@@ -25,6 +25,7 @@
 #include <elf.h>
 #include <event_queue.h>
 #include <eventfd.h>
+#include <timerfd.h>
 #include <frame_buffer_console.h>
 #include <fs/fd.h>
 #include <fs/node_monitor.h>

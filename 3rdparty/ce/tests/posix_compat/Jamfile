@@ -10,6 +10,11 @@ Application eventfd_test :
 	: libgnu.so
 ;
 
+Application timerfd_test :
+	timerfd_test.cpp
+	: libgnu.so
+;
+
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test timerfd_test ;
 }

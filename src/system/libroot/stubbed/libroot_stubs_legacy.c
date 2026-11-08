@@ -1244,6 +1244,9 @@ void _kern_system_profiler_start() {}
 void _kern_system_profiler_stop() {}
 void _kern_system_time() {}
 void _kern_thread_yield() {}
+void _kern_timerfd_create() {}
+void _kern_timerfd_gettime() {}
+void _kern_timerfd_settime() {}
 void _kern_transfer_area() {}
 void _kern_unblock_thread() {}
 void _kern_unblock_threads() {}

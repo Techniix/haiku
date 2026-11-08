@@ -86,6 +86,13 @@ extern ssize_t		_kern_event_queue_wait(int queue, struct event_wait_info* infos,
 extern int			_kern_eventfd(uint32 initialValue, int openFlags,
 						bool semaphore);
 
+/* timerfd (Haiku Community Edition; user API in libgnu) */
+extern int			_kern_timerfd_create(clockid_t clock, int openFlags);
+extern status_t		_kern_timerfd_settime(int fd, bool absolute,
+						const struct itimerspec* newValue,
+						struct itimerspec* oldValue);
+extern status_t		_kern_timerfd_gettime(int fd, struct itimerspec* value);
+
 /* user mutex functions */
 extern status_t		_kern_mutex_lock(int32* mutex, const char* name,
 						uint32 flags, bigtime_t timeout);
