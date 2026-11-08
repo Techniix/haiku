@@ -7,5 +7,5 @@ Application vsnd_test :
 ;
 
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin : vsnd_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : vsnd_test ;
 }

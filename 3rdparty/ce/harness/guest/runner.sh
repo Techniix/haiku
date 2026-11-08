@@ -22,8 +22,10 @@ ls -R /dev/audio 2>&1
 # Give device drivers a moment to finish publishing.
 sleep 2
 
-for test in /boot/system/non-packaged/bin/vsnd_test; do
+# Every test program installed by 3rdparty/ce/tests runs, one after the other.
+for test in /boot/system/non-packaged/bin/ce-tests/*; do
 	if [ -x "$test" ]; then
+		echo "CE-INFO running $(basename "$test")"
 		"$test"
 		echo "CE-INFO $(basename "$test") exited with $?"
 	fi

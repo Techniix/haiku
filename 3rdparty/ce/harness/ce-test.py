@@ -63,7 +63,8 @@ VIRTIO_SOUND_PHASES = [
 WATCHED_DRIVERS = ("virtio_sound",)
 
 # Compile-only targets: fast feedback before the image build.
-COMPILE_TARGETS = ["virtio_sound", "vsnd_test"]
+COMPILE_TARGETS = ["kernel_x86_64", "libgnu.so", "virtio_sound",
+	"vsnd_test", "eventfd_test"]
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
 TRACE_SOURCES = [
@@ -103,7 +104,8 @@ def run_logged(command, cwd, log_path, timeout=None):
 
 # Source paths whose compiler warnings we want to see. Warnings elsewhere are
 # upstream's and only drown out the signal.
-WATCHED_PATHS = ("3rdparty/ce", "drivers/audio/virtio")
+WATCHED_PATHS = ("3rdparty/ce", "drivers/audio/virtio", "kernel/events",
+	"libs/gnu")
 
 
 def interesting_build_lines(log_path, limit=60):
