@@ -38,10 +38,25 @@
 	manager does not support allocating queues a second time on a live
 	device. uninit_device() only stops the stream and frees the buffers.
 
+	Robustness
+	----------
+	The device is used by one client at a time (a second open() gets
+	B_BUSY), since a second client could free the buffers the first one is
+	writing to. TX request cookies carry a stream generation, so buffers the
+	device returns after a stop are never confused with the current
+	stream's. If the device stops answering - a control request or a drain
+	after STOP/RELEASE times out - it may still own buffers we can no
+	longer account for, so it is marked broken and not touched again until
+	the driver is reloaded. Error paths of buffer_exchange() wait about one
+	period before returning, because the media add-on calls it in a loop at
+	real-time priority and ignores the result.
+
 	Scope
 	-----
 	Playback only, stereo only. The first output stream that supports two
-	channels is used. Capture (RX queue) is not implemented yet, and since
+	channels is used. Capture (RX queue) is not implemented yet. The event
+	queue is not populated, so jack and period events are not received
+	(the spec only says a driver SHOULD populate it). Since
 	the virtio control elements (VIRTIO_SND_F_CTLS) are not negotiated there
 	is no hardware mixer; the Media Kit's software mixer handles volume.
 
@@ -118,6 +133,24 @@ static_assert(kMaxBuffers * kTxSlotSize <= B_PAGE_SIZE, "TX slots too big");
 // multi_audio channel ids: two output channels plus the matching output bus.
 static const int32 kChannelInfoCount = 4;
 
+// TX request cookies carry the buffer index and the stream generation they
+// were queued in, so that completions of an earlier stream (e.g. buffers the
+// device returns late, after a stop) are never mistaken for current ones.
+static inline void*
+make_tx_cookie(int32 generation, uint32 index)
+{
+	return (void*)(addr_t)(((uint32)generation & 0xffffff) << 8 | (index + 1));
+}
+
+
+static inline void
+parse_tx_cookie(void* cookie, int32& generation, uint32& index)
+{
+	uint32 value = (uint32)(addr_t)cookie;
+	generation = value >> 8;
+	index = (value & 0xff) - 1;
+}
+
 
 struct VirtIOSoundDriverInfo {
 	device_node*				node;
@@ -166,15 +199,28 @@ struct VirtIOSoundDriverInfo {
 	int32						fillIndex;			// buffer owned by client
 	int32						generation;			// bumped on every stop
 
+	// Set once the device stopped answering (a control request or a drain
+	// timed out). From then on it is not used any more, because it may still
+	// own buffers we can no longer track; reloading the driver resets it.
+	bool						broken;
+	bool						controlFailed;
+
+	// Exclusive access: one client at a time, like the HDA driver.
+	int32						openCount;
+
 	// Completion bookkeeping, written from the TX interrupt callback and
 	// protected by txLock.
 	spinlock					txLock;
-	uint8						completed[kMaxBuffers];
+	struct {
+		uint8					index;
+		bool					error;
+		int64					frames;		// played frames after this buffer
+		bigtime_t				time;		// when it completed
+	}							completed[kMaxBuffers];
 	uint32						completedHead;
 	uint32						completedCount;
 	int32						inFlight;
 	int64						framesPlayed;
-	bigtime_t					lastCompletion;
 	int32						txErrors;
 	sem_id						txSem;
 };
@@ -291,6 +337,9 @@ control_request(VirtIOSoundDriverInfo* info, const void* request,
 
 	MutexLocker locker(info->controlLock);
 
+	if (info->controlFailed)
+		return B_IO_ERROR;
+
 	uint8* requestBuffer = info->controlBuffer + kControlRequestOffset;
 	uint8* responseBuffer = info->controlBuffer + kControlResponseOffset;
 	memcpy(requestBuffer, request, requestSize);
@@ -329,11 +378,14 @@ control_request(VirtIOSoundDriverInfo* info, const void* request,
 		if (atomic_get(&info->controlCompletedId) == id)
 			break;
 		if (status != B_OK) {
-			// The device still owns the buffers of this request. The next
-			// request reuses them, but a late answer only rewrites a response
-			// nobody reads any more, so this is not a memory safety issue.
-			ERROR("control request 0x%" B_PRIx32 " timed out\n",
+			// The device still owns this request's buffers and may yet
+			// execute it. Reusing the buffer for the next request could make
+			// it run that one twice, so the control queue is not used again.
+			ERROR("control request 0x%" B_PRIx32 " timed out, giving up on "
+				"the device\n",
 				B_LENDIAN_TO_HOST_INT32(((virtio_snd_hdr*)request)->code));
+			info->controlFailed = true;
+			info->broken = true;
 			return B_TIMED_OUT;
 		}
 		info->controlCondition.Add(&entry);
@@ -374,28 +426,39 @@ tx_callback(void* driverCookie, void* cookie)
 	void* bufferCookie;
 	while (info->virtio->queue_dequeue(info->queues[VIRTIO_SND_VQ_TX],
 			&bufferCookie, NULL)) {
-		// Cookies are buffer index + 1, see submit_buffer().
-		uint32 index = (uint32)(addr_t)bufferCookie - 1;
-		if (index >= kMaxBuffers)
+		int32 generation;
+		uint32 index;
+		parse_tx_cookie(bufferCookie, generation, index);
+
+		SpinLocker locker(info->txLock);
+		// Every queued buffer was counted in inFlight, current or not.
+		info->inFlight--;
+
+		// Only buffers of the current stream are handed to the client.
+		if (generation != (atomic_get(&info->generation) & 0xffffff)
+			|| index >= info->bufferCount || index >= kMaxBuffers
+			|| info->completedCount >= kMaxBuffers) {
 			continue;
+		}
 
 		virtio_snd_pcm_status* pcmStatus = (virtio_snd_pcm_status*)
 			(info->txHeaders + index * kTxSlotSize + kTxStatusOffset);
-		uint32 code = B_LENDIAN_TO_HOST_INT32(pcmStatus->status);
-
-		SpinLocker locker(info->txLock);
-		if (code != VIRTIO_SND_S_OK)
+		bool error = B_LENDIAN_TO_HOST_INT32(pcmStatus->status)
+			!= VIRTIO_SND_S_OK;
+		if (error)
 			info->txErrors++;
-		if (info->completedCount < kMaxBuffers) {
-			uint32 slot = (info->completedHead + info->completedCount)
-				% kMaxBuffers;
-			info->completed[slot] = (uint8)index;
-			info->completedCount++;
-		}
-		info->inFlight--;
+
 		info->framesPlayed += info->bufferFrames;
-		info->lastCompletion = system_time();
+		uint32 slot = (info->completedHead + info->completedCount)
+			% kMaxBuffers;
+		info->completed[slot].index = (uint8)index;
+		info->completed[slot].error = error;
+		info->completed[slot].frames = info->framesPlayed;
+		info->completed[slot].time = system_time();
+		info->completedCount++;
 		locker.Unlock();
+
+		TRACE("buffer %" B_PRIu32 " done%s\n", index, error ? " (error)" : "");
 
 		release_sem_etc(info->txSem, 1, B_DO_NOT_RESCHEDULE);
 	}
@@ -406,6 +469,9 @@ tx_callback(void* driverCookie, void* cookie)
 static status_t
 submit_buffer(VirtIOSoundDriverInfo* info, uint32 index)
 {
+	if (info->broken || index >= info->bufferCount)
+		return B_IO_ERROR;
+
 	uint8* slot = info->txHeaders + index * kTxSlotSize;
 	virtio_snd_pcm_xfer* xfer = (virtio_snd_pcm_xfer*)slot;
 	virtio_snd_pcm_status* pcmStatus
@@ -429,9 +495,10 @@ submit_buffer(VirtIOSoundDriverInfo* info, uint32 index)
 	info->inFlight++;
 	locker.Unlock();
 
+	TRACE("queue buffer %" B_PRIu32 "\n", index);
 	status_t status = info->virtio->queue_request_v(
 		info->queues[VIRTIO_SND_VQ_TX], entries, 2, 1,
-		(void*)(addr_t)(index + 1));
+		make_tx_cookie(atomic_get(&info->generation), index));
 	if (status != B_OK) {
 		locker.Lock();
 		info->inFlight--;
@@ -492,7 +559,7 @@ prepare_stream(VirtIOSoundDriverInfo* info)
 /*!	Stops the stream and waits until the device has returned every buffer.
 	Afterwards the buffers may be freed or rewritten. Called with info->lock
 	held. Returns an error only if the device kept buffers; in that case the
-	caller must not free them.
+	caller must not free them, and the device is marked broken.
 */
 static status_t
 stop_stream(VirtIOSoundDriverInfo* info)
@@ -504,10 +571,16 @@ stop_stream(VirtIOSoundDriverInfo* info)
 		pcm_request(info, VIRTIO_SND_R_PCM_RELEASE);
 	}
 
+	TRACE("stopping stream (running %d, prepared %d)\n", info->running,
+		info->prepared);
 	info->running = false;
 	info->prepared = false;
 	info->fillIndex = -1;
 	atomic_add(&info->generation, 1);
+
+	// Wake up a client blocked in buffer_exchange(): it notices the new
+	// generation and returns.
+	release_sem_etc(info->txSem, 1, B_DO_NOT_RESCHEDULE);
 
 	bigtime_t deadline = system_time() + kDrainTimeout;
 	while (true) {
@@ -516,9 +589,10 @@ stop_stream(VirtIOSoundDriverInfo* info)
 		locker.Unlock();
 		if (inFlight <= 0)
 			break;
-		if (system_time() > deadline) {
-			ERROR("device still holds %" B_PRId32 " playback buffers\n",
-				inFlight);
+		if (info->controlFailed || system_time() > deadline) {
+			ERROR("device still holds %" B_PRId32 " playback buffers, giving "
+				"up on the device\n", inFlight);
+			info->broken = true;
 			return B_TIMED_OUT;
 		}
 		snooze(1000);
@@ -526,11 +600,17 @@ stop_stream(VirtIOSoundDriverInfo* info)
 
 	// Forget completions of the old stream, including their semaphore counts.
 	InterruptsSpinLocker locker(info->txLock);
+	int32 txErrors = info->txErrors;
 	info->completedHead = 0;
 	info->completedCount = 0;
 	info->framesPlayed = 0;
-	info->lastCompletion = 0;
+	info->txErrors = 0;
 	locker.Unlock();
+
+	if (txErrors > 0) {
+		ERROR("device reported errors for %" B_PRId32 " playback buffers\n",
+			txErrors);
+	}
 
 	int32 count;
 	if (get_sem_count(info->txSem, &count) == B_OK && count > 0)
@@ -612,6 +692,9 @@ allocate_buffers(VirtIOSoundDriverInfo* info, uint32 count, uint32 frames)
 static status_t
 start_stream(VirtIOSoundDriverInfo* info)
 {
+	if (info->broken)
+		return B_IO_ERROR;
+
 	if (!info->prepared) {
 		status_t status = prepare_stream(info);
 		if (status != B_OK)
@@ -639,7 +722,24 @@ start_stream(VirtIOSoundDriverInfo* info)
 
 	info->running = true;
 	info->fillIndex = -1;
+	TRACE("stream started, generation %" B_PRId32 "\n",
+		atomic_get(&info->generation));
 	return B_OK;
+}
+
+
+/*!	Waits for about one period. Used on error paths of buffer_exchange():
+	the multi_audio add-on calls it in a loop at real-time priority and
+	ignores errors, so returning at once would starve a CPU.
+*/
+static void
+snooze_period(VirtIOSoundDriverInfo* info)
+{
+	const rate_mapping* rate = find_rate(info->rate);
+	bigtime_t period = 20000;
+	if (rate != NULL && info->bufferFrames > 0)
+		period = (bigtime_t)info->bufferFrames * 1000000 / rate->hertz;
+	snooze(period);
 }
 
 
@@ -785,9 +885,12 @@ set_global_format(VirtIOSoundDriverInfo* info, multi_format_info* userData)
 	// The buffer layout depends on the format; the media add-on always asks
 	// for new buffers (B_MULTI_GET_BUFFERS) after changing the format.
 	status_t status = free_buffers(info);
+	if (status != B_OK)
+		return status;
+
 	info->rate = newRate;
 	info->format = newFormat;
-	return status;
+	return B_OK;
 }
 
 
@@ -803,6 +906,9 @@ get_buffers(VirtIOSoundDriverInfo* info, multi_buffer_list* userData)
 		count = kDefaultBuffers;
 
 	MutexLocker locker(info->lock);
+
+	if (info->broken)
+		return B_IO_ERROR;
 
 	uint32 frames = list.request_playback_buffer_size;
 	if (frames < kMinBufferFrames || frames > kMaxBufferFrames) {
@@ -886,20 +992,25 @@ buffer_exchange(VirtIOSoundDriverInfo* info, multi_buffer_info* userData)
 	MutexLocker exchangeLocker(info->exchangeLock);
 	MutexLocker locker(info->lock);
 
-	if (info->dataArea < 0)
-		return B_NO_INIT;
-
-	status_t status;
-	if (!info->running) {
+	status_t status = B_OK;
+	if (info->broken)
+		status = B_IO_ERROR;
+	else if (info->dataArea < 0)
+		status = B_NO_INIT;
+	else if (!info->running)
 		status = start_stream(info);
-		if (status != B_OK)
-			return status;
-	} else if (info->fillIndex >= 0) {
+	else if (info->fillIndex >= 0) {
 		// The client has finished writing the buffer we gave it last time.
+		// If queueing fails we keep it and try again on the next call.
 		status = submit_buffer(info, info->fillIndex);
-		info->fillIndex = -1;
-		if (status != B_OK)
-			return status;
+		if (status == B_OK)
+			info->fillIndex = -1;
+	}
+
+	if (status != B_OK) {
+		locker.Unlock();
+		snooze_period(info);
+		return status;
 	}
 
 	int32 generation = atomic_get(&info->generation);
@@ -907,6 +1018,7 @@ buffer_exchange(VirtIOSoundDriverInfo* info, multi_buffer_info* userData)
 	locker.Unlock();
 
 	int32 index = -1;
+	bool error = false;
 	int64 frames = 0;
 	bigtime_t realTime = 0;
 	while (index < 0) {
@@ -920,22 +1032,27 @@ buffer_exchange(VirtIOSoundDriverInfo* info, multi_buffer_info* userData)
 
 		locker.Lock();
 		if (atomic_get(&info->generation) != generation || !info->running) {
-			// The stream was stopped while we waited.
-			return B_INTERRUPTED;
+			// The stream was stopped while we waited. Not B_INTERRUPTED:
+			// the kernel restarts syscalls that return it, which would
+			// silently start the stream again right after the stop.
+			return B_CANCELED;
 		}
 
 		InterruptsSpinLocker txLocker(info->txLock);
 		if (info->completedCount > 0) {
-			index = info->completed[info->completedHead];
-			info->completedHead = (info->completedHead + 1) % kMaxBuffers;
+			uint32 head = info->completedHead;
+			index = info->completed[head].index;
+			error = info->completed[head].error;
+			frames = info->completed[head].frames;
+			realTime = info->completed[head].time;
+			info->completedHead = (head + 1) % kMaxBuffers;
 			info->completedCount--;
-			frames = info->framesPlayed;
-			realTime = info->lastCompletion;
 		}
 		txLocker.Unlock();
 
-		if (index < 0) {
+		if (index < 0 || (uint32)index >= count) {
 			// A stale semaphore count from before a stop; wait again.
+			index = -1;
 			locker.Unlock();
 			continue;
 		}
@@ -943,6 +1060,11 @@ buffer_exchange(VirtIOSoundDriverInfo* info, multi_buffer_info* userData)
 		info->fillIndex = index;
 		locker.Unlock();
 	}
+
+	// A device that fails buffers may return them at once; keep real-time
+	// pacing so that the client does not spin.
+	if (error)
+		snooze_period(info);
 
 	bufferInfo.flags = B_MULTI_BUFFER_PLAYBACK;
 	bufferInfo.playback_buffer_cycle = (index + 1) % count;
@@ -987,6 +1109,9 @@ static status_t
 multi_audio_control(VirtIOSoundDriverInfo* info, uint32 op, void* arg,
 	size_t length)
 {
+	if (op != B_MULTI_BUFFER_EXCHANGE)
+		TRACE("ioctl 0x%" B_PRIx32 "\n", op);
+
 	switch (op) {
 		case B_MULTI_GET_DESCRIPTION:
 			return get_description(info, (multi_description*)arg);
@@ -1188,6 +1313,10 @@ virtio_sound_init_device(void* _info, void** _cookie)
 	if (!info->transportReady && !info->transportFailed) {
 		if (setup_transport(info) != B_OK && !info->transportReady)
 			info->transportFailed = true;
+	} else if (info->transportReady && info->outputStream < 0
+		&& !info->controlFailed) {
+		// The stream probe failed last time; try again.
+		probe_streams(info);
 	}
 
 	if (!info->transportReady || info->outputStream < 0)
@@ -1215,10 +1344,17 @@ virtio_sound_open(void* _info, const char* path, int openMode, void** _cookie)
 {
 	VirtIOSoundDriverInfo* info = (VirtIOSoundDriverInfo*)_info;
 
+	// One client at a time: a second one could free the buffers the first
+	// one is writing to, or steal its completions.
+	if (atomic_test_and_set(&info->openCount, 1, 0) != 0)
+		return B_BUSY;
+
 	VirtIOSoundHandle* handle
 		= (VirtIOSoundHandle*)malloc(sizeof(VirtIOSoundHandle));
-	if (handle == NULL)
+	if (handle == NULL) {
+		atomic_set(&info->openCount, 0);
 		return B_NO_MEMORY;
+	}
 
 	handle->info = info;
 	*_cookie = handle;
@@ -1236,7 +1372,9 @@ virtio_sound_close(void* cookie)
 static status_t
 virtio_sound_free(void* cookie)
 {
-	free(cookie);
+	VirtIOSoundHandle* handle = (VirtIOSoundHandle*)cookie;
+	atomic_set(&handle->info->openCount, 0);
+	free(handle);
 	return B_OK;
 }
 
@@ -1370,12 +1508,15 @@ virtio_sound_init_driver(device_node* node, void** _cookie)
 	info->fillIndex = -1;
 	info->generation = 0;
 
+	info->broken = false;
+	info->controlFailed = false;
+	info->openCount = 0;
+
 	B_INITIALIZE_SPINLOCK(&info->txLock);
 	info->completedHead = 0;
 	info->completedCount = 0;
 	info->inFlight = 0;
 	info->framesPlayed = 0;
-	info->lastCompletion = 0;
 	info->txErrors = 0;
 
 	info->controlArea = create_dma_page("virtio_sound control",

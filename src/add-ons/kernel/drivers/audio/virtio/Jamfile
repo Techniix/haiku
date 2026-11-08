@@ -3,6 +3,12 @@ SubDir HAIKU_TOP src add-ons kernel drivers audio virtio ;
 UsePrivateKernelHeaders ;
 UsePrivateHeaders audio drivers shared virtio ;
 
+# Verbose builds (jam -sCE_TRACE=1, e.g. "3rdparty/ce/harness/ce-test.py
+# --verbose") turn on the driver's TRACE() output.
+if $(CE_TRACE) {
+	SubDirC++Flags -DTRACE_VIRTIO_SOUND ;
+}
+
 KernelAddon virtio_sound :
 	virtio_sound.cpp
 ;
