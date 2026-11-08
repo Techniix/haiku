@@ -6,6 +6,7 @@
 
 #include <kdevice_manager.h>
 
+#include <dirent.h>
 #include <new>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,11 +18,14 @@
 
 #include <boot_device.h>
 #include <device_manager_defs.h>
+#include <find_directory_private.h>
 #include <fs/devfs.h>
 #include <fs/KPath.h>
 #include <generic_syscall.h>
 #include <kernel.h>
 #include <kmodule.h>
+#include <safemode.h>
+#include <sys/stat.h>
 #include <util/AutoLock.h>
 #include <util/DoublyLinkedList.h>
 #include <util/Stack.h>
@@ -356,7 +360,71 @@ publish_directories(const char* subPath)
 		}
 		close_module_list(list);
 	} else {
-		// TODO: implement module directory traversal!
+		// Once the boot volume is there, the module list only knows the
+		// modules that have been loaded so far, so a driver that has never
+		// been loaded would not get its directory published - and since
+		// devfs only probes drivers when one of its directories is looked
+		// at, such a driver would never be found. A new-style driver for a
+		// device class without any legacy driver (e.g. virtio_sound, whose
+		// "/dev/audio" nobody else creates in a virtual machine) is the
+		// typical victim.
+		// Look at the add-on directories themselves instead. Only directory
+		// names are read; no driver image is loaded.
+		static const directory_which kDirectories[] = {
+			B_SYSTEM_ADDONS_DIRECTORY,
+			B_SYSTEM_NONPACKAGED_ADDONS_DIRECTORY,
+			B_USER_ADDONS_DIRECTORY,
+			B_USER_NONPACKAGED_ADDONS_DIRECTORY,
+		};
+		// Same rule as the module loader (module.cpp, kModulePaths).
+		const bool disableUserAddOns = get_safemode_boolean(
+			B_SAFEMODE_DISABLE_USER_ADD_ONS, false);
+
+		for (size_t i = 0; i < B_COUNT_OF(kDirectories); i++) {
+			if (disableUserAddOns && i > 0)
+				break;
+
+			KPath path;
+			if (path.InitCheck() != B_OK
+				|| __find_directory(kDirectories[i], gBootDevice, true,
+					path.LockBuffer(), path.BufferSize()) != B_OK) {
+				continue;
+			}
+			path.UnlockBuffer();
+			if (path.Append("kernel/drivers") != B_OK
+				|| (subPath[0] != '\0' && path.Append(subPath) != B_OK)) {
+				continue;
+			}
+
+			DIR* dir = opendir(path.Path());
+			if (dir == NULL)
+				continue;
+
+			while (struct dirent* entry = readdir(dir)) {
+				const char* name = entry->d_name;
+				if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+					continue;
+				// "bin" and "dev" hold the legacy drivers, which
+				// legacy_driver_probe() takes care of.
+				if (subPath[0] == '\0'
+					&& (strcmp(name, "bin") == 0 || strcmp(name, "dev") == 0)) {
+					continue;
+				}
+
+				KPath entryPath(path);
+				struct stat st;
+				if (entryPath.Append(name) != B_OK
+					|| stat(entryPath.Path(), &st) != 0
+					|| !S_ISDIR(st.st_mode)) {
+					continue;
+				}
+
+				KPath devicePath(subPath);
+				if (devicePath.Append(name) == B_OK)
+					devfs_publish_directory(devicePath.Path());
+			}
+			closedir(dir);
+		}
 	}
 }
 
@@ -2458,13 +2526,15 @@ status_t
 device_manager_probe(const char* path, uint32 updateCycle)
 {
 	TRACE(("device_manager_probe(\"%s\")\n", path));
+
+	// First, publish directories in the driver directory. This may read
+	// directories on the boot volume, so it is done without holding sLock.
+	publish_directories(path);
+
 	RecursiveLocker _(sLock);
 
 	if (sRootNode == NULL || !sRootNode->IsRegistered())
 		return B_NO_INIT;
-
-	// first, publish directories in the driver directory
-	publish_directories(path);
 
 	return sRootNode->Probe(path, updateCycle);
 }
