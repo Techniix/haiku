@@ -17,6 +17,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 
 		SharedLibrary [ MultiArchDefaultGristFiles libgnu.so ] :
 			crypt.cpp
+			eventfd.cpp
 			sched_affinity.cpp
 			sched_getcpu.cpp
 			xattr.cpp

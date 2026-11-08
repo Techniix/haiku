@@ -1032,6 +1032,7 @@ void _kern_estimate_max_scheduling_latency() {}
 void _kern_event_queue_create() {}
 void _kern_event_queue_select() {}
 void _kern_event_queue_wait() {}
+void _kern_eventfd() {}
 void _kern_exec() {}
 void _kern_exit_team() {}
 void _kern_exit_thread() {}

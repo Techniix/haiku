@@ -1,0 +1,15 @@
+SubDir HAIKU_TOP 3rdparty ce tests posix_compat ;
+
+# Conformance tests for the POSIX/Linux compatibility APIs (libgnu and the
+# kernel objects behind them).
+
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+
+Application eventfd_test :
+	eventfd_test.cpp
+	: libgnu.so
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test ;
+}

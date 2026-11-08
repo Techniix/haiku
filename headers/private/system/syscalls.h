@@ -82,6 +82,10 @@ extern status_t		_kern_event_queue_select(int queue,
 extern ssize_t		_kern_event_queue_wait(int queue, struct event_wait_info* infos,
 						int numInfos, uint32 flags, bigtime_t timeout);
 
+/* eventfd (Haiku Community Edition; user API in libgnu) */
+extern int			_kern_eventfd(uint32 initialValue, int openFlags,
+						bool semaphore);
+
 /* user mutex functions */
 extern status_t		_kern_mutex_lock(int32* mutex, const char* name,
 						uint32 flags, bigtime_t timeout);
