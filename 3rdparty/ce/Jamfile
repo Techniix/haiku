@@ -1,0 +1,21 @@
+SubDir HAIKU_TOP 3rdparty ce ;
+
+# Haiku Community Edition tooling: the automated test harness and its in-guest
+# test programs. Upstream's 3rdparty/Jamfile includes this directory only when
+# HAIKU_INCLUDE_3RDPARTY is set, so normal builds are not affected at all.
+# Nothing is added to an image unless the harness also sets CE_HARNESS.
+
+SubInclude HAIKU_TOP 3rdparty ce tests ;
+
+if $(CE_HARNESS) {
+	# The guest-side runner and the launch_daemon job that starts it once the
+	# boot volumes are mounted. The runner runs the test programs, writes their
+	# output to /dev/dprintf (which reaches the host through the serial port)
+	# and powers the machine off.
+	local guestDir = [ FDirName $(HAIKU_TOP) 3rdparty ce harness guest ] ;
+	local runner = <ce-harness>runner.sh ;
+	local job = <ce-harness>ce-harness ;
+	SEARCH on $(runner) $(job) = $(guestDir) ;
+	AddFilesToHaikuImage system non-packaged data ce-harness : $(runner) ;
+	AddFilesToHaikuImage system settings launch : $(job) ;
+}

@@ -1,0 +1,9 @@
+# Haiku Community Edition test harness job (installed only into harness images,
+# as /boot/system/settings/launch/ce-harness). Runs the in-guest test runner
+# once the boot volumes are mounted, independently of any desktop session.
+
+job x-vnd.Haiku-CE-harness {
+	launch /bin/sh /boot/system/non-packaged/data/ce-harness/runner.sh
+	on initial_volumes_mounted
+	no_safemode
+}

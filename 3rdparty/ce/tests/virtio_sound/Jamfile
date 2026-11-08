@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP 3rdparty ce tests virtio_sound ;
+
+UsePrivateHeaders audio ;
+
+Application vsnd_test :
+	vsnd_test.cpp
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin : vsnd_test ;
+}
