@@ -148,10 +148,9 @@ notifications_std_ops(int32 op, ...)
 
 			unregister_generic_syscall(NET_NOTIFICATIONS_SYSCALLS, 1);
 
-			// TODO: due to the way the locking in the notification
-			// manager works, there's a potential race condition here
-			// where someone attempts to add a listener right as
-			// we're uninitializing. Needs to be looked at/resolved.
+			// The module is B_KEEP_LOADED (see sNotificationsModule), so
+			// this only runs if that is ever dropped; the race with
+			// listeners being added during uninit is described there.
 			sNotificationService.Unregister();
 
 			// we need to release the reference that was acquired
@@ -169,7 +168,18 @@ notifications_std_ops(int32 op, ...)
 net_notifications_module_info sNotificationsModule = {
 	{
 		NET_NOTIFICATIONS_MODULE_NAME,
-		0,
+		// Keep the module loaded: unloading it deadlocks against
+		// start_watching_network(). The uninit runs with the modules lock
+		// held (put_module()) and unregister_generic_syscall() waits for
+		// threads inside net_notifications_control(); such a thread, via
+		// DefaultUserNotificationService::_AddListener() and FirstAdded(),
+		// calls get_module() and waits for the modules lock. Seen as an
+		// intermittent boot hang: net_server's last socket close unloads
+		// the stack (and with it this module) while launch_daemon starts
+		// watching the network; every team exit and fork then blocks
+		// behind the notification locks. The module is small, so staying
+		// resident costs a few KB.
+		B_KEEP_LOADED,
 		notifications_std_ops
 	},
 
