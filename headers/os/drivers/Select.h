@@ -23,7 +23,12 @@ enum select_events {
 	B_SELECT_HIGH_PRI_READ,
 	B_SELECT_HIGH_PRI_WRITE,
 
-	B_SELECT_DISCONNECTED
+	B_SELECT_DISCONNECTED,
+
+	// Renga: the peer shut down its sending side (stream sockets); poll()'s
+	// POLLRDHUP and epoll's EPOLLRDHUP. Its flag (1 << 13) is 0x2000, the
+	// value of both. 9 to 12 are kept free, 13 is B_EVENT_INVALID's bit.
+	B_SELECT_READ_DISCONNECTED = 14
 };
 
 

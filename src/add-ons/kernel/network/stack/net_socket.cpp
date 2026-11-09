@@ -68,6 +68,13 @@ struct net_socket_private : net_socket,
 
 	bool						is_connected;
 	bool						is_in_socket_list;
+
+	// Stream sockets: the receiving or the sending side has ended (the
+	// protocol notified B_SELECT_READ/B_SELECT_WRITE with an error, or
+	// B_SELECT_READ_DISCONNECTED). Used to report POLLRDHUP and, once both
+	// are set, POLLHUP to waiting select()ors; cleared by connect().
+	bool						read_ended;
+	bool						write_ended;
 };
 
 
@@ -88,7 +95,9 @@ net_socket_private::net_socket_private()
 	child_count(0),
 	select_pool(NULL),
 	is_connected(false),
-	is_in_socket_list(false)
+	is_in_socket_list(false),
+	read_ended(false),
+	write_ended(false)
 {
 	first_protocol = NULL;
 	first_info = NULL;
@@ -834,6 +843,15 @@ socket_request_notification(net_socket* _socket, uint8 event, selectsync* sync)
 				notify_select_event(sync, event);
 			break;
 		}
+		case B_SELECT_READ_DISCONNECTED:
+		{
+			// POLLRDHUP: the receiving side has ended, by the peer's
+			// shutdown(SHUT_WR) or close, or our own SHUT_RD; as on Linux
+			// also while unread data is still queued.
+			if (socket->read_ended || socket_read_avail(socket) < 0)
+				notify_select_event(sync, event);
+			break;
+		}
 		case B_SELECT_WRITE:
 		{
 			if ((socket->options & SO_ACCEPTCONN) != 0)
@@ -851,8 +869,11 @@ socket_request_notification(net_socket* _socket, uint8 event, selectsync* sync)
 			break;
 		case B_SELECT_DISCONNECTED:
 		{
+			// POLLHUP means both directions are over, as on Linux. A peer's
+			// half-close (TCP CLOSE-WAIT, a UNIX peer's SHUT_WR) leaves the
+			// sending side usable and is reported as POLLRDHUP only.
 			ssize_t available = socket_read_avail(socket);
-			if (available < 0)
+			if (available < 0 && socket_send_avail(socket) < 0)
 				notify_select_event(sync, event);
 			break;
 		}
@@ -901,11 +922,36 @@ socket_notify(net_socket* _socket, uint8 event, int32 value)
 
 	MutexLocker _(socket->lock);
 
-	if (notify && socket->select_pool != NULL) {
-		notify_select_event_pool(socket->select_pool, event);
+	// Track which directions have ended (see net_socket_private). This is
+	// called with the protocol's lock held, so the protocol cannot be asked
+	// here; the error passed tells a half-close from a disconnect instead:
+	// TCP reports a received FIN as ESHUTDOWN, UNIX sockets a peer's
+	// SHUT_WR (and our own SHUT_RD) as EPIPE; anything else (ECONNRESET,
+	// ENOTCONN, ...) means the connection is gone.
+	bool disconnected = false;
+	if (event == B_SELECT_READ_DISCONNECTED
+		|| (event == B_SELECT_READ && value < 0)) {
+		socket->read_ended = true;
+		if (event == B_SELECT_READ && value != ESHUTDOWN && value != EPIPE)
+			disconnected = true;
+	} else if (event == B_SELECT_WRITE && value < 0)
+		socket->write_ended = true;
+	if (socket->read_ended && socket->write_ended)
+		disconnected = true;
 
-		if (event == B_SELECT_READ && value < 0)
-			notify_select_event_pool(socket->select_pool, B_SELECT_DISCONNECTED);
+	if (notify && socket->select_pool != NULL) {
+		if (event != B_SELECT_READ_DISCONNECTED)
+			notify_select_event_pool(socket->select_pool, event);
+
+		if (event == B_SELECT_READ_DISCONNECTED || (event == B_SELECT_READ
+				&& value < 0)) {
+			notify_select_event_pool(socket->select_pool,
+				B_SELECT_READ_DISCONNECTED);
+		}
+		if (disconnected) {
+			notify_select_event_pool(socket->select_pool,
+				B_SELECT_DISCONNECTED);
+		}
 		if (event == B_SELECT_ERROR) {
 			// always notify read/write on error
 			notify_select_event_pool(socket->select_pool, B_SELECT_READ);
@@ -984,6 +1030,11 @@ socket_connect(net_socket* socket, const struct sockaddr* address,
 {
 	if (address == NULL || addressLength == 0)
 		return ENETUNREACH;
+
+	// A new connection starts with both directions open (POLLRDHUP/POLLHUP
+	// tracking in socket_notify()).
+	((net_socket_private*)socket)->read_ended = false;
+	((net_socket_private*)socket)->write_ended = false;
 
 	if (socket->address.ss_len == 0) {
 		// try to bind first

@@ -24,8 +24,13 @@ typedef struct select_info {
 
 #define SELECT_FLAG(type) (1L << (type - 1))
 
+// Events that are never reported as "always ready" by objects without select
+// support. B_SELECT_READ_DISCONNECTED (POLLRDHUP) is selected explicitly,
+// but only stream sockets can have it: everything else must never report it,
+// as on Linux.
 #define SELECT_OUTPUT_ONLY_FLAGS \
-	(B_EVENT_ERROR | B_EVENT_DISCONNECTED | B_EVENT_INVALID)
+	(B_EVENT_ERROR | B_EVENT_DISCONNECTED | B_EVENT_INVALID \
+		| SELECT_FLAG(B_SELECT_READ_DISCONNECTED))
 
 #define SELECT_TYPE_IS_OUTPUT_ONLY(type) \
 	((SELECT_FLAG(type) & SELECT_OUTPUT_ONLY_FLAGS) != 0)

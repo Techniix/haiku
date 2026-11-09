@@ -26,6 +26,8 @@ struct pollfd {
 #define	POLLRDBAND	0x0008		/* priority readable data */
 #define	POLLWRBAND	0x0010		/* priority data can be written */
 #define	POLLPRI		0x0020		/* high priority readable data */
+#define	POLLRDHUP	0x2000		/* peer shut down writing (Linux, FreeBSD
+								   extension); stream sockets only */
 
 /* revents only */
 #define	POLLERR		0x0004		/* errors pending */

@@ -2039,6 +2039,10 @@ TCPEndpoint::_Receive(tcp_segment_header& segment, net_buffer* buffer)
 			fReceiveNext++;
 			notify = true;
 
+			// The peer will send no more: POLLRDHUP/EPOLLRDHUP from now on,
+			// even while received data is still queued (as on Linux).
+			gSocketModule->notify(socket, B_SELECT_READ_DISCONNECTED, 0);
+
 			// FIN implies PUSH
 			fReceiveQueue.SetPushPointer();
 

@@ -36,6 +36,9 @@ updates this file in the same commit.
 | Abortive close (`SO_LINGER` with zero timeout) sends a reset | (behaviour) | | Broken: no reset sent, peer never notified | Fixed |
 | `__cxa_thread_atexit_impl()` (C++ `thread_local` destructors) | (C++ runtime) | libroot (nothing extra) | Missing | Available |
 | `sched_getaffinity()`/`sched_setaffinity()`, `pthread_getaffinity_np()`/`pthread_setaffinity_np()` | `<sched.h>`, `<pthread.h>` (gnu headers) | libroot (nothing extra) | In libgnu, with bugs (see below) | Available in libroot |
+| `getdents64()`, `getdents()` (Linux record layouts) | `<dirent.h>` (gnu) | `-lgnu` | Missing | Available |
+| `getpeereid()` | `<unistd.h>` (bsd) | `-lbsd` | Missing | Available |
+| `POLLRDHUP` (`poll()`), `EPOLLRDHUP` on a peer's half-close | `<poll.h>`, `<sys/epoll.h>` | | Missing; a half-close was reported as `POLLHUP` | Available |
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -96,7 +99,8 @@ epoll backend instead of a `poll()` fallback.
   ready set. Every report reflects the descriptor's state at the time of
   the call, not an earlier notification.
 - Events: `EPOLLIN`, `EPOLLOUT`, `EPOLLPRI`, `EPOLLRDNORM`, `EPOLLRDBAND`,
-  `EPOLLWRNORM`, `EPOLLWRBAND`; `EPOLLERR` and `EPOLLHUP` always. `data` is
+  `EPOLLWRNORM`, `EPOLLWRBAND`, `EPOLLRDHUP` (see "Half-close" below);
+  `EPOLLERR` and `EPOLLHUP` always. `data` is
   returned exactly as given (`ptr`, `fd`, `u32`, `u64`).
 - Registrations belong to the open file description, as on Linux: they
   survive `close()` while a `dup()`ed or inherited descriptor keeps it
@@ -121,9 +125,6 @@ epoll backend instead of a `poll()` fallback.
     Correct, only less efficient for many processes accepting on one
     socket.
   - `EPOLLWAKEUP` is accepted and ignored; `EPOLLMSG` is never reported.
-  - `EPOLLRDHUP` is reported together with `EPOLLHUP` when the descriptor
-    reports a disconnect. A peer's half-close (`shutdown(SHUT_WR)`) shows
-    only as `EPOLLIN` with `read()` returning 0.
   - Closing the epoll descriptor while another thread waits on it wakes
     that thread with `EBADF` (Linux keeps it waiting).
   - One call returns at most 1024 events (the rest come with the next).
@@ -300,6 +301,72 @@ in `thread_create_thread()` (`src/system/kernel/thread.cpp`).
 
 Since: the commit that moved that file to libroot. Tests:
 `3rdparty/ce/tests/posix_compat/affinity_test.cpp` (15 checks).
+
+### getdents64, getdents
+
+`getdents64(fd, buffer, length)` (as in glibc 2.30) and `getdents()` fill
+the buffer with directory entries in the record layouts of the Linux system
+calls: `struct linux_dirent64` (`d_ino`, `d_off`, `d_reclen`, `d_type`,
+`d_name`) and `struct linux_dirent` (type in the last byte of the record),
+8-byte aligned, as many as fit; 0 at the end. Code that called
+`syscall(SYS_getdents64, ...)` on Linux calls the function instead.
+
+- Errors: `EINVAL` (not even one record fits), `EBADF`, `ENOTDIR`,
+  `EFAULT`.
+- `d_type` is filled in (from `fstatat()` without following links), with
+  Linux's values (4 directory, 8 regular file, 10 symbolic link, 1 FIFO,
+  12 socket, 2 and 6 devices).
+- A descriptor from `open(dir, O_RDONLY | O_DIRECTORY)` works: on first use
+  it is replaced (same number, same close-on-exec flag) by a directory
+  descriptor, as libroot's `fdopendir()` does.
+- **Differences from Linux:**
+  - `d_off` is not a seek position (Haiku directories cannot be positioned
+    with `lseek()`); it is non-zero and increasing within one buffer.
+  - The `DT_*` names are not defined: Haiku's `struct dirent` has no
+    `d_type`, and code often reads `#ifdef DT_DIR` as "it has". Use the
+    numbers, or define the names in the port.
+
+Implementation: `src/libs/gnu/getdents.cpp`.
+
+Since: the commit that added that file. Tests:
+`3rdparty/ce/tests/posix_compat/getdents_test.cpp` (13 checks).
+
+### getpeereid
+
+`getpeereid(fd, &uid, &gid)` (the BSDs, macOS), in libbsd and the bsd
+`<unistd.h>`: the effective user and group IDs of the peer of a connected
+UNIX stream socket, recorded at `connect()`/`listen()`, from the same data
+as `SO_PEERCRED`. Errors as on FreeBSD: `ENOTCONN` (unconnected or
+listening socket), `EINVAL` (datagram or non-UNIX socket), `ENOTSOCK`,
+`EBADF`.
+
+Implementation: `src/libs/bsd/getpeereid.c`. Since: the commit that added
+it. Tests: `socket_ext_test.cpp`.
+
+### Half-close: POLLRDHUP and EPOLLRDHUP
+
+A peer's `shutdown(SHUT_WR)` (or close) on a TCP or UNIX stream socket is
+reported as `POLLIN | POLLRDHUP` by `poll()` and `EPOLLIN | EPOLLRDHUP` by
+epoll, as on Linux, also while received data is still queued; `POLLHUP`
+only once both directions are shut (the peer closed a UNIX socket, or the
+peer's and our own `SHUT_WR`), and for TCP, as on Linux, not while the
+connection is in CLOSE-WAIT. A blocked `poll()`/`epoll_wait()` is woken by
+it. `POLLRDHUP` is 0x2000 (Linux's value; also `EPOLLRDHUP`), and is only
+reported when asked for. Pipes, files and datagram sockets never report it.
+
+Stock Haiku reported a half-close as `POLLHUP` (the descriptor looked
+disconnected while the socket could still send) and had no `POLLRDHUP`.
+Code that treated `POLLHUP` as "peer finished sending" on Haiku should test
+`POLLRDHUP` or `read()` returning 0 instead.
+
+Implementation: a new select event `B_SELECT_READ_DISCONNECTED`
+(`headers/os/drivers/Select.h`), reported by the socket layer
+(`src/add-ons/kernel/network/stack/net_socket.cpp`) from the TCP FIN and
+UNIX shutdown notifications, and mapped by `poll()` and epoll.
+
+Since: the commit that added `B_SELECT_READ_DISCONNECTED`. Tests:
+`3rdparty/ce/tests/posix_compat/socket_ext_test.cpp` (35 checks, with
+`getpeereid()`).
 
 ### eventfd
 

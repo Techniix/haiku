@@ -591,6 +591,12 @@ UnixStreamEndpoint::Sendable()
 	UnixFifo* peerFifo = fPeerEndpoint->fReceiveFifo;
 	UnixFifoLocker fifoLocker(peerFifo);
 
+	// Our sending side has ended (our SHUT_WR or the peer's SHUT_RD): writes
+	// fail with EPIPE. Saying so here lets select()ors see POLLHUP once the
+	// receiving side has ended too (net_socket.cpp).
+	if (peerFifo->IsWriteShutdown() || peerFifo->IsReadShutdown())
+		RETURN_ERROR(EPIPE);
+
 	RETURN_ERROR(peerFifo->Writable());
 }
 
@@ -704,6 +710,8 @@ UnixStreamEndpoint::Shutdown(int direction)
 	if (direction == SHUT_WR || direction == SHUT_RDWR) {
 		gSocketModule->notify(socket, B_SELECT_WRITE, EPIPE);
 		gSocketModule->notify(fPeerEndpoint->socket, B_SELECT_READ, EPIPE);
+			// EPIPE: a half-close, the peer reports POLLIN | POLLRDHUP
+			// but not POLLHUP while it can still send (net_socket.cpp)
 	}
 
 	RETURN_ERROR(B_OK);

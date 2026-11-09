@@ -21,6 +21,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			fgetln.c
 			fts.c
 			getloadavg.cpp
+			getpeereid.c
 			getpass.c
 			issetugid.c
 			kqueue.cpp

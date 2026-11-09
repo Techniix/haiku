@@ -28,6 +28,9 @@ char	*getusershell(void);
 int		issetugid(void);
 void	setusershell(void);
 
+int		getpeereid(int socket, uid_t* _uid, gid_t* _gid);
+	/* Renga: peer credentials of a connected UNIX stream socket */
+
 int		closefrom(int lowFd);
 int		close_range(u_int minFd, u_int maxFd, int flags);
 

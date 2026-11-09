@@ -4,6 +4,8 @@ SubDir HAIKU_TOP 3rdparty ce tests posix_compat ;
 # kernel objects behind them).
 
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility bsd ] : true ;
+	# getpeereid() (libbsd)
 
 # epoll; uses eventfd and timerfd as event sources.
 Application epoll_test :
@@ -12,6 +14,18 @@ Application epoll_test :
 ;
 
 # inotify; also uses epoll and fs_write_attr() (libroot).
+# getdents64()/getdents() are in libgnu.
+Application getdents_test :
+	getdents_test.cpp
+	: libgnu.so network [ TargetLibstdc++ ]
+;
+
+# getpeereid() (libbsd), POLLRDHUP/EPOLLRDHUP on stream sockets.
+Application socket_ext_test :
+	socket_ext_test.cpp
+	: libbsd.so libgnu.so network
+;
+
 Application inotify_test :
 	inotify_test.cpp
 	: libgnu.so [ TargetLibstdc++ ]
@@ -89,6 +103,6 @@ Application timerfd_test :
 ;
 
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test inotify_test libc_ext_test memfd_test
-		mqueue_test shm_test signalfd_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test
+		mqueue_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test ;
 }

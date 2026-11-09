@@ -204,6 +204,8 @@ haiku_events_for(uint32 events)
 		result |= B_EVENT_PRIORITY_READ;
 	if ((events & EPOLLWRBAND) != 0)
 		result |= B_EVENT_PRIORITY_WRITE;
+	if ((events & EPOLLRDHUP) != 0)
+		result |= SELECT_FLAG(B_SELECT_READ_DISCONNECTED);
 	return result;
 }
 
@@ -224,9 +226,13 @@ epoll_events_for(uint16 events, uint32 requested)
 		result |= requested & EPOLLWRBAND;
 	if ((events & B_EVENT_ERROR) != 0)
 		result |= EPOLLERR;
+	if ((events & SELECT_FLAG(B_SELECT_READ_DISCONNECTED)) != 0) {
+		// The peer shut down its sending side (stream sockets).
+		result |= requested & EPOLLRDHUP;
+	}
 	if ((events & B_EVENT_DISCONNECTED) != 0) {
-		// Haiku objects report only a full disconnect; a peer's half-close
-		// shows up as readability (read() returns 0).
+		// A full disconnect implies the peer's side is shut too, as on
+		// Linux (objects other than sockets only report this one).
 		result |= EPOLLHUP | (requested & EPOLLRDHUP);
 	}
 	return result;
