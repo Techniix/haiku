@@ -16,6 +16,8 @@
 
 #include "efi_platform.h"
 #include <efi/protocol/block-io.h>
+#include <efi/protocol/device-path.h>
+#include <efi/protocol/loaded-image.h>
 
 #include "gpt.h"
 #include "gpt_known_guids.h"
@@ -30,6 +32,12 @@
 
 
 static efi_guid BlockIoGUID = EFI_BLOCK_IO_PROTOCOL_GUID;
+static efi_guid sLoadedImageProtocolGUID = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+static efi_guid sDevicePathProtocolGUID = EFI_DEVICE_PATH_PROTOCOL_GUID;
+
+// Upper bound for the device paths compared below; real ones are a few
+// dozen bytes. It only guards against a malformed path without an end node.
+static const size_t kMaxDevicePathSize = 4096;
 
 
 class EfiDevice : public Node
@@ -139,6 +147,79 @@ device_contains_partition(EfiDevice *device, boot::Partition *partition)
 }
 
 
+/*!	Returns the size in bytes of \a path without its end node, or 0 if the
+	path is malformed (a node shorter than its own header, or no end node
+	within kMaxDevicePathSize bytes).
+*/
+static size_t
+device_path_size(const efi_device_path_protocol* path)
+{
+	size_t size = 0;
+	while (size < kMaxDevicePathSize) {
+		const efi_device_path_protocol* node
+			= (const efi_device_path_protocol*)((const uint8*)path + size);
+		if (node->Type == DEVICE_PATH_END)
+			return size;
+		if (node->Length < sizeof(efi_device_path_protocol))
+			return 0;
+		size += node->Length;
+	}
+	return 0;
+}
+
+
+/*!	Returns the device path of the device the firmware loaded this boot
+	loader from: the EFI system partition, or the El Torito boot image of a
+	CD. Returns NULL if the firmware cannot tell (for example when the loader
+	came over the network or from a memory-mapped image).
+*/
+static efi_device_path_protocol*
+boot_loader_device_path()
+{
+	efi_loaded_image_protocol* loadedImage;
+	if (kBootServices->HandleProtocol(kImage, &sLoadedImageProtocolGUID,
+			(void**)&loadedImage) != EFI_SUCCESS
+		|| loadedImage->DeviceHandle == NULL)
+		return NULL;
+
+	efi_device_path_protocol* devicePath;
+	if (kBootServices->HandleProtocol(loadedImage->DeviceHandle,
+			&sDevicePathProtocolGUID, (void**)&devicePath) != EFI_SUCCESS)
+		return NULL;
+
+	return devicePath;
+}
+
+
+/*!	Returns whether \a diskPath is the device path of the whole disk that
+	contains \a loaderPath. The firmware names a partition by the path of
+	its disk followed by one media node (HardDrive for an MBR or GPT
+	partition, CDROM for an El Torito image), so the disk's path has to be a
+	prefix of the partition's, followed by such a node. A loader started
+	from an unpartitioned disk has the disk's own path.
+*/
+static bool
+is_boot_loader_disk(const efi_device_path_protocol* diskPath,
+	const efi_device_path_protocol* loaderPath)
+{
+	size_t diskSize = device_path_size(diskPath);
+	size_t loaderSize = device_path_size(loaderPath);
+	if (diskSize == 0 || loaderSize < diskSize
+		|| memcmp(diskPath, loaderPath, diskSize) != 0)
+		return false;
+
+	if (loaderSize == diskSize)
+		return true;
+
+	const efi_device_path_protocol* next
+		= (const efi_device_path_protocol*)((const uint8*)loaderPath
+			+ diskSize);
+	return next->Type == DEVICE_PATH_MEDIA
+		&& (next->SubType == MEDIA_HARDDRIVE_DP
+			|| next->SubType == MEDIA_CDROM_DP);
+}
+
+
 status_t
 platform_add_boot_device(struct stage2_args *args, NodeList *devicesList)
 {
@@ -173,6 +254,17 @@ platform_add_boot_device(struct stage2_args *args, NodeList *devicesList)
 			handles) != EFI_SUCCESS)
 		panic("Failed to locate block devices!");
 
+	// The generic loader boots the first BFS boot volume it finds, going
+	// through the devices in list order. With several disks that each carry
+	// an install, that has to be the one on the disk the firmware loaded us
+	// from, the one the user picked in the firmware's boot menu; firmware
+	// handle order has nothing to do with that choice. So find that disk
+	// below and move it in front of the other disks. If the firmware does
+	// not tell us where we came from, the order stays as it was.
+	efi_device_path_protocol* loaderPath = boot_loader_device_path();
+	EfiDevice* firstDevice = NULL;
+	EfiDevice* loaderDisk = NULL;
+
 	// All block devices has one for the disk and one per partition
 	// There is a special case for a device with one fixed partition
 	// But we probably do not care about booting on that kind of device
@@ -206,6 +298,25 @@ platform_add_boot_device(struct stage2_args *args, NodeList *devicesList)
 		if (device == NULL)
 			panic("Can't allocate memory for block devices!");
 		devicesList->Insert(device);
+		if (firstDevice == NULL)
+			firstDevice = device;
+
+		efi_device_path_protocol* diskPath;
+		if (loaderPath != NULL && loaderDisk == NULL
+			&& kBootServices->HandleProtocol(handles[n],
+				&sDevicePathProtocolGUID, (void**)&diskPath) == EFI_SUCCESS
+			&& is_boot_loader_disk(diskPath, loaderPath)) {
+			loaderDisk = device;
+		}
+	}
+
+	if (loaderDisk != NULL && loaderDisk != firstDevice) {
+		// Only reorder among the disks: a remote disk found above stays
+		// first, as before.
+		dprintf("efi/devices: boot loader disk is not the first disk, "
+			"trying it first\n");
+		devicesList->Remove(loaderDisk);
+		devicesList->InsertBefore(firstDevice, loaderDisk);
 	}
 
 	return devicesList->Count() > 0 ? B_OK : B_ENTRY_NOT_FOUND;

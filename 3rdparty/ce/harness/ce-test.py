@@ -84,6 +84,10 @@ SCRATCH_DISKS = [
 # working trims all 8 MiB would.
 SCRATCH_ALLOCATED_RANGE = (4 * 1024 * 1024, 6 * 1024 * 1024)
 
+# --two-installs: BFS volume name of the second install attached in front of
+# the test image.
+DECOY_VOLUME_NAME = "Decoy"
+
 # Scratch namespaces for nvme_test: one NVMe controller with two namespaces
 # of different sizes and logical block sizes, each backed by its own sparse
 # file (attached without -snapshot like the scratch disks above). Entries are
@@ -229,13 +233,30 @@ def build(args, results_dir, report):
 	return code == 0
 
 
-def boot_drive(args, image):
+def boot_drive(args, image, decoy=None):
 	"""Returns the QEMU options that attach the test image.
 
 	"disk" attaches the image as an IDE hard disk (raw images, and anyboot
 	images the way they boot from a USB stick); "cdrom" attaches it as an
 	IDE CD-ROM, which exercises the El Torito boot paths of anyboot images.
+
+	With a decoy (--two-installs), a second install is attached in front of
+	the test image, first on the bus and first in the boot order. OVMF
+	connects the devices in boot order, so the decoy's block device is the
+	first one the boot loader sees. The decoy has no EFI system partition
+	(see make_decoy()), so the firmware cannot start it and goes on to the
+	test image, whose boot loader then has to pick its own disk.
 	"""
+	if decoy is not None:
+		if args.disk_bus == "virtio":
+			return ["-drive", "file=%s,format=raw,if=none,id=decoy" % decoy,
+				"-device", "virtio-blk-pci,drive=decoy,bootindex=0",
+				"-drive", "file=%s,format=raw,if=none,id=boot" % image,
+				"-device", "virtio-blk-pci,drive=boot,bootindex=1"]
+		return ["-drive", "file=%s,format=raw,if=none,id=decoy" % decoy,
+			"-device", "ide-hd,drive=decoy,bus=ide.0,unit=0,bootindex=0",
+			"-drive", "file=%s,format=raw,if=none,id=boot" % image,
+			"-device", "ide-hd,drive=boot,bus=ide.0,unit=1,bootindex=1"]
 	if args.media == "cdrom":
 		return ["-drive",
 			"file=%s,format=raw,if=ide,media=cdrom,readonly=on" % image]
@@ -259,6 +280,97 @@ def image_path(args):
 	}
 	return os.path.join(args.output, names.get(args.profile,
 		"haiku-%s.image" % args.profile.replace("-raw", "")))
+
+
+def bfs_volume_offset(path):
+	"""Byte offset of the BFS volume in an image: the first BFS partition
+	(type 0xeb) of its MBR, or 0 for an unpartitioned image. None if there
+	is no BFS superblock where one is expected."""
+	with open(path, "rb") as image:
+		mbr = image.read(512)
+		offsets = []
+		if mbr[510:512] == b"\x55\xaa":
+			for index in range(4):
+				entry = mbr[446 + 16 * index:462 + 16 * index]
+				if entry[4] == 0xeb:
+					offsets.append(struct.unpack("<I", entry[8:12])[0] * 512)
+		offsets.append(0)
+		for offset in offsets:
+			image.seek(offset + 512)
+			superblock = image.read(64)
+			if superblock[32:36] == b"1SFB":
+				return offset
+	return None
+
+
+def bfs_volume_name(path):
+	offset = bfs_volume_offset(path)
+	if offset is None:
+		return None
+	with open(path, "rb") as image:
+		image.seek(offset + 512)
+		return image.read(32).split(b"\0")[0].decode("utf-8", "replace")
+
+
+def make_decoy(image, decoy):
+	"""Copies the test image into a second, distinguishable install for
+	--two-installs: its BFS volume is renamed to DECOY_VOLUME_NAME (the
+	runner's "df /boot" shows which of the two the guest booted), and its
+	MBR loses every partition entry except the BFS one, the EFI system
+	partition above all. Anyboot images also carry an El Torito boot catalog
+	that firmware honours on hard disks too, so its boot record descriptor
+	goes as well. Like an install made for BIOS booting, the firmware then
+	has nothing to start on the decoy. The changed MBR also lets the kernel's
+	boot disk identifier (which checksums the first disk blocks) tell the
+	two disks apart, the way it can two different real installs."""
+	offset = bfs_volume_offset(image)
+	if offset is None or offset == 0:
+		return False
+	shutil.copyfile(image, decoy)
+	with open(decoy, "r+b") as copy:
+		for index in range(4):
+			copy.seek(446 + 16 * index)
+			entry = copy.read(16)
+			if entry[4] != 0xeb:
+				copy.seek(446 + 16 * index)
+				copy.write(b"\0" * 16)
+		# ISO 9660 volume descriptors start at 2 KiB sector 16; a boot
+		# record (type 0) names the El Torito catalog.
+		for sector in range(16, 32):
+			copy.seek(sector * 2048)
+			descriptor = copy.read(39)
+			if descriptor[1:6] != b"CD001" or descriptor[0] == 0xff:
+				break
+			if descriptor[0] == 0 \
+					and descriptor[7:30] == b"EL TORITO SPECIFICATION":
+				copy.seek(sector * 2048)
+				copy.write(b"\0" * 2048)
+		copy.seek(offset + 512)
+		copy.write(DECOY_VOLUME_NAME.encode().ljust(32, b"\0"))
+	return True
+
+
+def check_two_installs(args, results_dir, report):
+	"""--two-installs: the boot loader must have booted the install whose
+	boot loader the firmware started, not the decoy enumerated before it."""
+	if not args.two_installs:
+		return
+	want = report.get("boot", {}).get("volume_name")
+	try:
+		with open(os.path.join(results_dir, "serial.log"), errors="replace") \
+				as serial:
+			text = serial.read()
+	except OSError:
+		text = ""
+	volume = re.search(r'Volume Name: "([^"]*)"', text)
+	got = volume.group(1) if volume else None
+	report.setdefault("host_checks", []).append({
+		"name": "boot.two_installs",
+		"pass": want is not None and got == want,
+		"detail": "booted volume %s (want \"%s\" from the boot disk, not "
+			"\"%s\" from the disk enumerated first)" % (
+			'"%s"' % got if got is not None else "not reported", want,
+			DECOY_VOLUME_NAME)})
 
 
 # #pragma mark - boot
@@ -459,6 +571,13 @@ def boot(args, results_dir, report):
 	if os.path.exists(monitor_path):
 		os.unlink(monitor_path)
 
+	decoy = None
+	if args.two_installs:
+		decoy = os.path.join(results_dir, "decoy.img")
+		if not make_decoy(image, decoy):
+			report["boot"] = {"status": "no-bfs-volume", "image": image}
+			return False
+
 	qemu = [
 		"qemu-system-x86_64",
 		"-m", str(args.memory),
@@ -470,7 +589,7 @@ def boot(args, results_dir, report):
 		"-monitor", "unix:%s,server=on,wait=off" % monitor_path,
 		"-no-reboot",
 		"-snapshot",
-	] + boot_drive(args, image) + [
+	] + boot_drive(args, image, decoy) + [
 		"-audiodev", "wav,id=snd0,path=%s,out.frequency=48000,"
 			"out.channels=2,out.format=s16" % audio,
 		"-device", "virtio-sound-pci,audiodev=snd0",
@@ -521,6 +640,8 @@ def boot(args, results_dir, report):
 		qemu += ["-boot", "d"]
 
 	report["boot"] = {"command": " ".join(qemu), "image": image}
+	if decoy is not None:
+		report["boot"]["volume_name"] = bfs_volume_name(image)
 	log("booting: " + " ".join(qemu))
 
 	started = time.time()
@@ -583,6 +704,9 @@ def boot(args, results_dir, report):
 	reader.done.wait(timeout=10)
 
 	qemu_stderr.close()
+	if decoy is not None:
+		# A full copy of the image, only needed while the guest runs.
+		os.remove(decoy)
 	report["boot"]["screenshots"] = convert_screenshots(shots)
 	if reader.kdl.is_set():
 		# The whole debugger session (every backtrace); summary.md only
@@ -1028,6 +1152,9 @@ def write_report(results_dir, report):
 		"a CD-ROM" if report.get("media") == "cdrom"
 			else "a %s hard disk" % ("virtio" if report.get("disk_bus")
 				== "virtio" else "IDE")))
+	if report.get("two_installs"):
+		lines[-1] += (" A renamed second install (\"%s\") was attached in "
+			"front of it." % DECOY_VOLUME_NAME)
 	lines.append("")
 
 	build_info = report.get("build")
@@ -1128,6 +1255,11 @@ def main():
 	parser.add_argument("--disk-bus", choices=("ide", "virtio"), default="ide",
 		help="bus of the boot disk: IDE (default) or virtio-blk, which boots "
 			"through the virtio_block driver")
+	parser.add_argument("--two-installs", action="store_true",
+		help="with --firmware uefi: attach a second, renamed install "
+			"without an EFI system partition in front of the image (first "
+			"on the bus and in the boot order) and check that the guest "
+			"booted the install whose boot loader the firmware started")
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
@@ -1145,6 +1277,10 @@ def main():
 		help="build the drivers under test with their TRACE() output on")
 	args = parser.parse_args()
 	args.output = os.path.abspath(args.output)
+	if args.two_installs and (args.media == "cdrom"
+			or args.firmware != "uefi"):
+		parser.error("--two-installs tests the EFI boot loader's choice "
+			"between hard disks; it needs --firmware uefi and --media disk")
 	if args.profile is None:
 		args.profile = "minimum-anyboot" \
 			if args.firmware == "uefi" or args.media == "cdrom" \
@@ -1163,6 +1299,7 @@ def main():
 	report = {"started": started.isoformat(timespec="seconds"),
 		"profile": args.profile, "firmware": args.firmware,
 		"media": args.media, "disk_bus": args.disk_bus,
+		"two_installs": args.two_installs,
 		"compile_only": args.compile_only}
 
 	ok = True
@@ -1175,6 +1312,7 @@ def main():
 		check_scratch_disks(results_dir, report)
 		check_nvme_namespaces(results_dir, report)
 		check_image_identity(args, results_dir, report)
+		check_two_installs(args, results_dir, report)
 		analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 
 	summary, passed = write_report(results_dir, report)

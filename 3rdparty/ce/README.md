@@ -35,6 +35,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --smp 4          # several CPUs
 3rdparty/ce/harness/ce-test.py --firmware uefi  # OVMF, anyboot image
 3rdparty/ce/harness/ce-test.py --media cdrom    # anyboot as a CD (El Torito)
+3rdparty/ce/harness/ce-test.py --firmware uefi --two-installs   # pick the right disk
 3rdparty/ce/harness/selftest.py                 # check the harness itself
 ```
 
@@ -44,6 +45,17 @@ From the root of the Haiku tree, after `configure` has created
 image boots: BIOS from disk or USB (MBR), BIOS from CD (the El Torito floppy
 image), and UEFI from either. UEFI runs use a fresh copy of the OVMF variable
 store each time.
+
+`--two-installs` (UEFI, hard disk only) checks that the EFI boot loader boots
+the install on the disk the firmware started it from. The harness attaches a
+second copy of the image in front of the test image, first on the bus and
+first in the boot order. The copy, the decoy, has its BFS volume renamed to
+"Decoy", and its EFI system partition entry and El Torito boot record
+removed, like an install made for BIOS booting: OVMF cannot start it, goes
+on to the test image, but still lists the decoy's disk first. The check
+`boot.two_installs` passes if the guest's `/boot` is the test image's volume.
+A loader that takes the first disk in firmware order boots "Decoy" instead.
+Works with `--disk-bus virtio` too.
 
 Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 `ce-test-results/latest` always points to the newest run:

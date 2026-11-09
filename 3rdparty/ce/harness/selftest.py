@@ -208,5 +208,54 @@ expect("vblk: media change seen by nobody fails", not media_changed(""))
 expect("vblk: media change of another disk fails", not media_changed(
 	"Media changed from /dev/disk/virtual/virtio_block/1/raw\r\n"))
 
+class TwoInstallsArgs:
+	two_installs = True
+
+def two_installs(volume_line):
+	directory = tempfile.mkdtemp()
+	with open(os.path.join(directory, "serial.log"), "w") as serial:
+		serial.write("CE-INFO boot volume:\r\n" + volume_line)
+	report = {"boot": {"volume_name": "Haiku"}}
+	ce_test.check_two_installs(TwoInstallsArgs, directory, report)
+	return report["host_checks"][0]["pass"]
+
+expect("two installs: booted volume passes",
+	two_installs('  Volume Name: "Haiku"\r\n'))
+expect("two installs: decoy volume fails",
+	not two_installs('  Volume Name: "Decoy"\r\n'))
+expect("two installs: no volume reported fails", not two_installs(""))
+
+# make_decoy() on a miniature anyboot image: an MBR with a BFS partition
+# (LBA 128) and an EFI system partition (LBA 256), an El Torito boot record
+# at 2 KiB sector 17, and a BFS superblock.
+directory = tempfile.mkdtemp()
+original = os.path.join(directory, "anyboot.img")
+image = bytearray(256 * 1024)
+image[446:462] = bytes([0x80, 0, 0, 0, 0xeb, 0, 0, 0]) \
+	+ struct.pack("<II", 128, 64)
+image[462:478] = bytes([0, 0, 0, 0, 0xef, 0, 0, 0]) \
+	+ struct.pack("<II", 256, 64)
+image[510:512] = b"\x55\xaa"
+for sector, kind in ((16, 1), (17, 0), (18, 0xff)):
+	image[sector * 2048:sector * 2048 + 6] = bytes([kind]) + b"CD001"
+image[17 * 2048 + 7:17 * 2048 + 30] = b"EL TORITO SPECIFICATION"
+image[128 * 512 + 512:128 * 512 + 517] = b"Haiku"
+image[128 * 512 + 544:128 * 512 + 548] = b"1SFB"
+with open(original, "wb") as imageFile:
+	imageFile.write(image)
+decoy = os.path.join(directory, "decoy.img")
+made = ce_test.make_decoy(original, decoy)
+with open(decoy, "rb") as decoyFile:
+	copy = decoyFile.read()
+expect("decoy: made", made and len(copy) == len(image))
+expect("decoy: renamed", ce_test.bfs_volume_name(decoy)
+	== ce_test.DECOY_VOLUME_NAME and ce_test.bfs_volume_name(original)
+	== "Haiku", str(ce_test.bfs_volume_name(decoy)))
+expect("decoy: BFS partition kept, EFI system partition gone",
+	copy[446:462] == image[446:462] and copy[462:478] == bytes(16))
+expect("decoy: El Torito boot record gone",
+	copy[17 * 2048:18 * 2048] == bytes(2048)
+	and copy[16 * 2048:17 * 2048] == image[16 * 2048:17 * 2048])
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)
