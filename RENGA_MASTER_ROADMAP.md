@@ -324,6 +324,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-40 | Visual identity pack (themes) | Not Started | None |
 | F-41 | Deskbar modernisation | Investigating (requirements set) | None |
 | F-42 | Gamepad support and configurator | Investigating (requirements set) | None |
+| F-43 | Chromium platform readiness | Designed (phases A-H) | None |
 
 ---
 
@@ -1081,6 +1082,50 @@ Milestone checklist (in order; phases 1 and 3 first because they unblock the mos
 
 ### Hardware platform
 
+#### F-43 Chromium platform readiness (native, fully featured)
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Haiku runs QtWebEngine 5.15 (Chromium 87) from HaikuPorts; no current Chromium. Missing for Chromium: epoll/eventfd/inotify (now in Renga), process sandbox, GPU path for web content, desktop service interfaces |
+| Renga maturity | The maintainer's port [Chromium-HaikuOS](https://github.com/Techniix/Chromium-HaikuOS) (Chromium 156) builds and runs on Haiku through the Wayland compatibility layer with a native window frame; sound through a Media Kit backend is being tested; it runs with `--no-sandbox`, `--disable-gpu`, `--disable-quic` |
+| Status | **Designed** (evaluation 2026-11-09, below) |
+| Completed | OS side already in Renga: `epoll`, `eventfd`, `timerfd`, `inotify`, `signalfd`, `memfd_create`, `backtrace()`, `getrandom`, `sendmmsg`/`recvmmsg`, `TCP_INFO`, keepalive (`F-05`, `F-06`-`F-12`, `F-15`) |
+| Remaining | Checklist below (OS side in Renga, port side in Chromium-HaikuOS) |
+| Known bugs/limitations | See checklist |
+| Dependencies | `F-15`; `F-31` phases 1-5; `F-35` (GPU); `F-37` (power); `F-26` (LinuxKPI GPU drivers for Intel/AMD) |
+| Difficulty | Small items 2-4; sandbox 7; GPU path 8-9 (audit scale) |
+| Risk | Medium; High for the sandbox (security-critical) |
+| Testing status | None yet for this entry. Each OS item gets a harness test; the browser itself is tested on the maintainer's machine |
+| Next milestone | Phase A (small OS gaps), harness-tested |
+| Recommended next action | Schedule phase A with the porting work; it is small and also helps other ports (Electron, Node, Firefox) |
+| Links | Chromium-HaikuOS `docs/PORTING.md`; its platform checklist |
+
+**Fastest route (evaluation, 2026-11-09).** The port already follows the quickest model: FreeBSD's maintained `www/chromium` patch set, converted to Haiku by the port's `haikuify` tool on every release ("Linux in GN, Haiku in C++", from the HaikuPorts QtWebEngine port), plus a small Haiku patch series, with Chromium's mature Ozone/Wayland backend running on Haiku's Wayland compatibility layer. Renga speeds this up most by **offering the interfaces Chromium's Linux and BSD code already uses**, so that code compiles unchanged and the Haiku-only patches shrink instead of grow, which also makes every Chromium update cheaper. Where an established project already solved a piece, reuse it instead of writing a Renga-only design:
+
+- process sandbox: OpenBSD's Chromium sandbox, built on `pledge()`/`unveil()`; implement those two primitives in the Renga kernel and reuse OpenBSD's sandbox patches, instead of porting seccomp or inventing a new sandbox model;
+- desktop services: the freedesktop D-Bus interfaces Chromium (and Electron, Firefox, GTK and Qt) already speak; Renga provides backends only (xdg-desktop-portal for file dialogs, screen sharing, screenshots, open-URI, settings and inhibit; the Notifications, Secret Service and UPower interfaces);
+- hardware video: VA-API (libva) as the hardware video interface of the Media Kit phase 5 (`F-31`), with existing drivers behind it (nvidia-vaapi-driver over NVDEC for the maintainer's NVIDIA driver, Mesa's VA drivers for AMD/Intel through LinuxKPI-ported DRM), so Chromium's existing VA-API code works;
+- media in the port: the HaikuPorts QtWebEngine port's Media Kit audio and video-capture code as the reference;
+- GPU: Mesa (EGL, GLES, Vulkan) with ANGLE, the same stack Linux uses.
+
+Checklist (OS side unless marked "port"):
+
+- [ ] **Phase A, small OS gaps (each 2-4, harness-tested):**
+  - [ ] `__cxa_thread_atexit_impl` in libroot, so `thread_local` destructors work without the port's `libhaikucompat.a` helper;
+  - [ ] `sched_getaffinity`/`sched_setaffinity` and `pthread_setaffinity_np` in libroot (today only in libgnu, pulled in through a `libm.a` linker-script trick);
+  - [ ] `getdents`/`getdents64`, `getpeereid`, and `POLLRDHUP` honoured by `poll()` as well as `epoll`;
+  - [ ] `memfd` sealing (`MFD_ALLOW_SEALING`, `F_ADD_SEALS`, `F_GET_SEALS`), used by Chromium's Linux shared-memory code and Wayland;
+  - [ ] the UDP socket options QUIC needs: find the call that fails with "Operation not supported" (likely ECN via `IP_RECVTOS`/`IPV6_RECVTCLASS`, `IP_PKTINFO`, or path-MTU options) and implement it, so HTTP/3 works without `--disable-quic`;
+  - [ ] Linux-compatible memory semantics for V8 and PartitionAlloc (`MADV_DONTNEED` zero-fill, `MADV_FREE`, `mprotect` on sub-ranges, `PROT_NONE` reservations that commit no memory, `MAP_FIXED` over reservations): the port's V8 "Check failed: success" tab crash points here; reproduce in the harness first;
+  - [ ] fontconfig configured for Haiku's font folders by default (no `FONTCONFIG_FILE` needed).
+- [ ] **Phase B, port catches up with Renga (port):** native `MessagePumpEpoll` with `eventfd` wake-ups (drop the poll-mode patch), the Linux `inotify` file watcher (replace the stub), `memfd` shared memory, symbolized crash stack traces through `backtrace()`.
+- [ ] **Phase C, Wayland compatibility layer as a Renga component:** bring Haiku's `wayland_server` layer (HaikuPorts) into Renga and extend it: clipboard bridged to the Haiku clipboard, drag and drop, `text-input-v3` bridged to Haiku input methods (non-US layouts, IME), fractional scaling, multiple outputs, idle-inhibit; later `linux-dmabuf` and EGL with the GPU work. Benefits every Wayland program (GTK4, Qt, SDL, Electron, Firefox).
+- [ ] **Phase D, desktop services:** a D-Bus session bus started by launch_daemon; `xdg-desktop-portal` with a Renga backend (FileChooser on BFilePanel, ScreenCast and Screenshot on the `F-31` phase-3 capture API, Notification on BNotification, OpenURI, Settings with the dark-mode preference, Inhibit for "keep the screen on" during video); `org.freedesktop.Notifications`; Secret Service on Haiku's key store (BKeyStore) for saved passwords; UPower-compatible battery status on `F-37`.
+- [ ] **Phase E, media (mostly port, on `F-31`):** Media Kit audio output (being tested) and microphone input; camera capture through the Media Kit on the UVC driver (`F-31` phase 2), with the QtWebEngine code as the reference; screen sharing through the portal (phase D); hardware video decode and encode through VA-API (`F-31` phase 5). Codecs: decide on `proprietary_codecs` (H.264/AAC licensing).
+- [ ] **Phase F, GPU:** EGL/GLES/Vulkan from Mesa on Renga's GPU drivers (`F-35`; the maintainer's NVIDIA driver; LinuxKPI DRM for Intel/AMD), the dma-buf path in the Wayland layer (phase C), and Chromium's GPU process through ANGLE: GPU raster, compositing, WebGL, WebGPU. Software rendering stays the fallback.
+- [ ] **Phase G, sandbox:** `pledge()`- and `unveil()`-style restrictions in the Renga kernel (a per-team set of allowed system-call groups checked in the syscall dispatcher, and per-team path visibility in the VFS), then OpenBSD's Chromium sandbox policies on top; a harness suite that proves forbidden calls and paths fail. Until then the port documents `--no-sandbox`.
+- [ ] **Phase H, remaining features:** accessibility through AT-SPI2 on D-Bus with a Renga bridge (no screen reader exists yet, large); WebUSB/WebHID/WebSerial through Haiku's USB Kit (port); Gamepad API on `F-42` (port); optional minidump crash reports later.
+
 #### F-35 GPU and graphics
 
 | Field | Value |
@@ -1691,6 +1736,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Audio GUI reworked together with the Media Kit phases, exposing every new feature as it lands | `F-31`, `F-32` |
 | 2026-11-09 | After the Media Kit: LinuxKPI integration for Wi-Fi on real hardware, then full gamepad support with a configurator and complete SDL support (8BitDo Ultimate 2C flawless) | `F-26`, `F-34`, `F-42`; section 5.1 |
 | 2026-11-09 | After gamepads: first part of the boot loader work, booting Windows from the boot menu | `F-22`; section 5.1 |
+| 2026-11-09 | Chromium: run natively and fully featured; take the fastest route and reuse existing work (FreeBSD patch set + converter, OpenBSD sandbox model, freedesktop portal/D-Bus interfaces, VA-API, Mesa/ANGLE, HaikuPorts QtWebEngine media code) | `F-43` |
 
 ---
 
