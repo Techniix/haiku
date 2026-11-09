@@ -1037,7 +1037,7 @@ Milestone checklist (in order; phases 1 and 3 first because they unblock the mos
 - [ ] **Phase 3, capture APIs:** app_server screen capture (full screen, window, region; steady frame rate; optional cursor; permission prompt on first use); a capture session that delivers screen, audio and camera with matched timestamps.
 - [ ] **Phase 4, codecs and streaming:** updated FFmpeg plug-in (AV1 via dav1d, modern HEVC/VP9, Opus/FLAC/AAC encode); one encode/decode API that picks hardware when present and software otherwise; HLS/DASH playback; RTMP and RTP/WebRTC-friendly output; network audio output.
 - [ ] **Phase 5, hardware video acceleration:** back ends behind the phase-4 API: NVIDIA NVENC/NVDEC with the maintainer's driver rework; Intel/AMD most likely through LinuxKPI-ported GPU drivers. Phases 1-4 do not wait for it; implement what is possible now and come back.
-- [ ] **Phase 6, audio settings redesign:** see `F-32`.
+- [ ] **Phase 6, audio settings redesign:** see `F-32`. Maintainer decision (2026-11-09): the audio GUI is reworked together with the Media Kit work, so each phase ships with the controls that use its features (not as a separate project at the end).
 
 #### F-32 Audio settings redesign
 
@@ -1659,6 +1659,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Target design: desktop concept A "Haiku Evolved" (Lumina classic as the default look, Lumina's advanced features as options) and Control Panel concept 1 "Sidebar & search" | `F-25`, `F-28`; [concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq) |
 | 2026-11-09 | Deskbar to be modernised in design and functionality as part of the Lumina work: easy to use and full featured | `F-41` |
 | 2026-11-09 | Deskbar approach: hybrid; keep Deskbar as the host (API, replicants) and build its new features from components shared with Lumina Panel | `F-41` |
+| 2026-11-09 | Audio GUI reworked together with the Media Kit phases, exposing every new feature as it lands | `F-31`, `F-32` |
 
 ---
 
