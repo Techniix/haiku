@@ -671,13 +671,29 @@ virtio_block_set_capacity(virtio_block_driver_info* info)
 	if (info->block_size == blockSize && info->capacity == capacity)
 		return false;
 
-	info->capacity = capacity;
-
 	if (info->block_size != 0) {
-		ERROR("old %" B_PRId32 ", new %" B_PRId32 "\n", info->block_size,
-			blockSize);
-		panic("updating DMAResource not yet implemented...");
+		// Already set up: the host changed the disk while we run.
+		if (info->block_size != blockSize) {
+			// The DMAResource and I/O scheduler are built for one block size
+			// and cannot be switched underneath requests in flight. A
+			// logical block size change on a live disk is not something
+			// hosts do in practice; refuse it rather than panic, as this
+			// used to.
+			ERROR("block size changed from %" B_PRIu32 " to %" B_PRIu32
+				"; ignored\n", info->block_size, blockSize);
+			return false;
+		}
+
+		// A resize (QEMU "block_resize", growing a virtual disk): only the
+		// capacity changes, which get_geometry() and the trim code read
+		// directly. This used to hit the panic above too.
+		TRACE("capacity changed from %" B_PRIu64 " to %" B_PRIu64
+			" blocks\n", info->capacity, capacity);
+		info->capacity = capacity;
+		return true;
 	}
+
+	info->capacity = capacity;
 
 	dma_restrictions restrictions;
 	memset(&restrictions, 0, sizeof(restrictions));

@@ -258,10 +258,13 @@ class SerialReader(threading.Thread):
 	syslog tail, then lets the main thread stop the VM.
 	"""
 
-	def __init__(self, process, log_path):
+	def __init__(self, process, log_path, monitor_path=None):
 		threading.Thread.__init__(self, daemon=True)
 		self.process = process
 		self.log_path = log_path
+		self.monitor_path = monitor_path
+		self.line = b""		# incomplete last line, for CE-HOST requests
+		self.host_requests = []
 		self.done = threading.Event()
 		self.kdl = threading.Event()
 		self.finished = threading.Event()
@@ -293,6 +296,7 @@ class SerialReader(threading.Thread):
 					at_line_start = piece.endswith(b"\n")
 				timedFile.flush()
 				self.last_output = time.time()
+				self._host_requests(chunk)
 				buffer = (buffer + chunk)[-8192:]
 				text = buffer.decode("latin-1")
 				if "CE-HARNESS END" in text:
@@ -309,6 +313,35 @@ class SerialReader(threading.Thread):
 					threading.Thread(target=self._debug_session,
 						daemon=True).start()
 		self.done.set()
+
+	def _host_requests(self, chunk):
+		"""Carries out requests a test makes of the host, written as lines
+		"CE-HOST <command> <arguments>". Only commands on a short list are
+		accepted, and only for the scratch disks, so a test cannot make the
+		harness do anything else with the VM:
+
+		  CE-HOST block_resize <scratch disk> <size>
+		      resize a scratch disk, e.g. "block_resize vblk0 128M"; the
+		      guest sees a configuration change interrupt
+		"""
+		self.line += chunk
+		lines = self.line.split(b"\n")
+		self.line = lines.pop()
+		for raw in lines:
+			line = raw.decode("latin-1").strip()
+			if not line.startswith("CE-HOST "):
+				continue
+			words = line.split()[1:]
+			accepted = len(words) == 3 and words[0] == "block_resize" \
+				and words[1] in [name for name, _ in SCRATCH_DISKS] \
+				and re.fullmatch(r"\d+[KMG]?", words[2]) is not None
+			if accepted and self.monitor_path is not None:
+				threading.Thread(target=monitor_command, daemon=True,
+					args=(self.monitor_path, " ".join(words))).start()
+			self.host_requests.append({"request": " ".join(words),
+				"accepted": accepted})
+			log("guest request %s: %s" % ("carried out" if accepted
+				else "refused", " ".join(words)))
 
 	def _send(self, command, settle=1.0):
 		try:
@@ -467,7 +500,7 @@ def boot(args, results_dir, report):
 	qemu_stderr = open(os.path.join(results_dir, "qemu.stderr.log"), "wb")
 	process = subprocess.Popen(qemu, stdin=subprocess.PIPE,
 		stdout=subprocess.PIPE, stderr=qemu_stderr)
-	reader = SerialReader(process, serial_log)
+	reader = SerialReader(process, serial_log, monitor_path)
 	reader.start()
 
 	status = "exited"
@@ -535,6 +568,7 @@ def boot(args, results_dir, report):
 	report["boot"]["status"] = status
 	report["boot"]["seconds"] = round(time.time() - started, 1)
 	report["boot"]["runner_finished"] = reader.finished.is_set()
+	report["boot"]["host_requests"] = reader.host_requests
 	log("guest %s after %.0fs" % (status, time.time() - started))
 	return status == "exited" and reader.finished.is_set()
 

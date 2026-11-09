@@ -136,5 +136,14 @@ otherDrivers = [t for t in report["tests"] if t["name"].startswith("driver.")
 expect("serial: other drivers unaffected", all(t["pass"] for t in otherDrivers),
 	str(otherDrivers))
 
+# Guest requests: only block_resize on a scratch disk is carried out, and
+# only complete lines count.
+reader = ce_test.SerialReader(None, os.path.join(directory, "x.log"))
+reader._host_requests(b"CE-HOST block_resize vblk0 128M\nCE-HOST block_resize ")
+reader._host_requests(b"boot 1G\nCE-HOST quit\nCE-HOST block_resize vblk1 64M;quit\n")
+expect("host requests: only safe ones accepted",
+	[r["accepted"] for r in reader.host_requests] == [True, False, False, False],
+	str(reader.host_requests))
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

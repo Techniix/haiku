@@ -28,6 +28,10 @@
 	run the harness also checks on the host that the trimmed space was given
 	back (the files are sparse again).
 
+	Finally it has the harness grow the first scratch disk to 128 MiB while
+	the system runs (a "CE-HOST block_resize" line, see ce-test.py) and
+	checks that the driver notices; it used to panic.
+
 	Output format: see 3rdparty/ce/README.md.
 */
 
@@ -261,6 +265,55 @@ test_disk(const char* path, int index)
 }
 
 
+/*!	Asks the harness to grow the first scratch disk (QEMU block_resize,
+	which raises a virtio configuration change interrupt), then checks that
+	the driver picked up the new size without a reboot and that the new
+	space can be used.
+*/
+static void
+test_resize(const char* path)
+{
+	int fd = open(path, O_RDWR);
+	if (fd < 0) {
+		report("resize", false, "%s: %s", path, strerror(errno));
+		return;
+	}
+
+	printf("CE-HOST block_resize vblk0 128M\n");
+	fflush(stdout);
+
+	off_t size = -1;
+	bigtime_t start = system_time();
+	while (system_time() - start < 15000000) {
+		size = device_size(fd);
+		if (size == 128 * kMiB)
+			break;
+		snooze(100000);
+	}
+	report("resize_seen", size == 128 * kMiB,
+		"size %lld after %lld ms (want %lld)", (long long)size,
+		(long long)(system_time() - start) / 1000, (long long)(128 * kMiB));
+
+	status_t mediaStatus = B_OK;
+	ioctl(fd, B_GET_MEDIA_STATUS, &mediaStatus, sizeof(mediaStatus));
+	report("resize_media_changed", mediaStatus == B_DEV_MEDIA_CHANGED,
+		"B_GET_MEDIA_STATUS -> %s (want media changed)",
+		strerror(mediaStatus));
+
+	// The grown part is usable, and the old data is untouched.
+	bool written = size == 128 * kMiB
+		&& fill_range(fd, 100 * kMiB, 4096, 0x3c);
+	bool kept = check_range(fd, 0, kMiB, kPattern) < 0;
+	report("resize_new_space", written
+			&& check_range(fd, 100 * kMiB, 4096, 0x3c) < 0 && kept,
+		"write at 100 MiB %s, old data %s", written ? "ok" : "failed",
+		kept ? "kept" : "CHANGED");
+
+	ioctl(fd, B_FLUSH_DRIVE_CACHE);
+	close(fd);
+}
+
+
 int
 main()
 {
@@ -269,6 +322,8 @@ main()
 	report("scratch_disks", count == 2, "found %d of 2", count);
 	for (int i = 0; i < count; i++)
 		test_disk(paths[i], i);
+	if (count > 0)
+		test_resize(paths[0]);
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);
