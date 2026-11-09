@@ -411,6 +411,16 @@ state_needs_finish(int32 state)
 //	#pragma mark -
 
 
+// Keepalive defaults: RFC 1122 4.2.3.6 (and Linux, FreeBSD): probe after two
+// hours idle, every 75 seconds, give up after 9 unanswered probes.
+static const bigtime_t kDefaultKeepAliveIdle = 7200 * 1000000LL;
+static const bigtime_t kDefaultKeepAliveInterval = 75 * 1000000LL;
+static const uint32 kDefaultKeepAliveCount = 9;
+// Limits as on Linux: 1..32767 seconds, 1..127 probes.
+static const int kMaxKeepAliveSeconds = 32767;
+static const int kMaxKeepAliveCount = 127;
+
+
 TCPEndpoint::TCPEndpoint(net_socket* socket)
 	:
 	ProtocolSocket(socket),
@@ -449,7 +459,12 @@ TCPEndpoint::TCPEndpoint(net_socket* socket)
 	fSlowStartThreshold(0),
 	fState(CLOSED),
 	fFlags(FLAG_OPTION_WINDOW_SCALE | FLAG_OPTION_TIMESTAMP
-		| FLAG_OPTION_SACK_PERMITTED | FLAG_AUTO_RECEIVE_BUFFER_SIZE)
+		| FLAG_OPTION_SACK_PERMITTED | FLAG_AUTO_RECEIVE_BUFFER_SIZE),
+	fKeepAliveIdle(kDefaultKeepAliveIdle),
+	fKeepAliveInterval(kDefaultKeepAliveInterval),
+	fKeepAliveCount(kDefaultKeepAliveCount),
+	fKeepAliveProbesSent(0),
+	fLastReceiveTime(0)
 {
 	// TODO: to be replaced with a real read/write locking strategy!
 	mutex_init(&fLock, "tcp lock");
@@ -458,6 +473,8 @@ TCPEndpoint::TCPEndpoint(net_socket* socket)
 	fSendCondition.Init(this, "tcp send");
 
 	gStackModule->init_timer(&fPersistTimer, TCPEndpoint::_PersistTimer, this);
+	gStackModule->init_timer(&fKeepAliveTimer, TCPEndpoint::_KeepAliveTimer,
+		this);
 	gStackModule->init_timer(&fRetransmitTimer, TCPEndpoint::_RetransmitTimer,
 		this);
 	gStackModule->init_timer(&fDelayedAcknowledgeTimer,
@@ -983,6 +1000,17 @@ TCPEndpoint::ReadData(size_t numBytes, uint32 flags, net_buffer** _buffer)
 			return B_OK;
 		}
 
+		if (fState == CLOSED) {
+			// The connection was reset or timed out (keepalive) while we
+			// were waiting: _Close() wakes us, but nothing else in this loop
+			// looks at the state, so without this check the reader would
+			// sleep until its own timeout. Hand out any data that was
+			// already queued first, as for the closing states above.
+			if (fReceiveQueue.Available() > 0)
+				break;
+			return socket->error != B_OK ? socket->error : ENOTCONN;
+		}
+
 		if (fReceiveQueue.Available() > 0) {
 			if (fReceiveQueue.Available() >= dataNeeded
 				|| (fReceiveQueue.PushedData() > 0
@@ -1097,6 +1125,18 @@ TCPEndpoint::GetOption(int option, void* _value, int* _length)
 			*value = fReceiveMaxSegmentSize;
 			return B_OK;
 
+		case TCP_KEEPIDLE:
+			*value = (int)(fKeepAliveIdle / 1000000);
+			return B_OK;
+
+		case TCP_KEEPINTVL:
+			*value = (int)(fKeepAliveInterval / 1000000);
+			return B_OK;
+
+		case TCP_KEEPCNT:
+			*value = (int)fKeepAliveCount;
+			return B_OK;
+
 		default:
 			return B_BAD_VALUE;
 	}
@@ -1106,21 +1146,51 @@ TCPEndpoint::GetOption(int option, void* _value, int* _length)
 status_t
 TCPEndpoint::SetOption(int option, const void* _value, int length)
 {
-	if (option != TCP_NODELAY)
-		return B_BAD_VALUE;
-
 	if (length != sizeof(int))
 		return B_BAD_VALUE;
 
 	const int* value = (const int*)_value;
 
 	MutexLocker _(fLock);
-	if (*value)
-		fOptions |= TCP_NODELAY;
-	else
-		fOptions &= ~TCP_NODELAY;
+	switch (option) {
+		case TCP_NODELAY:
+			if (*value)
+				fOptions |= TCP_NODELAY;
+			else
+				fOptions &= ~TCP_NODELAY;
+			return B_OK;
 
-	return B_OK;
+		case TCP_KEEPIDLE:
+		case TCP_KEEPINTVL:
+			if (*value < 1 || *value > kMaxKeepAliveSeconds)
+				return B_BAD_VALUE;
+			if (option == TCP_KEEPIDLE)
+				fKeepAliveIdle = *value * 1000000LL;
+			else
+				fKeepAliveInterval = *value * 1000000LL;
+			// A running timer adopts the new value right away (Linux does
+			// the same for the idle time).
+			_UpdateKeepAlive();
+			return B_OK;
+
+		case TCP_KEEPCNT:
+			if (*value < 1 || *value > kMaxKeepAliveCount)
+				return B_BAD_VALUE;
+			fKeepAliveCount = *value;
+			return B_OK;
+
+		default:
+			return B_BAD_VALUE;
+	}
+}
+
+
+/*!	SO_KEEPALIVE was set or cleared on the socket. */
+void
+TCPEndpoint::KeepAliveOptionChanged()
+{
+	MutexLocker _(fLock);
+	_UpdateKeepAlive();
 }
 
 
@@ -1199,6 +1269,8 @@ TCPEndpoint::_CancelConnectionTimers()
 	T(TimerSet(this, "persist", -1));
 	gStackModule->cancel_timer(&fDelayedAcknowledgeTimer);
 	T(TimerSet(this, "delayed ack", -1));
+	gStackModule->cancel_timer(&fKeepAliveTimer);
+	T(TimerSet(this, "keepalive", -1));
 }
 
 
@@ -1243,6 +1315,10 @@ TCPEndpoint::_MarkEstablished()
 {
 	fState = ESTABLISHED;
 	T(State(this));
+
+	// Accepted connections inherit SO_KEEPALIVE from their listener.
+	fLastReceiveTime = system_time();
+	_UpdateKeepAlive();
 
 	gSocketModule->set_connected(socket);
 	if (gSocketModule->has_parent(socket))
@@ -1575,6 +1651,9 @@ TCPEndpoint::_Spawn(TCPEndpoint* parent, tcp_segment_header& segment,
 	}
 
 	fOptions = parent->fOptions;
+	fKeepAliveIdle = parent->fKeepAliveIdle;
+	fKeepAliveInterval = parent->fKeepAliveInterval;
+	fKeepAliveCount = parent->fKeepAliveCount;
 	fAcceptSemaphore = parent->fAcceptSemaphore;
 
 	_PrepareReceivePath(segment);
@@ -1997,6 +2076,11 @@ TCPEndpoint::SegmentReceived(tcp_segment_header& segment, net_buffer* buffer)
 		(uint32)segment.advertised_window << fSendWindowShift, buffer));
 	int32 segmentAction = DROP;
 
+	// Any segment from the peer shows it is alive. Only the time is noted
+	// here; the keepalive timer works out what is left of the idle period.
+	fLastReceiveTime = system_time();
+	fKeepAliveProbesSent = 0;
+
 	switch (fState) {
 		case LISTEN:
 			segmentAction = _ListenReceive(segment, buffer);
@@ -2161,13 +2245,18 @@ TCPEndpoint::_PrepareSendSegment()
 
 status_t
 TCPEndpoint::_PrepareAndSend(tcp_segment_header& segment, net_buffer* buffer,
-	bool isRetransmit)
+	bool isRetransmit, bool keepAliveProbe)
 {
 	LocalAddress().CopyTo(buffer->source);
 	PeerAddress().CopyTo(buffer->destination);
 
 	uint32 size = buffer->size, segmentLength = size;
-	segment.sequence = fSendNext.Number();
+	// A keepalive probe carries SND.UNA - 1, a sequence number the peer has
+	// already acknowledged, so it must answer with an ACK (RFC 1122
+	// 4.2.3.6) and nothing new enters the sequence space.
+	segment.sequence = keepAliveProbe
+		? (fSendUnacknowledged - tcp_sequence(1)).Number()
+		: fSendNext.Number();
 
 	TRACE("_PrepareAndSend(): buffer %p (%" B_PRIu32 " bytes) address %s to "
 		"%s flags %#" B_PRIx8 ", seq %" B_PRIu32 ", ack %" B_PRIu32
@@ -2671,7 +2760,97 @@ TCPEndpoint::_RetransmitTimer(net_timer* timer, void* _endpoint)
 }
 
 
+/*static*/ bool
+TCPEndpoint::_KeepAliveEnabled() const
+{
+	return (socket->options & SO_KEEPALIVE) != 0;
+}
+
+
+/*!	Arms or cancels the keepalive timer for the current state and options.
+	Called with fLock held. Keepalive applies to connections that can still
+	receive acknowledgements: ESTABLISHED and FINISH_RECEIVED (CLOSE-WAIT).
+*/
+void
+TCPEndpoint::_UpdateKeepAlive()
+{
+	if (!_KeepAliveEnabled()
+		|| (fState != ESTABLISHED && fState != FINISH_RECEIVED)) {
+		gStackModule->cancel_timer(&fKeepAliveTimer);
+		fKeepAliveProbesSent = 0;
+		return;
+	}
+
+	if (fLastReceiveTime == 0)
+		fLastReceiveTime = system_time();
+	bigtime_t idle = system_time() - fLastReceiveTime;
+	bigtime_t delay = fKeepAliveProbesSent > 0 ? fKeepAliveInterval
+		: fKeepAliveIdle - idle;
+	gStackModule->set_timer(&fKeepAliveTimer, delay > 0 ? delay : 0);
+	T(TimerSet(this, "keepalive", delay));
+}
+
+
+/*!	Sends a keepalive probe: an empty ACK segment with SND.UNA - 1. */
+status_t
+TCPEndpoint::_SendKeepAliveProbe()
+{
+	if (fRoute == NULL)
+		return B_ERROR;
+
+	tcp_segment_header segment = _PrepareSendSegment();
+	segment.flags &= ~(TCP_FLAG_PUSH | TCP_FLAG_FINISH);
+
+	net_buffer* buffer = gBufferModule->create(256);
+	if (buffer == NULL)
+		return B_NO_MEMORY;
+
+	return _PrepareAndSend(segment, buffer, false, true);
+}
+
+
 /*static*/ void
+TCPEndpoint::_KeepAliveTimer(net_timer* timer, void* _endpoint)
+{
+	TCPEndpoint* endpoint = (TCPEndpoint*)_endpoint;
+	T(TimerTriggered(endpoint, "keepalive"));
+
+	MutexLocker locker(endpoint->fLock);
+	if (!locker.IsLocked() || gStackModule->is_timer_active(timer))
+		return;
+	if (!endpoint->_KeepAliveEnabled()
+		|| (endpoint->fState != ESTABLISHED
+			&& endpoint->fState != FINISH_RECEIVED)) {
+		return;
+	}
+
+	bigtime_t idle = system_time() - endpoint->fLastReceiveTime;
+	if (endpoint->fKeepAliveProbesSent == 0
+		&& idle < endpoint->fKeepAliveIdle) {
+		// The peer was heard from since the timer was set: wait for the
+		// rest of the idle period.
+		gStackModule->set_timer(timer, endpoint->fKeepAliveIdle - idle);
+		return;
+	}
+
+	if (endpoint->fKeepAliveProbesSent >= endpoint->fKeepAliveCount) {
+		// No answer to any probe: the peer is gone. Readers and writers
+		// get ETIMEDOUT, as on other systems.
+		TRACE("keepalive: no answer to %" B_PRIu32 " probes, dropping",
+			endpoint->fKeepAliveProbesSent);
+		endpoint->_HandleReset(ETIMEDOUT);
+		return;
+	}
+
+	// Count the probe even if it could not be sent (no route): an
+	// unreachable peer is exactly what keepalive has to detect.
+	endpoint->_SendKeepAliveProbe();
+	endpoint->fKeepAliveProbesSent++;
+	gStackModule->set_timer(timer, endpoint->fKeepAliveInterval);
+}
+
+
+void
 TCPEndpoint::_PersistTimer(net_timer* timer, void* _endpoint)
 {
 	TCPEndpoint* endpoint = (TCPEndpoint*)_endpoint;

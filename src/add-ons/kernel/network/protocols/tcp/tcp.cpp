@@ -592,8 +592,14 @@ tcp_setsockopt(net_protocol* _protocol, int level, int option,
 	} else if (level == IPPROTO_TCP)
 		return protocol->SetOption(option, _value, length);
 
-	return protocol->next->module->setsockopt(protocol->next, level, option,
-		_value, length);
+	status_t status = protocol->next->module->setsockopt(protocol->next,
+		level, option, _value, length);
+
+	// The socket layer stores SO_KEEPALIVE; arm or stop the probes.
+	if (status == B_OK && level == SOL_SOCKET && option == SO_KEEPALIVE)
+		protocol->KeepAliveOptionChanged();
+
+	return status;
 }
 
 

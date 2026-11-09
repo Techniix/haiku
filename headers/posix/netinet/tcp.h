@@ -79,5 +79,14 @@ struct tcphdr {
 	/* don't use TH_PUSH */
 #define TCP_NOOPT				0x08
 	/* don't use any TCP options */
+/* Keepalive tuning (FreeBSD values; Linux uses other numbers, but code
+   uses the names). In seconds, except TCP_KEEPCNT (probes). They apply to
+   connections with SO_KEEPALIVE set. */
+#define TCP_KEEPIDLE			0x100
+	/* idle time before the first probe (default 7200) */
+#define TCP_KEEPINTVL			0x200
+	/* time between probes (default 75) */
+#define TCP_KEEPCNT				0x400
+	/* unanswered probes before the connection is dropped (default 9) */
 
 #endif	/* NETINET_TCP_H */

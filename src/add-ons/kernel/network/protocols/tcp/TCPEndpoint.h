@@ -55,6 +55,7 @@ public:
 
 			status_t	GetOption(int option, void* value, int* _length);
 			status_t	SetOption(int option, const void* value, int length);
+			void		KeepAliveOptionChanged();
 
 			tcp_state	State() const { return fState; }
 			bool		IsBound() const;
@@ -81,7 +82,8 @@ private:
 							uint32 length, uint32 segmentMaxSize,
 							uint32 flightSize);
 			status_t	_PrepareAndSend(tcp_segment_header& segment, net_buffer* buffer,
-							bool isRetransmit);
+							bool isRetransmit,
+							bool keepAliveProbe = false);
 			status_t	_SendAcknowledge(bool force = false);
 			status_t	_SendReset(bool force = false);
 			status_t	_SendQueued(bool force = false);
@@ -123,6 +125,10 @@ private:
 	static	void		_PersistTimer(net_timer* timer, void* _endpoint);
 	static	void		_DelayedAcknowledgeTimer(net_timer* timer,
 							void* _endpoint);
+	static	void		_KeepAliveTimer(net_timer* timer, void* _endpoint);
+			bool		_KeepAliveEnabled() const;
+			void		_UpdateKeepAlive();
+			status_t	_SendKeepAliveProbe();
 
 	static	status_t	_WaitForCondition(ConditionVariable& condition,
 							MutexLocker& locker, bigtime_t timeout);
@@ -199,6 +205,14 @@ private:
 	net_timer		fPersistTimer;
 	net_timer		fDelayedAcknowledgeTimer;
 	net_timer		fTimeWaitTimer;
+
+	// keepalive (SO_KEEPALIVE, TCP_KEEPIDLE/INTVL/CNT)
+	net_timer		fKeepAliveTimer;
+	bigtime_t		fKeepAliveIdle;
+	bigtime_t		fKeepAliveInterval;
+	uint32			fKeepAliveCount;
+	uint32			fKeepAliveProbesSent;
+	bigtime_t		fLastReceiveTime;
 };
 
 #endif	// TCP_ENDPOINT_H
