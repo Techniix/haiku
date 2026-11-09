@@ -4,7 +4,10 @@
  */
 
 
+#include <algorithm>
+
 #include <condition_variable.h>
+#include <kernel.h>
 #include <lock.h>
 #include <StackOrHeapArray.h>
 #include <util/AutoLock.h>
@@ -131,8 +134,100 @@ get_feature_name(uint64 feature)
 			return "topology";
 		case VIRTIO_BLK_F_CONFIG_WCE:
 			return "config wce";
+		case VIRTIO_BLK_F_DISCARD:
+			return "discard";
+		case VIRTIO_BLK_F_WRITE_ZEROES:
+			return "write zeroes";
 	}
 	return NULL;
+}
+
+
+/*!	Reads the device configuration. The fields for discard and write zeroes
+	come after the original ones and are only read when one of those features
+	was negotiated: a device that offers neither may not implement them, and
+	reading past its configuration space yields garbage.
+*/
+static status_t
+read_config(virtio_block_driver_info* info)
+{
+	status_t status = info->virtio->read_device_config(info->virtio_device, 0,
+		&info->config, VIRTIO_BLK_CONFIG_BASE_SIZE);
+	if (status != B_OK)
+		return status;
+
+	if ((info->features
+			& (VIRTIO_BLK_F_DISCARD | VIRTIO_BLK_F_WRITE_ZEROES)) == 0) {
+		return B_OK;
+	}
+
+	// Start at the aligned offset before the extension (re-reading the
+	// writeback byte): read_device_config() reads in 32-bit units, and QEMU
+	// rejects unaligned accesses to the legacy I/O port configuration, which
+	// then read as zero.
+	const uint8 start = VIRTIO_BLK_CONFIG_BASE_SIZE & ~3;
+	return info->virtio->read_device_config(info->virtio_device, start,
+		(uint8*)&info->config + start,
+		sizeof(struct virtio_blk_config) - start);
+}
+
+
+/*!	Queues one request and waits for it. \a entries holds \a readable
+	device-readable entries (the header first) followed by \a writable
+	device-writable ones (the status byte last). The header and status byte
+	live in the command buffer, so the caller must hold info->lock, which
+	also keeps requests one at a time (currentRequest identifies the one the
+	interrupt handler wakes us for).
+*/
+static status_t
+execute_request(virtio_block_driver_info* info, physical_entry* entries,
+	size_t readable, size_t writable, bigtime_t timeout)
+{
+	ASSERT_LOCKED_MUTEX(&info->lock);
+
+	uint8* ack = (uint8*)info->bufferAddr + sizeof(struct virtio_blk_outhdr);
+	*ack = 0xff;
+
+	atomic_add(&info->currentRequest, 1);
+
+	ConditionVariableEntry entry;
+	info->interruptCondition.Add(&entry);
+
+	status_t result = info->virtio->queue_request_v(info->virtio_queue, entries,
+		readable, writable, (void *)(addr_t)info->currentRequest);
+	if (result == B_OK)
+		result = entry.Wait(B_RELATIVE_TIMEOUT, timeout);
+	if (result != B_OK)
+		return EIO;
+
+	switch (*ack) {
+		case VIRTIO_BLK_S_OK:
+			return B_OK;
+		case VIRTIO_BLK_S_UNSUPP:
+			return ENOTSUP;
+		default:
+			return EIO;
+	}
+}
+
+
+/*!	Fills in the request header at the start of the command buffer and
+	returns the physical entries for the header and the status byte.
+*/
+static void
+prepare_header(virtio_block_driver_info* info, uint32 type, uint64 sector,
+	physical_entry& header, physical_entry& status)
+{
+	struct virtio_blk_outhdr* outHeader
+		= (struct virtio_blk_outhdr*)info->bufferAddr;
+	outHeader->type = type;
+	outHeader->sector = sector;
+	outHeader->ioprio = 1;
+
+	header.address = info->bufferPhysAddr;
+	header.size = sizeof(struct virtio_blk_outhdr);
+	status.address = info->bufferPhysAddr + sizeof(struct virtio_blk_outhdr);
+	status.size = sizeof(uint8);
 }
 
 
@@ -164,9 +259,7 @@ virtio_block_config_callback(void* driverCookie)
 {
 	virtio_block_driver_info* info = (virtio_block_driver_info*)driverCookie;
 
-	status_t status = info->virtio->read_device_config(info->virtio_device, 0,
-		&info->config, sizeof(struct virtio_blk_config));
-	if (status != B_OK)
+	if (read_config(info) != B_OK)
 		return;
 
 	if (virtio_block_set_capacity(info))
@@ -192,63 +285,175 @@ do_io(void* cookie, IOOperation* operation)
 {
 	virtio_block_driver_info* info = (virtio_block_driver_info*)cookie;
 
-	MutexTryLocker locker(&info->lock);
-	if (!locker.IsLocked())
-		return B_BUSY;
+	// The I/O scheduler ignores this function's return value and waits for
+	// OperationCompleted(), so an operation must never be dropped. The lock
+	// used to be taken with a try-lock, returning B_BUSY without completing
+	// the operation if it was held; that was harmless only while the
+	// scheduler thread was the lock's sole user. The flush and trim ioctls
+	// now use the command buffer too, so wait for them instead.
+	MutexLocker locker(&info->lock);
 
 	BStackOrHeapArray<physical_entry, 16> entries(operation->VecCount() + 2);
 
-	struct virtio_blk_outhdr *header = (struct virtio_blk_outhdr*)info->bufferAddr;
-	header->type = operation->IsWrite() ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
-	header->sector = operation->Offset() / 512;
-	header->ioprio = 1;
-
-	uint8* ack = (uint8*)info->bufferAddr + sizeof(struct virtio_blk_outhdr);
-	*ack = 0xff;
-
-	entries[0].address = info->bufferPhysAddr;
-	entries[0].size = sizeof(struct virtio_blk_outhdr);
-	entries[operation->VecCount() + 1].address = entries[0].address
-		+ sizeof(struct virtio_blk_outhdr);
-	entries[operation->VecCount() + 1].size = sizeof(uint8);
+	prepare_header(info,
+		operation->IsWrite() ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN,
+		operation->Offset() / 512, entries[0],
+		entries[operation->VecCount() + 1]);
 
 	memcpy(entries + 1, operation->Vecs(), operation->VecCount()
 		* sizeof(physical_entry));
 
-	atomic_add(&info->currentRequest, 1);
-
-	ConditionVariableEntry entry;
-	info->interruptCondition.Add(&entry);
-
-	status_t result = info->virtio->queue_request_v(info->virtio_queue, entries,
-		1 + (operation->IsWrite() ? operation->VecCount() : 0 ),
+	status_t status = execute_request(info, entries,
+		1 + (operation->IsWrite() ? operation->VecCount() : 0),
 		1 + (operation->IsWrite() ? 0 : operation->VecCount()),
-		(void *)(addr_t)info->currentRequest);
+		10 * 1000 * 1000);
 
-	if (result == B_OK)
-		result = entry.Wait(B_RELATIVE_TIMEOUT, 10 * 1000 * 1000);
+	info->io_scheduler->OperationCompleted(operation, status,
+		status == B_OK ? operation->Length() : 0);
+	return status;
+}
 
-	size_t bytesTransferred = 0;
-	status_t status = B_OK;
-	if (result != B_OK) {
-		status = EIO;
-	} else {
-		switch (*ack) {
-			case VIRTIO_BLK_S_OK:
-				status = B_OK;
-				bytesTransferred = operation->Length();
-				break;
-			case VIRTIO_BLK_S_UNSUPP:
-				status = ENOTSUP;
-				break;
-			default:
-				status = EIO;
-				break;
+
+/*!	B_FLUSH_DRIVE_CACHE: asks the host to make all completed writes
+	durable (VIRTIO_BLK_T_FLUSH). Without VIRTIO_BLK_F_FLUSH the device has
+	no volatile cache to flush (writes complete only once durable), so there
+	is nothing to do.
+*/
+static status_t
+flush_cache(virtio_block_driver_info* info)
+{
+	if ((info->features & VIRTIO_BLK_F_FLUSH) == 0)
+		return B_OK;
+
+	MutexLocker locker(&info->lock);
+
+	physical_entry entries[2];
+	prepare_header(info, VIRTIO_BLK_T_FLUSH, 0, entries[0], entries[1]);
+
+	// A flush can take a while on a host with a lot of dirty data.
+	return execute_request(info, entries, 1, 1, 60 * 1000 * 1000);
+}
+
+
+/*!	B_TRIM_DEVICE: tells the host that the given byte ranges are unused,
+	so a sparse or thin-provisioned image can give the space back.
+
+	Uses DISCARD when the device offers it, otherwise WRITE ZEROES with the
+	unmap flag if the device says it may unmap (the data reads as zeroes
+	afterwards, which is fine for space BFS has freed). Ranges are shrunk
+	inwards to whole, aligned sectors - a partial block is never discarded -
+	split to the device's per-segment limit, and sent in batches of as many
+	segments as the device and the command buffer allow.
+*/
+static status_t
+trim_device(virtio_block_driver_info* info, fs_trim_data* trimData)
+{
+	trimData->trimmed_size = 0;
+
+	uint32 type;
+	uint32 maxSectors;
+	uint32 maxSegments;
+	uint32 alignment = 1;
+	uint32 flags = 0;
+	if ((info->features & VIRTIO_BLK_F_DISCARD) != 0) {
+		type = VIRTIO_BLK_T_DISCARD;
+		maxSectors = info->config.max_discard_sectors;
+		maxSegments = info->config.max_discard_seg;
+		if (info->config.discard_sector_alignment > 1)
+			alignment = info->config.discard_sector_alignment;
+	} else if ((info->features & VIRTIO_BLK_F_WRITE_ZEROES) != 0
+		&& info->config.write_zeroes_may_unmap != 0) {
+		type = VIRTIO_BLK_T_WRITE_ZEROES;
+		maxSectors = info->config.max_write_zeroes_sectors;
+		maxSegments = info->config.max_write_zeroes_seg;
+		flags = VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP;
+	} else
+		return B_UNSUPPORTED;
+
+	if (maxSectors == 0 || maxSegments == 0)
+		return B_UNSUPPORTED;
+
+	// Never discard less than a logical block.
+	uint32 blockSectors = info->block_size / 512;
+	if (blockSectors > alignment)
+		alignment = blockSectors;
+	// Keep segments a multiple of the alignment.
+	maxSectors -= maxSectors % alignment;
+	if (maxSectors == 0)
+		return B_UNSUPPORTED;
+
+	// The segments follow the header and status byte in the command buffer.
+	const size_t segmentOffset = 64;
+	struct virtio_blk_discard_write_zeroes* segments
+		= (struct virtio_blk_discard_write_zeroes*)(info->bufferAddr
+			+ segmentOffset);
+	uint32 bufferSegments = (B_PAGE_SIZE - segmentOffset)
+		/ sizeof(struct virtio_blk_discard_write_zeroes);
+	maxSegments = std::min(maxSegments, bufferSegments);
+
+	const uint64 deviceSectors = info->capacity * (info->block_size / 512);
+
+	MutexLocker locker(&info->lock);
+
+	uint32 count = 0;
+	uint64 batchBytes = 0;
+	uint64 trimmed = 0;
+
+	// Sends the segments collected so far.
+	auto flushBatch = [&]() -> status_t {
+		if (count == 0)
+			return B_OK;
+
+		physical_entry entries[3];
+		prepare_header(info, type, 0, entries[0], entries[2]);
+		entries[1].address = info->bufferPhysAddr + segmentOffset;
+		entries[1].size = count * sizeof(struct virtio_blk_discard_write_zeroes);
+
+		status_t status = execute_request(info, entries, 2, 1,
+			60 * 1000 * 1000);
+		if (status != B_OK)
+			return status;
+
+		trimmed += batchBytes;
+		count = 0;
+		batchBytes = 0;
+		return B_OK;
+	};
+
+	for (uint32 i = 0; i < trimData->range_count; i++) {
+		uint64 start = trimData->ranges[i].offset;
+		uint64 end = start + trimData->ranges[i].size;
+		if (end < start)
+			return B_BAD_VALUE;
+
+		// In sectors, rounded inwards to the alignment.
+		uint64 first = (start + 511) / 512;
+		first = (first + alignment - 1) / alignment * alignment;
+		uint64 last = std::min(end / 512, deviceSectors);
+		last -= last % alignment;
+
+		while (first < last) {
+			uint32 sectors = (uint32)std::min(last - first, (uint64)maxSectors);
+
+			segments[count].sector = first;
+			segments[count].num_sectors = sectors;
+			segments[count].flags = flags;
+			count++;
+			batchBytes += (uint64)sectors * 512;
+			first += sectors;
+
+			if (count == maxSegments) {
+				status_t status = flushBatch();
+				if (status != B_OK) {
+					trimData->trimmed_size = trimmed;
+					return status;
+				}
+			}
 		}
 	}
 
-	info->io_scheduler->OperationCompleted(operation, status,
-		bytesTransferred);
+	status_t status = flushBatch();
+	trimData->trimmed_size = trimmed;
 	return status;
 }
 
@@ -272,12 +477,11 @@ virtio_block_init_device(void* _info, void** _cookie)
 			| VIRTIO_BLK_F_SEG_MAX | VIRTIO_BLK_F_GEOMETRY
 			| VIRTIO_BLK_F_RO | VIRTIO_BLK_F_BLK_SIZE
 			| VIRTIO_BLK_F_FLUSH | VIRTIO_BLK_F_TOPOLOGY
+			| VIRTIO_BLK_F_DISCARD | VIRTIO_BLK_F_WRITE_ZEROES
 			| VIRTIO_FEATURE_RING_INDIRECT_DESC,
 		&info->features, &get_feature_name);
 
-	status_t status = info->virtio->read_device_config(
-		info->virtio_device, 0, &info->config,
-		sizeof(struct virtio_blk_config));
+	status_t status = read_config(info);
 	if (status != B_OK)
 		return status;
 
@@ -433,8 +637,13 @@ virtio_block_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 			return user_memcpy(buffer, &iconData, sizeof(device_icon));
 		}
 
-		/*case B_FLUSH_DRIVE_CACHE:
-			return synchronize_cache(info);*/
+		case B_FLUSH_DRIVE_CACHE:
+			return flush_cache(info);
+
+		case B_TRIM_DEVICE:
+			// devfs has copied the data into the kernel (fs_trim_support.h)
+			ASSERT(IS_KERNEL_ADDRESS(buffer));
+			return trim_device(info, (fs_trim_data*)buffer);
 	}
 
 	return B_DEV_INVALID_IOCTL;

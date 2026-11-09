@@ -42,6 +42,9 @@
 #define VIRTIO_BLK_F_FLUSH	0x0200	/* Flush command supported */
 #define VIRTIO_BLK_F_TOPOLOGY	0x0400	/* Topology information is available */
 #define VIRTIO_BLK_F_CONFIG_WCE 0x0800	/* Writeback mode available in config */
+#define VIRTIO_BLK_F_MQ		0x1000	/* Support more than one vq */
+#define VIRTIO_BLK_F_DISCARD	0x2000	/* DISCARD is supported */
+#define VIRTIO_BLK_F_WRITE_ZEROES	0x4000	/* WRITE ZEROES is supported */
 
 #define VIRTIO_BLK_ID_BYTES	20	/* ID string length */
 
@@ -72,8 +75,26 @@ struct virtio_blk_config {
 
 	/* Writeback mode (if VIRTIO_BLK_F_CONFIG_WCE) */
 	uint8_t writeback;
+	uint8_t unused0;
 
+	/* Number of queues (if VIRTIO_BLK_F_MQ) */
+	uint16_t num_queues;
+
+	/* Discard limits, all in 512-byte sectors (if VIRTIO_BLK_F_DISCARD) */
+	uint32_t max_discard_sectors;
+	uint32_t max_discard_seg;
+	uint32_t discard_sector_alignment;
+
+	/* Write zeroes limits (if VIRTIO_BLK_F_WRITE_ZEROES) */
+	uint32_t max_write_zeroes_sectors;
+	uint32_t max_write_zeroes_seg;
+	uint8_t write_zeroes_may_unmap;
+	uint8_t unused1[3];
 } __attribute__((packed));
+
+/* Size of the configuration before the fields added for discard and write
+   zeroes; older devices may not provide more. */
+#define VIRTIO_BLK_CONFIG_BASE_SIZE	33
 
 /*
  * Command types
@@ -99,6 +120,11 @@ struct virtio_blk_config {
 /* Get device ID command */
 #define VIRTIO_BLK_T_GET_ID	8
 
+/* Discard and write zeroes commands (payload: virtio_blk_discard_write_zeroes
+   segments) */
+#define VIRTIO_BLK_T_DISCARD		11
+#define VIRTIO_BLK_T_WRITE_ZEROES	13
+
 /* Barrier before this op. */
 #define VIRTIO_BLK_T_BARRIER	0x80000000
 
@@ -114,6 +140,16 @@ struct virtio_blk_outhdr {
 	/* Sector (ie. 512 byte offset) */
 	uint64_t sector;
 };
+
+/* One range of a DISCARD or WRITE_ZEROES request. */
+struct virtio_blk_discard_write_zeroes {
+	uint64_t sector;
+	uint32_t num_sectors;
+	uint32_t flags;
+} __attribute__((packed));
+
+/* flags of virtio_blk_discard_write_zeroes */
+#define VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP	0x1
 
 struct virtio_scsi_inhdr {
 	uint32_t errors;

@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP 3rdparty ce tests virtio_block ;
+
+# Flush and trim on the virtio_block driver; needs the scratch disks the
+# harness attaches.
+Application vblk_test :
+	vblk_test.cpp
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : vblk_test ;
+}

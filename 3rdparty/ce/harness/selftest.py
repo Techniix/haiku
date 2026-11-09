@@ -118,16 +118,23 @@ with open(os.path.join(directory, "serial.log"), "w") as serial:
 		"\x1b[33mvirtio_sound:\x1b[0m device stopped returning buffers\n")
 report = {}
 ce_test.parse_serial(directory, report)
-# Two test lines (the echoed one is ignored) plus the driver error check.
-expect("serial: tests parsed", len(report["tests"]) == 3
+# Two test lines (the echoed one is ignored) plus one driver error check per
+# watched driver.
+expect("serial: tests parsed", len(report["tests"])
+	== 2 + len(ce_test.WATCHED_DRIVERS)
 	and report["tests"][1]["pass"] is False, str(report["tests"]))
 expect("serial: panic detected", len(report["problems"]) == 1,
 	str(report["problems"]))
 expect("serial: driver log kept", any("output stream" in l
 	for l in report["driver_log"]))
-driverCheck = [t for t in report["tests"] if t["name"].startswith("driver.")]
+driverCheck = [t for t in report["tests"]
+	if t["name"] == "driver.virtio_sound.errors"]
 expect("serial: driver error line fails the run", len(driverCheck) == 1
 	and not driverCheck[0]["pass"], str(driverCheck))
+otherDrivers = [t for t in report["tests"] if t["name"].startswith("driver.")
+	and t["name"] != "driver.virtio_sound.errors"]
+expect("serial: other drivers unaffected", all(t["pass"] for t in otherDrivers),
+	str(otherDrivers))
 
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

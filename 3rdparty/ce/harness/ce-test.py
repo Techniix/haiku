@@ -60,13 +60,29 @@ VIRTIO_SOUND_PHASES = [
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
-WATCHED_DRIVERS = ("virtio_sound",)
+WATCHED_DRIVERS = ("virtio_sound", "virtio_block")
 
 # Compile-only targets: fast feedback before the image build.
 COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"libnetwork.so", "libc_ext_test", "virtio_sound",
 	"vsnd_test", "eventfd_test", "memfd_test", "mqueue_test", "shm_test", "timerfd_test",
-	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp"]
+	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
+	"virtio_block", "vblk_test"]
+
+# Scratch disks for vblk_test: sparse files attached as virtio block devices
+# without -snapshot, so what the guest does to them (trimming above all) can
+# be checked on the host afterwards. Each entry is the file name and the
+# virtio-blk-pci properties; the guest sees them as virtio_block/0, /1, ...
+# in this order.
+SCRATCH_DISK_SIZE = 64 * 1024 * 1024
+SCRATCH_DISKS = [
+	("vblk0", "discard=on,write-zeroes=on"),	# trims use DISCARD
+	("vblk1", "discard=off,write-zeroes=on"),	# trims use WRITE ZEROES + unmap
+]
+# vblk_test writes 8 MiB and trims 2 MiB, about 1 MiB more in an unaligned
+# range, then rewrites 4 KiB; so between 4 and 6 MiB stay allocated. Without
+# working trims all 8 MiB would.
+SCRATCH_ALLOCATED_RANGE = (4 * 1024 * 1024, 6 * 1024 * 1024)
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
 TRACE_SOURCES = [
@@ -201,15 +217,21 @@ def build(args, results_dir, report):
 
 
 def boot_drive(args, image):
-	"""Returns the value of QEMU's -drive option for the test image.
+	"""Returns the QEMU options that attach the test image.
 
 	"disk" attaches the image as an IDE hard disk (raw images, and anyboot
 	images the way they boot from a USB stick); "cdrom" attaches it as an
 	IDE CD-ROM, which exercises the El Torito boot paths of anyboot images.
 	"""
 	if args.media == "cdrom":
-		return "file=%s,format=raw,if=ide,media=cdrom,readonly=on" % image
-	return "file=%s,format=raw,if=ide" % image
+		return ["-drive",
+			"file=%s,format=raw,if=ide,media=cdrom,readonly=on" % image]
+	if args.disk_bus == "virtio":
+		# bootindex makes the firmware boot this disk and not one of the
+		# (blank) virtio scratch disks.
+		return ["-drive", "file=%s,format=raw,if=none,id=boot" % image,
+			"-device", "virtio-blk-pci,drive=boot,bootindex=0"]
+	return ["-drive", "file=%s,format=raw,if=ide" % image]
 
 
 def image_path(args):
@@ -219,6 +241,8 @@ def image_path(args):
 		"test-raw": "haiku-test.image",
 		"minimum-anyboot": "haiku-minimum-anyboot.iso",
 		"nightly-anyboot": "haiku-nightly-anyboot.iso",
+		"renga-raw": "renga.image",
+		"renga-anyboot": "renga-anyboot.iso",
 	}
 	return os.path.join(args.output, names.get(args.profile,
 		"haiku-%s.image" % args.profile.replace("-raw", "")))
@@ -400,7 +424,7 @@ def boot(args, results_dir, report):
 		"-monitor", "unix:%s,server=on,wait=off" % monitor_path,
 		"-no-reboot",
 		"-snapshot",
-		"-drive", boot_drive(args, image),
+	] + boot_drive(args, image) + [
 		"-audiodev", "wav,id=snd0,path=%s,out.frequency=48000,"
 			"out.channels=2,out.format=s16" % audio,
 		"-device", "virtio-sound-pci,audiodev=snd0",
@@ -409,6 +433,15 @@ def boot(args, results_dir, report):
 		"-d", "guest_errors,unimp",
 		"-D", os.path.join(results_dir, "qemu.log"),
 	]
+	for name, properties in SCRATCH_DISKS:
+		path = os.path.join(results_dir, name + ".img")
+		with open(path, "wb") as scratch:
+			scratch.truncate(SCRATCH_DISK_SIZE)
+		qemu += [
+			"-drive", "file=%s,if=none,id=%s,format=raw,snapshot=off,"
+				"discard=unmap" % (path, name),
+			"-device", "virtio-blk-pci,drive=%s,%s" % (name, properties),
+		]
 	if os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.W_OK):
 		qemu += ["-enable-kvm", "-cpu", "host"]
 	if args.firmware == "uefi":
@@ -588,6 +621,20 @@ def parse_qemu_log(results_dir, report):
 		"detail": "%d device model complaint(s)%s" % (len(device_errors),
 			": " + device_errors[0] if device_errors else "")})
 
+	# Accesses the memory API rejects (unaligned, or to unmapped addresses)
+	# are guest bugs whatever the device: a driver reading its registers the
+	# wrong way gets zeroes or all-ones back without any error. This is how
+	# virtio_block's unaligned configuration reads showed up.
+	# OVMF probes for a TPM at 0xfed40000 on every boot; with no TPM
+	# configured QEMU rejects those reads. That is the firmware, not Haiku.
+	invalid = [l for l in lines if (l.startswith("Invalid read")
+			or l.startswith("Invalid write"))
+		and not re.search(r"addr 0x[Ff][Ee][Dd]4[0-4][0-9A-Fa-f]{3},", l)]
+	report["tests"].append({"name": "qemu.invalid_accesses",
+		"pass": len(invalid) == 0,
+		"detail": "%d rejected access(es)%s" % (len(invalid),
+			": " + invalid[0] if invalid else "")})
+
 
 def read_wav(path):
 	"""Returns (rate, channels, samples) where samples is a list per channel.
@@ -633,6 +680,32 @@ def goertzel_power(samples, rate, hertz):
 		s2 = s1
 		s1 = s0
 	return s1 * s1 + s2 * s2 - coefficient * s1 * s2
+
+
+def check_scratch_disks(results_dir, report):
+	"""Host-side half of vblk_test: the trimmed space must be free again."""
+	checks = report.setdefault("host_checks", [])
+	low, high = SCRATCH_ALLOCATED_RANGE
+	# Only meaningful if vblk_test ran (an older image may not have it).
+	ran = "vblk" in report.get("suites", {})
+	for name, properties in SCRATCH_DISKS:
+		path = os.path.join(results_dir, name + ".img")
+		if not os.path.exists(path):
+			continue
+		allocated = os.stat(path).st_blocks * 512
+		if not ran:
+			os.remove(path)
+			continue
+		checks.append({
+			"name": "host.%s_space_returned" % name,
+			"pass": low <= allocated <= high,
+			"detail": "%.2f MiB allocated after the run (want %.0f-%.0f MiB; "
+				"8 MiB means trims never reached the file) [%s]" % (
+				allocated / 1048576.0, low / 1048576.0, high / 1048576.0,
+				properties),
+		})
+		# The image is only useful for this check.
+		os.remove(path)
 
 
 def analyze_audio(results_dir, report, phases):
@@ -726,6 +799,7 @@ def analyze_audio(results_dir, report, phases):
 def write_report(results_dir, report):
 	checks = list(report.get("tests", []))
 	checks += report.get("audio", {}).get("checks", [])
+	checks += report.get("host_checks", [])
 	failed = [c for c in checks if not c["pass"]]
 
 	build_ok = report.get("build", {}).get("compile_status", 0) == 0 \
@@ -755,7 +829,9 @@ def write_report(results_dir, report):
 	lines.append("")
 	lines.append("Image `%s`, %s firmware, booted as %s." % (
 		report.get("profile"), report.get("firmware"),
-		"a CD-ROM" if report.get("media") == "cdrom" else "a hard disk"))
+		"a CD-ROM" if report.get("media") == "cdrom"
+			else "a %s hard disk" % ("virtio" if report.get("disk_bus")
+				== "virtio" else "IDE")))
 	lines.append("")
 
 	build_info = report.get("build")
@@ -853,6 +929,9 @@ def main():
 		help="OVMF variable store template; copied for every run")
 	parser.add_argument("--media", choices=("disk", "cdrom"), default="disk",
 		help="attach the image as a hard disk (default) or as a CD-ROM")
+	parser.add_argument("--disk-bus", choices=("ide", "virtio"), default="ide",
+		help="bus of the boot disk: IDE (default) or virtio-blk, which boots "
+			"through the virtio_block driver")
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
@@ -887,7 +966,7 @@ def main():
 
 	report = {"started": started.isoformat(timespec="seconds"),
 		"profile": args.profile, "firmware": args.firmware,
-		"media": args.media,
+		"media": args.media, "disk_bus": args.disk_bus,
 		"compile_only": args.compile_only}
 
 	ok = True
@@ -897,6 +976,7 @@ def main():
 		boot(args, results_dir, report)
 		parse_serial(results_dir, report)
 		parse_qemu_log(results_dir, report)
+		check_scratch_disks(results_dir, report)
 		analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 
 	summary, passed = write_report(results_dir, report)

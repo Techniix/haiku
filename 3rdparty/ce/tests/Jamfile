@@ -4,4 +4,5 @@ SubDir HAIKU_TOP 3rdparty ce tests ;
 # in harness images; the guest runner runs all of them.
 
 SubInclude HAIKU_TOP 3rdparty ce tests posix_compat ;
+SubInclude HAIKU_TOP 3rdparty ce tests virtio_block ;
 SubInclude HAIKU_TOP 3rdparty ce tests virtio_sound ;
