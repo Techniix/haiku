@@ -19,16 +19,22 @@
 	   relative timers are not affected by them.
 
 	How it works:
-	 - The kernel timer hook runs in interrupt context, where neither the
-	   object's mutex nor the select pool may be touched. It only counts the
-	   fire under a spinlock and queues a DPC.
-	 - The DPC runs in a kernel thread with the object's mutex held. It
-	   turns fires into expirations, adds the periods that passed while it
-	   was delayed, re-arms periodic timers, and wakes up readers and
-	   select()/poll() waiters.
-	 - timerfd_settime() holds the same mutex while it cancels the kernel
-	   timer and clears the pending fires, so a DPC can never re-arm a
-	   stale timer, and a DPC queued for a stale timer finds nothing to do.
+	 - Expirations are derived from time, not from timer interrupts:
+	   CatchUp() compares the clock with nextExpiry and adds every period
+	   that has passed. read(), select() and timerfd_gettime() call it
+	   first, so their answer is exact even if the wake-up below is late
+	   (an early version counted only in the DPC and under-reported when
+	   the DPC thread was delayed, which the harness caught on one CPU).
+	 - The kernel timer exists only to wake up waiters on time. Its hook
+	   runs in interrupt context, where neither the object's mutex nor the
+	   select pool may be touched, so it just queues a DPC on the
+	   high-priority DPC queue. The DPC takes the mutex, calls CatchUp(),
+	   re-arms the kernel timer for the next period and wakes up readers
+	   and select()/poll() waiters.
+	 - Everything else runs under the object's mutex, and the kernel timer
+	   is always (re)started for the current nextExpiry whenever that
+	   changes, so a stale hook or DPC can at most cause a spurious,
+	   harmless CatchUp().
 
 	Event loops use timerfd for timeouts (libuv, systemd-style daemons,
 	PipeWire, Wine), and a Linux compatibility layer needs it as a native
@@ -72,12 +78,8 @@ struct TimerFD : DPCCallback {
 	bool				realTimeBase;	// absolute CLOCK_REALTIME timer
 	bigtime_t			nextExpiry;		// in the timer's time base
 	bigtime_t			interval;		// 0: one-shot
-	uint64				expirations;
+	uint64				expirations;	// not yet read
 	bool				closing;
-
-	// Protected by "fireLock"; written by the timer hook.
-	spinlock			fireLock;
-	uint32				pendingFires;
 
 	::timer				kernelTimer;
 
@@ -90,12 +92,10 @@ struct TimerFD : DPCCallback {
 		nextExpiry(0),
 		interval(0),
 		expirations(0),
-		closing(false),
-		pendingFires(0)
+		closing(false)
 	{
 		mutex_init(&lock, "timerfd");
 		condition.Init(this, "timerfd");
-		B_INITIALIZE_SPINLOCK(&fireLock);
 		memset(&kernelTimer, 0, sizeof(kernelTimer));
 		kernelTimer.user_data = this;
 	}
@@ -114,30 +114,66 @@ struct TimerFD : DPCCallback {
 
 	virtual void DoDPC(DPCQueue* queue);
 
+	bool CatchUp();
 	status_t Arm();
 	void Disarm();
 };
 
 
+static DPCQueue*
+timerfd_dpc_queue()
+{
+	// Timer wake-ups are latency sensitive (event loops sleep on them), so
+	// use the high-priority queue rather than the normal one.
+	return DPCQueue::DefaultQueue(B_URGENT_DISPLAY_PRIORITY);
+}
+
+
 static int32
 timerfd_hook(timer* kernelTimer)
 {
-	TimerFD* timerFD = (TimerFD*)kernelTimer->user_data;
-
-	acquire_spinlock(&timerFD->fireLock);
-	timerFD->pendingFires++;
-	release_spinlock(&timerFD->fireLock);
-
-	// EALREADY just means a DPC is queued and will see this fire, too.
-	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Add(timerFD);
+	// Interrupt context: just hand over to the DPC. EALREADY (already
+	// queued) is fine, the queued DPC will see this expiry as well.
+	timerfd_dpc_queue()->Add((TimerFD*)kernelTimer->user_data);
 	return B_HANDLED_INTERRUPT;
 }
 
 
-//!	Starts the kernel timer for nextExpiry. Called with lock held.
+/*!	Adds the expirations that have happened by now and advances
+	nextExpiry past the present. A one-shot timer becomes disarmed. Does not
+	touch the kernel timer. Called with lock held. Returns whether any
+	expirations were added.
+*/
+bool
+TimerFD::CatchUp()
+{
+	if (!armed)
+		return false;
+
+	bigtime_t now = Now();
+	if (now < nextExpiry)
+		return false;
+
+	if (interval > 0) {
+		bigtime_t periods = (now - nextExpiry) / interval + 1;
+		expirations += periods;
+		nextExpiry += periods * interval;
+	} else {
+		expirations++;
+		armed = false;
+	}
+	return true;
+}
+
+
+/*!	(Re)starts the kernel timer for nextExpiry, cancelling a pending one.
+	Called with lock held.
+*/
 status_t
 TimerFD::Arm()
 {
+	cancel_timer(&kernelTimer);
+
 	uint32 flags = B_ONE_SHOT_ABSOLUTE_TIMER;
 	if (realTimeBase)
 		flags |= B_TIMER_REAL_TIME_BASE;
@@ -148,19 +184,15 @@ TimerFD::Arm()
 }
 
 
-/*!	Stops the kernel timer and forgets fires the DPC has not processed yet.
-	Called with lock held; afterwards the hook is not running and will not
-	run again until the next Arm().
+/*!	Stops the timer. Called with lock held. cancel_timer() waits for a hook
+	running on another CPU; a DPC that hook queued finds armed == false and
+	does nothing.
 */
 void
 TimerFD::Disarm()
 {
-	if (armed)
-		cancel_timer(&kernelTimer);
+	cancel_timer(&kernelTimer);
 	armed = false;
-
-	InterruptsSpinLocker locker(fireLock);
-	pendingFires = 0;
 }
 
 
@@ -171,32 +203,19 @@ TimerFD::DoDPC(DPCQueue* queue)
 	if (closing)
 		return;
 
-	InterruptsSpinLocker fireLocker(fireLock);
-	uint32 fires = pendingFires;
-	pendingFires = 0;
-	fireLocker.Unlock();
+	bool expired = CatchUp();
 
-	if (fires == 0)
-		return;
-
-	uint64 newExpirations = fires;
-	if (interval > 0) {
-		// Re-arm; count the periods that passed while this DPC was pending.
-		bigtime_t next = nextExpiry + interval;
-		bigtime_t now = Now();
-		if (now >= next) {
-			bigtime_t missed = (now - next) / interval + 1;
-			newExpirations += missed;
-			next += missed * interval;
-		}
-		nextExpiry = next;
+	if (armed) {
+		// Periodic (or a spurious early DPC): wait for the next expiry.
+		// One-shot timers that just expired were disarmed by CatchUp().
 		Arm();
 	} else
-		armed = false;
+		cancel_timer(&kernelTimer);
 
-	expirations += newExpirations;
-	condition.NotifyAll();
-	notify_select_event_pool(selectPool, B_SELECT_READ);
+	if (expired || expirations > 0) {
+		condition.NotifyAll();
+		notify_select_event_pool(selectPool, B_SELECT_READ);
+	}
 }
 
 
@@ -222,7 +241,7 @@ timerfd_free(file_descriptor* descriptor)
 
 	// Waits for a DPC that is running right now; it sees "closing" and
 	// returns without touching anything.
-	DPCQueue::DefaultQueue(B_NORMAL_PRIORITY)->Cancel(timerFD);
+	timerfd_dpc_queue()->Cancel(timerFD);
 
 	delete timerFD;
 }
@@ -238,6 +257,7 @@ timerfd_read(file_descriptor* descriptor, off_t pos, void* buffer,
 	TimerFD* timerFD = (TimerFD*)descriptor->cookie;
 	MutexLocker locker(timerFD->lock);
 
+	timerFD->CatchUp();
 	while (timerFD->expirations == 0) {
 		if ((descriptor->open_mode & O_NONBLOCK) != 0)
 			return B_WOULD_BLOCK;
@@ -246,6 +266,7 @@ timerfd_read(file_descriptor* descriptor, off_t pos, void* buffer,
 			B_CAN_INTERRUPT);
 		if (status != B_OK)
 			return status;
+		timerFD->CatchUp();
 	}
 
 	uint64 value = timerFD->expirations;
@@ -277,6 +298,7 @@ timerfd_select(file_descriptor* descriptor, uint8 event, selectsync* sync)
 	if (status != B_OK)
 		return status;
 
+	timerFD->CatchUp();
 	if (event == B_SELECT_READ && timerFD->expirations > 0)
 		return notify_select_event(sync, event);
 
@@ -382,12 +404,15 @@ bigtime_to_timespec(bigtime_t value, timespec& _time)
 static void
 get_setting(TimerFD* timerFD, itimerspec& setting)
 {
+	timerFD->CatchUp();
+
 	bigtime_t remaining = 0;
 	if (timerFD->armed) {
 		remaining = timerFD->nextExpiry - timerFD->Now();
 		if (remaining < 1) {
-			// Fired, the DPC has just not run yet: report the shortest
-			// possible time rather than 0, which would mean "disarmed".
+			// CatchUp() just moved nextExpiry past the present, but a
+			// real-time clock reading can step: never report 0, which
+			// would mean "disarmed".
 			remaining = 1;
 		}
 	}
