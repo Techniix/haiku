@@ -117,8 +117,28 @@ need host-side evidence, like the audio analysis, go in `ce-test.py`. Each
 should get a known-bad case in `selftest.py`, so a broken check can't pass
 silently.
 
+## Renga images
+
+`jam -q @renga-raw` (or `@renga-anyboot`, `@renga-vmware`) builds a full
+Renga desktop image: the regular image plus the volume label "Renga", the
+Techniix package repository and `HAIKU_RENGA_EXTRA_PACKAGES`. The profiles
+are defined in `build/RengaBuildProfiles`; Jamrules includes that file, the
+only upstream build file the fork touches. To test one:
+
+```sh
+3rdparty/ce/harness/ce-test.py --profile renga-raw
+```
+
+The harness then also checks the volume name and the repositories.
+
 ## Current suites
 
+- **posix_compat**: eventfd, timerfd, memfd, POSIX message queues, System V
+  shared memory, the libc additions, user contexts, and TCP (keepalive,
+  `TCP_INFO`, orderly and abortive close).
+- **virtio_block**: flush and trim on two scratch disks, one offering
+  DISCARD and one only WRITE ZEROES; the harness then checks on the host
+  that the trimmed space was freed in the image files.
 - **virtio_sound**: drives `/dev/audio/hmulti/virtio_sound/*` with the same
   ioctl sequence and buffer-cycle rules as the multi_audio media add-on. It
   plays three tone phases (initial start, restart after force-stop, and after

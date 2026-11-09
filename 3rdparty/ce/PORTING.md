@@ -32,6 +32,9 @@ updates this file in the same commit.
 | `sendmmsg()`, `recvmmsg()` | `<sys/socket.h>` | libnetwork (nothing extra) | Missing | Available |
 | `getcontext()`/`setcontext()`/`makecontext()`/`swapcontext()` | `<ucontext.h>` | libroot (nothing extra) | Missing | Available (x86_64) |
 | TCP keepalive: `SO_KEEPALIVE` probes, `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT` | `<netinet/tcp.h>` | libnetwork (nothing extra) | Missing (option accepted, no probes sent) | Available |
+| `TCP_INFO` (`struct tcp_info`), `TCPS_*` states | `<netinet/tcp.h>`, `<netinet/tcp_fsm.h>` | libnetwork (nothing extra) | Missing | Available |
+| Abortive close (`SO_LINGER` with zero timeout) sends a reset | (behaviour) | | Broken: no reset sent, peer never notified | Fixed |
+| virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
 `poll()` and `wait_for_objects()`, are inherited by `fork()`, and honour
@@ -238,6 +241,54 @@ out; those patches can be dropped.
 
 Since: commit `9c6d9157`. Tests:
 `tcp_keepalive_test.cpp`.
+
+### TCP_INFO
+
+`getsockopt(fd, IPPROTO_TCP, TCP_INFO, &info, &length)` fills a
+`struct tcp_info` for any TCP socket.
+
+- The layout is FreeBSD's. Its first part, up to `tcpi_rcv_space`, matches
+  Linux byte for byte, so code reading `tcpi_rtt`, `tcpi_rttvar`,
+  `tcpi_snd_mss`, `tcpi_rcv_mss`, `tcpi_snd_cwnd`, `tcpi_snd_ssthresh`,
+  `tcpi_rcv_space` or `tcpi_last_data_recv` works unchanged.
+- Units are FreeBSD's: microseconds for times, bytes for windows. The one
+  difference that matters for Linux code: `tcpi_snd_cwnd` is in bytes, not
+  segments (divide by `tcpi_snd_mss`). `tcpi_last_data_recv` is
+  microseconds (Linux: milliseconds).
+- `tcpi_state` is a BSD `TCPS_*` value from `<netinet/tcp_fsm.h>`
+  (`TCPS_ESTABLISHED` is 4), not Linux's `TCP_ESTABLISHED` (1). Compare
+  against the `TCPS_*` names, as FreeBSD ports already do.
+- Filled in: state, options and window scales, RTO, MSS both ways, RTT and
+  variation, congestion window, slow start threshold, receive space, peer
+  window, `tcpi_snd_nxt`/`tcpi_rcv_nxt`. Retransmission counters and the
+  other `__tcpi_*` fields read as zero.
+- Like on Linux and FreeBSD, a shorter buffer gets the start of the
+  structure. `TCP_INFO` is 0x20 (FreeBSD's number); code guarded by
+  `#ifdef __linux__` should test `#ifdef TCP_INFO` instead.
+
+Since: commit `dcb5350b`. Tests: `tcp_info_test.cpp`.
+
+### Abortive close
+
+`close()` with `SO_LINGER` set to `{1, 0}` now sends a reset, as everywhere
+else: the peer's blocked `recv()` returns `ECONNRESET` at once and its
+writes fail. Stock Haiku sent nothing, leaving the peer connected to a
+socket that no longer existed. Workarounds in ports (timeouts added only
+for Haiku, say) can go.
+
+Since: commit `efd6464a`. Tests: `tcp_close_test.cpp`.
+
+### virtio-blk disks
+
+Renga ships the `virtio_block` driver on x86_64 (stock Haiku only does on
+ARM and RISC-V), so VMs using virtio-blk disks (the default in
+virt-manager/libvirt and Proxmox) see them and can boot from them. The
+driver flushes the host cache on `fsync()`/`B_FLUSH_DRIVE_CACHE` and passes
+trims through (DISCARD, or WRITE ZEROES with unmap), so `fstrim` gives
+space back to sparse or thin images. Not a porting API, but useful when a
+port's CI or test VM uses virtio-blk.
+
+Since: commit `5b068a5e`. Tests: `vblk_test.cpp`.
 
 ### virtio-sound
 
