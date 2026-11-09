@@ -1226,6 +1226,121 @@ discard_area_range(VMArea* area, addr_t address, addr_t size)
 }
 
 
+/*!	Whether a page at cache offset \a offset exists in \a cache or one of its
+	sources (all locked), i.e. would be seen through an upper cache that has
+	no page there.
+*/
+static bool
+page_in_source_chain(VMCache* cache, off_t offset)
+{
+	for (; cache != NULL; cache = cache->source) {
+		if (cache->LookupPage(offset) != NULL || cache->StoreHasPage(offset))
+			return true;
+	}
+	return false;
+}
+
+
+/*!	Renga: madvise(MADV_DONTNEED) for one area, with Linux's semantics for
+	private mappings: the next access sees the pages as they were before any
+	write through this mapping, i.e. zeros for anonymous memory and the file
+	contents for private file mappings. Shared mappings (anonymous or file)
+	keep their contents; Linux only unmaps those pages, which is invisible.
+
+	The area's own (top) cache loses its pages in the range. For anonymous
+	memory whose cache has anonymous sources (after fork(): the pages from
+	before the fork are in a lower cache shared with the child), those lower
+	pages would show through, so a zeroed page is put into the top cache for
+	each of them. \a reservation must hold enough pages for that; if not,
+	nothing is changed, \a _neededPages is set and B_NO_MEMORY returned, so
+	the caller can reserve without locks held and try again.
+
+	Skipped (left as they are, as before): caches other than RAM caches,
+	caches with consumers, and ranges another area maps too (clone_area());
+	areas split by munmap()/mmap(MAP_FIXED) map disjoint parts of their
+	shared cache and are handled.
+*/
+static status_t
+dontneed_area_range(VMArea* area, addr_t address, addr_t size,
+	vm_page_reservation* reservation, page_num_t* _neededPages)
+{
+	addr_t offset;
+	if (!intersect_area(area, address, size, offset))
+		return B_OK;
+	if ((area->protection & B_SHARED_AREA) != 0)
+		return B_OK;
+
+	VMCache* cache = vm_area_get_locked_cache(area);
+	const off_t cacheStart = area->cache_offset + offset;
+	const off_t cacheEnd = cacheStart + size;
+
+	bool usable = cache->type == CACHE_TYPE_RAM && cache->consumers.IsEmpty();
+	for (VMArea* other = cache->areas.First(); usable && other != NULL;
+			other = cache->areas.GetNext(other)) {
+		if (other != area && other->cache_offset < cacheEnd
+			&& other->cache_offset + (off_t)other->Size() > cacheStart) {
+			usable = false;
+		}
+	}
+	if (!usable) {
+		vm_area_put_locked_cache(cache);
+		return B_OK;
+	}
+
+	VMCacheChainLocker cacheChainLocker(cache);
+	cacheChainLocker.LockAllSourceCaches();
+
+	bool anonymousChain = true;
+	for (VMCache* source = cache->source; source != NULL;
+			source = source->source) {
+		if (source->type != CACHE_TYPE_RAM)
+			anonymousChain = false;
+	}
+
+	page_num_t needed = 0;
+	if (anonymousChain && cache->source != NULL) {
+		for (off_t pageOffset = cacheStart; pageOffset < cacheEnd;
+				pageOffset += B_PAGE_SIZE) {
+			if (page_in_source_chain(cache->source, pageOffset))
+				needed++;
+		}
+	}
+	if (needed > reservation->count) {
+		*_neededPages = needed;
+		cacheChainLocker.Unlock();
+		return B_NO_MEMORY;
+	}
+
+	unmap_pages(area, address, size);
+
+	// VMCache::Discard() can temporarily drop the lock: unlock the lower
+	// caches first, as discard_area_range() does.
+	cacheChainLocker.Unlock(cache);
+	cache->Discard(cacheStart, size);
+
+	if (needed > 0) {
+		VMCacheChainLocker sourceLocker(cache);
+		sourceLocker.LockAllSourceCaches();
+		for (off_t pageOffset = cacheStart; pageOffset < cacheEnd;
+				pageOffset += B_PAGE_SIZE) {
+			if (cache->LookupPage(pageOffset) != NULL
+				|| !page_in_source_chain(cache->source, pageOffset)
+				|| reservation->count == 0) {
+				continue;
+			}
+			vm_page* page = vm_page_allocate_page(reservation,
+				PAGE_STATE_ACTIVE | VM_PAGE_ALLOC_CLEAR);
+			cache->InsertPage(page, pageOffset);
+			DEBUG_PAGE_ACCESS_END(page);
+		}
+		sourceLocker.Unlock(cache);
+	}
+
+	cache->ReleaseRefAndUnlock();
+	return B_OK;
+}
+
+
 static status_t
 discard_address_range(VMAddressSpace* addressSpace, addr_t address, addr_t size,
 	bool kernel)
@@ -6405,9 +6520,56 @@ _user_memory_advice(void* _address, size_t size, uint32 advice)
 		case MADV_SEQUENTIAL:
 		case MADV_RANDOM:
 		case MADV_WILLNEED:
-		case MADV_DONTNEED:
 			// TODO: Implement!
 			break;
+
+		case MADV_DONTNEED:
+		{
+			// Renga: Linux semantics, see dontneed_area_range(). V8 and
+			// PartitionAlloc decommit with it and rely on the pages being
+			// zero when they are used again.
+			vm_page_reservation reservation;
+			reservation.count = 0;
+			status_t status = B_OK;
+			while (true) {
+				AddressSpaceWriteLocker locker;
+				do {
+					status = locker.SetTo(team_get_current_team_id());
+					if (status != B_OK)
+						break;
+				} while (wait_if_address_range_is_wired(locker.AddressSpace(),
+						address, size, &locker));
+				if (status != B_OK)
+					break;
+
+				page_num_t neededPages = 0;
+				for (VMAddressSpace::AreaRangeIterator it
+						= locker.AddressSpace()->GetAreaRangeIterator(address,
+							size);
+						VMArea* area = it.Next();) {
+					status = dontneed_area_range(area, address, size,
+						&reservation, &neededPages);
+					if (status != B_OK)
+						break;
+				}
+				if (status != B_NO_MEMORY)
+					break;
+
+				// Not enough pages reserved to shadow pages shared after
+				// fork(): reserve them without locks held, then start over
+				// (areas already handled have nothing left to do).
+				locker.Unlock();
+				if (reservation.count > 0)
+					vm_page_unreserve_pages(&reservation);
+				vm_page_reserve_pages(&reservation, neededPages,
+					VM_PRIORITY_USER);
+			}
+			if (reservation.count > 0)
+				vm_page_unreserve_pages(&reservation);
+			if (status != B_OK)
+				return status;
+			break;
+		}
 
 		case MADV_FREE:
 		{

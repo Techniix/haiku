@@ -40,6 +40,7 @@ updates this file in the same commit.
 | `getpeereid()` | `<unistd.h>` (bsd) | `-lbsd` | Missing | Available |
 | `POLLRDHUP` (`poll()`), `EPOLLRDHUP` on a peer's half-close | `<poll.h>`, `<sys/epoll.h>` | | Missing; a half-close was reported as `POLLHUP` | Available |
 | UDP options for QUIC: `IP_RECVTOS`, `IP_PKTINFO`, `IP_MTU_DISCOVER`, `IPV6_RECVTCLASS`, `IPV6_TCLASS`, `IPV6_DONTFRAG`, `IPV6_MTU_DISCOVER`; `sendmsg()` with `IP_TOS`/`IP_TTL`/`IPV6_TCLASS`/`IPV6_HOPLIMIT`; `MSG_CTRUNC` | `<netinet/in.h>` | libnetwork (nothing extra) | Missing; any `sendmsg()` control message failed with `EOPNOTSUPP` | Available |
+| `madvise(MADV_DONTNEED)` zero-fill of private memory (V8, PartitionAlloc) | `<sys/mman.h>` | libroot (nothing extra) | Accepted, did nothing | Available |
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -424,6 +425,40 @@ limit travel with the buffer (`net_buffer::traffic_class`, `hop_limit`),
 
 Since: the commit that added `IP_RECVTOS` to `<netinet/in.h>`. Tests:
 `3rdparty/ce/tests/posix_compat/quic_udp_test.cpp` (32 checks).
+
+### Memory semantics for V8 and PartitionAlloc
+
+What V8 and PartitionAlloc (Chromium, Node.js, Electron) expect from the
+virtual memory system, as Linux provides it:
+
+- `madvise(MADV_DONTNEED)` on private memory now works as on Linux: the
+  pages are freed, and the next access sees zeros (anonymous memory) or the
+  file's contents (private file mappings), also for memory shared
+  copy-on-write with a `fork()`ed child (the child keeps its copy) and in
+  mappings split by `mprotect()` or `mmap(MAP_FIXED)`. Shared mappings keep
+  their contents, as on Linux. Stock Haiku accepted the call and did
+  nothing, so PartitionAlloc's decommit/recommit handed out pages that
+  were not zero.
+- Already working, and now tested: `PROT_NONE` reservations up to a
+  terabyte (V8's sandbox) commit no memory; `mprotect()` of sub-ranges
+  commits only those pages and the rest still faults; read-write/read-
+  execute toggling; `mmap(MAP_FIXED, PROT_NONE)` over committed pages at
+  the same address (V8's `DecommitPages()`), which frees them;
+  `munmap()` of sub-ranges; `MADV_FREE` (frees at once; the contents read
+  as zero or as before, both allowed).
+- None of the calls V8 checks with `CHECK(success)` (reserve, commit,
+  decommit, discard, release, permission changes) failed in the test, so
+  the Chromium port's V8 "Check failed: success" tab crash is not
+  explained by them alone; it needs a backtrace from the port.
+- **Differences from Linux:** `MADV_DONTNEED` leaves memory untouched in
+  the rare cases where another area maps the same pages (`clone_area()`)
+  or for device memory. Pages shared with a `fork()`ed child cost a new
+  zeroed page each (Linux maps its shared zero page).
+
+Implementation: `dontneed_area_range()` in `src/system/kernel/vm/vm.cpp`.
+
+Since: the commit that added `dontneed_area_range()`. Tests:
+`3rdparty/ce/tests/posix_compat/vm_semantics_test.cpp` (20 checks).
 
 ### eventfd
 

@@ -103,6 +103,11 @@ Application thread_atexit_test :
 	thread_atexit_test.cpp
 ;
 
+# Memory semantics V8 and PartitionAlloc rely on (kernel VM only).
+Application vm_semantics_test :
+	vm_semantics_test.cpp
+;
+
 Application timerfd_test :
 	timerfd_test.cpp
 	: libgnu.so
@@ -110,5 +115,5 @@ Application timerfd_test :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test
-		mqueue_test quic_udp_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test ;
+		mqueue_test quic_udp_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test vm_semantics_test ;
 }

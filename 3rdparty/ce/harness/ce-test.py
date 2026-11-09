@@ -67,7 +67,7 @@ WATCHED_DRIVERS = ("virtio_sound", "virtio_block", "nvme_disk")
 COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"libnetwork.so", "libbsd.so", "libc_ext_test", "virtio_sound",
 	"vsnd_test", "affinity_test", "epoll_test", "eventfd_test", "getdents_test", "inotify_test", "memfd_test", "mqueue_test", "quic_udp_test", "shm_test", "signalfd_test", "socket_ext_test", "thread_atexit_test", "timerfd_test",
-	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
+	"ucontext_test", "vm_semantics_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
 	"virtio_block", "vblk_test", "nvme_disk", "nvme_test",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
