@@ -197,6 +197,15 @@ AddVariableToScript $(script) : tmpDir : $(HAIKU_TMP_DIR) ;
 AddVariableToScript $(script) : addBuildCompatibilityLibDir
 	: "export $(HOST_ADD_BUILD_COMPATIBILITY_LIB_DIR)" ;
 AddTargetVariableToScript $(script) : <build>copyattr ;
+# Renga: the archive must fit the 2.88 MB El Torito floppy, and the x86_64
+# kernel plus boot modules no longer did. Kernel add-ons in the archive are
+# stripped of their full symbol tables (.symtab); the dynamic symbols they
+# are linked through stay, and the kernel itself keeps all its symbols. The
+# only effect is that a kernel debugger backtrace through a static function
+# of a boot module, on a system booted from CD, shows an address instead of
+# a name. Installed systems load the unstripped modules from disk.
+AddVariableToScript $(script) : stripAddOns
+	: $(HAIKU_STRIP_$(TARGET_PACKAGING_ARCH)) ;
 
 # create the other scripts
 local makeDirsScript = <FloppyBootArchive>haiku-floppyboot-make-dirs ;

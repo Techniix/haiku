@@ -59,6 +59,18 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
+# Optionally strip the full symbol tables from kernel add-ons (set by the
+# floppy boot archive, see build/jam/images/FloppyBootImage). Only regular
+# ELF files are touched; --strip-unneeded keeps everything needed for
+# dynamic linking.
+if [ -n "$stripAddOns" ] && [ -d "$outputDir/system/add-ons" ]; then
+	find "$outputDir/system/add-ons" -type f | while read -r file; do
+		if [ "$(head -c 4 "$file" | od -An -c | tr -d ' ')" = "177ELF" ]; then
+			"$stripAddOns" --strip-unneeded "$file"
+		fi
+	done
+fi
+
 # get an absolute path for the archive
 cwd=$(pwd)
 cd $(dirname $archive)
