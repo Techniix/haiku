@@ -1698,6 +1698,7 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-09 | [`e1638a07`](https://github.com/Techniix/haiku/commit/e1638a07) | `signalfd` (kernel + libgnu); synchronous signalfd notification from `kill()`/`raise()`/`sigqueue()`; inotify `write()` fails with `EINVAL` | 28 checks; 480/480 BIOS with 1, 2 and 4 CPUs, 477/477 UEFI; a `--smp 4` failure (DPC delay) fixed before commit |
 | 2026-11-09 | [`94fb0126`](https://github.com/Techniix/haiku/commit/94fb0126) | Roadmap: `F-43` Chromium platform readiness | Documentation only |
 | 2026-11-09 | [`c36db227`](https://github.com/Techniix/haiku/commit/c36db227) | Harness: `--only` partial runs, per-program timing, `harness.tests_ran` | PARTIAL run 120 checks; full 481/481 BIOS, 481/481 `--smp 2`, 478/478 UEFI; selftest 0 failures |
+| 2026-11-09 | (this commit) | hrev tag workflow runs only when `3rdparty/ce/upstream-base` changes (upstream syncs), not on every push | Two transient GitHub startup failures ("No jobs were run") on `3c560bad` and `98b3da53`; the latter succeeded on re-run |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
@@ -1766,7 +1767,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
    git log --oneline 4197d30f..master -- $(cat /tmp/renga-files)
    ```
 3. Also watch the directories next to Renga's work even where Renga changed no file: `src/system/kernel/vm/`, `src/system/kernel/scheduler/`, `src/add-ons/kernel/network/`, `src/system/boot/`, `src/kits/package/`, `src/servers/input/`, `src/apps/terminal/`, `build/jam/`.
-4. Rebase `ce/main` onto the new upstream, run the harness on every boot path in section 8.2, and record the new base and the result here and in section 10.1. The tag workflow publishes the new `hrev` tag on the next push.
+4. Rebase `ce/main` onto the new upstream, run the harness on every boot path in section 8.2, and record the new base and the result here and in section 10.1. Update `3rdparty/ce/upstream-base` in the same push: changing that file is what runs the tag workflow (`.github/workflows/ce-hrev-tag.yml`), which publishes the new `hrev` tag. Ordinary Renga pushes no longer run it (since 2026-11-09).
 5. If upstream fixes one of the bugs in section 10.2, drop or adapt the Renga hunk and note it in section 10.1.
 
 ### Upstream files Renga modifies (79 files, `git diff --stat 4197d30f..HEAD -- . ':!3rdparty'`)

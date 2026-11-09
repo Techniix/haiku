@@ -5,7 +5,8 @@
 # build/scripts/determine_haiku_revision). A fresh clone of this fork has no
 # hrev tags, so the build either fails or needs HAIKU_REVISION set by hand.
 #
-# On every push to ce/main this job:
+# When a push to ce/main changes 3rdparty/ce/upstream-base (the upstream
+# revision ce/main is based on, updated at every upstream sync), this job:
 #   1. fetches ce/main's commit graph from this repository (commits only,
 #      no trees or file contents: a few seconds of transfer),
 #   2. lists upstream's hrev tags from review.haiku-os.org (the GitHub
@@ -20,15 +21,25 @@
 # "git describe" needs, and it keeps the fork's tag list readable.
 #
 # It never touches branches, so master stays identical to upstream.
-# Pushes made with GITHUB_TOKEN do not trigger workflows, so the tag push
-# cannot re-run this job. "Run workflow" (workflow_dispatch) re-checks the
-# tip of the branch it is started on.
+# "Run workflow" (workflow_dispatch) checks the tip of the branch it is
+# started on.
+#
+# Why not on every push: the nearest hrev tag only changes when upstream
+# commits are merged into ce/main, which happens at an upstream sync, not
+# with Renga's own commits. Running on every push re-confirmed the same tag
+# dozens of times a day, and GitHub occasionally fails to start a job
+# ("No jobs were run", a startup failure that succeeds when re-run), which
+# sent a failure e-mail for nothing. A schedule is no alternative: GitHub
+# only runs scheduled workflows from the default branch, which is master.
 
 name: Renga hrev tag
 
 on:
   push:
     branches: [ce/main]
+    paths:
+      - 3rdparty/ce/upstream-base
+      - .github/workflows/ce-hrev-tag.yml
   workflow_dispatch:
 
 permissions:

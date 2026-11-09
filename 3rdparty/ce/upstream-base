@@ -1,0 +1,7 @@
+# Upstream Haiku revision that Renga's ce/main is based on.
+#
+# Update this file in the merge commit of every upstream sync. A push that
+# changes it runs .github/workflows/ce-hrev-tag.yml, which publishes the
+# nearest upstream hrev tag to this repository (Haiku's build names itself
+# after it).
+hrev60381 4197d30f
