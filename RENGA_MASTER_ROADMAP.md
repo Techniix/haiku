@@ -327,6 +327,10 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-43 | Chromium platform readiness | In Development (phase A QEMU Tested; B-H Designed) | Phase A: 143 checks in 7 programs |
 | F-44 | Bundled applications | Designed (three batches) | None |
 | F-46 | Haiku and BeOS program compatibility | Designed (guarantee and checks) | None |
+| F-47 | Zero-copy presentation and a Haiku Vulkan surface | Designed | None |
+| F-48 | Guest-memory and VM performance (hole punching, huge pages, many small mappings) | Designed | None |
+| F-49 | Futex-style waiting (`futex()` wait/wake) | Designed | None |
+| F-50 | Game mode (gamemode-compatible API, native service, Control Panel switch) | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -555,7 +559,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 2 (audit Tier 1) |
 | Risk | Low |
 | Testing status | None |
-| Next milestone | Agreed work order item 10 |
+| Next milestone | Agreed work order item 11 |
 | Recommended next action | A conditional launch_daemon job; harness check that skews the guest clock and expects correction (QEMU user networking provides an NTP-reachable path only if configured; verify first) |
 | Links | Audit Tier 1 |
 
@@ -1019,6 +1023,11 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Recommended next action | Start after LinuxKPI integration (`F-26`); bring the maintainer's patched `usb_hid` XInput driver in first |
 | Links | Audit "Gamepad API with SDL mapping database" |
 
+**Also required (Eglantine port, 2026-11-09):** the 8BitDo Ultimate 2C requirement above is unchanged.
+
+- [ ] Raw HID access for SDL3's HIDAPI back end on Haiku (a `hidraw`-style device for HID interfaces, with access control), so Pro Controller and Joy-Con work with gyro, rumble and HD rumble.
+- [ ] A working libusb on Renga: libusb upstream has a Haiku back end; find out why Eglantine's CMake turns libusb off for Haiku, fix the cause, and re-enable it (the GameCube controller adapter needs it).
+
 #### F-28 Control Panel suite
 
 | Field | Value |
@@ -1108,6 +1117,66 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Recommended next action | None until Stage 1 resumes |
 | Links | Trac #18441, #10486, #13087, #15864 |
 
+### Performance for ports and emulators
+
+#### F-48 Guest-memory and VM performance
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | No hole punching (`fallocate` modes, `MADV_REMOVE`); no user huge pages; one VM area per mapping |
+| Renga maturity | `memfd_create` with sealing, `MADV_DONTNEED` with Linux semantics, large `PROT_NONE` reservations (`F-08`, `F-43` phase A) |
+| Status | **Designed** |
+| Completed | None |
+| Remaining | Three parts, below |
+| Known bugs/limitations | Without (a), Eglantine falls back to `memset`, which is slower and keeps the pages resident |
+| Dependencies | `F-08` memfd |
+| Difficulty | (a) 3; (b) 8; (c) 5-7 after the benchmark |
+| Risk | (a) Low; (b) and (c) High (kernel VM) |
+| Testing status | None. All three parts are testable in the QEMU harness (functional checks and benchmarks); real-hardware measurements of (b) and (c) with Eglantine |
+| Next milestone | (a), in the port-performance batch (section 5.1) |
+| Recommended next action | (a) with `F-49` and `F-50`; then the benchmark for (c) |
+| Links | Motivation: the maintainer's Eglantine port (Eden-based Nintendo Switch 2 emulator, Djihads80/Eglantine 0.1.0-rc3, RengaPorts), requirements of 2026-11-09; `src/common/host_memory.cpp` |
+
+- [ ] **(a) Releasing memory in a memfd:** `fallocate(fd, FALLOC_FL_PUNCH_HOLE \| FALLOC_FL_KEEP_SIZE, offset, length)` on memfds (and regular files where the file system allows), and `madvise(MADV_REMOVE)` on shared mappings of them: the range reads back as zeros and its pages are freed. Eglantine uses it to free zeroed guest memory (`src/common/host_memory.cpp`, now behind `#ifdef __linux__`). Small, harness-testable, useful to other ports (Chromium's and Wine's shared memory, Mesa). Port-visible: PORTING.md "Planned".
+- [ ] **(b) Huge pages for user mappings:** Linux's `madvise(MADV_HUGEPAGE)` and transparent huge pages (2 MB pages on x86_64) for large anonymous and memfd mappings, to cut TLB misses on Eglantine's guest address space. Haiku has no 2 MB user pages: kernel VM work (page allocation, page tables, splitting on partial `mprotect`/`munmap`). Port-visible: PORTING.md "Planned".
+- [ ] **(c) Many small mappings:** fast `mmap`/`munmap` of many small `MAP_SHARED \| MAP_FIXED` pieces of a memfd inside one large `MAP_NORESERVE` reservation (Eglantine's guest memory layout). Haiku creates a VM area per mapping. First a harness benchmark against the same pattern, then area merging or a cheaper path for mappings inside a reservation.
+
+#### F-49 Futex-style waiting
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | No `futex()`; the kernel has address-keyed user mutex calls used by pthreads |
+| Renga maturity | None |
+| Status | **Designed** |
+| Completed | None |
+| Remaining | `futex()` in libgnu (`FUTEX_WAIT`, `FUTEX_WAKE`, with `FUTEX_PRIVATE_FLAG`; timeouts; later `FUTEX_WAIT_BITSET`/`FUTEX_WAKE_BITSET`), on a small kernel extension of the user mutex code (compare the value, then sleep, atomically against a wake); harness tests including cross-process wakes on shared memory. Then rebuilds in RengaPorts: libstdc++ uses futexes for `std::atomic::wait` only when built with its Linux futex switch, so it needs a patched build, not just a rebuild; Mesa's fence and semaphore waits (`util/futex`) need its Haiku case |
+| Known bugs/limitations | Not applicable |
+| Dependencies | None |
+| Difficulty | 3 |
+| Risk | Low |
+| Testing status | None; fully harness-testable |
+| Next milestone | Port-performance batch (section 5.1) |
+| Recommended next action | Implement with `F-48` (a) and `F-50` |
+| Links | Motivation: the maintainer's Eglantine port (Eden-based Nintendo Switch 2 emulator, Djihads80/Eglantine 0.1.0-rc3, RengaPorts), requirements of 2026-11-09. Useful to other ports: Chromium, Wine (its esync/fsync paths), Mesa. Port-visible: PORTING.md "Planned" |
+
+#### F-50 Game mode
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Thread priorities only; no performance mode |
+| Renga maturity | None |
+| Status | **Designed** |
+| Completed | Design (2026-11-09): be compatible with Feral's gamemode instead of inventing an API. Games and emulators already link its client library on Linux; Renga ships a library with the same client API and ABI (`gamemode_client.h`: `gamemode_request_start()`, `gamemode_request_end()`, `gamemode_query_status()`, and the `..._for(pid)` variants), so ports use their Linux code unchanged, backed by a small native Renga service instead of D-Bus |
+| Remaining | The service: while any program holds game mode, a low-latency scheduler setting, the top CPU performance state (`F-37`), the game's threads kept at high priority, optionally a quiet notification policy; released when the program ends or crashes. The client library in RengaPorts. The GUI (rule in section 1.2): a Game mode page in the Control Panel (`F-28`; until it exists, a Deskbar item) to allow or forbid game mode per application, show which programs hold it, and set what it changes. Harness tests for the service and the library |
+| Known bugs/limitations | Today Eglantine only sets `B_URGENT_DISPLAY_PRIORITY` |
+| Dependencies | `F-37` (CPU performance states); `F-28` (final home of the GUI) |
+| Difficulty | 4 |
+| Risk | Low |
+| Testing status | None; the API and service are harness-testable, the performance effect is measured on real hardware |
+| Next milestone | Port-performance batch (section 5.1) |
+| Recommended next action | Implement with `F-48` (a) and `F-49` |
+| Links | Motivation: the maintainer's Eglantine port (Eden-based Nintendo Switch 2 emulator, Djihads80/Eglantine 0.1.0-rc3, RengaPorts), requirements of 2026-11-09. Useful to every game and emulator port. Port-visible: PORTING.md "Planned" |
+
 ### Bundled applications
 
 #### F-44 Bundled applications (gap review, 2026-11-09)
@@ -1125,7 +1194,7 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Risk | Low to medium (backup and restore: medium, user data) |
 | Testing status | None. Each item gets a harness check where it can run headless (archive round trips, share mounts against QEMU's built-in SMB server, backup/restore round trips, package-state restore) plus screenshots for the GUIs |
 | Next milestone | Batch 1 (see section 5.1) |
-| Recommended next action | Start batch 1 after periodic NTP sync (work order item 11) |
+| Recommended next action | Start batch 1 after periodic NTP sync (work order item 12) |
 | Links | Gap review in the 2026-11-09 conversation; decisions log |
 
 Skipped for now by the maintainer: disk encryption, calendar and CalDAV/CardDAV, night light; later consideration: Mail, DeskCalc, ShowImage and remote desktop updates, a camera app.
@@ -1170,11 +1239,12 @@ Checklist:
 
 Milestone checklist (in order; phases 1 and 3 first because they unblock the most, including the maintainer's OBS and Sunshine ports):
 
-- [ ] **Phase 1, mixing and routing (foundation):** per-application streams with volume, mute and remembered per-app settings; system-wide routing (any app to any output, default device, streams follow hot-plugged USB/HDMI devices); loopback and recording (one app or the whole mix, "what you hear"); microphone capture with per-input gain; better sample-rate conversion, a low-latency mode, click-free device switches.
+- [ ] **Phase 1, mixing and routing (foundation):** per-application streams with volume, mute and remembered per-app settings; system-wide routing (any app to any output, default device, streams follow hot-plugged USB/HDMI devices); loopback and recording (one app or the whole mix, "what you hear"); microphone capture with per-input gain; better sample-rate conversion, a low-latency mode, click-free device switches. Low-latency path with stable buffer sizes for emulators and games (Eglantine port, 2026-11-09: its SDL3 audio runs on `BSoundPlayer` because cubeb has no Haiku back end); and, better than SDL alone, a cubeb back end on the Media Kit published in RengaPorts, which Firefox and several emulators use, so many ports benefit at once.
 - [ ] **Phase 2, devices:** USB Audio Class 2, HDMI/DisplayPort audio, `virtio_sound` capture, hot-plug; a real UVC webcam driver exposed as a Media Kit video source; Bluetooth audio (A2DP) listed but unscheduled until the Bluetooth stack is finished.
 - [ ] **Phase 3, capture APIs:** app_server screen capture (full screen, window, region; steady frame rate; optional cursor; permission prompt on first use); a capture session that delivers screen, audio and camera with matched timestamps.
 - [ ] **Phase 4, codecs and streaming:** updated FFmpeg plug-in (AV1 via dav1d, modern HEVC/VP9, Opus/FLAC/AAC encode); one encode/decode API that picks hardware when present and software otherwise; HLS/DASH playback; RTMP and RTP/WebRTC-friendly output; network audio output.
-- [ ] **Phase 5, hardware video acceleration:** back ends behind the phase-4 API: NVIDIA NVENC/NVDEC with the maintainer's driver rework; Intel/AMD most likely through LinuxKPI-ported GPU drivers. Phases 1-4 do not wait for it; implement what is possible now and come back.
+  - Low-latency path with stable buffer sizes for emulators and games (Eglantine port, 2026-11-09; its SDL3 audio runs on `BSoundPlayer` because cubeb has no Haiku back end), on the phase-1 low-latency mode. Better than SDL alone: a cubeb back end for the Media Kit, published in RengaPorts, which Firefox and several emulators use, so many ports benefit at once.
+- [ ] **Phase 5, hardware video acceleration:** back ends behind the phase-4 API: NVIDIA NVENC/NVDEC with the maintainer's driver rework; Intel/AMD most likely through LinuxKPI-ported GPU drivers. Phases 1-4 do not wait for it; implement what is possible now and come back. Also wanted for in-game video in emulators (Eglantine port, 2026-11-09; low priority): Vulkan Video decode in NVK on Haiku, or VA-API over NVDEC.
 - [ ] **Phase 6, audio settings redesign:** see `F-32`. Maintainer decision (2026-11-09): the audio GUI is reworked together with the Media Kit work, so each phase ships with the controls that use its features (not as a separate project at the end).
 
 #### F-32 Audio settings redesign
@@ -1243,6 +1313,39 @@ Checklist (OS side unless marked "port"):
 
 **Phase A findings (2026-11-09).** Not fixed, recorded for later: IPv6 datagrams larger than the MTU without "don't fragment" are sent as fragments but never reassembled. `send_fragments()` gives every fragment a new identification, and `reassemble_fragments()` counts the extension headers as data and leaves the fragment header in non-first fragments. Correcting those two was not enough in a first attempt, which was reverted. QUIC always sends with DF, so this does not affect HTTP/3. The receive loop that could spin forever on a fragment header was fixed (`836867b5`).
 
+#### F-47 Zero-copy presentation and a Haiku Vulkan surface
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | No GPU buffer sharing between applications and app_server; windows are drawn from CPU `BBitmap`s copied into the framebuffer. Haiku already has two paths that avoid app_server copies: overlay bitmaps (`B_BITMAP_WILL_OVERLAY`, used for video) and `BDirectWindow` (direct framebuffer access for fullscreen) |
+| Renga maturity | None |
+| Status | **Designed** |
+| Completed | Design (2026-11-09), below |
+| Remaining | Checklist below |
+| Known bugs/limitations | Today, with Quasar and X547's VideoStreamsWsi layer: `QueuePresent` submits, then `WaitForFences` (CPU stall), copies the GPU image into a linear host-visible image, waits again, and app_server copies that `BBitmap` into the framebuffer: about 33 MB copied twice per 4K frame plus two stalls. VideoStreamsWsi bugs: `GetFormats` copies `sizeof(VkFormat)` per entry instead of `sizeof(VkSurfaceFormatKHR)`; the layer submits on `GetDeviceQueue(0, 0)` from its present thread, breaking Vulkan's one-thread-per-queue rule (needs a lock, or the application's present queue) |
+| Dependencies | `F-35` accelerant extension (buffer import, page flip, vblank events); the maintainer's NVIDIA driver (Quasar, `Techniix/nvidia-haiku`, branch `rtx5070-dev`), which stays out of tree behind that vendor-neutral extension; `F-33` (a compositor would use the same buffer import) |
+| Difficulty | 8 |
+| Risk | High (app_server, drivers, external Vulkan layer) |
+| Testing status | None. Needs real NVIDIA hardware for the full path. QEMU can test the app_server protocol and the overlay/flip bookkeeping with a software buffer, and virgl/venus (`F-35`) later |
+| Next milestone | Accelerant extension design (`F-35`) |
+| Recommended next action | Start with the GPU stage; begin by measuring today's frame time breakdown on the maintainer's machine |
+| Links | Motivation: the maintainer's Eglantine port (Eden-based Nintendo Switch 2 emulator, Djihads80/Eglantine 0.1.0-rc3, RengaPorts), requirements of 2026-11-09; Eglantine presents through VideoStreamsWsi's headless surface plus a `BitmapHook` |
+
+**Design (2026-11-09): extend Haiku's existing no-copy paths instead of adding a new one.**
+
+- Windowed: overlay bitmaps gain imported GPU buffers (by driver handle, through the accelerant extension) and a flip queue, so a client's GPU image is shown by the display hardware in its window with no CPU copy, the way Windows shows a flip-model swap chain.
+- Fullscreen: direct scanout of the client's buffer (the equivalent of Windows' independent flip and Linux KMS page flips), building on `BDirectWindow`'s fullscreen model, with app_server falling back to composition when a window overlaps.
+- This is where Renga can beat Windows and Linux: fullscreen direct scanout without a compositor in the way, plus lower OS overhead. NVK is generally slower than NVIDIA's own driver on GPU-heavy work, so raw GPU throughput is not expected to win.
+
+Checklist:
+
+- [ ] Accelerant extension (with `F-35`): buffer import, page flip with completion events, vblank events, vendor-neutral, implemented in Quasar.
+- [ ] app_server: GPU buffers in overlay bitmaps with a flip queue; fullscreen direct scanout; fallback composition.
+- [ ] A Haiku Vulkan surface that takes a `BWindow`/`BView` (today applications create a headless surface and cast its handle to the layer's C++ object). Vulkan extension names must be registered with Khronos, so the name and structure are decided together with X547 (VideoStreamsWsi's author); a clearly provisional vendor-prefixed name is used until then. Decision pending.
+- [ ] Present modes FIFO, MAILBOX and IMMEDIATE, synchronised with semaphores and fences instead of CPU waits; VRR later.
+- [ ] VideoStreamsWsi fixes: `GetFormats` element size; queue use from the present thread.
+- [ ] Measurements on the maintainer's machine: frame time breakdown before and after, compared with Windows and Linux on the same hardware.
+
 #### F-35 GPU and graphics
 
 | Field | Value |
@@ -1260,6 +1363,14 @@ Checklist (OS side unless marked "port"):
 | Next milestone | None scheduled |
 | Recommended next action | None until Stage 5 |
 | Links | Audit section 1 hardware table |
+
+**NVK feature coverage for Eden-based emulators** (Motivation: the maintainer's Eglantine port (Eden-based Nintendo Switch 2 emulator, Djihads80/Eglantine 0.1.0-rc3, RengaPorts), requirements of 2026-11-09). Eglantine's list comes from `src/video_core/vulkan_common/vulkan_device.h` (the `FOR_EACH_VK_*` macros).
+
+- [ ] Run `vulkaninfo` on Renga with Quasar and NVK on the maintainer's RTX 5070 and compare with the lists below (real hardware only).
+- [ ] Mesa: Haiku's build packages carry Mesa 22.0.5; NVK needs a current Mesa (24 or later), built for Renga in RengaPorts with Quasar's winsys.
+- Required or strongly preferred: `VK_EXT_extended_dynamic_state`, `_2`, `_3`; `VK_EXT_vertex_input_dynamic_state`; `VK_EXT_external_memory_host` (needs host-pointer import in NVK's RM back end; VideoStreamsWsi has disabled code for it); `VK_EXT_robustness2`; `VK_EXT_conditional_rendering`; `VK_EXT_conservative_rasterization`; `VK_EXT_depth_bias_control`; `VK_EXT_line_rasterization`; `VK_EXT_4444_formats`; `VK_EXT_vertex_attribute_divisor`; `VK_KHR_push_descriptor`; `VK_KHR_shader_float_controls`; `VK_NV_viewport_swizzle`, `VK_NV_viewport_array2`, `VK_NV_geometry_shader_passthrough`.
+- Also used: timeline semaphores, `VK_EXT_memory_budget`, `VK_KHR_swapchain_mutable_format`.
+- Most of these are implemented in NVK upstream on Linux; the expected gaps are on the Haiku side (the Mesa version, and kernel features in Quasar such as host-pointer import and memory budget reporting).
 
 #### F-37 Power management and suspend
 
@@ -1396,13 +1507,16 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
 8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Then the maintainer's real-hardware install.
 9. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
-10. **Periodic NTP sync** (`F-30`).
-11. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
-12. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
-13. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
-14. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+10. **Port-performance batch** (`F-48` part a, `F-49`, `F-50`), placed by the maintainer (2026-11-09): hole punching in memfds, `futex()`, game mode with its Control Panel switch. Small, harness-testable, and useful to Chromium, Wine and Mesa as well as Eglantine.
+11. **Periodic NTP sync** (`F-30`).
+12. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
+13. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
+14. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
+15. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
+
+Later, with the GPU stage (needs the maintainer's NVIDIA hardware): zero-copy presentation and the Haiku Vulkan surface (`F-47`), NVK feature coverage (`F-35`). Later kernel VM work: huge pages and many small mappings (`F-48` parts b and c). With `F-42` and `F-31` as planned: raw HID and libusb for controllers, the cubeb back end, video decode for in-game video.
 
 ### 5.2 Renga-specific projects (from the maintainer's goals)
 
@@ -1486,7 +1600,7 @@ Milestone count: 6 of 6 (100%).
 
 | # | Item | Done |
 | --- | --- | --- |
-| 1 | Periodic NTP sync | No (work order item 10) |
+| 1 | Periodic NTP sync | No (work order item 11) |
 | 2 | Finish and ship `virtio_sound` | Yes (playback) `658d1756`, `fbbb290a` |
 | 3 | `virtio_block` DISCARD/WRITE_ZEROES | Yes `5b068a5e` |
 | 4 | NVMe multi-namespace + teardown TODOs | Yes `0758b116` (one TODO remains) |
@@ -1574,6 +1688,10 @@ graph LR
   ACC[Accelerant extension]:::todo
   COMP[F-33 Compositor]:::todo
   HW[Real-hardware validation]:::todo
+  ZC[F-47 Zero-copy presentation]:::todo
+  NVK[NVK feature coverage]:::todo
+  PERF[F-48a / F-49 / F-50 port performance]:::todo
+  VM[F-48b/c huge pages, small mappings]:::todo
 
   H --> EFD & TFD & MFD & MQ & SHM & TCP & VSND & BOOT & MOUSE
   EFD --> EPOLL
@@ -1590,6 +1708,10 @@ graph LR
   KPI --> WIFI
   KPI --> CP
   ACC --> COMP
+  ACC --> ZC
+  HW --> NVK
+  MFD --> PERF
+  PERF --> VM
   HW --> WIFI
 ```
 
@@ -1900,6 +2022,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Every user-facing feature ships with its GUI in the same work item; a feature is not Implemented until it can be reached from the desktop (principle added to section 1.2). Review of finished features: only repository priorities (`F-13`) lack a GUI | Section 1.2, `F-13` |
 | 2026-11-09 | Backwards compatibility is a guarantee: Renga always runs the Haiku programs, and the BeOS programs Haiku ran, as Haiku did before Renga; enforced by an ABI check against the upstream base and runtime checks (`F-46`) | `F-46`, section 1.2 |
 | 2026-11-09 | BeOS programs: Renga stays 64-bit; running 32-bit Haiku and BeOS programs on 64-bit Renga comes last of everything, the lowest priority on the roadmap | `F-46` |
+| 2026-11-09 | Eglantine port requirements: zero-copy presentation by extending overlay bitmaps and fullscreen direct scanout on the accelerant extension, with a Haiku Vulkan surface named together with X547 (`F-47`); NVK coverage starting from `vulkaninfo` on real hardware (`F-35`); hole punching, huge pages, cheap small mappings (`F-48`); `futex()` (`F-49`); game mode compatible with Feral's gamemode client API (`F-50`); raw HID and libusb (`F-42`); low-latency audio and a cubeb back end (`F-31` phase 1); in-game video decode (`F-31` phase 5). The port-performance batch goes after LinuxKPI | `F-47`-`F-50`, `F-35`, `F-42`, `F-31`, section 5.1 |
 
 ---
 

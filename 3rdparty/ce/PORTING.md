@@ -749,6 +749,24 @@ workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
 - `TFD_TIMER_CANCEL_ON_SET`.
+- Releasing memory inside a memfd: `fallocate(fd, FALLOC_FL_PUNCH_HOLE |
+  FALLOC_FL_KEEP_SIZE, ...)` and `madvise(MADV_REMOVE)` (roadmap `F-48`
+  part a). Until then keep the `memset` fallback.
+- Huge pages for user mappings: `madvise(MADV_HUGEPAGE)` and transparent
+  huge pages (`F-48` part b). Until then leave the call out; nothing to
+  emulate.
+- `futex()` (`FUTEX_WAIT`, `FUTEX_WAKE`, private and shared) in libgnu
+  (`F-49`). Until then keep the condition-variable or semaphore fallback.
+  libstdc++'s `std::atomic::wait` and Mesa's waits benefit only after their
+  RengaPorts builds are updated.
+- Game mode: a library compatible with Feral's gamemode client API
+  (`gamemode_client.h`, `gamemode_request_start()`/`_end()`/
+  `gamemode_query_status()`), backed by a native Renga service and switched
+  in the Control Panel (`F-50`). Keep the existing gamemode calls of Linux
+  code paths; they will work unchanged once the library ships.
+- Zero-copy GPU presentation and a Haiku Vulkan surface that takes a
+  `BWindow`/`BView` (`F-47`, needs the NVIDIA driver work): keep the
+  current VideoStreamsWsi presentation until then.
 - Linux driver support through LinuxKPI, and Linux binary compatibility
   through Renguin: both build on the APIs above.
 
