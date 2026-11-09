@@ -60,14 +60,14 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 **What is Renga today?** Renga is a fork of Haiku (upstream base `4197d30f`, `hrev60381`, 2026-11-04) developed on the `ce/main` branch of Techniix/haiku. It is upstream Haiku plus 46 commits (2026-11-08 to 2026-11-09): about 17,200 added lines in upstream files and 9,600 in the fork's own `3rdparty/ce` directory. It boots in QEMU under BIOS and UEFI, from disk, CD and virtio-blk, and identifies itself as Renga in the boot loader, ISO volume ID, About window, Deskbar and Installer. The fork was named Renga on 2026-11-08 because Haiku, Inc.'s distribution guidelines do not allow "Haiku" in a distribution's name. `uname` still reports Haiku so ports keep detecting the platform.
 
 **What has been completed?** (all QEMU Tested; none Hardware Tested yet)
-- Fork foundation: branch model (`master` = upstream, work on `ce/main`), automatic `hrev` tag workflow, a headless QEMU test harness with hang capture, screenshots, key and pointer injection, and four boot paths. Current committed baseline: **480/480** checks (BIOS, also with 2 and 4 CPUs) and **477/477** (UEFI) since `signalfd`; `renga-raw` **324/324**, from before `epoll`.
+- Fork foundation: branch model (`master` = upstream, work on `ce/main`), automatic `hrev` tag workflow, a headless QEMU test harness with hang capture, screenshots, key and pointer injection, and four boot paths. Current committed baseline: **619/619** checks (BIOS, also with 2 CPUs) and **616/616** (UEFI) since `F-43` phase A (`575f9cc0`); `renga-raw` **324/324**, from before `epoll`.
 - `epoll`, `inotify` and `signalfd` (`F-15`, all three): Linux semantics including edge-triggered, one-shot, nesting and fork sharing (epoll, 84 checks); create/delete/rename with cookies, modify/attrib/close events, overflow (inotify, 47 checks); per-thread pending signals, SIGCHLD, queued realtime signals (signalfd, 28 checks).
 - Porting API pack 1, **6 of 6 items (100%)**: `eventfd`, `timerfd`, `memfd_create`, POSIX message queues, System V shared memory, libc fill-ins (`getrandom`, `getauxval`, `backtrace*`, `copy_file_range`, `sendmmsg`/`recvmmsg`), user contexts (x86_64), TCP keepalive.
 - Tier 1 work: `TCP_INFO`, abortive-close reset, `virtio_sound` playback, `virtio_block` flush/trim/resize and shipping on x86_64, NVMe multi-namespace, EFI loader boot-disk preference, boot menu timeout with countdown.
 - Identity: live-animated Renga boot splash, Renga branding, `renga-raw`/`renga-anyboot`/`renga-vmware` build profiles, Techniix repository preferred over HaikuPorts, Ctrl as the default shortcut key with a switch back to Alt.
 - Upstream bugs found and fixed in the fork (10 written up for later reporting, plus 2 newer ones): see [Section 10.2](#102-upstream-haiku-bugs-found-and-fixed-in-renga).
 
-**What is being developed now?** The small Chromium OS gaps (`F-43` phase A), then the Media Kit (`F-31`, starting with `virtio_sound` capture). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
+**What is being developed now?** The Media Kit (`F-31`), starting with `virtio_sound` capture (`F-02`). The small Chromium OS gaps (`F-43` phase A) were finished on 2026-11-09 (`82cd4654` to `575f9cc0`): `thread_local` destructors, CPU affinity in libroot, `getdents64`, `getpeereid`, `POLLRDHUP`, `memfd` sealing, the QUIC UDP options and `MADV_DONTNEED`, with ten upstream bugs fixed on the way (section 10.2, 14-23). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
 
 **What is blocked?**
 - NVMe multi-namespace (`F-04`) cannot reach Hardware Tested until the maintainer runs it on his real NVMe PC (pending, by his choice).
@@ -271,7 +271,7 @@ This section summarises the original audit of upstream Haiku at `4197d30f` (2026
 | Commits on top of upstream | 46 (author date 2026-11-08: 32, 2026-11-09: 14) |
 | Upstream files changed | 79 files outside `3rdparty`, +17,204 / -351 lines (of which about 8,200 lines are generated splash and logo image headers) |
 | Fork-only tree | `3rdparty/ce`: 38 files, +9,609 lines (harness, tests, artwork scripts, build profiles, repository config, docs) |
-| Harness baseline | 480/480 (BIOS, `minimum-raw`) and 477/477 (UEFI, `minimum-anyboot`) after `signalfd`; 324/324 (`renga-raw`) from before `epoll` |
+| Harness baseline | 619/619 (BIOS, `minimum-raw`, 1 and 2 CPUs) and 616/616 (UEFI, `minimum-anyboot`) after `F-43` phase A (`575f9cc0`); 324/324 (`renga-raw`) from before `epoll` |
 | Test suites | 6 committed in-guest suites (`virtio_sound`, `posix_compat` with 10 programs, `virtio_block`, `nvme`, `pkg_priority`, `shortcut_keys`), plus host-side checks; `pointer` in development |
 | Hardware-tested components | 0 |
 | Uncommitted work | VM mouse integration (9 files changed, +397/-21 lines, plus the new `3rdparty/ce/tests/pointer/` suite) |
@@ -289,7 +289,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-05 | TCP additions | QEMU Tested | 32 checks (loopback) |
 | F-06 | eventfd | QEMU Tested | 19 checks |
 | F-07 | timerfd | QEMU Tested | 27 checks |
-| F-08 | memfd_create | QEMU Tested | 22 checks |
+| F-08 | memfd_create | QEMU Tested (with sealing) | 41 checks |
 | F-09 | POSIX message queues | QEMU Tested | 39 checks |
 | F-10 | System V shared memory | QEMU Tested | 18 checks |
 | F-11 | libc additions | QEMU Tested | 19 checks |
@@ -324,7 +324,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-40 | Visual identity pack (themes) | Not Started | None |
 | F-41 | Deskbar modernisation | Investigating (requirements set) | None |
 | F-42 | Gamepad support and configurator | Investigating (requirements set) | None |
-| F-43 | Chromium platform readiness | Designed (phases A-H) | None |
+| F-43 | Chromium platform readiness | In Development (phase A QEMU Tested; B-H Designed) | Phase A: 143 checks in 7 programs |
 | F-44 | Bundled applications | Designed (three batches) | None |
 | F-46 | Haiku and BeOS program compatibility | Designed (guarantee and checks) | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
@@ -1203,16 +1203,16 @@ Milestone checklist (in order; phases 1 and 3 first because they unblock the mos
 | --- | --- |
 | Upstream maturity | Haiku runs QtWebEngine 5.15 (Chromium 87) from HaikuPorts; no current Chromium. Missing for Chromium: epoll/eventfd/inotify (now in Renga), process sandbox, GPU path for web content, desktop service interfaces |
 | Renga maturity | The maintainer's port [Chromium-HaikuOS](https://github.com/Techniix/Chromium-HaikuOS) (Chromium 156) builds and runs on Haiku through the Wayland compatibility layer with a native window frame; sound through a Media Kit backend is being tested; it runs with `--no-sandbox`, `--disable-gpu`, `--disable-quic` |
-| Status | **Designed** (evaluation 2026-11-09, below) |
-| Completed | OS side already in Renga: `epoll`, `eventfd`, `timerfd`, `inotify`, `signalfd`, `memfd_create`, `backtrace()`, `getrandom`, `sendmmsg`/`recvmmsg`, `TCP_INFO`, keepalive (`F-05`, `F-06`-`F-12`, `F-15`) |
+| Status | **In Development**: phase A done and QEMU Tested (2026-11-09); phases B-H Designed |
+| Completed | OS side already in Renga: `epoll`, `eventfd`, `timerfd`, `inotify`, `signalfd`, `memfd_create`, `backtrace()`, `getrandom`, `sendmmsg`/`recvmmsg`, `TCP_INFO`, keepalive (`F-05`, `F-06`-`F-12`, `F-15`); phase A (2026-11-09): `__cxa_thread_atexit_impl` (`82cd4654`), CPU affinity in libroot (`00df2593`, scheduler fix `25c8548d`), `getdents64`/`getdents`, `getpeereid`, `POLLRDHUP` (`1bfb2665`), `memfd` sealing (`75e11a4b`), the QUIC UDP options (`836867b5`), `MADV_DONTNEED` for V8/PartitionAlloc (`575f9cc0`) |
 | Remaining | Checklist below (OS side in Renga, port side in Chromium-HaikuOS) |
 | Known bugs/limitations | See checklist |
 | Dependencies | `F-15`; `F-31` phases 1-5; `F-35` (GPU); `F-37` (power); `F-26` (LinuxKPI GPU drivers for Intel/AMD) |
 | Difficulty | Small items 2-4; sandbox 7; GPU path 8-9 (audit scale) |
 | Risk | Medium; High for the sandbox (security-critical) |
-| Testing status | None yet for this entry. Each OS item gets a harness test; the browser itself is tested on the maintainer's machine |
-| Next milestone | Phase A (small OS gaps), harness-tested; next in the agreed work order (section 5.1, item 4) |
-| Recommended next action | Schedule phase A with the porting work; it is small and also helps other ports (Electron, Node, Firefox) |
+| Testing status | Phase A QEMU Tested: `thread_atexit` 9, `affinity` 15, `getdents` 13, `socket_ext` 35, `memfd` sealing 19 (of 41), `quic_udp` 32, `vm_semantics` 20 checks; full runs 619/619 (BIOS, 1 and 2 CPUs), 616/616 (UEFI) at `575f9cc0`. The browser itself is tested on the maintainer's machine; none of phase A has been tried in the port yet |
+| Next milestone | Phase B (port catches up with Renga), in the Chromium-HaikuOS repository; try HTTP/3 without `--disable-quic` and get a backtrace of the V8 "Check failed: success" crash on Renga with `575f9cc0` |
+| Recommended next action | Rebuild the port against phase A (drop `libhaikucompat.a`'s `thread_local` helper and the `libm.a` libgnu trick, enable sealing and QUIC); report what still fails |
 | Links | Chromium-HaikuOS `docs/PORTING.md`; its platform checklist |
 
 **Fastest route (evaluation, 2026-11-09).** The port already follows the quickest model: FreeBSD's maintained `www/chromium` patch set, converted to Haiku by the port's `haikuify` tool on every release ("Linux in GN, Haiku in C++", from the HaikuPorts QtWebEngine port), plus a small Haiku patch series, with Chromium's mature Ozone/Wayland backend running on Haiku's Wayland compatibility layer. Renga speeds this up most by **offering the interfaces Chromium's Linux and BSD code already uses**, so that code compiles unchanged and the Haiku-only patches shrink instead of grow, which also makes every Chromium update cheaper. Where an established project already solved a piece, reuse it instead of writing a Renga-only design:
@@ -1225,14 +1225,14 @@ Milestone checklist (in order; phases 1 and 3 first because they unblock the mos
 
 Checklist (OS side unless marked "port"):
 
-- [ ] **Phase A, small OS gaps (each 2-4, harness-tested):**
-  - [ ] `__cxa_thread_atexit_impl` in libroot, so `thread_local` destructors work without the port's `libhaikucompat.a` helper;
-  - [ ] `sched_getaffinity`/`sched_setaffinity` and `pthread_setaffinity_np` in libroot (today only in libgnu, pulled in through a `libm.a` linker-script trick);
-  - [ ] `getdents`/`getdents64`, `getpeereid`, and `POLLRDHUP` honoured by `poll()` as well as `epoll`;
-  - [ ] `memfd` sealing (`MFD_ALLOW_SEALING`, `F_ADD_SEALS`, `F_GET_SEALS`), used by Chromium's Linux shared-memory code and Wayland;
-  - [ ] the UDP socket options QUIC needs: find the call that fails with "Operation not supported" (likely ECN via `IP_RECVTOS`/`IPV6_RECVTCLASS`, `IP_PKTINFO`, or path-MTU options) and implement it, so HTTP/3 works without `--disable-quic`;
-  - [ ] Linux-compatible memory semantics for V8 and PartitionAlloc (`MADV_DONTNEED` zero-fill, `MADV_FREE`, `mprotect` on sub-ranges, `PROT_NONE` reservations that commit no memory, `MAP_FIXED` over reservations): the port's V8 "Check failed: success" tab crash points here; reproduce in the harness first;
-  - [ ] fontconfig configured for Haiku's font folders by default (no `FONTCONFIG_FILE` needed).
+- [x] **Phase A, small OS gaps (each 2-4, harness-tested):** done 2026-11-09, QEMU Tested; details and deviations in `3rdparty/ce/PORTING.md`
+  - [x] `__cxa_thread_atexit_impl` in libroot, so `thread_local` destructors work without the port's `libhaikucompat.a` helper (`82cd4654`; libc++abi uses it; Haiku's own libstdc++ keeps its emulation until HaikuPorts rebuilds gcc_syslibs);
+  - [x] `sched_getaffinity`/`sched_setaffinity` and `pthread_setaffinity_np` in libroot (today only in libgnu, pulled in through a `libm.a` linker-script trick) (`00df2593`: moved, Linux return conventions, masks inherited; a kernel panic setting another thread's mask and a scheduler bug, `25c8548d`, fixed);
+  - [x] `getdents`/`getdents64`, `getpeereid`, and `POLLRDHUP` honoured by `poll()` as well as `epoll` (`1bfb2665`; a peer's half-close is no longer reported as `POLLHUP`);
+  - [x] `memfd` sealing (`MFD_ALLOW_SEALING`, `F_ADD_SEALS`, `F_GET_SEALS`), used by Chromium's Linux shared-memory code and Wayland (`75e11a4b`, including `F_SEAL_FUTURE_WRITE` and `F_SEAL_EXEC`);
+  - [x] the UDP socket options QUIC needs: find the call that fails with "Operation not supported" (likely ECN via `IP_RECVTOS`/`IPV6_RECVTCLASS`, `IP_PKTINFO`, or path-MTU options) and implement it, so HTTP/3 works without `--disable-quic` (`836867b5`: it was any `sendmsg()` with a control message, `EOPNOTSUPP` because UDP had no hook; the options were missing too and are added; not yet tried in the port);
+  - [x] Linux-compatible memory semantics for V8 and PartitionAlloc (`MADV_DONTNEED` zero-fill, `MADV_FREE`, `mprotect` on sub-ranges, `PROT_NONE` reservations that commit no memory, `MAP_FIXED` over reservations): the port's V8 "Check failed: success" tab crash points here; reproduce in the harness first (`575f9cc0`: only `MADV_DONTNEED` differed, it was a no-op; everything else already worked, and no call V8 `CHECK`s failed, so the tab crash is not explained yet and needs a backtrace from the port);
+  - [x] fontconfig configured for Haiku's font folders by default (no `FONTCONFIG_FILE` needed). Nothing to do in Renga (checked 2026-11-09): fontconfig is a HaikuPorts package, and its 2.18.2-2 `fonts.conf` (`/boot/system/settings/fonts/fonts.conf`) already lists the four Haiku font folders and Haiku cache directories. A port that needs `FONTCONFIG_FILE` is most likely using a bundled fontconfig (Chromium's `use_bundled_fontconfig`) with another configuration directory: build against the system fontconfig or point the bundled one at that file (port side, phase B).
 - [ ] **Phase B, port catches up with Renga (port):** native `MessagePumpEpoll` with `eventfd` wake-ups (drop the poll-mode patch), the Linux `inotify` file watcher (replace the stub), `memfd` shared memory, symbolized crash stack traces through `backtrace()`.
 - [ ] **Phase C, Wayland compatibility layer as a Renga component:** bring Haiku's `wayland_server` layer (HaikuPorts) into Renga and extend it: clipboard bridged to the Haiku clipboard, drag and drop, `text-input-v3` bridged to Haiku input methods (non-US layouts, IME), fractional scaling, multiple outputs, idle-inhibit; later `linux-dmabuf` and EGL with the GPU work. Benefits every Wayland program (GTK4, Qt, SDL, Electron, Firefox).
 - [ ] **Phase D, desktop services:** a D-Bus session bus started by launch_daemon; `xdg-desktop-portal` with a Renga backend (FileChooser on BFilePanel, ScreenCast and Screenshot on the `F-31` phase-3 capture API, Notification on BNotification, OpenURI, Settings with the dark-mode preference, Inhibit for "keep the screen on" during video); `org.freedesktop.Notifications`; Secret Service on Haiku's key store (BKeyStore) for saved passwords; UPower-compatible battery status on `F-37`.
@@ -1240,6 +1240,8 @@ Checklist (OS side unless marked "port"):
 - [ ] **Phase F, GPU:** EGL/GLES/Vulkan from Mesa on Renga's GPU drivers (`F-35`; the maintainer's NVIDIA driver; LinuxKPI DRM for Intel/AMD), the dma-buf path in the Wayland layer (phase C), and Chromium's GPU process through ANGLE: GPU raster, compositing, WebGL, WebGPU. Software rendering stays the fallback.
 - [ ] **Phase G, sandbox:** `pledge()`- and `unveil()`-style restrictions in the Renga kernel (a per-team set of allowed system-call groups checked in the syscall dispatcher, and per-team path visibility in the VFS), then OpenBSD's Chromium sandbox policies on top; a harness suite that proves forbidden calls and paths fail. Until then the port documents `--no-sandbox`.
 - [ ] **Phase H, remaining features:** accessibility through AT-SPI2 on D-Bus with a Renga bridge (no screen reader exists yet, large); WebUSB/WebHID/WebSerial through Haiku's USB Kit (port); Gamepad API on `F-42` (port); optional minidump crash reports later.
+
+**Phase A findings (2026-11-09).** Not fixed, recorded for later: IPv6 datagrams larger than the MTU without "don't fragment" are sent as fragments but never reassembled. `send_fragments()` gives every fragment a new identification, and `reassemble_fragments()` counts the extension headers as data and leaves the fragment header in non-first fragments. Correcting those two was not enough in a first attempt, which was reverted. QUIC always sends with DF, so this does not affect HTTP/3. The receive loop that could spin forever on a fragment header was fixed (`836867b5`).
 
 #### F-35 GPU and graphics
 
@@ -1388,7 +1390,7 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 1. **VM mouse integration** (`F-19`): done 2026-11-09 (QEMU Tested).
 2. **`epoll`, `inotify`, `signalfd`** (`F-15`): done 2026-11-09 (QEMU Tested).
 3. **Harness quick mode and timing**: done 2026-11-09 (`c36db227`): `--only` partial runs (never a pass), per-program timing, `harness.tests_ran`.
-4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too.
+4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too. Done 2026-11-09 (QEMU Tested, `82cd4654` to `575f9cc0`); fontconfig turned out to need nothing in Renga.
 5. **`virtio_sound` capture** (`F-02`). Done first, as step 0 of the Media Kit (its loopback and recording tests need it).
 6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
 7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
@@ -1641,14 +1643,14 @@ Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratc
 
 | Path | Option | Image | Last recorded result |
 | --- | --- | --- | --- |
-| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 481/481 at `c36db227` |
-| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 478/478 at `c36db227` |
+| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 619/619 at `575f9cc0` |
+| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 616/616 at `575f9cc0` |
 | BIOS, CD-ROM (El Torito floppy) | `--media cdrom` | `minimum-anyboot` | 270/270 at `7b4a14df` |
 | UEFI, CD-ROM | `--firmware uefi --media cdrom` | `minimum-anyboot` | 273/273 at `22bf89ca` |
 | BIOS / UEFI, virtio-blk boot disk | `--disk-bus virtio` | either | BIOS 270/270 at `7b4a14df`; UEFI 271/271 at `2b728fa3` |
 | UEFI, two installs (decoy first) | `--two-installs` | `minimum-anyboot` | 272/272 at `2b728fa3` |
 | Boot menu countdown | `--boot-menu-timeout N` | either | 272/272 at `22bf89ca` (6 s) |
-| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 481/481 (`--smp 2`) at `c36db227`; 480/480 (`--smp 4`) at `e1638a07` |
+| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 619/619 (`--smp 2`) at `575f9cc0`; 548/548 (`--smp 4`) at `1bfb2665` |
 | Full desktop image | `--profile renga-raw` | `renga-raw` | 286/286 |
 
 Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; any real hardware.
@@ -1692,6 +1694,8 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 **inotify suite (`F-15`, committed `b421d52a`):** 47 checks; baseline 452/452 (BIOS) with 1, 2 and 4 CPUs.
 
 **signalfd suite (`F-15`, committed `e1638a07`):** 28 checks; baseline 480/480 (BIOS) with 1, 2 and 4 CPUs, 477/477 (UEFI).
+
+**`F-43` phase A (committed `82cd4654` to `575f9cc0`):** new `posix_compat` programs `thread_atexit` (9 checks), `affinity` (15), `getdents` (13), `socket_ext` (35: `getpeereid`, `POLLRDHUP`), `quic_udp` (32), `vm_semantics` (20), and 19 sealing checks added to `memfd` (now 41). Baseline 619/619 (BIOS) with 1 and 2 CPUs, 616/616 (UEFI); 548/548 with 4 CPUs at `1bfb2665`. Run against the old code first, the new tests failed as follows: `quic_udp` 24 of 32 (stalled until a receive timeout was added); `vm_semantics` 7 of 20; `affinity` panicked the kernel with 2 CPUs; `socket_ext` found the IPv6 receive loop that stopped loopback traffic.
 
 ### 8.4 QEMU-only versus hardware-tested
 
@@ -1819,6 +1823,15 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-09 | [`94fb0126`](https://github.com/Techniix/haiku/commit/94fb0126) | Roadmap: `F-43` Chromium platform readiness | Documentation only |
 | 2026-11-09 | [`c36db227`](https://github.com/Techniix/haiku/commit/c36db227) | Harness: `--only` partial runs, per-program timing, `harness.tests_ran` | PARTIAL run 120 checks; full 481/481 BIOS, 481/481 `--smp 2`, 478/478 UEFI; selftest 0 failures |
 | 2026-11-09 | (this commit) | hrev tag workflow runs only when `3rdparty/ce/upstream-base` changes (upstream syncs), not on every push | Two transient GitHub startup failures ("No jobs were run") on `3c560bad` and `98b3da53`; the latter succeeded on re-run |
+| 2026-11-09 | [`82cd4654`](https://github.com/Techniix/haiku/commit/82cd4654) | `__cxa_thread_atexit_impl()` in libroot: `thread_local` destructors at thread exit and `exit()`, image kept loaded until they ran (`F-43`) | 9 checks; 490/490 BIOS and `--smp 2`, 487/487 UEFI |
+| 2026-11-09 | [`9ede251c`](https://github.com/Techniix/haiku/commit/9ede251c) | Correction: this documentation commit also contains the rename `src/libs/gnu/sched_affinity.cpp` → `src/system/libroot/posix/sched_affinity.cpp` (unchanged content), picked up from the shared index; the build changes follow in `00df2593` | Rename only |
+| 2026-11-09 | [`00df2593`](https://github.com/Techniix/haiku/commit/00df2593) | CPU affinity in libroot with Linux return conventions; masks inherited; panic setting another thread's mask fixed (upstream bug) (`F-43`) | 15 checks; 505/505 BIOS and `--smp 2`, 502/502 UEFI |
+| 2026-11-09 | [`25c8548d`](https://github.com/Techniix/haiku/commit/25c8548d) | Scheduler migrates only runnable threads (upstream bug; undertaker assertion) | `affinity` `--smp 2` three times clean (failed 1 in 3 before); 548/548 with 1, 2, 4 CPUs, 545/545 UEFI |
+| 2026-11-09 | [`1bfb2665`](https://github.com/Techniix/haiku/commit/1bfb2665) | `getdents64`/`getdents` (libgnu), `getpeereid` (libbsd), `POLLRDHUP`/`EPOLLRDHUP` on half-close, `POLLHUP` only when both directions are shut (`F-43`) | 13 + 35 checks; 548/548 BIOS, `--smp 2`, `--smp 4`, 545/545 UEFI |
+| 2026-11-09 | [`75e11a4b`](https://github.com/Techniix/haiku/commit/75e11a4b) | `memfd` sealing: `F_ADD_SEALS`/`F_GET_SEALS`, all six seals, enforced in the VFS and `mmap()` (`F-43`) | 19 checks; 567/567 BIOS and `--smp 2`, 564/564 UEFI |
+| 2026-11-09 | [`836867b5`](https://github.com/Techniix/haiku/commit/836867b5) | QUIC UDP options (ECN, packet info, don't-fragment), `sendmsg()` control messages, `MSG_CTRUNC`; five upstream network bugs fixed (`F-43`) | 32 checks (24 failed before); 599/599 BIOS and `--smp 2`, 596/596 UEFI |
+| 2026-11-09 | [`575f9cc0`](https://github.com/Techniix/haiku/commit/575f9cc0) | `MADV_DONTNEED` with Linux semantics (zero-fill, also after `fork()`); V8/PartitionAlloc memory patterns tested (`F-43`) | 20 checks (7 failed before); 619/619 BIOS and `--smp 2`, 616/616 UEFI |
+| 2026-11-09 | (this commit) | Roadmap: `F-43` phase A done, baselines, history, upstream bugs 14-24 | Documentation only |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
@@ -1839,6 +1852,17 @@ Items 1-10 are written up in the [upstream bug reports doc](https://claude.ai/ar
 | 11 | Package kit ignores the configured repository priority at install time | pkg_priority suite | `85bff35a` |
 | 12 | Terminal in Windows/Linux shortcut mode runs menu shortcuts on Ctrl+letter (Ctrl+C copies, never interrupts) | shortcut_keys suite | `23ca3768` |
 | 13 | A signal handler that interrupts `ppoll()`/`pselect()` returns to the temporary mask, which then stays installed | epoll suite (`epoll_pwait()` shares the code) | `85fe86ef` |
+| 14 | `_user_set_thread_affinity()` dereferences `thread->cpu` of the target thread, NULL when it is not running: setting another, waiting thread's mask panics; `sched_*affinity()` return negative status codes instead of -1/`errno`; the main thread's `pthread_t` (id 0) makes `pthread_*affinity_np()` act on the caller | affinity suite (`--smp 2` panic) | `00df2593` |
+| 15 | `reschedule()` re-enqueues the outgoing thread whenever its mask excludes the CPU, also when it is going to sleep or dying (undertaker assertion `THREAD_STATE_FREE_ON_RESCHED`) | affinity suite (`--smp 2`) | `25c8548d` |
+| 16 | A stream socket's half-close (TCP CLOSE-WAIT, a UNIX peer's `SHUT_WR`) is reported as `POLLHUP`, i.e. disconnected, while the socket can still send | socket_ext suite | `1bfb2665` |
+| 17 | Any `sendmsg()` with a control message on a UDP socket fails with `EOPNOTSUPP` (UDP has no `add_ancillary_data` hook) | quic_udp suite | `836867b5` |
+| 18 | UDP passes its own protocol object to the IP layer's receive control-message hook, which reads option flags from the wrong structure | quic_udp suite (spurious IPv6 messages) | `836867b5` |
+| 19 | `IPV6_RECVHOPLIMIT` always reports 64 (version test inverted; stored header absent in datagram clones) | Code review during quic_udp | `836867b5` |
+| 20 | `IPv6Header::GetHeaderOffset()` adds the raw extension header length byte; with a fragment header the receive thread loops forever (stopped all loopback traffic; also reachable with crafted packets) | quic_udp suite (stall, kdl.log) | `836867b5` |
+| 21 | The IPv6 send path converts the traffic class with `htonl()` twice (latent) | Code review | `836867b5` |
+| 22 | `recvmsg()` with a too small control buffer fails with `ENOMEM` (IPv6) instead of `MSG_CTRUNC` | quic_udp suite | `836867b5` |
+| 23 | `madvise(MADV_DONTNEED)` is accepted and does nothing; private memory keeps its contents | vm_semantics suite | `575f9cc0` |
+| 24 | IPv6 fragmentation: every fragment gets a new identification and reassembly miscounts the headers, so fragmented datagrams are never delivered | quic_udp suite | **Not fixed** (see `F-43` phase A findings) |
 
 Upstream behaviours observed and **not** changed: aliases on the loop interface get no routes, and a down interface still delivers on cached routes (`9c6d9157`). Partition devices report `logical_block_size` 0 (`0758b116`). An intermittent burst of rejected framebuffer writes, first seen in older runs, turned out to be a Renga bug (the splash thread) and was fixed in `a44b1890`.
 
