@@ -29,6 +29,7 @@ struct fd_set;
 struct fs_info;
 struct iovec;
 struct loadavg;
+struct mq_attr;
 struct msqid_ds;
 struct net_stat;
 struct pollfd;
@@ -92,6 +93,22 @@ extern status_t		_kern_timerfd_settime(int fd, bool absolute,
 						const struct itimerspec* newValue,
 						struct itimerspec* oldValue);
 extern status_t		_kern_timerfd_gettime(int fd, struct itimerspec* value);
+
+/* POSIX message queues (Haiku Community Edition) */
+extern int			_kern_mqueue_open(const char* name, int openFlags,
+						mode_t mode, const struct mq_attr* attr);
+extern status_t		_kern_mqueue_unlink(const char* name);
+extern status_t		_kern_mqueue_send(int fd, const void* buffer,
+						size_t length, uint32 priority, uint32 flags,
+						bigtime_t timeout);
+extern ssize_t		_kern_mqueue_receive(int fd, void* buffer, size_t length,
+						uint32* priority, uint32 flags, bigtime_t timeout);
+extern status_t		_kern_mqueue_getsetattr(int fd,
+						const struct mq_attr* newAttr,
+						struct mq_attr* oldAttr);
+extern status_t		_kern_mqueue_notify(int fd, const struct sigevent* event,
+						const struct thread_creation_attributes*
+							threadAttributes);
 
 /* user mutex functions */
 extern status_t		_kern_mutex_lock(int32* mutex, const char* name,

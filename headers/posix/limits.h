@@ -62,7 +62,7 @@
 #define	EXPR_NEST_MAX			(32)
 
 #define MQ_OPEN_MAX				(0)
-#define MQ_PRIO_MAX				(0)
+#define MQ_PRIO_MAX				(32768)
 
 #define	RE_DUP_MAX				(0x7fff)
 

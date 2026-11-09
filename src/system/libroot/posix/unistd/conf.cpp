@@ -375,7 +375,9 @@ __sysconf(int name)
 		case _SC_LOGIN_NAME_MAX:
 			return LOGIN_NAME_MAX;
 		case _SC_MQ_OPEN_MAX:
-			return MQ_OPEN_MAX;
+			// Message queue descriptors are file descriptors: no limit of
+			// their own beyond the open file limit.
+			return -1;
 		case _SC_MQ_PRIO_MAX:
 			return  MQ_PRIO_MAX;
 		case _SC_THREAD_DESTRUCTOR_ITERATIONS:

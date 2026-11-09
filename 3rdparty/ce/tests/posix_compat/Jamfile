@@ -15,11 +15,17 @@ Application memfd_test :
 	: libgnu.so network
 ;
 
+# POSIX message queues live in libroot; no libgnu needed.
+Application mqueue_test :
+	mqueue_test.cpp
+;
+
 Application timerfd_test :
 	timerfd_test.cpp
 	: libgnu.so
 ;
 
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test memfd_test timerfd_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test memfd_test mqueue_test
+		timerfd_test ;
 }

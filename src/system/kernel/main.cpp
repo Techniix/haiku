@@ -45,6 +45,7 @@
 #include <messaging.h>
 #include <Notifications.h>
 #include <port.h>
+#include <posix/mqueue.h>
 #include <posix/realtime_sem.h>
 #include <posix/xsi_message_queue.h>
 #include <posix/xsi_semaphore.h>
@@ -224,6 +225,7 @@ _start(kernel_args *bootKernelArgs, int currentCPU)
 #endif
 		TRACE("init POSIX semaphores\n");
 		realtime_sem_init();
+		mqueue_init();
 		xsi_sem_init();
 		xsi_msg_init();
 

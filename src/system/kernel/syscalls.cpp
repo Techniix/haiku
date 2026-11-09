@@ -38,6 +38,7 @@
 #include <ksystem_info.h>
 #include <messaging.h>
 #include <port.h>
+#include <posix/mqueue.h>
 #include <posix/realtime_sem.h>
 #include <posix/xsi_message_queue.h>
 #include <posix/xsi_semaphore.h>
