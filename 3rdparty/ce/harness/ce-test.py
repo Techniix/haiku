@@ -33,6 +33,7 @@ run without crashing, and every check passed.
 
 import argparse
 import datetime
+import glob
 import json
 import math
 import os
@@ -350,6 +351,99 @@ def make_decoy(image, decoy):
 	return True
 
 
+def make_menu_timeout_image(args, image, copy):
+	"""Copies the test image for --boot-menu-timeout and sets
+	"boot_menu_timeout <seconds>" in the copy's kernel settings file, through
+	the build's bfs_shell. The file written is the image's own (the tree's
+	data/settings/kernel/drivers/kernel, which the build copies) plus that
+	line. Returns an error text, or None on success."""
+	offset = bfs_volume_offset(image)
+	if offset is None:
+		return "no BFS volume in " + image
+	shells = glob.glob(os.path.join(args.output, "objects", "*", "*", "*",
+		"tools", "bfs_shell", "bfs_shell"))
+	if not shells:
+		return "bfs_shell not built (jam -q '<build>bfs_shell')"
+
+	with open(os.path.join(HAIKU_TOP, "data", "settings", "kernel",
+			"drivers", "kernel")) as original:
+		settings = original.read()
+	settings_path = copy + ".kernel-settings"
+	with open(settings_path, "w") as patched:
+		patched.write(settings.rstrip("\n") + "\n\nboot_menu_timeout %d\n"
+			% args.boot_menu_timeout)
+
+	shutil.copyfile(image, copy)
+	target = "/myfs/home/config/settings/kernel/drivers/kernel"
+	result = subprocess.run([shells[0], "--start-offset", str(offset), copy],
+		input=("cp -f :%s %s\ncat %s\nsync\nquit\n" % (settings_path, target,
+			target)).encode(), stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT, timeout=120)
+	os.remove(settings_path)
+	output = result.stdout.decode("utf-8", "replace")
+	if result.returncode != 0 \
+			or "boot_menu_timeout %d" % args.boot_menu_timeout not in output:
+		return "bfs_shell could not update the settings: " + output[-300:]
+	return None
+
+
+def check_boot_menu(args, results_dir, report):
+	"""The boot loader's menu countdown, from its "boot menu:" lines. Without
+	--boot-menu-timeout there must be none: the menu stays off unless a key
+	is held, as it always was. With it, the countdown must start at the
+	configured number of seconds, run out after about that long, and
+	continue booting on its own (the rest of the run shows that it did)."""
+	# serial.timed.log stamps a line when its first byte arrives. On UEFI
+	# the firmware copies the menu's screen output to the serial port too,
+	# so a log line can follow the countdown drawn a second earlier on the
+	# same line, and carry that earlier stamp. The time the countdown took
+	# is therefore measured from the line that starts it to the first line
+	# after it ran out, which cannot be stamped before the countdown ended.
+	lines = []
+	after_end = None
+	try:
+		with open(os.path.join(results_dir, "serial.timed.log"),
+				errors="replace") as serial:
+			for line in serial:
+				match = re.match(r"\[\s*([0-9.]+)\] (.*)", line)
+				if match is None:
+					continue
+				stamp = float(match.group(1))
+				menu = re.search(r"boot menu: .*", match.group(2))
+				if menu:
+					lines.append((stamp, menu.group(0).rstrip("\r\n")))
+				elif lines and after_end is None \
+						and lines[-1][1].startswith("boot menu: timeout"):
+					after_end = stamp
+	except OSError:
+		pass
+
+	seconds = args.boot_menu_timeout
+	if not seconds:
+		report.setdefault("host_checks", []).append({"name": "boot.menu",
+			"pass": len(lines) == 0,
+			"detail": "no boot menu (none configured)" if not lines
+				else "unexpected boot menu: " + lines[0][1]})
+		return
+
+	start = [t for t, text in lines if text.startswith(
+		'boot menu: "Continue booting" in %d s' % seconds)]
+	end = [t for t, text in lines
+		if text == 'boot menu: timeout, choosing "Continue booting"']
+	ticks = [text for t, text in lines if re.match(r"boot menu: \d+ s$", text)]
+	took = after_end - start[0] if start and end and after_end is not None \
+		else None
+	report.setdefault("host_checks", []).append({"name": "boot.menu",
+		"pass": len(start) == 1 and len(end) == 1
+			and len(ticks) == seconds - 1
+			and took is not None and seconds - 0.5 <= took <= seconds + 5,
+		"detail": "%d s countdown, %d tick(s), %s (want %d s, %d ticks, then "
+			"\"Continue booting\")%s" % (seconds, len(ticks),
+			"ran out after %.1f s" % took if took is not None
+				else "did not run out", seconds, seconds - 1,
+			"; last line: " + lines[-1][1] if lines and not end else "")})
+
+
 def check_two_installs(args, results_dir, report):
 	"""--two-installs: the boot loader must have booted the install whose
 	boot loader the firmware started, not the decoy enumerated before it."""
@@ -571,6 +665,17 @@ def boot(args, results_dir, report):
 	if os.path.exists(monitor_path):
 		os.unlink(monitor_path)
 
+	patched = None
+	if args.boot_menu_timeout:
+		patched = os.path.join(results_dir, "menu-timeout.img")
+		error = make_menu_timeout_image(args, image, patched)
+		if error is not None:
+			report["boot"] = {"status": "image-setup-failed", "image": image,
+				"error": error}
+			log(error)
+			return False
+		image = patched
+
 	decoy = None
 	if args.two_installs:
 		decoy = os.path.join(results_dir, "decoy.img")
@@ -704,9 +809,10 @@ def boot(args, results_dir, report):
 	reader.done.wait(timeout=10)
 
 	qemu_stderr.close()
-	if decoy is not None:
-		# A full copy of the image, only needed while the guest runs.
-		os.remove(decoy)
+	for copy in (decoy, patched):
+		# Full copies of the image, only needed while the guest runs.
+		if copy is not None:
+			os.remove(copy)
 	report["boot"]["screenshots"] = convert_screenshots(shots)
 	if reader.kdl.is_set():
 		# The whole debugger session (every backtrace); summary.md only
@@ -1152,6 +1258,9 @@ def write_report(results_dir, report):
 		"a CD-ROM" if report.get("media") == "cdrom"
 			else "a %s hard disk" % ("virtio" if report.get("disk_bus")
 				== "virtio" else "IDE")))
+	if report.get("boot_menu_timeout"):
+		lines[-1] += " Its settings set a %d s boot menu timeout." \
+			% report["boot_menu_timeout"]
 	if report.get("two_installs"):
 		lines[-1] += (" A renamed second install (\"%s\") was attached in "
 			"front of it." % DECOY_VOLUME_NAME)
@@ -1260,6 +1369,10 @@ def main():
 			"without an EFI system partition in front of the image (first "
 			"on the bus and in the boot order) and check that the guest "
 			"booted the install whose boot loader the firmware started")
+	parser.add_argument("--boot-menu-timeout", type=int, default=0,
+		metavar="SECONDS",
+		help="boot a copy of the image with boot_menu_timeout SECONDS in its "
+			"kernel settings and check the boot loader's countdown")
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
@@ -1300,6 +1413,7 @@ def main():
 		"profile": args.profile, "firmware": args.firmware,
 		"media": args.media, "disk_bus": args.disk_bus,
 		"two_installs": args.two_installs,
+		"boot_menu_timeout": args.boot_menu_timeout,
 		"compile_only": args.compile_only}
 
 	ok = True
@@ -1313,6 +1427,7 @@ def main():
 		check_nvme_namespaces(results_dir, report)
 		check_image_identity(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
+		check_boot_menu(args, results_dir, report)
 		analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 
 	summary, passed = write_report(results_dir, report)

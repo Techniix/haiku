@@ -18,6 +18,11 @@
 #fail_safe_video_mode true
 	# Use failsafe (VESA/framebuffer) video mode on every boot.
 
+#boot_menu_timeout 5
+	# Shows the boot menu on every boot and continues booting after this
+	# many seconds unless a key is pressed; the menu counts the seconds down.
+	# Disabled by default: the menu only appears when a key is held at boot.
+
 #bluescreen false
 	# Enables/disables on-screen KDL, which defaults to enabled.
 	# You likely want to disable this when using serial debugging.

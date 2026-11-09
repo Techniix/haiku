@@ -52,6 +52,12 @@ enum {
 	TEXT_CONSOLE_CURSOR_KEYS_END,
 };
 
+// Results of console_wait_for_key_timeout() that are not keys.
+#define TEXT_CONSOLE_NO_KEY				(-1)
+	// no key was pressed before the timeout
+#define TEXT_CONSOLE_NO_TIMED_WAIT		(-2)
+	// the platform cannot wait for a key with a timeout
+
 #define TEXT_CONSOLE_IS_CURSOR_KEY(key) \
 	(key >= TEXT_CONSOLE_CURSOR_KEYS_START \
 	 && key < TEXT_CONSOLE_CURSOR_KEYS_END)
@@ -69,6 +75,11 @@ extern void console_hide_cursor(void);
 extern void console_set_color(int32 foreground, int32 background);
 
 extern int console_wait_for_key(void);
+extern int console_wait_for_key_timeout(bigtime_t timeout);
+	// Like console_wait_for_key(), but gives up after about \a timeout
+	// microseconds and returns TEXT_CONSOLE_NO_KEY then. Platforms that do
+	// not implement it get a default that returns TEXT_CONSOLE_NO_TIMED_WAIT
+	// at once (see generic/text_menu.cpp).
 
 #ifdef __cplusplus
 }

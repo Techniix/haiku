@@ -36,6 +36,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --firmware uefi  # OVMF, anyboot image
 3rdparty/ce/harness/ce-test.py --media cdrom    # anyboot as a CD (El Torito)
 3rdparty/ce/harness/ce-test.py --firmware uefi --two-installs   # pick the right disk
+3rdparty/ce/harness/ce-test.py --boot-menu-timeout 2   # boot menu countdown
 3rdparty/ce/harness/selftest.py                 # check the harness itself
 ```
 
@@ -56,6 +57,15 @@ on to the test image, but still lists the decoy's disk first. The check
 `boot.two_installs` passes if the guest's `/boot` is the test image's volume.
 A loader that takes the first disk in firmware order boots "Decoy" instead.
 Works with `--disk-bus virtio` too.
+
+`--boot-menu-timeout <seconds>` boots a copy of the image whose kernel
+settings file (`home/config/settings/kernel/drivers/kernel`, written with the
+build's `bfs_shell`) sets `boot_menu_timeout`. The boot loader then shows its
+menu, counts down and continues booting on its own. The boot loader logs the
+countdown ("boot menu: ..." lines) on the serial console; the `boot.menu`
+check wants the configured start, one line per second and the timeout, after
+about the configured time. Every other run checks that no boot menu appears.
+Works with either firmware.
 
 Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 `ce-test-results/latest` always points to the newest run:

@@ -65,8 +65,19 @@ main(stage2_args *args)
 	BootVolume bootVolume;
 	PathBlocklist pathBlocklist;
 
-	if (get_boot_file_system(args, bootVolume) != B_OK
-		|| (platform_boot_options() & BOOT_OPTION_MENU) != 0) {
+	// The menu is shown if there is nothing to boot, if the user asked for
+	// it (a key held at boot), or if the boot volume's settings ask for a
+	// menu with a timeout ("boot_menu_timeout" in the kernel settings file).
+	// Only the last one counts down to booting on its own.
+	bool showMenu = get_boot_file_system(args, bootVolume) != B_OK
+		|| (platform_boot_options() & BOOT_OPTION_MENU) != 0;
+	int32 menuTimeout = 0;
+	if (!showMenu) {
+		menuTimeout = boot_menu_timeout(bootVolume);
+		showMenu = menuTimeout > 0;
+	}
+
+	if (showMenu) {
 		if (!bootVolume.IsValid())
 			puts("\tno boot path found, scan for all partitions...\n");
 
@@ -80,7 +91,7 @@ main(stage2_args *args)
 
 		mountedAllVolumes = true;
 
-		if (user_menu(bootVolume, pathBlocklist) < B_OK) {
+		if (user_menu(bootVolume, pathBlocklist, menuTimeout) < B_OK) {
 			// user requested to quit the loader
 			goto out;
 		}

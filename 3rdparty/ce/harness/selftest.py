@@ -257,5 +257,35 @@ expect("decoy: El Torito boot record gone",
 	copy[17 * 2048:18 * 2048] == bytes(2048)
 	and copy[16 * 2048:17 * 2048] == image[16 * 2048:17 * 2048])
 
+class MenuArgs:
+	boot_menu_timeout = 0
+
+def boot_menu(seconds, lines):
+	directory = tempfile.mkdtemp()
+	with open(os.path.join(directory, "serial.timed.log"), "w") as serial:
+		serial.write("[   0.100] Welcome to the Haiku boot loader!\r\n")
+		for stamp, text in lines:
+			serial.write("[%8.3f] %s\r\n" % (stamp, text))
+	MenuArgs.boot_menu_timeout = seconds
+	report = {}
+	ce_test.check_boot_menu(MenuArgs, directory, report)
+	return report["host_checks"][0]["pass"]
+
+countdown = [(1.0, 'boot menu: "Continue booting" in 2 s unless a key is '
+	'pressed'), (2.0, "\x1b[07;20HContinue booting in 1 s, press any key to "
+	"stopboot menu: 1 s"), (2.0, 'boot menu: timeout, choosing "Continue '
+	'booting"'), (3.2, "load kernel kernel_x86_64...")]
+expect("boot menu: none configured, none shown passes", boot_menu(0, []))
+expect("boot menu: none configured but shown fails",
+	not boot_menu(0, countdown))
+expect("boot menu: 2 s countdown passes", boot_menu(2, countdown))
+expect("boot menu: wrong length fails", not boot_menu(3, countdown))
+expect("boot menu: countdown stopped by a key fails", not boot_menu(2,
+	countdown[:1] + [(1.5, "boot menu: countdown stopped by a key")]))
+expect("boot menu: countdown too fast fails", not boot_menu(2,
+	[(1.0, countdown[0][1]), (1.1, "boot menu: 1 s"),
+		(1.2, countdown[2][1]), (1.3, "load kernel kernel_x86_64...")]))
+expect("boot menu: no countdown at all fails", not boot_menu(2, []))
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

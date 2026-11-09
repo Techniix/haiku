@@ -12,8 +12,9 @@
 class PathBlocklist;
 
 
+extern int32 boot_menu_timeout(BootVolume& volume);
 extern status_t user_menu(BootVolume& _bootVolume,
-	PathBlocklist& _pathBlocklist);
+	PathBlocklist& _pathBlocklist, int32 timeout = 0);
 
 
 #endif	/* MENU_H */

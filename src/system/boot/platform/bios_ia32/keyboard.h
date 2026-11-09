@@ -28,6 +28,7 @@ extern "C" {
 
 extern void clear_key_buffer(void);
 extern union key wait_for_key(void);
+extern union key wait_for_key_timeout(bigtime_t timeout);
 extern uint32 check_for_boot_keys(void);
 
 #ifdef __cplusplus

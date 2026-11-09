@@ -10,6 +10,7 @@
 #include <boot/platform/generic/text_console.h>
 #include <boot/platform/generic/text_menu.h>
 
+#include <stdio.h>
 #include <string.h>
 #include <system_revision.h>
 
@@ -41,6 +42,18 @@ static int32 sMenuOffset = 0;
 
 
 static void run_menu(Menu* menu);
+
+
+/*!	Default for platforms that cannot wait for a key with a timeout; a
+	platform's console code overrides it with a real implementation. Menus
+	with a timeout then take their default item at once instead of waiting
+	for a key forever, which is the closest to booting without a menu.
+*/
+extern "C" int __attribute__((weak))
+console_wait_for_key_timeout(bigtime_t timeout)
+{
+	return TEXT_CONSOLE_NO_TIMED_WAIT;
+}
 
 
 static int32
@@ -283,6 +296,29 @@ draw_menu(Menu *menu)
 }
 
 
+/*!	Shows how many seconds are left before the menu takes its default item,
+	or clears that line if \a seconds is negative. It goes above the menu,
+	on the title line, which the main menu does not use.
+*/
+static void
+print_countdown(Menu* menu, int32 seconds)
+{
+	int32 line = menu->Title() != NULL ? kFirstLine - 3 : kFirstLine - 2;
+
+	console_set_color(kTextColor, kBackgroundColor);
+	console_set_cursor(0, line);
+	print_spacing(console_width() - 1);
+
+	if (seconds >= 0) {
+		char text[128];
+		snprintf(text, sizeof(text), "%s in %" B_PRId32 " s, press any key "
+			"to stop", menu->DefaultItem()->Label(), seconds);
+		print_centered(line, text);
+	} else
+		console_set_cursor(0, 0);
+}
+
+
 static int32
 first_selectable_item(Menu *menu)
 {
@@ -428,8 +464,51 @@ run_menu(Menu* menu)
 
 	make_item_visible(menu, selected);
 
+	// A menu with a timeout counts down to its default item; any key stops
+	// the countdown and is then handled as usual. Every second is also
+	// logged, so the countdown can be followed on a serial console.
+	int32 secondsLeft = 0;
+	if (menu->Timeout() > 0) {
+		secondsLeft = (menu->Timeout() + 999999) / 1000000;
+		dprintf("boot menu: \"%s\" in %" B_PRId32 " s unless a key is "
+			"pressed\n", menu->DefaultItem()->Label(), secondsLeft);
+	}
+
 	while (true) {
-		int key = console_wait_for_key();
+		int key;
+		if (secondsLeft > 0) {
+			print_countdown(menu, secondsLeft);
+			key = console_wait_for_key_timeout(1000000);
+			if (key == TEXT_CONSOLE_NO_KEY && --secondsLeft > 0) {
+				dprintf("boot menu: %" B_PRId32 " s\n", secondsLeft);
+				continue;
+			}
+
+			MenuItem* defaultItem = menu->DefaultItem();
+			menu->SetTimeout(0, NULL);
+
+			if (key == TEXT_CONSOLE_NO_KEY
+				|| key == TEXT_CONSOLE_NO_TIMED_WAIT) {
+				// Time is up, or the platform cannot count it.
+				dprintf("boot menu: %s, choosing \"%s\"\n",
+					key == TEXT_CONSOLE_NO_KEY ? "timeout"
+						: "no timed key input on this platform",
+					defaultItem->Label());
+				secondsLeft = 0;
+				defaultItem->Select(true);
+				selected = menu->IndexOf(defaultItem);
+				if (invoke_item(menu, defaultItem, selected,
+						TEXT_CONSOLE_KEY_RETURN)) {
+					break;
+				}
+				continue;
+			}
+
+			secondsLeft = 0;
+			print_countdown(menu, -1);
+			dprintf("boot menu: countdown stopped by a key\n");
+		} else
+			key = console_wait_for_key();
 
 		item = menu->ItemAt(selected);
 

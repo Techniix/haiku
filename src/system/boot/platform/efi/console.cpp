@@ -191,19 +191,9 @@ EFITextConsole::SetColors(int32 foreground, int32 background)
 }
 
 
-int
-console_wait_for_key(void)
+static int
+translate_key(const efi_input_key& key)
 {
-	size_t index;
-	efi_status status;
-	efi_input_key key;
-	efi_event event = kSystemTable->ConIn->WaitForKey;
-
-	do {
-		kBootServices->WaitForEvent(1, &event, &index);
-		status = kSystemTable->ConIn->ReadKeyStroke(kSystemTable->ConIn, &key);
-	} while (status == EFI_NOT_READY);
-
 	if (key.UnicodeChar > 0)
 		return (int) key.UnicodeChar;
 
@@ -228,6 +218,42 @@ console_wait_for_key(void)
 			return TEXT_CONSOLE_KEY_END;
 	}
 	return 0;
+}
+
+
+int
+console_wait_for_key(void)
+{
+	size_t index;
+	efi_status status;
+	efi_input_key key;
+	efi_event event = kSystemTable->ConIn->WaitForKey;
+
+	do {
+		kBootServices->WaitForEvent(1, &event, &index);
+		status = kSystemTable->ConIn->ReadKeyStroke(kSystemTable->ConIn, &key);
+	} while (status == EFI_NOT_READY);
+
+	return translate_key(key);
+}
+
+
+int
+console_wait_for_key_timeout(bigtime_t timeout)
+{
+	// Polls in 10 ms steps; that is precise enough for a countdown in
+	// seconds and needs no timer event.
+	const bigtime_t kStep = 10000;
+	efi_input_key key;
+
+	for (bigtime_t waited = 0; ; waited += kStep) {
+		if (kSystemTable->ConIn->ReadKeyStroke(kSystemTable->ConIn, &key)
+				== EFI_SUCCESS)
+			return translate_key(key);
+		if (waited >= timeout)
+			return TEXT_CONSOLE_NO_KEY;
+		kBootServices->Stall(kStep);
+	}
 }
 
 

@@ -194,11 +194,9 @@ Console::SetColors(int32 foreground, int32 background)
 }
 
 
-int
-console_wait_for_key(void)
+static int
+translate_key(union key key)
 {
-	union key key = wait_for_key();
-
 	if (key.code.ascii == 0) {
 		switch (key.code.bios) {
 			case BIOS_KEY_UP:
@@ -222,6 +220,24 @@ console_wait_for_key(void)
 		}
 	} else
 		return key.code.ascii;
+}
+
+
+int
+console_wait_for_key(void)
+{
+	return translate_key(wait_for_key());
+}
+
+
+int
+console_wait_for_key_timeout(bigtime_t timeout)
+{
+	union key key = wait_for_key_timeout(timeout);
+	if (key.ax == 0)
+		return TEXT_CONSOLE_NO_KEY;
+
+	return translate_key(key);
 }
 
 

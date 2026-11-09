@@ -144,6 +144,13 @@ public:
 			void				SortItems(bool (*less)(const MenuItem*,
 									const MenuItem*));
 
+			// A menu with a timeout counts down and then invokes its default
+			// item, unless a key is pressed first (see user_menu()).
+			void				SetTimeout(bigtime_t timeout,
+									MenuItem* defaultItem);
+			bigtime_t			Timeout() const { return fTimeout; }
+			MenuItem*			DefaultItem() const { return fDefaultItem; }
+
 			void				Run();
 
 private:
@@ -165,6 +172,8 @@ private:
 			menu_type			fType;
 			MenuItem*			fSuperItem;
 			shortcut*			fShortcuts;
+			bigtime_t			fTimeout;
+			MenuItem*			fDefaultItem;
 };
 
 

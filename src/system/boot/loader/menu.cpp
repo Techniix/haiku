@@ -9,11 +9,15 @@
 #include "menu.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include <strings.h>
+#include <unistd.h>
 
 #include <algorithm>
 
 #include <OS.h>
+#include <drivers/driver_settings.h>
 
 #include <AutoDeleter.h>
 #include <boot/menu.h>
@@ -219,7 +223,9 @@ Menu::Menu(menu_type type, const char* title)
 	fIsHidden(true),
 	fType(type),
 	fSuperItem(NULL),
-	fShortcuts(NULL)
+	fShortcuts(NULL),
+	fTimeout(0),
+	fDefaultItem(NULL)
 {
 }
 
@@ -449,6 +455,14 @@ void
 Menu::SortItems(bool (*less)(const MenuItem*, const MenuItem*))
 {
 	fItems.Sort(less);
+}
+
+
+void
+Menu::SetTimeout(bigtime_t timeout, MenuItem* defaultItem)
+{
+	fTimeout = defaultItem != NULL ? timeout : 0;
+	fDefaultItem = defaultItem;
 }
 
 
@@ -1610,8 +1624,52 @@ user_menu_reboot(Menu* menu, MenuItem* item)
 }
 
 
+/*!	Returns the boot menu timeout in seconds configured on \a volume, or 0
+	if there is none. It is the "boot_menu_timeout" parameter of the kernel
+	settings file, home/config/settings/kernel/drivers/kernel, which also
+	holds the other options the boot loader applies (4gb_memory_limit,
+	fail_safe_video_mode, ...). This runs before load_driver_settings(),
+	since the boot loader has to decide on the menu first, so it reads the
+	file itself. Values are capped at kMaxBootMenuTimeout; anything that is
+	not a positive number means no timeout.
+*/
+int32
+boot_menu_timeout(BootVolume& volume)
+{
+	static const int32 kMaxBootMenuTimeout = 600;
+
+	if (!volume.IsValid())
+		return 0;
+
+	int fd = open_from(volume.RootDirectory(),
+		"home/config/settings/kernel/drivers/kernel", O_RDONLY);
+	if (fd < 0)
+		return 0;
+
+	void* settings = load_driver_settings_file(fd);
+	close(fd);
+	if (settings == NULL)
+		return 0;
+
+	const char* value = get_driver_parameter(settings, "boot_menu_timeout",
+		NULL, NULL);
+	int32 timeout = value != NULL ? strtol(value, NULL, 10) : 0;
+	unload_driver_settings(settings);
+
+	if (timeout <= 0)
+		return 0;
+	return std::min(timeout, kMaxBootMenuTimeout);
+}
+
+
+/*!	Shows the boot menu. With a \a timeout (in seconds, see
+	boot_menu_timeout()) the menu counts down and then continues booting
+	\a _bootVolume, unless a key is pressed first; without one it waits for
+	the user, as when they asked for the menu at boot.
+*/
 status_t
-user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist)
+user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
+	int32 timeout)
 {
 
 	Menu* menu = new(std::nothrow) Menu(MAIN_MENU);
@@ -1652,8 +1710,16 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist)
 		item->SetLabel("Cannot continue booting (Boot volume is not valid)");
 		item->SetEnabled(false);
 		menu->ItemAt(0)->Select(true);
-	} else
+	} else {
 		item->SetShortcut('b');
+
+		if (timeout > 0) {
+			// Start on the default entry, so that the countdown shows what
+			// it will do and Return does the same right away.
+			item->Select(true);
+			menu->SetTimeout(timeout * 1000000LL, item);
+		}
+	}
 
 	menu->Run();
 

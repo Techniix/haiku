@@ -7,6 +7,8 @@
 #include "keyboard.h"
 #include "bios.h"
 
+#include <KernelExport.h>
+
 #include <boot/platform.h>
 
 
@@ -49,6 +51,25 @@ wait_for_key(void)
 	} while (key.ax == 0);
 
 	return key;
+}
+
+
+/*!	Waits up to about \a timeout microseconds for a key; returns a key with
+	ax 0 if none was pressed. Counts in 10 ms spin() steps instead of reading
+	system_time(), whose BIOS tick count starts over at midnight.
+*/
+extern "C" union key
+wait_for_key_timeout(bigtime_t timeout)
+{
+	const bigtime_t kStep = 10000;
+	union key key;
+
+	for (bigtime_t waited = 0; ; waited += kStep) {
+		key.ax = check_for_key();
+		if (key.ax != 0 || waited >= timeout)
+			return key;
+		spin(kStep);
+	}
 }
 
 
