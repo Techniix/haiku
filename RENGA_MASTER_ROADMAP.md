@@ -755,6 +755,14 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Recommended next action | Decide whether LinuxKPI ships as a Techniix package or under `3rdparty` |
 | Links | Audit section 1 hardware table, Tier 5 |
 
+**Planned feature (maintainer's idea, 2026-11-09; do when `F-26` starts): optional online driver support at install time.** The user chooses whether the Installer (and first boot) may go online to fetch LinuxKPI driver support for the hardware it finds, so a new installation works out of the box. Design notes:
+
+- [ ] Hardware detection: PCI and USB IDs of devices no native driver claimed, matched against the device tables of the LinuxKPI driver packages (generated from the Linux drivers' own ID tables).
+- [ ] Opt-in, with the list shown first: which devices, which driver packages, which firmware files, and their licences.
+- [ ] Source: driver packages from RengaPorts (`F-45`); firmware from the upstream `linux-firmware` collection, fetched per device instead of shipped in the image, which keeps the image small and leaves non-redistributable files out of it.
+- [ ] Chicken-and-egg: the image carries offline the drivers needed to get online in the first place (common wired Ethernet and the most common Wi-Fi chips, such as the maintainer's MediaTek MT7921/MT7922); if no network is available, the Installer offers the same lookup later from the Control Panel's Hardware page (`F-28`).
+- [ ] Fetched drivers are ordinary packages, so they update with the system and are part of package states (`F-44` backup and restore).
+
 ### Boot and installation
 
 #### F-16 Boot splash
@@ -1842,6 +1850,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Separate ports for Renga: `Techniix/RengaPorts` (recipes and package repository, packages require `renga`), apart from the Techniix ports for stock Haiku (`haiku-packages`) | `F-45`, `F-13` |
 | 2026-11-09 | Media Kit right after `F-43` phase A (with `virtio_sound` capture as its first step), then LinuxKPI; NTP sync and bundled applications batch 1 move after them | Section 5.1 |
 | 2026-11-09 | After the Media Kit: boot loader first part, then the Installer's in-place replacement of an existing Haiku/Renga installation (modes: upgrade keeping files and applications, with the old system kept as a bootable package state; replace system keeping files; erase), then the maintainer installs Renga on his real hardware; LinuxKPI and the rest follow | `F-22`, `F-23`, section 5.1 |
+| 2026-11-09 | LinuxKPI: optional, user-approved online fetch of driver packages and firmware for detected hardware at install time (and later from the Control Panel); to be done when `F-26` starts | `F-26`, `F-23`, `F-45` |
 
 ---
 
