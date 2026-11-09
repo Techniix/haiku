@@ -845,6 +845,9 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Recommended next action | Chainloading first; renderer after |
 | Links | Audit section 6 |
 
+
+**First part, scheduled after gamepads (maintainer, 2026-11-09): boot Windows from the Renga boot menu.** Scope: the existing boot loader menu (`src/system/boot`) gains entries for other operating systems, Windows first. UEFI (the common case): find the Windows Boot Manager (`\EFI\Microsoft\Boot\bootmgfw.efi`) on any EFI system partition and start it with the firmware's `LoadImage`/`StartImage`; Secure Boot keeps working because the firmware verifies Microsoft's signed loader. BIOS: chainload the Windows partition's boot sector. Entries are detected automatically; the boot menu timeout and default entry (`2b728fa3`) apply to them. Testable in QEMU: the harness can put a small test EFI program at Windows' path on a scratch ESP that reports to the serial port when started, plus a BIOS test boot sector; the real Windows check needs the maintainer's machine. The graphical, themed menu remains the later full project.
+
 #### F-23 Installer redesign
 
 | Field | Value |
@@ -1229,7 +1232,8 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 5. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
 6. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
 7. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
-8. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+8. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
+9. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
 
@@ -1686,6 +1690,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Deskbar approach: hybrid; keep Deskbar as the host (API, replicants) and build its new features from components shared with Lumina Panel | `F-41` |
 | 2026-11-09 | Audio GUI reworked together with the Media Kit phases, exposing every new feature as it lands | `F-31`, `F-32` |
 | 2026-11-09 | After the Media Kit: LinuxKPI integration for Wi-Fi on real hardware, then full gamepad support with a configurator and complete SDL support (8BitDo Ultimate 2C flawless) | `F-26`, `F-34`, `F-42`; section 5.1 |
+| 2026-11-09 | After gamepads: first part of the boot loader work, booting Windows from the boot menu | `F-22`; section 5.1 |
 
 ---
 
