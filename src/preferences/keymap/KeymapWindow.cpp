@@ -30,8 +30,10 @@
 #include <MenuItem.h>
 #include <Path.h>
 #include <PopUpMenu.h>
+#include <RadioButton.h>
 #include <Screen.h>
 #include <ScrollView.h>
+#include <ShortcutKeyStyle.h>
 #include <StringView.h>
 #include <TextControl.h>
 
@@ -51,7 +53,8 @@ static const uint32 kMsgMenuFileSaveAs = 'mMFA';
 
 static const uint32 kChangeKeyboardLayout = 'cKyL';
 
-static const uint32 kMsgSwitchShortcuts = 'swSc';
+static const uint32 kMsgShortcutKeysCtrl = 'swSc';
+static const uint32 kMsgShortcutKeysAlt = 'swSa';
 
 static const uint32 kMsgMenuFontChanged = 'mMFC';
 
@@ -109,8 +112,16 @@ KeymapWindow::KeymapWindow()
 	fTextControl = new BTextControl(B_TRANSLATE("Sample and clipboard:"),
 		"", NULL);
 
-	fSwitchShortcutsButton = new BButton("switch", "",
-		new BMessage(kMsgSwitchShortcuts));
+	// Which key is the shortcut key: Ctrl (Windows and Linux, Renga's
+	// default) or Alt (BeOS and Haiku). It is part of the keymap, but kept
+	// when another keyboard layout is picked from the list.
+	fShortcutKeysLabel = new BStringView("shortcutKeysLabel",
+		B_TRANSLATE("Shortcut key:"));
+	fShortcutKeysCtrlButton = new BRadioButton("shortcutKeysCtrl",
+		B_TRANSLATE("Ctrl (Windows/Linux)"),
+		new BMessage(kMsgShortcutKeysCtrl));
+	fShortcutKeysAltButton = new BRadioButton("shortcutKeysAlt",
+		B_TRANSLATE("Alt (Haiku)"), new BMessage(kMsgShortcutKeysAlt));
 
 	// controls pane
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
@@ -123,7 +134,9 @@ KeymapWindow::KeymapWindow()
 				.AddGroup(B_HORIZONTAL)
 					.Add(_CreateDeadKeyMenuField(), 0.0)
 					.AddGlue()
-					.Add(fSwitchShortcutsButton)
+					.Add(fShortcutKeysLabel)
+					.Add(fShortcutKeysCtrlButton)
+					.Add(fShortcutKeysAltButton)
 					.End()
 				.Add(fTextControl)
 				.AddGlue(0.0)
@@ -193,7 +206,7 @@ KeymapWindow::KeymapWindow()
 	_UpdateButtons();
 
 	_UpdateDeadKeyMenu();
-	_UpdateSwitchShortcutButton();
+	_UpdateShortcutKeyControls();
 
 	Unlock();
 }
@@ -275,8 +288,11 @@ KeymapWindow::MessageReceived(BMessage* message)
 			break;
 		}
 
-		case kMsgSwitchShortcuts:
-			_SwitchShortcutKeys();
+		case kMsgShortcutKeysCtrl:
+			_SetShortcutKeyStyle(BPrivate::SHORTCUT_KEYS_CTRL);
+			break;
+		case kMsgShortcutKeysAlt:
+			_SetShortcutKeyStyle(BPrivate::SHORTCUT_KEYS_ALT);
 			break;
 
 		case kMsgMenuFontChanged:
@@ -320,11 +336,19 @@ KeymapWindow::MessageReceived(BMessage* message)
 			KeymapListItem* item
 				= static_cast<KeymapListItem*>(listView->ItemAt(index));
 			if (item != NULL) {
+				BPrivate::shortcut_key_style style
+					= BPrivate::get_shortcut_key_style(fCurrentMap.Map());
 				status_t status = fCurrentMap.Load(item->EntryRef());
 				if (status != B_OK) {
 					listView->RemoveItem(item);
 					break;
 				}
+
+				// The system's keymaps all come with the Alt shortcut key:
+				// picking a keyboard layout keeps the shortcut key in use.
+				// Keymaps the user saved keep their own.
+				if (listView == fSystemListView)
+					BPrivate::set_shortcut_key_style(fCurrentMap.Map(), style);
 
 				fAppliedMap = fCurrentMap;
 				fKeyboardLayoutView->SetKeymap(&fCurrentMap);
@@ -761,22 +785,33 @@ KeymapWindow::_MarkKeyboardLayoutItem(const char* path, BMenu* menu)
 }
 
 
-/*!	Sets the label of the "Switch Shorcuts" button to make it more
-	descriptive what will happen when you press that button.
+/*!	Shows which key is the shortcut key in the current keymap. Keymaps
+	that assign the command and control keys some other way (the Mac
+	keymaps, or a custom choice in "Set modifier keys") show neither; their
+	keys are changed in the modifier keys window.
 */
 void
-KeymapWindow::_UpdateSwitchShortcutButton()
+KeymapWindow::_UpdateShortcutKeyControls()
 {
-	const char* label = B_TRANSLATE("Switch shortcut keys");
-	if (fCurrentMap.KeyForModifier(B_LEFT_COMMAND_KEY) == 0x5d
-		&& fCurrentMap.KeyForModifier(B_LEFT_CONTROL_KEY) == 0x5c) {
-		label = B_TRANSLATE("Switch shortcut keys to Windows/Linux mode");
-	} else if (fCurrentMap.KeyForModifier(B_LEFT_COMMAND_KEY) == 0x5c
-		&& fCurrentMap.KeyForModifier(B_LEFT_CONTROL_KEY) == 0x5d) {
-		label = B_TRANSLATE("Switch shortcut keys to Haiku mode");
-	}
+	BPrivate::shortcut_key_style style
+		= BPrivate::get_shortcut_key_style(fCurrentMap.Map());
+	bool standard = style != BPrivate::SHORTCUT_KEYS_OTHER;
 
-	fSwitchShortcutsButton->SetLabel(label);
+	fShortcutKeysCtrlButton->SetValue(style == BPrivate::SHORTCUT_KEYS_CTRL
+		? B_CONTROL_ON : B_CONTROL_OFF);
+	fShortcutKeysAltButton->SetValue(style == BPrivate::SHORTCUT_KEYS_ALT
+		? B_CONTROL_ON : B_CONTROL_OFF);
+	fShortcutKeysCtrlButton->SetEnabled(standard);
+	fShortcutKeysAltButton->SetEnabled(standard);
+
+	const char* toolTip = standard
+		? B_TRANSLATE("Ctrl: Ctrl+C copies, Alt+Tab switches windows.\n"
+			"Alt: Alt+C copies, Ctrl+Tab switches windows.")
+		: B_TRANSLATE("This keymap uses its own modifier keys; see "
+			"\"Set modifier keys" B_UTF8_ELLIPSIS "\" in the \"File\" menu.");
+	fShortcutKeysLabel->SetToolTip(toolTip);
+	fShortcutKeysCtrlButton->SetToolTip(toolTip);
+	fShortcutKeysAltButton->SetToolTip(toolTip);
 }
 
 
@@ -837,27 +872,17 @@ KeymapWindow::_UpdateButtons()
 	fRevertButton->SetEnabled(fCurrentMap != fPreviousMap);
 
 	_UpdateDeadKeyMenu();
-	_UpdateSwitchShortcutButton();
+	_UpdateShortcutKeyControls();
 }
 
 
+//!	Makes Ctrl or Alt the shortcut key (swaps the command and control keys).
 void
-KeymapWindow::_SwitchShortcutKeys()
+KeymapWindow::_SetShortcutKeyStyle(BPrivate::shortcut_key_style style)
 {
-	uint32 leftCommand = fCurrentMap.Map().left_command_key;
-	uint32 leftControl = fCurrentMap.Map().left_control_key;
-	uint32 rightCommand = fCurrentMap.Map().right_command_key;
-	uint32 rightControl = fCurrentMap.Map().right_control_key;
+	if (BPrivate::set_shortcut_key_style(fCurrentMap.Map(), style))
+		fKeyboardLayoutView->SetKeymap(&fCurrentMap);
 
-	// switch left side
-	fCurrentMap.Map().left_command_key = leftControl;
-	fCurrentMap.Map().left_control_key = leftCommand;
-
-	// switch right side
-	fCurrentMap.Map().right_command_key = rightControl;
-	fCurrentMap.Map().right_control_key = rightCommand;
-
-	fKeyboardLayoutView->SetKeymap(&fCurrentMap);
 	_UpdateButtons();
 }
 

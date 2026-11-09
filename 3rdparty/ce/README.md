@@ -213,6 +213,51 @@ in Renga builds and shows in English until it is translated; FirstBootPrompt
 keeps upstream's translated, name-free texts for that reason, since it is
 where the user picks a language.
 
+## Shortcut key: Ctrl
+
+Renga builds (every build that is not `HAIKU_DISTRO_COMPATIBILITY=official`)
+use Ctrl as the shortcut key, like Windows and Linux; BeOS and Haiku use
+Alt. It is Haiku's own "Windows/Linux mode": the keymap puts
+`B_COMMAND_KEY` on the Ctrl keys and `B_CONTROL_KEY` on the Alt keys.
+`headers/private/shared/ShortcutKeyStyle.h` recognises and sets the two
+styles; Renga's default is `kDefaultShortcutKeyStyle` there.
+
+- **Default keymap.** input_server's built-in keymap (US-International,
+  used when `~/config/settings/Key_map` does not exist, and by Keymap
+  preferences' "Defaults") gets the Ctrl style, so fresh images and new
+  installs start with it. The keymap files in `/boot/system/data/Keymaps`
+  are unchanged (Alt style).
+- **Keymap preferences** shows "Shortcut key: Ctrl (Windows/Linux) /
+  Alt (Haiku)" radio buttons under the keyboard instead of the "Switch
+  shortcut keys" button. Picking a keyboard layout from the System list
+  keeps the shortcut key in use; maps from the User list keep their own.
+  Keymaps that assign the keys some other way (the Mac keymaps) disable the
+  buttons. FirstBootPrompt's keymap choice also keeps the shortcut key.
+- **Terminal.** With Ctrl as the shortcut key, Ctrl+<key> sends the control
+  character (Ctrl+C interrupts, Ctrl+D, Ctrl+R, Ctrl+W, Ctrl+Z reach the
+  shell) and Ctrl+Shift+<key> runs Terminal's shortcut (Ctrl+Shift+C copy,
+  Ctrl+Shift+V paste, Ctrl+Shift+T new tab, Ctrl+Shift+W close tab,
+  Ctrl+Shift+N new window, Ctrl+Shift+Q quit, Ctrl+Shift+F find), like the
+  Linux terminals. Ctrl+digits, Ctrl+arrows, Ctrl++/- stay shortcuts.
+  Upstream Terminal ran the shortcuts on Ctrl+letter in this mode, so
+  Ctrl+C copied and never interrupted. Alt+<letter> still sends the control
+  character there (Alt is the Control modifier in this style).
+- **Elsewhere** the keys follow from the swap: window switcher Alt+Tab
+  (Haiku mode: Ctrl+Tab), workspaces Ctrl+F1...F12 (Alt+F1...), previous
+  workspace Ctrl+grave accent, input method Ctrl+Space, Ctrl+Q quits
+  applications.
+  Unchanged: Ctrl+Alt+Del (Team monitor), Ctrl+Alt+Shift+Esc (safe video
+  mode), the kernel debugger's Alt+SysRq (raw scan codes in the keyboard
+  driver) and the boot loader's keys.
+
+The `shortcut_keys` suite checks it: the active keymap, the saved
+`Key_map`, a system keymap converted the way Keymap preferences does it,
+and typing through QEMU: the test prints `CE-HOST sendkey <keys>` and the
+harness presses them with the monitor's `sendkey` (only modifier+letter,
+digit, ret, tab or esc; never sysrq or delete). Ctrl+V must paste into a
+BTextView and Alt+V must not; in Terminal, Ctrl+C must interrupt a `sleep`
+(a trap records SIGINT) and Ctrl+Shift+V must paste a line the shell reads.
+
 ## Current suites
 
 - **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
@@ -232,6 +277,7 @@ where the user picks a language.
 - **posix_compat**: eventfd, timerfd, memfd, POSIX message queues, System V
   shared memory, the libc additions, user contexts, and TCP (keepalive,
   `TCP_INFO`, orderly and abortive close).
+- **shortcut_keys**: Ctrl as the shortcut key, see above.
 - **virtio_block**: flush and trim on two scratch disks, one offering
   DISCARD and one only WRITE ZEROES; the harness then checks on the host
   that the trimmed space was freed in the image files.

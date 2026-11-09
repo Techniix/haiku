@@ -373,5 +373,23 @@ expect("identity: priority after the list (another CE- line) is ignored",
 	and ce_test.repository_priorities("CE-INFO pkgman list-repos:\r\n"
 		"        Techniix\r\nCE-INFO x\r\n\t\tpriority:  1\r\n") == {})
 
+for words, allowed in [
+		(["sendkey", "ctrl-v"], True),
+		(["sendkey", "ctrl-shift-v"], True),
+		(["sendkey", "alt-tab"], True),
+		(["sendkey", "ret"], True),
+		(["sendkey", "alt-sysrq-d"], False),
+		(["sendkey", "ctrl-alt-delete"], False),
+		(["sendkey", "ctrl-alt-shift-v"], False),
+		(["sendkey", "ctrl-ctrl-v"], False),
+		(["sendkey", "ctrl-v", "extra"], False),
+		(["sendkey", "ctrl-v;quit"], False),
+		(["quit"], False),
+		(["block_resize", "vblk0", "128M"], True),
+		(["block_resize", "hda", "128M"], False)]:
+	expect("host request %s %s" % (" ".join(words),
+			"allowed" if allowed else "refused"),
+		ce_test.host_request_allowed(words) == allowed)
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

@@ -55,6 +55,7 @@
 #include <UnicodeChar.h>
 
 #include <AutoLocker.h>
+#include <ShortcutKeyStyle.h>
 
 #include "ActiveProcessInfo.h"
 #include "Arguments.h"
@@ -409,6 +410,81 @@ TermWindow::QuitRequested()
 	_SaveWindowPosition();
 
 	return BWindow::QuitRequested();
+}
+
+
+void
+TermWindow::DispatchMessage(BMessage* message, BHandler* target)
+{
+	if (message->what == B_KEY_DOWN
+		&& _TranslateCtrlShortcutKey(message, target)) {
+		return;
+	}
+
+	BWindow::DispatchMessage(message, target);
+}
+
+
+/*!	With Ctrl as the shortcut key (Renga's default, Haiku's "Windows/Linux
+	mode"), Ctrl+letter would run Terminal's shortcuts: Ctrl+C would copy
+	instead of interrupting, Ctrl+D, Ctrl+R, Ctrl+Z, Ctrl+W... would never
+	reach the shell. Terminal then follows the Linux terminals instead:
+
+	- Ctrl+<key> sends the control character the keymap gives that key with
+	  the Control modifier (Ctrl+C sends 0x03, Ctrl+[ ESC, ...), as Ctrl
+	  does with Alt as the shortcut key. Only keys with a printable
+	  character and a single-byte control character count, so Ctrl+digits,
+	  Ctrl+arrows, Ctrl++ and Ctrl+- stay shortcuts.
+	- Ctrl+Shift+<the same keys> runs the shortcut Ctrl+<key> runs
+	  elsewhere: Ctrl+Shift+C copies, Ctrl+Shift+V pastes, Ctrl+Shift+T
+	  opens a tab, Ctrl+Shift+W closes it, Ctrl+Shift+Q quits.
+
+	Nothing changes with Alt as the shortcut key, or with Alt (or the
+	Option key) held too. Returns whether \a message was handled.
+*/
+bool
+TermWindow::_TranslateCtrlShortcutKey(BMessage* message, BHandler* target)
+{
+	if (fKeymap == NULL || fKeymapChars == NULL
+		|| BPrivate::get_shortcut_key_style(*fKeymap)
+			!= BPrivate::SHORTCUT_KEYS_CTRL) {
+		return false;
+	}
+
+	int32 modifiers;
+	int32 key;
+	if (message->FindInt32("modifiers", &modifiers) != B_OK
+		|| message->FindInt32("key", &key) != B_OK
+		|| key < 0 || key >= 128) {
+		return false;
+	}
+	if ((modifiers & (B_COMMAND_KEY | B_CONTROL_KEY | B_OPTION_KEY
+			| B_MENU_KEY)) != B_COMMAND_KEY) {
+		return false;
+	}
+
+	TermView* view = _ActiveTermView();
+	if (view == NULL || target != view)
+		return false;
+
+	// What the key types without modifiers, and with Control.
+	const char* normal = &fKeymapChars[fKeymap->normal_map[key]];
+	const char* control = &fKeymapChars[fKeymap->control_map[key]];
+	if (normal[0] != 1 || (uint8)normal[1] < 0x20 || normal[1] == 0x7f
+		|| control[0] != 1
+		|| ((uint8)control[1] >= 0x20 && control[1] != 0x7f)) {
+		return false;
+	}
+
+	if ((modifiers & B_SHIFT_KEY) != 0) {
+		// Ctrl+Shift+key: the shortcut, as Ctrl+key elsewhere.
+		message->ReplaceInt32("modifiers", modifiers
+			& ~(B_SHIFT_KEY | B_LEFT_SHIFT_KEY | B_RIGHT_SHIFT_KEY));
+		return false;
+	}
+
+	view->SendControlCharacter(control[1]);
+	return true;
 }
 
 

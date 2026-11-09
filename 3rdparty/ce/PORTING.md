@@ -303,6 +303,33 @@ the standard Media Kit path. Playback only for now; capture is planned.
 
 Since: commits `658d1756`, `fbbb290a`.
 
+### Ctrl is the shortcut key
+
+Renga uses the Windows/Linux convention: Ctrl+C copies, Ctrl+V pastes,
+Alt+Tab switches windows. BeOS and Haiku use Alt. Nothing changed in the API:
+Renga's default keymap puts `B_COMMAND_KEY` on the Ctrl keys and
+`B_CONTROL_KEY` on the Alt keys, as Haiku's own "Windows/Linux mode" always
+did. Users can switch back in Keymap preferences ("Shortcut key: Ctrl / Alt").
+
+For ports:
+
+- Use `B_COMMAND_KEY` for shortcuts (`AddShortcut()`, `BMenuItem`), as on
+  Haiku. Do not map a toolkit's "Ctrl" to `B_CONTROL_KEY` for shortcuts:
+  that is the Alt key in Renga's default and the Ctrl key in Haiku mode.
+  Toolkits that translate Haiku's modifiers (SDL, Qt, GTK backends) should
+  translate `B_COMMAND_KEY` to their "Ctrl"/"Primary" modifier.
+- Do not decide by physical key codes (0x5c, 0x5d) which key is which; read
+  the modifier bits, or `get_key_map()` if a port must show key names.
+- Programs that need raw Ctrl+letter control characters (terminal emulators,
+  editors running in one) get `B_COMMAND_KEY` for Ctrl in Renga's default.
+  Terminal handles this (Ctrl+letter sends the control character,
+  Ctrl+Shift+letter runs the shortcut); a port of another terminal should
+  do the same when `left_command_key` is 0x5c, see
+  `headers/private/shared/ShortcutKeyStyle.h`.
+
+Since: the commit that added `headers/private/shared/ShortcutKeyStyle.h`.
+Tests: `shortcut_keys_test.cpp`.
+
 ## Planned (do not work around these yet)
 
 If a port needs one of these, note it rather than writing a Haiku-specific

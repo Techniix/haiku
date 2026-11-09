@@ -12,6 +12,7 @@
 
 #include <new>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <Alert.h>
 #include <Bitmap.h>
@@ -37,6 +38,7 @@
 #include <Screen.h>
 #include <ScrollView.h>
 #include <SeparatorView.h>
+#include <ShortcutKeyStyle.h>
 #include <StringItem.h>
 #include <StringView.h>
 #include <TextView.h>
@@ -569,6 +571,18 @@ BootPromptWindow::_ActivateKeymap(const BMessage* message) const
 		fprintf(stderr, "Failed to load new keymap file (%s).\n", ref.name);
 		return;
 	}
+
+	// Keymap files come with Haiku's Alt shortcut key. Keep the shortcut key
+	// of the active keymap instead, which is Ctrl in Renga by default.
+	key_map* activeMap = NULL;
+	char* activeChars = NULL;
+	get_key_map(&activeMap, &activeChars);
+	if (activeMap != NULL) {
+		BPrivate::set_shortcut_key_style(keymap.Map(),
+			BPrivate::get_shortcut_key_style(*activeMap));
+	}
+	free(activeMap);
+	free(activeChars);
 
 	// Get entry_ref to the Key_map file in the user settings.
 	entry_ref currentRef;

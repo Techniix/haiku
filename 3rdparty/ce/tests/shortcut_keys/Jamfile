@@ -1,0 +1,16 @@
+SubDir HAIKU_TOP 3rdparty ce tests shortcut_keys ;
+
+# Ctrl as the shortcut key (Windows/Linux style): the default keymap, and
+# typing Ctrl+V, Alt+V and Ctrl+C, Ctrl+Shift+V in Terminal through keys the
+# harness presses in QEMU.
+UsePrivateHeaders shared ;
+
+Application shortcut_keys_test :
+	shortcut_keys_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: shortcut_keys_test ;
+}

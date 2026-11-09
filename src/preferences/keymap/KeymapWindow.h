@@ -18,12 +18,16 @@
 #include <String.h>
 #include <Window.h>
 
+#include <ShortcutKeyStyle.h>
+
 #include "Keymap.h"
 
 
 class BMenu;
 class BMenuBar;
 class BMenuField;
+class BRadioButton;
+class BStringView;
 class BTextControl;
 class KeyboardLayoutView;
 class KeymapListItem;
@@ -47,9 +51,10 @@ protected:
 			void				_MarkKeyboardLayoutItem(const char* path,
 									BMenu* menu);
 
-			void				_UpdateSwitchShortcutButton();
+			void				_UpdateShortcutKeyControls();
 			void				_UpdateButtons();
-			void				_SwitchShortcutKeys();
+			void				_SetShortcutKeyStyle(
+									BPrivate::shortcut_key_style style);
 
 			void				_UseKeymap();
 			void				_DefaultKeymap();
@@ -81,7 +86,9 @@ private:
 			BMenu*				fFontMenu;
 			KeyboardLayoutView*	fKeyboardLayoutView;
 			BTextControl*		fTextControl;
-			BButton*			fSwitchShortcutsButton;
+			BStringView*		fShortcutKeysLabel;
+			BRadioButton*		fShortcutKeysCtrlButton;
+			BRadioButton*		fShortcutKeysAltButton;
 			BMenu*				fAcuteMenu;
 			BMenu*				fCircumflexMenu;
 			BMenu*				fDiaeresisMenu;

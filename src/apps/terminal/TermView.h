@@ -103,6 +103,7 @@ public:
 			void				SetScrollBar(BScrollBar* scrollBar);
 			BScrollBar*			ScrollBar() const { return fScrollBar; };
 
+			void				SendControlCharacter(char character);
 			void				SetKeymap(const key_map* keymap,
 									const char* chars);
 			void				SetUseOptionAsMetaKey(bool enable);

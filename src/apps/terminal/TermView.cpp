@@ -736,6 +736,21 @@ TermView::SetEncoding(int encoding)
 }
 
 
+/*!	Sends \a character to the shell as if it had been typed with the
+	Control modifier, e.g. 0x03 for Ctrl+C. TermWindow uses this when Ctrl
+	is the shortcut key (see TermWindow::DispatchMessage()); the key event
+	itself cannot be passed on, since TermView ignores keys while the
+	command key is down (that selects hyperlinks).
+*/
+void
+TermView::SendControlCharacter(char character)
+{
+	_ActivateCursor(true);
+	_ScrollTo(0, true);
+	fShell->Write(&character, 1);
+}
+
+
 void
 TermView::SetKeymap(const key_map* keymap, const char* chars)
 {

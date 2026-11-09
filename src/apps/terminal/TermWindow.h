@@ -68,6 +68,8 @@ public:
 
 protected:
 	virtual bool				QuitRequested();
+	virtual	void				DispatchMessage(BMessage* message,
+									BHandler* target);
 	virtual void				MessageReceived(BMessage* message);
 	virtual void				WindowActivated(bool activated);
 	virtual void				MenusBeginning();
@@ -165,6 +167,8 @@ private:
 			TermViewContainerView* _ActiveTermViewContainerView() const;
 			TermViewContainerView* _TermViewContainerViewAt(int32 index) const;
 			TermView*			_ActiveTermView() const;
+			bool				_TranslateCtrlShortcutKey(BMessage* message,
+									BHandler* target);
 			TermView*			_TermViewAt(int32 index) const;
 			int32				_IndexOfTermView(TermView* termView) const;
 	inline	Session*			_SessionAt(int32 index) const;

@@ -39,6 +39,7 @@
 	// this is an automatically generated file
 
 #include <ServerProtocol.h>
+#include <ShortcutKeyStyle.h>
 
 using std::nothrow;
 
@@ -279,6 +280,10 @@ InputServer::_LoadSystemKeymap()
 {
 	delete[] fChars;
 	fKeys = kSystemKeymap;
+	// The built-in keymap (US-International) has Haiku's Alt shortcut key;
+	// Renga builds use Ctrl instead (see ShortcutKeyStyle.h). This is the
+	// keymap of a fresh install and of Keymap preferences' "Defaults".
+	BPrivate::set_shortcut_key_style(fKeys, BPrivate::kDefaultShortcutKeyStyle);
 	fCharsSize = kSystemKeyCharsSize;
 	fChars = new (nothrow) char[fCharsSize];
 	if (fChars == NULL)

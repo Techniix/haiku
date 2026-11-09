@@ -69,7 +69,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"vsnd_test", "eventfd_test", "memfd_test", "mqueue_test", "shm_test", "timerfd_test",
 	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
 	"virtio_block", "vblk_test", "nvme_disk", "nvme_test",
-	"package_priority_test", "libpackage.so"]
+	"package_priority_test", "libpackage.so", "shortcut_keys_test",
+	"input_server", "Terminal", "Keymap"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -543,6 +544,11 @@ class SerialReader(threading.Thread):
 		  CE-HOST block_resize <scratch disk> <size>
 		      resize a scratch disk, e.g. "block_resize vblk0 128M"; the
 		      guest sees a configuration change interrupt
+		  CE-HOST sendkey <keys>
+		      press keys on the guest's keyboard, e.g. "sendkey ctrl-v":
+		      at most two of ctrl, alt and shift, then a letter, a digit,
+		      ret, tab or esc (no sysrq, so no kernel debugger, and no
+		      delete, so no Team monitor)
 		"""
 		self.line += chunk
 		lines = self.line.split(b"\n")
@@ -552,9 +558,7 @@ class SerialReader(threading.Thread):
 			if not line.startswith("CE-HOST "):
 				continue
 			words = line.split()[1:]
-			accepted = len(words) == 3 and words[0] == "block_resize" \
-				and words[1] in [name for name, _ in SCRATCH_DISKS] \
-				and re.fullmatch(r"\d+[KMG]?", words[2]) is not None
+			accepted = host_request_allowed(words)
 			if accepted and self.monitor_path is not None:
 				threading.Thread(target=monitor_command, daemon=True,
 					args=(self.monitor_path, " ".join(words))).start()
@@ -615,6 +619,20 @@ class SerialReader(threading.Thread):
 			self._send("running", 2)
 		finally:
 			self.debug_done.set()
+
+
+def host_request_allowed(words):
+	"""Whether a CE-HOST request (its words after "CE-HOST") is on the list
+	SerialReader._host_requests documents."""
+	if len(words) == 3 and words[0] == "block_resize":
+		return words[1] in [name for name, _ in SCRATCH_DISKS] \
+			and re.fullmatch(r"\d+[KMG]?", words[2]) is not None
+	if len(words) == 2 and words[0] == "sendkey":
+		return re.fullmatch(r"(?:(?:ctrl|alt|shift)-){0,2}"
+			r"(?:[a-z0-9]|ret|tab|esc)", words[1]) is not None \
+			and len(set(words[1].split("-")[:-1])) \
+				== len(words[1].split("-")[:-1])
+	return False
 
 
 def monitor_command(path, command):
