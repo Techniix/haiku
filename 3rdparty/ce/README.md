@@ -32,8 +32,18 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --verbose        # drivers built with TRACE() on
 3rdparty/ce/harness/ce-test.py --screenshots 2,4,8   # save the screen then
 3rdparty/ce/harness/ce-test.py --stall 45       # quicker hang detection
+3rdparty/ce/harness/ce-test.py --smp 4          # several CPUs
+3rdparty/ce/harness/ce-test.py --firmware uefi  # OVMF, anyboot image
+3rdparty/ce/harness/ce-test.py --media cdrom    # anyboot as a CD (El Torito)
 3rdparty/ce/harness/selftest.py                 # check the harness itself
 ```
+
+`--firmware uefi` and `--media cdrom` switch the image to `minimum-anyboot`
+(only anyboot images have an EFI system partition and a CD boot catalog);
+`--profile` overrides that. The four combinations cover every way a release
+image boots: BIOS from disk or USB (MBR), BIOS from CD (the El Torito floppy
+image), and UEFI from either. UEFI runs use a fresh copy of the OVMF variable
+store each time.
 
 Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 `ce-test-results/latest` always points to the newest run:

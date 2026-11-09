@@ -200,11 +200,25 @@ def build(args, results_dir, report):
 	return code == 0
 
 
+def boot_drive(args, image):
+	"""Returns the value of QEMU's -drive option for the test image.
+
+	"disk" attaches the image as an IDE hard disk (raw images, and anyboot
+	images the way they boot from a USB stick); "cdrom" attaches it as an
+	IDE CD-ROM, which exercises the El Torito boot paths of anyboot images.
+	"""
+	if args.media == "cdrom":
+		return "file=%s,format=raw,if=ide,media=cdrom,readonly=on" % image
+	return "file=%s,format=raw,if=ide" % image
+
+
 def image_path(args):
 	names = {
 		"minimum-raw": "haiku-minimum.image",
 		"nightly-raw": "haiku-nightly.image",
 		"test-raw": "haiku-test.image",
+		"minimum-anyboot": "haiku-minimum-anyboot.iso",
+		"nightly-anyboot": "haiku-nightly-anyboot.iso",
 	}
 	return os.path.join(args.output, names.get(args.profile,
 		"haiku-%s.image" % args.profile.replace("-raw", "")))
@@ -386,7 +400,7 @@ def boot(args, results_dir, report):
 		"-monitor", "unix:%s,server=on,wait=off" % monitor_path,
 		"-no-reboot",
 		"-snapshot",
-		"-drive", "file=%s,format=raw,if=ide" % image,
+		"-drive", boot_drive(args, image),
 		"-audiodev", "wav,id=snd0,path=%s,out.frequency=48000,"
 			"out.channels=2,out.format=s16" % audio,
 		"-device", "virtio-sound-pci,audiodev=snd0",
@@ -398,7 +412,20 @@ def boot(args, results_dir, report):
 	if os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.W_OK):
 		qemu += ["-enable-kvm", "-cpu", "host"]
 	if args.firmware == "uefi":
-		qemu += ["-bios", args.ovmf]
+		# OVMF comes as read-only code plus a variable store the firmware
+		# writes to (boot entries, the boot order); each run gets a fresh
+		# copy of the store so runs cannot influence each other.
+		vars_copy = os.path.join(results_dir, "OVMF_VARS.fd")
+		shutil.copyfile(args.ovmf_vars, vars_copy)
+		qemu += [
+			"-drive", "if=pflash,format=raw,unit=0,readonly=on,file=%s"
+				% args.ovmf,
+			"-drive", "if=pflash,format=raw,unit=1,file=%s" % vars_copy,
+		]
+	if args.media == "cdrom":
+		# BIOS boots a CD through the El Torito floppy image (the
+		# haiku-floppyboot.tgz boot archive), UEFI through the ESP image.
+		qemu += ["-boot", "d"]
 
 	report["boot"] = {"command": " ".join(qemu), "image": image}
 	log("booting: " + " ".join(qemu))
@@ -726,6 +753,10 @@ def write_report(results_dir, report):
 		"PASS" if verdict["pass"] else "FAIL", verdict["checks"],
 		verdict["failed"]))
 	lines.append("")
+	lines.append("Image `%s`, %s firmware, booted as %s." % (
+		report.get("profile"), report.get("firmware"),
+		"a CD-ROM" if report.get("media") == "cdrom" else "a hard disk"))
+	lines.append("")
 
 	build_info = report.get("build")
 	if build_info:
@@ -805,15 +836,23 @@ def main():
 		formatter_class=argparse.RawDescriptionHelpFormatter)
 	parser.add_argument("--output", default=os.path.join(HAIKU_TOP,
 		"generated.x86_64"), help="configured Haiku output directory")
-	parser.add_argument("--profile", default="minimum-raw",
-		help="build profile of the test image (default: minimum-raw)")
+	parser.add_argument("--profile", default=None,
+		help="build profile of the test image (default: minimum-raw, or "
+			"minimum-anyboot with --firmware uefi or --media cdrom, since "
+			"only anyboot images carry an EFI system partition and an El "
+			"Torito boot catalog)")
 	parser.add_argument("--no-build", action="store_true",
 		help="boot the existing image without building")
 	parser.add_argument("--compile-only", action="store_true",
 		help="only compile the test targets, do not build or boot an image")
 	parser.add_argument("--firmware", choices=("bios", "uefi"),
 		default="bios")
-	parser.add_argument("--ovmf", default="/usr/share/OVMF/OVMF_CODE_4M.fd")
+	parser.add_argument("--ovmf", default="/usr/share/OVMF/OVMF_CODE_4M.fd",
+		help="OVMF firmware code (read-only pflash)")
+	parser.add_argument("--ovmf-vars", default="/usr/share/OVMF/OVMF_VARS_4M.fd",
+		help="OVMF variable store template; copied for every run")
+	parser.add_argument("--media", choices=("disk", "cdrom"), default="disk",
+		help="attach the image as a hard disk (default) or as a CD-ROM")
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
@@ -831,6 +870,10 @@ def main():
 		help="build the drivers under test with their TRACE() output on")
 	args = parser.parse_args()
 	args.output = os.path.abspath(args.output)
+	if args.profile is None:
+		args.profile = "minimum-anyboot" \
+			if args.firmware == "uefi" or args.media == "cdrom" \
+			else "minimum-raw"
 
 	started = datetime.datetime.now()
 	results_root = os.path.join(args.output, "ce-test-results")
@@ -844,6 +887,7 @@ def main():
 
 	report = {"started": started.isoformat(timespec="seconds"),
 		"profile": args.profile, "firmware": args.firmware,
+		"media": args.media,
 		"compile_only": args.compile_only}
 
 	ok = True
