@@ -930,9 +930,11 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Difficulty | Not rated yet |
 | Risk | Medium (central UI; must stay as fast and reliable as today's Deskbar) |
 | Testing status | None |
-| Next milestone | Design: feature list and mockups in the concept A style, decide whether it evolves Deskbar's code or becomes Lumina Panel's "classic" layout |
+| Next milestone | Design: feature list and mockups in the concept A style, following the hybrid approach below |
 | Recommended next action | Do the design step together with the Lumina phase (after S1-S8) |
 | Links | [Concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq) (concept A shows the starting point) |
+
+**Approach (maintainer's decision, 2026-11-09): a hybrid, "somewhere in the middle".** Deskbar stays the host: its process, its public `BDeskbar` API and its replicant tray are kept, so existing tray add-ons and apps that talk to Deskbar keep working. Its insides are modernised by sharing Lumina's parts instead of duplicating them: liblumina's configuration, rules and profiles, its animation and effects, and Lumina Panel's widgets (search, pinned apps, grouped window list, status items) built as components both can use. Lumina Panel's other layouts (for example modern mode) are separate front ends on the same components. One implementation of each feature, two presentations, the same principle as the shared disk engine for the Installer and partition manager (`F-23`, `F-24`).
 
 #### F-28 Control Panel suite
 
@@ -1656,6 +1658,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Installer requirements incl. migration, dual boot, OS detection, EFI entries, validation, previews, rollback; installer and partition manager share one disk engine | `F-23`, `F-24` |
 | 2026-11-09 | Target design: desktop concept A "Haiku Evolved" (Lumina classic as the default look, Lumina's advanced features as options) and Control Panel concept 1 "Sidebar & search" | `F-25`, `F-28`; [concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq) |
 | 2026-11-09 | Deskbar to be modernised in design and functionality as part of the Lumina work: easy to use and full featured | `F-41` |
+| 2026-11-09 | Deskbar approach: hybrid; keep Deskbar as the host (API, replicants) and build its new features from components shared with Lumina Panel | `F-41` |
 
 ---
 
