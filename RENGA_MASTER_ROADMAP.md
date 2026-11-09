@@ -67,7 +67,7 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 - Identity: live-animated Renga boot splash, Renga branding, `renga-raw`/`renga-anyboot`/`renga-vmware` build profiles, Techniix repository preferred over HaikuPorts, Ctrl as the default shortcut key with a switch back to Alt.
 - Upstream bugs found and fixed in the fork (10 written up for later reporting, plus 2 newer ones): see [Section 10.2](#102-upstream-haiku-bugs-found-and-fixed-in-renga).
 
-**What is being developed now?** Periodic NTP sync (`F-30`) is next. `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
+**What is being developed now?** The small Chromium OS gaps (`F-43` phase A) are next, then periodic NTP sync (`F-30`). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
 
 **What is blocked?**
 - NVMe multi-namespace (`F-04`) cannot reach Hardware Tested until the maintainer runs it on his real NVMe PC (pending, by his choice).
@@ -421,7 +421,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 3 (audit Tier 1) |
 | Risk | Low |
 | Testing status | 33 `virtio_sound.*` checks + 4 `audio.*` recording checks + `qemu.virtio_sound`, every run; real-time pacing within 0.3% |
-| Next milestone | Capture (agreed work order item 4) |
+| Next milestone | Capture (agreed work order item 6) |
 | Recommended next action | Implement the RX queue with a loopback-style harness check (QEMU input from a WAV file) |
 | Links | PORTING.md "virtio-sound" |
 
@@ -513,7 +513,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 2 (audit Tier 1) |
 | Risk | Low |
 | Testing status | None |
-| Next milestone | Agreed work order item 3 |
+| Next milestone | Agreed work order item 5 |
 | Recommended next action | A conditional launch_daemon job; harness check that skews the guest clock and expects correction (QEMU user networking provides an NTP-reachable path only if configured; verify first) |
 | Links | Audit Tier 1 |
 
@@ -1095,7 +1095,7 @@ Milestone checklist (in order; phases 1 and 3 first because they unblock the mos
 | Difficulty | Small items 2-4; sandbox 7; GPU path 8-9 (audit scale) |
 | Risk | Medium; High for the sandbox (security-critical) |
 | Testing status | None yet for this entry. Each OS item gets a harness test; the browser itself is tested on the maintainer's machine |
-| Next milestone | Phase A (small OS gaps), harness-tested |
+| Next milestone | Phase A (small OS gaps), harness-tested; next in the agreed work order (section 5.1, item 4) |
 | Recommended next action | Schedule phase A with the porting work; it is small and also helps other ports (Electron, Node, Firefox) |
 | Links | Chromium-HaikuOS `docs/PORTING.md`; its platform checklist |
 
@@ -1271,13 +1271,15 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 
 1. **VM mouse integration** (`F-19`): done 2026-11-09 (QEMU Tested).
 2. **`epoll`, `inotify`, `signalfd`** (`F-15`): done 2026-11-09 (QEMU Tested).
-3. **Periodic NTP sync** (`F-30`).
-4. **`virtio_sound` capture** (`F-02`).
-5. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
-6. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
-7. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
-8. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
-9. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+3. **Harness quick mode and timing**: done 2026-11-09 (`c36db227`): `--only` partial runs (never a pass), per-program timing, `harness.tests_ran`.
+4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too.
+5. **Periodic NTP sync** (`F-30`).
+6. **`virtio_sound` capture** (`F-02`).
+7. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
+8. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+9. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
+10. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
+11. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
 
@@ -1363,7 +1365,7 @@ Milestone count: 6 of 6 (100%).
 
 | # | Item | Done |
 | --- | --- | --- |
-| 1 | Periodic NTP sync | No (work order item 3) |
+| 1 | Periodic NTP sync | No (work order item 5) |
 | 2 | Finish and ship `virtio_sound` | Yes (playback) `658d1756`, `fbbb290a` |
 | 3 | `virtio_block` DISCARD/WRITE_ZEROES | Yes `5b068a5e` |
 | 4 | NVMe multi-namespace + teardown TODOs | Yes `0758b116` (one TODO remains) |
@@ -1391,7 +1393,7 @@ Milestone count: 8 of 14 (57%).
 | 5 | Partition resize backend + DriveSetup queue | Open |
 | 6 | Visual identity pack | Partial: splash and logos only |
 | 7 | Porting API pack 1 | Done |
-| 8 | Media pack 1 (encoders, per-app volume) | Open (work order item 5) |
+| 8 | Media pack 1 (encoders, per-app volume) | Open (work order item 7) |
 | 9 | Lumina in-tree engine | Open |
 | 10 | Installer wizard | Open |
 
@@ -1511,7 +1513,7 @@ graph LR
 
 ### 8.1 Harness overview
 
-`3rdparty/ce/harness/ce-test.py` builds the test targets and an image with `CE_HARNESS=1`, boots it headless in QEMU with a snapshot disk, and runs every program installed in `/boot/system/non-packaged/bin/ce-tests` from a launch_daemon job, with no desktop needed. It then judges the run. A run fails if any check fails, a watched driver (`virtio_sound`, `virtio_block`, `nvme_disk`) prints an error, QEMU logs a device guest error or rejected memory access, or the kernel panics. Results go to `generated.x86_64/ce-test-results/<timestamp>/` (`summary.md`, `results.json`, `serial.log`, `serial.timed.log`, `qemu.log`, `build.log`, `audio.wav`, `kdl.log` on a stall, screenshots). A full run takes about 75 seconds once the image is built (minimum image). Details: [README](https://github.com/Techniix/haiku/blob/ce/main/3rdparty/ce/README.md).
+`3rdparty/ce/harness/ce-test.py` builds the test targets and an image with `CE_HARNESS=1`, boots it headless in QEMU with a snapshot disk, and runs every program installed in `/boot/system/non-packaged/bin/ce-tests` from a launch_daemon job, with no desktop needed. It then judges the run. A run fails if any check fails, a watched driver (`virtio_sound`, `virtio_block`, `nvme_disk`) prints an error, QEMU logs a device guest error or rejected memory access, or the kernel panics. Results go to `generated.x86_64/ce-test-results/<timestamp>/` (`summary.md`, `results.json`, `serial.log`, `serial.timed.log`, `qemu.log`, `build.log`, `audio.wav`, `kdl.log` on a stall, screenshots). A full run takes about 2.5 minutes: about 46 s to build the image and about 92 s in the guest (BIOS, minimum image). `--only <tests>` runs only the named test programs on a copy of the image for quick checks; such a run is labelled **PARTIAL**, exits with 2, and never counts. Every run checks `harness.tests_ran` (each program that should run ran to the end) and lists each program's time in `summary.md` (`c36db227`). Details: [README](https://github.com/Techniix/haiku/blob/ce/main/3rdparty/ce/README.md).
 
 Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratch disks only), `CE-HOST sendkey` (at most two modifiers plus a letter, digit, ret, tab or esc; never sysrq or delete). Pointer and screenshot requests are in development.
 
@@ -1519,14 +1521,14 @@ Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratc
 
 | Path | Option | Image | Last recorded result |
 | --- | --- | --- | --- |
-| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 480/480 at `e1638a07` |
-| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 477/477 at `e1638a07` |
+| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 481/481 at `c36db227` |
+| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 478/478 at `c36db227` |
 | BIOS, CD-ROM (El Torito floppy) | `--media cdrom` | `minimum-anyboot` | 270/270 at `7b4a14df` |
 | UEFI, CD-ROM | `--firmware uefi --media cdrom` | `minimum-anyboot` | 273/273 at `22bf89ca` |
 | BIOS / UEFI, virtio-blk boot disk | `--disk-bus virtio` | either | BIOS 270/270 at `7b4a14df`; UEFI 271/271 at `2b728fa3` |
 | UEFI, two installs (decoy first) | `--two-installs` | `minimum-anyboot` | 272/272 at `2b728fa3` |
 | Boot menu countdown | `--boot-menu-timeout N` | either | 272/272 at `22bf89ca` (6 s) |
-| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 480/480 (`--smp 2` and `--smp 4`) at `e1638a07` |
+| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 481/481 (`--smp 2`) at `c36db227`; 480/480 (`--smp 4`) at `e1638a07` |
 | Full desktop image | `--profile renga-raw` | `renga-raw` | 286/286 |
 
 Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; any real hardware.
@@ -1694,6 +1696,8 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-09 | [`71101ac5`](https://github.com/Techniix/haiku/commit/71101ac5) | `epoll` (kernel + libgnu); pipes notify every write | 84 checks; 405/405 BIOS with 1, 2 and 4 CPUs; first run's `_Scan()` panic fixed before commit |
 | 2026-11-09 | [`b421d52a`](https://github.com/Techniix/haiku/commit/b421d52a) | `inotify` (kernel + libgnu); VFS access/modify/attrib/open/close hooks | 47 checks; 452/452 BIOS with 1, 2 and 4 CPUs; first run's missing `IN_ISDIR` on rmdir fixed before commit |
 | 2026-11-09 | [`e1638a07`](https://github.com/Techniix/haiku/commit/e1638a07) | `signalfd` (kernel + libgnu); synchronous signalfd notification from `kill()`/`raise()`/`sigqueue()`; inotify `write()` fails with `EINVAL` | 28 checks; 480/480 BIOS with 1, 2 and 4 CPUs, 477/477 UEFI; a `--smp 4` failure (DPC delay) fixed before commit |
+| 2026-11-09 | [`94fb0126`](https://github.com/Techniix/haiku/commit/94fb0126) | Roadmap: `F-43` Chromium platform readiness | Documentation only |
+| 2026-11-09 | [`c36db227`](https://github.com/Techniix/haiku/commit/c36db227) | Harness: `--only` partial runs, per-program timing, `harness.tests_ran` | PARTIAL run 120 checks; full 481/481 BIOS, 481/481 `--smp 2`, 478/478 UEFI; selftest 0 failures |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
@@ -1740,6 +1744,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | After the Media Kit: LinuxKPI integration for Wi-Fi on real hardware, then full gamepad support with a configurator and complete SDL support (8BitDo Ultimate 2C flawless) | `F-26`, `F-34`, `F-42`; section 5.1 |
 | 2026-11-09 | After gamepads: first part of the boot loader work, booting Windows from the boot menu | `F-22`; section 5.1 |
 | 2026-11-09 | Chromium: run natively and fully featured; take the fastest route and reuse existing work (FreeBSD patch set + converter, OpenBSD sandbox model, freedesktop portal/D-Bus interfaces, VA-API, Mesa/ANGLE, HaikuPorts QtWebEngine media code) | `F-43` |
+| 2026-11-09 | `F-43` phase A goes right after the harness speed-up, before NTP sync | `F-43`, section 5.1 |
 
 ---
 
