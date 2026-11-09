@@ -133,6 +133,14 @@ The harness then also checks the volume name and the repositories.
 
 ## Current suites
 
+- **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
+  blocks, 80 MiB with 4096-byte blocks, each with an MBR partition). Checks
+  that both are published (`/dev/disk/nvme/<id>/raw` and
+  `/dev/disk/nvme/<id>/ns2/raw`) with the right size and block size, that
+  writes to one never reach the other, I/O through the partition devices, an
+  unaligned write on the 4K namespace, trim and flush. The harness then
+  checks on the host that each backing file holds exactly what was written
+  to that namespace and that the trimmed space was freed.
 - **posix_compat**: eventfd, timerfd, memfd, POSIX message queues, System V
   shared memory, the libc additions, user contexts, and TCP (keepalive,
   `TCP_INFO`, orderly and abortive close).
