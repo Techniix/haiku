@@ -60,9 +60,15 @@ _thread_do_exit_notification(void)
 void
 _thread_do_exit_work(void)
 {
-	callback_node *node = tls_get(TLS_ON_EXIT_THREAD_SLOT);
+	callback_node *node;
 	callback_node *next;
 
+	// thread_local destructors run first, while the thread's other state
+	// (on_exit_thread() callbacks, pthread keys, TLS) is still intact, as
+	// glibc runs __call_tls_dtors() first in its thread exit path.
+	__cxa_thread_call_dtors();
+
+	node = tls_get(TLS_ON_EXIT_THREAD_SLOT);
 	while (node != NULL) {
 		next = node->next;
 

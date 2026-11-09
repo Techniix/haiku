@@ -639,6 +639,8 @@ void __cxa_guard_acquire() {}
 void __cxa_guard_release() {}
 void __cxa_init_primary_exception() {}
 void __cxa_rethrow() {}
+void __cxa_thread_atexit_impl() {}
+void __cxa_thread_call_dtors() {}
 void __cxa_throw() {}
 void __cxa_throw_bad_array_new_length() {}
 void __des_setkey() {}

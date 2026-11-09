@@ -29,6 +29,7 @@
 
 extern "C" void _IO_cleanup(void);
 extern "C" void _thread_do_exit_work(void);
+extern "C" void __cxa_thread_call_dtors(void);
 
 
 struct AtExitInfoBlock;
@@ -310,6 +311,11 @@ atexit(void (*func)(void))
 void
 exit(int status)
 {
+	// The calling thread's thread_local objects are destroyed first, before
+	// static objects and atexit() handlers (C++ [basic.start.term], and what
+	// glibc's exit() does).
+	__cxa_thread_call_dtors();
+
 	// unwind the exit stack, calling the registered functions
 	__cxa_finalize(NULL);
 

@@ -34,6 +34,7 @@ updates this file in the same commit.
 | TCP keepalive: `SO_KEEPALIVE` probes, `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT` | `<netinet/tcp.h>` | libnetwork (nothing extra) | Missing (option accepted, no probes sent) | Available |
 | `TCP_INFO` (`struct tcp_info`), `TCPS_*` states | `<netinet/tcp.h>`, `<netinet/tcp_fsm.h>` | libnetwork (nothing extra) | Missing | Available |
 | Abortive close (`SO_LINGER` with zero timeout) sends a reset | (behaviour) | | Broken: no reset sent, peer never notified | Fixed |
+| `__cxa_thread_atexit_impl()` (C++ `thread_local` destructors) | (C++ runtime) | libroot (nothing extra) | Missing | Available |
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -231,6 +232,40 @@ signal becomes pending.
 
 Since: the commit that added `src/system/kernel/events/signalfd.cpp`.
 Tests: `3rdparty/ce/tests/posix_compat/signalfd_test.cpp` (28 checks).
+
+### thread_local destructors (`__cxa_thread_atexit_impl`)
+
+libroot provides `__cxa_thread_atexit_impl(dtor, object, dso_handle)`, the
+C library hook behind the destructors of C++ `thread_local` objects, with
+glibc's semantics. libc++abi (LLVM toolchains, Chromium's bundled libc++)
+uses it when present, so ports no longer need a helper library or the
+pthread-key emulation, which runs nothing for the main thread at `exit()`.
+
+- Destructors are per thread and run in reverse order of registration when
+  the thread ends: returning from its function, `pthread_exit()`,
+  `exit_thread()`, `spawn_thread()` threads included. They run before the
+  thread's `on_exit_thread()` callbacks and pthread key destructors.
+- For the thread calling `exit()` (or returning from `main()`) they run
+  first, before `atexit()` handlers and static destructors, as the C++
+  standard and glibc order them.
+- Destructors registered while the destructors run (a destructor touching
+  another `thread_local`) run too.
+- The library that registered a destructor stays loaded until it has run,
+  even if it is `dlclose()`d earlier (glibc does the same with a counter in
+  its link map; Renga takes a runtime_loader reference to the image).
+- **Differences from glibc:**
+  - Haiku's own `libstdc++` (gcc_syslibs) was built without the hook and
+    keeps its own emulation until HaikuPorts rebuilds it against Renga;
+    g++-built programs still work, with the emulation's behaviour.
+  - Add-ons loaded with `load_add_on()` cannot be pinned (the runtime_loader
+    finds only libraries by name); their destructors run unpinned.
+  - Allocation failure returns -1 (glibc aborts); the C++ runtimes then
+    call `std::terminate()`.
+
+Implementation: `src/system/libroot/posix/stdlib/thread_atexit.cpp`.
+
+Since: the commit that added that file. Tests:
+`3rdparty/ce/tests/posix_compat/thread_atexit_test.cpp` (9 checks).
 
 ### eventfd
 

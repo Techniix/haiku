@@ -73,6 +73,11 @@ Application signalfd_test :
 	: libgnu.so
 ;
 
+# __cxa_thread_atexit_impl() is in libroot.
+Application thread_atexit_test :
+	thread_atexit_test.cpp
+;
+
 Application timerfd_test :
 	timerfd_test.cpp
 	: libgnu.so
@@ -80,5 +85,5 @@ Application timerfd_test :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : epoll_test eventfd_test inotify_test libc_ext_test memfd_test
-		mqueue_test shm_test signalfd_test tcp_close_test tcp_info_test tcp_keepalive_test timerfd_test ucontext_test ;
+		mqueue_test shm_test signalfd_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test ;
 }

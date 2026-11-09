@@ -78,6 +78,8 @@ typedef struct _pthread_thread {
 	void		*exit_value;
 	struct pthread_key_data specific[PTHREAD_KEYS_MAX];
 	struct __pthread_cleanup_handler *cleanup_handlers;
+	struct __cxa_thread_dtor *thread_dtors;
+		// thread_local destructors (__cxa_thread_atexit_impl())
 } pthread_thread;
 
 
@@ -87,6 +89,7 @@ extern "C" {
 
 void __pthread_key_call_destructors(pthread_thread *thread);
 void __pthread_destroy_thread(void);
+void __cxa_thread_call_dtors(void);
 pthread_thread *__allocate_pthread(void* (*entry)(void*), void *data);
 void __init_pthread(pthread_thread* thread, void* (*entry)(void*), void* data);
 status_t __pthread_init_creation_attributes(

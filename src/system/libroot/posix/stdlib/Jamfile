@@ -33,6 +33,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			reallocarray.cpp
 			realpath.cpp
 			strfmon.c
+			thread_atexit.cpp
 			;
 	}
 }

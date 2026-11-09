@@ -97,6 +97,7 @@ __init_pthread(pthread_thread* thread, void* (*entry)(void*), void* data)
 	thread->entry_argument = data;
 	thread->exit_value = NULL;
 	thread->cleanup_handlers = NULL;
+	thread->thread_dtors = NULL;
 	thread->flags = THREAD_CANCEL_ENABLED;
 		// thread cancellation enabled, but deferred
 

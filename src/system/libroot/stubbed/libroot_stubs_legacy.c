@@ -478,6 +478,8 @@ void __ctype_toupper_loc() {}
 void __current_locale_t() {}
 void __cxa_atexit() {}
 void __cxa_finalize() {}
+void __cxa_thread_atexit_impl() {}
+void __cxa_thread_call_dtors() {}
 void __default_terminate() {}
 void __default_unexpected__Fv() {}
 void __deregister_frame() {}
