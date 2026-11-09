@@ -129,6 +129,7 @@ private:
 			bool		_KeepAliveEnabled() const;
 			void		_UpdateKeepAlive();
 			status_t	_SendKeepAliveProbe();
+			status_t	_GetInfo(void* value, int* _length);
 
 	static	status_t	_WaitForCondition(ConditionVariable& condition,
 							MutexLocker& locker, bigtime_t timeout);

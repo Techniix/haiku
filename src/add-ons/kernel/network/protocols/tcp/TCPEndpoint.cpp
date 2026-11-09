@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <netinet/tcp_fsm.h>
 #include <new>
 #include <signal.h>
 #include <stdlib.h>
@@ -1130,6 +1131,9 @@ TCPEndpoint::SetReceiveBufferSize(size_t length)
 status_t
 TCPEndpoint::GetOption(int option, void* _value, int* _length)
 {
+	if (option == TCP_INFO)
+		return _GetInfo(_value, _length);
+
 	if (*_length != sizeof(int))
 		return B_BAD_VALUE;
 
@@ -2782,7 +2786,81 @@ TCPEndpoint::_RetransmitTimer(net_timer* timer, void* _endpoint)
 }
 
 
-/*static*/ bool
+/*static*/ /*!	TCP_INFO: fills in a struct tcp_info (FreeBSD layout, see
+	<netinet/tcp.h>). Like Linux and FreeBSD, a shorter buffer gets the
+	start of the structure and *_length is set to what was written, so code
+	built against an older, smaller structure keeps working.
+*/
+status_t
+TCPEndpoint::_GetInfo(void* _value, int* _length)
+{
+	if (*_length <= 0)
+		return B_BAD_VALUE;
+
+	tcp_info info;
+	memset(&info, 0, sizeof(info));
+
+	MutexLocker locker(fLock);
+
+	// BSD state numbers (<netinet/tcp_fsm.h>), RFC 793 names.
+	switch (fState) {
+		case CLOSED:						info.tcpi_state = TCPS_CLOSED; break;
+		case LISTEN:						info.tcpi_state = TCPS_LISTEN; break;
+		case SYNCHRONIZE_SENT:				info.tcpi_state = TCPS_SYN_SENT; break;
+		case SYNCHRONIZE_RECEIVED:			info.tcpi_state = TCPS_SYN_RECEIVED; break;
+		case ESTABLISHED:					info.tcpi_state = TCPS_ESTABLISHED; break;
+		case FINISH_RECEIVED:				info.tcpi_state = TCPS_CLOSE_WAIT; break;
+		case WAIT_FOR_FINISH_ACKNOWLEDGE:	info.tcpi_state = TCPS_LAST_ACK; break;
+		case FINISH_SENT:					info.tcpi_state = TCPS_FIN_WAIT_1; break;
+		case FINISH_ACKNOWLEDGED:			info.tcpi_state = TCPS_FIN_WAIT_2; break;
+		case CLOSING:						info.tcpi_state = TCPS_CLOSING; break;
+		case TIME_WAIT:						info.tcpi_state = TCPS_TIME_WAIT; break;
+	}
+
+	// The FLAG_OPTION_* bits start out set and are cleared during the
+	// handshake when the peer does not offer the option, so once the
+	// connection is established they describe what was negotiated.
+	if ((fFlags & FLAG_OPTION_TIMESTAMP) != 0)
+		info.tcpi_options |= TCPI_OPT_TIMESTAMPS;
+	if ((fFlags & FLAG_OPTION_SACK_PERMITTED) != 0)
+		info.tcpi_options |= TCPI_OPT_SACK;
+	if ((fFlags & FLAG_OPTION_WINDOW_SCALE) != 0) {
+		info.tcpi_options |= TCPI_OPT_WSCALE;
+		info.tcpi_snd_wscale = fSendWindowShift;
+		info.tcpi_rcv_wscale = fReceiveWindowShift;
+	}
+
+	info.tcpi_rto = (uint32)fRetransmitTimeout;
+	info.tcpi_snd_mss = fSendMaxSegmentSize;
+	info.tcpi_rcv_mss = fReceiveMaxSegmentSize;
+
+	if (fLastReceiveTime > 0)
+		info.tcpi_last_data_recv = (uint32)(system_time() - fLastReceiveTime);
+
+	// The round trip estimates are kept in milliseconds (tcp_now()); -1
+	// means no sample yet.
+	if (fSmoothedRoundTripTime > 0) {
+		info.tcpi_rtt = (uint32)fSmoothedRoundTripTime * 1000;
+		info.tcpi_rttvar = (uint32)fRoundTripVariation * 1000;
+	}
+	info.tcpi_snd_ssthresh = fSlowStartThreshold;
+	info.tcpi_snd_cwnd = fCongestionWindow;
+	info.tcpi_rcv_space = fReceiveQueue.Free();
+
+	info.tcpi_snd_wnd = fSendWindow;
+	info.tcpi_snd_nxt = fSendNext.Number();
+	info.tcpi_rcv_nxt = fReceiveNext.Number();
+
+	locker.Unlock();
+
+	int length = min_c(*_length, (int)sizeof(info));
+	memcpy(_value, &info, length);
+	*_length = length;
+	return B_OK;
+}
+
+
+bool
 TCPEndpoint::_KeepAliveEnabled() const
 {
 	return (socket->options & SO_KEEPALIVE) != 0;

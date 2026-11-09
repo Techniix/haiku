@@ -30,7 +30,9 @@
 
 
 #define MAX_SOCKET_ADDRESS_LENGTH	(sizeof(sockaddr_storage))
-#define MAX_SOCKET_OPTION_LENGTH	128
+// Room for the largest option value; struct tcp_info (TCP_INFO) is the
+// largest one, at 196 bytes.
+#define MAX_SOCKET_OPTION_LENGTH	256
 #define MAX_ANCILLARY_DATA_LENGTH	1024
 
 #define GET_SOCKET_FD_OR_RETURN(fd, kernel, descriptor)	\
