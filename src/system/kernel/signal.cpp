@@ -27,6 +27,7 @@
 #include <kernel.h>
 #include <kscheduler.h>
 #include <sem.h>
+#include <signalfd.h>
 #include <syscall_restart.h>
 #include <syscall_utils.h>
 #include <team.h>
@@ -1450,6 +1451,9 @@ send_signal_to_thread_locked(Thread* thread, uint32 signalNumber,
 
 	update_thread_signals_flag(thread);
 
+	// Renga: wake select()/poll()/epoll waiters on signalfds.
+	signalfd_signal_queued(signalNumber);
+
 	// the thread has the signal reference, now
 	signalReference.Detach();
 
@@ -1701,6 +1705,9 @@ send_signal_to_team_locked(Team* team, uint32 signalNumber, Signal* signal,
 		team->AddPendingSignal(signalNumber);
 
 	update_team_threads_signal_flag(team);
+
+	// Renga: wake select()/poll()/epoll waiters on signalfds.
+	signalfd_signal_queued(signalNumber);
 
 	// the team has the signal reference, now
 	signalReference.Detach();
@@ -2350,8 +2357,28 @@ sigpending_internal(sigset_t* set)
 			\code < 0 \endcode -- then the target is a process group.
 	\return \c B_OK on success, another error code otherwise.
 */
+static status_t
+user_send_signal(int32 id, uint32 signalNumber,
+	const union sigval* userUserValue, uint32 flags);
+
+
 status_t
 _user_send_signal(int32 id, uint32 signalNumber,
+	const union sigval* userUserValue, uint32 flags)
+{
+	status_t status = user_send_signal(id, signalNumber, userUserValue,
+		flags);
+
+	// Renga: signalfd select()ors and epoll sets learn about the signal
+	// before kill()/raise()/sigqueue() return, as on Linux (the signal path
+	// itself can only queue a DPC). No locks are held here.
+	signalfd_flush_notifications();
+	return status;
+}
+
+
+static status_t
+user_send_signal(int32 id, uint32 signalNumber,
 	const union sigval* userUserValue, uint32 flags)
 {
 	// restrict flags to the allowed ones and add B_CHECK_PERMISSION
@@ -2438,6 +2465,34 @@ _user_sigaction(int signal, const struct sigaction *userAction,
 		return B_BAD_ADDRESS;
 
 	return status;
+}
+
+
+/*!	Renga (signalfd): dequeues one pending signal of \a set for the current
+	thread, as sigwaitinfo() does. With \a wait, blocks until one is
+	pending (interruptibly); otherwise fails with B_WOULD_BLOCK.
+*/
+status_t
+signal_dequeue_for_signalfd(const sigset_t* set, siginfo_t* info, bool wait)
+{
+	return sigwait_internal(set, info, wait ? 0 : B_RELATIVE_TIMEOUT, 0);
+}
+
+
+/*!	Renga (signalfd): whether a signal of \a set is pending for the thread
+	(sent to it or to its team).
+*/
+bool
+signal_pending_for_signalfd(thread_id id, sigset_t set)
+{
+	Thread* thread = Thread::GetAndLock(id);
+	if (thread == NULL)
+		return false;
+	BReference<Thread> reference(thread, true);
+	ThreadLocker threadLocker(thread, true);
+
+	InterruptsSpinLocker locker(thread->team->signal_lock);
+	return (thread->AllPendingSignals() & set) != 0;
 }
 
 

@@ -66,7 +66,7 @@ WATCHED_DRIVERS = ("virtio_sound", "virtio_block", "nvme_disk")
 # Compile-only targets: fast feedback before the image build.
 COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"libnetwork.so", "libc_ext_test", "virtio_sound",
-	"vsnd_test", "epoll_test", "eventfd_test", "inotify_test", "memfd_test", "mqueue_test", "shm_test", "timerfd_test",
+	"vsnd_test", "epoll_test", "eventfd_test", "inotify_test", "memfd_test", "mqueue_test", "shm_test", "signalfd_test", "timerfd_test",
 	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
 	"virtio_block", "vblk_test", "nvme_disk", "nvme_test",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",

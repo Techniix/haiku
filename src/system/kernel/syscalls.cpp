@@ -27,6 +27,7 @@
 #include <event_queue.h>
 #include <eventfd.h>
 #include <inotify.h>
+#include <signalfd.h>
 #include <timerfd.h>
 #include <frame_buffer_console.h>
 #include <fs/fd.h>

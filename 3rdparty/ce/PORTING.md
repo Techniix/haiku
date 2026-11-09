@@ -23,7 +23,7 @@ updates this file in the same commit.
 | `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback) |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
-| `signalfd` | `<sys/signalfd.h>` | | Missing | Planned |
+| `signalfd()` | `<sys/signalfd.h>` | `-lgnu` | Missing | Available |
 | System V shared memory (`shmget`, ...) | `<sys/shm.h>` | libroot (nothing extra) | Missing | Available |
 | `getrandom()` | `<sys/random.h>` | `-lgnu` | Missing (`getentropy()` only) | Available |
 | `getauxval()` | `<sys/auxv.h>` | `-lgnu` | Missing | Available |
@@ -188,6 +188,49 @@ watched.
 
 Since: the commit that added `src/system/kernel/events/inotify.cpp`.
 Tests: `3rdparty/ce/tests/posix_compat/inotify_test.cpp` (47 checks).
+
+### signalfd
+
+`signalfd(fd, mask, flags)`: block the signals with
+`sigprocmask()`/`pthread_sigmask()`, then `read()` them from the descriptor
+as 128-byte `struct signalfd_siginfo` records (Linux's layout) instead of
+having handlers run. The descriptor works with `poll()`, `select()` and
+`epoll`, so an event loop handles `SIGCHLD`, `SIGTERM` and friends with its
+other events.
+
+- `fd` -1 creates a descriptor; an existing signalfd gets its mask replaced
+  (the call returns it). Flags: `SFD_NONBLOCK`, `SFD_CLOEXEC`, `SFD_CLOFORK`
+  (Haiku extension). `SIGKILL` and `SIGSTOP` are silently left out of masks.
+- `read()` dequeues pending signals of the mask for the calling thread
+  (sent to it or to its process), as `sigwaitinfo()` would, as many as fit
+  (`EINVAL` below 128 bytes, `EAGAIN` with `SFD_NONBLOCK`). Realtime
+  signals keep their queue order and `sigqueue()` values.
+- Readiness is per thread, as on Linux: a signal sent to another thread
+  makes the descriptor readable for that thread only. In an epoll set it
+  is evaluated for the thread probing the set. `kill()`, `raise()`,
+  `pthread_kill()` and `sigqueue()` notify waiters before they return;
+  signals sent by the kernel (`SIGCHLD`, timers) a moment later.
+- After `fork()` the child reads its own signals through the inherited
+  descriptor.
+- Filled in: `ssi_signo`, `ssi_code`, `ssi_pid`, `ssi_uid`, `ssi_status`
+  (`SIGCHLD` exit status), `ssi_int`/`ssi_ptr` (`sigqueue()` value),
+  `ssi_addr`, `ssi_band`, `ssi_errno`.
+- **Differences from Linux:**
+  - Signal numbers are Haiku's (`SIGCHLD` is 5); use the names.
+  - `ssi_utime`, `ssi_stime`, `ssi_fd`, `ssi_tid`, `ssi_overrun`,
+    `ssi_trapno`, `ssi_addr_lsb`, `ssi_syscall`, `ssi_call_addr` and
+    `ssi_arch` are 0.
+  - Inherited Haiku behaviour: a `SIGCHLD` interrupts blocking calls
+    (`poll()`, `epoll_wait()`, ...) with `EINTR` even while it is blocked.
+    Event loops retry on `EINTR` anyway; the signal itself stays pending
+    and is read from the signalfd.
+
+Implementation: `src/system/kernel/events/signalfd.cpp`; reading uses the
+kernel's `sigwaitinfo()` code, and `signal.cpp` notifies signalfds when a
+signal becomes pending.
+
+Since: the commit that added `src/system/kernel/events/signalfd.cpp`.
+Tests: `3rdparty/ce/tests/posix_compat/signalfd_test.cpp` (28 checks).
 
 ### eventfd
 
@@ -450,7 +493,6 @@ If a port needs one of these, note it rather than writing a Haiku-specific
 workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
-- `signalfd`.
 - File sealing for `memfd_create()`; `TFD_TIMER_CANCEL_ON_SET`.
 - Linux driver support through LinuxKPI, and Linux binary compatibility
   through Renguin: both build on the APIs above.

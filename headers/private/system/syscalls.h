@@ -100,6 +100,10 @@ extern int			_kern_inotify_add_watch(int fd, const char* path,
 						uint32 mask);
 extern status_t		_kern_inotify_rm_watch(int fd, int wd);
 
+/* signalfd (Renga; user API in libgnu): fd -1 creates one, otherwise the
+   mask of an existing one is replaced. */
+extern int			_kern_signalfd(int fd, const sigset_t* mask, int openFlags);
+
 /* eventfd (Renga; user API in libgnu) */
 extern int			_kern_eventfd(uint32 initialValue, int openFlags,
 						bool semaphore);

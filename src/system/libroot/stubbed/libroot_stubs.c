@@ -1264,6 +1264,7 @@ void _kern_setsockopt() {}
 void _kern_shutdown() {}
 void _kern_shutdown_socket() {}
 void _kern_sigaction() {}
+void _kern_signalfd() {}
 void _kern_sigpending() {}
 void _kern_sigsuspend() {}
 void _kern_sigwait() {}

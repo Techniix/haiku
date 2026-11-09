@@ -27,6 +27,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			memfd.cpp
 			sched_affinity.cpp
 			sched_getcpu.cpp
+			signalfd.cpp
 			timerfd.cpp
 			xattr.cpp
 			;

@@ -1111,7 +1111,9 @@ _user_inotify_init(int openFlags)
 
 	descriptor->ops = &sInotifyOps;
 	descriptor->cookie = instance;
-	descriptor->open_mode = O_RDONLY | (openFlags & O_NONBLOCK);
+	// O_RDWR, so that write() reaches our hook and fails with EINVAL, as
+	// on Linux, rather than with EBADF.
+	descriptor->open_mode = O_RDWR | (openFlags & O_NONBLOCK);
 
 	io_context* context = get_current_io_context(false);
 	rw_lock_write_lock(&context->lock);

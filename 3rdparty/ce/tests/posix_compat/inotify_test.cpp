@@ -236,7 +236,8 @@ test_arguments()
 	report("fstat", fstat(fd, &st) == 0, "mode 0%o", (unsigned)st.st_mode);
 	errno = 0;
 	bytes = write(fd, "x", 1);
-	report("write_fails", bytes == -1, "%zd %s", bytes, errno_name(errno));
+	report("write_fails", bytes == -1 && errno == EINVAL, "%zd %s", bytes,
+		errno_name(errno));
 
 	unlink(path("plain").c_str());
 	close(fd);
