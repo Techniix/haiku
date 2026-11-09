@@ -1,5 +1,5 @@
 #!/bin/sh
-# Haiku Community Edition test runner (installed only into harness images).
+# Renga test runner (installed only into harness images).
 #
 # Started by launch_daemon as a system job (harness/guest/ce-harness), right
 # after the boot volumes are mounted. It does not depend on app_server or a

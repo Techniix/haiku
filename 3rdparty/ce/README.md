@@ -1,6 +1,12 @@
-# Haiku Community Edition: test harness and fork tooling
+# Renga: test harness and fork tooling
 
-This directory holds tooling specific to the Haiku Community Edition fork.
+Renga is an operating system based on Haiku®, an open source operating
+system. It is not the official Haiku distribution, which is available at
+https://www.haiku-os.org. Haiku® and the HAIKU logo® are registered
+trademarks of Haiku, Inc. and are developed by the Haiku Project; Renga uses
+neither its name nor its logo for itself.
+
+This directory holds tooling specific to the Renga fork.
 Upstream's `3rdparty/Jamfile` picks it up only when the build is run with
 `HAIKU_INCLUDE_3RDPARTY=1`, so ordinary builds are unaffected. No upstream
 build file had to change for any of it.
@@ -114,7 +120,7 @@ silently.
 ## Revision tags
 
 The build names itself after the nearest upstream `hrev` tag. The
-`CE hrev tag` workflow (`.github/workflows/ce-hrev-tag.yml`) publishes that
+`Renga hrev tag` workflow (`.github/workflows/ce-hrev-tag.yml`) publishes that
 tag automatically on every push to `ce/main`, so a fresh clone of the fork
 builds without setting `HAIKU_REVISION`. Fetch it with `git fetch --tags
 origin`. If ce/main is rebased onto a newer upstream revision, the next push

@@ -1,5 +1,5 @@
 /*
- * Copyright 2026, Haiku Community Edition contributors.
+ * Copyright 2026, Renga contributors.
  * Distributed under the terms of the MIT License.
  *
  * Some software includes <sys/ucontext.h> for ucontext_t (glibc layout).

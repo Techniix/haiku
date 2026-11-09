@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 #
-# Copyright 2026, Haiku Community Edition contributors.
+# Copyright 2026, Renga contributors.
 # Distributed under the terms of the MIT License.
 #
-"""Haiku Community Edition test harness.
+"""Renga test harness.
 
 Builds a test image, boots it headless in QEMU, collects the results the
 in-guest runner prints on the serial console, checks device output (such as
@@ -720,7 +720,7 @@ def write_report(results_dir, report):
 	with open(os.path.join(results_dir, "results.json"), "w") as jsonFile:
 		json.dump(report, jsonFile, indent=2, default=str)
 
-	lines = ["# CE test run %s" % report["started"], ""]
+	lines = ["# Renga test run %s" % report["started"], ""]
 	verdict = report["verdict"]
 	lines.append("**Verdict: %s** (%d checks, %d failed)" % (
 		"PASS" if verdict["pass"] else "FAIL", verdict["checks"],

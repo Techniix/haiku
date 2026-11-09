@@ -1,5 +1,5 @@
 /*
- * Copyright 2026, Haiku Community Edition contributors.
+ * Copyright 2026, Renga contributors.
  * Distributed under the terms of the MIT License.
  *
  * sendmmsg() and recvmmsg(): Linux batch versions of sendmsg()/recvmsg().

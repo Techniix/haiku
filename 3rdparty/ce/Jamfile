@@ -1,6 +1,6 @@
 SubDir HAIKU_TOP 3rdparty ce ;
 
-# Haiku Community Edition tooling: the automated test harness and its in-guest
+# Renga tooling: the automated test harness and its in-guest
 # test programs. Upstream's 3rdparty/Jamfile includes this directory only when
 # HAIKU_INCLUDE_3RDPARTY is set, so normal builds are not affected at all.
 # Nothing is added to an image unless the harness also sets CE_HARNESS.

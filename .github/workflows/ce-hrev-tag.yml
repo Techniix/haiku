@@ -1,4 +1,4 @@
-# Haiku Community Edition: publish the hrev tag that ce/main is based on.
+# Renga: publish the hrev tag that ce/main is based on.
 #
 # Haiku's build names itself after the nearest reachable upstream tag
 # ("git describe --tags --match=hrev*", see
@@ -24,7 +24,7 @@
 # cannot re-run this job. "Run workflow" (workflow_dispatch) re-checks the
 # tip of the branch it is started on.
 
-name: CE hrev tag
+name: Renga hrev tag
 
 on:
   push:
@@ -95,7 +95,7 @@ jobs:
           fi
 
           {
-            echo "### CE hrev tag"
+            echo "### Renga hrev tag"
             echo ""
             echo "| | |"
             echo "|---|---|"

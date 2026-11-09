@@ -1,9 +1,9 @@
-# Porting software to Haiku Community Edition
+# Porting software to Renga
 
-This is the reference for porting applications to Haiku Community Edition
-(CE), the `ce/main` branch of
+This is the reference for porting applications to Renga, the `ce/main`
+branch of
 [Techniix/haiku](https://github.com/Techniix/haiku/tree/ce/main). It lists
-what CE provides beyond stock Haiku, how a port picks each feature up, and
+what Renga provides beyond stock Haiku, how a port picks each feature up, and
 what is planned, so ports can use the native APIs instead of carrying
 workarounds written for stock Haiku.
 
@@ -14,7 +14,7 @@ updates this file in the same commit.
 
 ## Quick reference
 
-| Feature | Header | Link with | Stock Haiku | Status in CE |
+| Feature | Header | Link with | Stock Haiku | Status in Renga |
 | --- | --- | --- | --- | --- |
 | `eventfd()` | `<sys/eventfd.h>` | `-lgnu` | Missing | Available |
 | `timerfd_create()` / `_settime()` / `_gettime()` | `<sys/timerfd.h>` | `-lgnu` | Missing | Available |
@@ -51,15 +51,15 @@ POSIX message queues are standard POSIX, so they are in `libroot` and
 `sysconf(_SC_MESSAGE_PASSING)` and `_POSIX_MESSAGE_PASSING` report support.
 
 **Let the build system detect features.** Configure/CMake/Meson checks that
-look for these functions on Linux will now find them on CE. Prefer removing
-`__HAIKU__` special cases that force a fallback, over adding CE-specific
+look for these functions on Linux will now find them on Renga. Prefer removing
+`__HAIKU__` special cases that force a fallback, over adding Renga-specific
 ones. Typical checks: `check_symbol_exists(eventfd "sys/eventfd.h" ...)`,
 `AC_CHECK_FUNCS([eventfd timerfd_create memfd_create mq_open])`,
 `cc.has_function('memfd_create', prefix: '#include <sys/mman.h>')`.
 
 **Packaging caveat.** A binary that uses any of these will not load on stock
-Haiku, because the symbols are missing there. Packages built against CE
-belong in the CE package repository
+Haiku, because the symbols are missing there. Packages built against Renga
+belong in the Renga package repository
 ([Techniix/haiku-packages](https://github.com/Techniix/haiku-packages)),
 not in a repository meant for stock Haiku. If one source tree has to serve
 both, keep the fallback path and choose at build time.
@@ -241,4 +241,4 @@ Edition:
    because the API was missing.
 3. For anything under "Planned", leave a short note in the port instead of
    a workaround.
-4. Remember the packaging caveat: CE builds go to the CE package repository.
+4. Remember the packaging caveat: Renga builds go to the Renga package repository.

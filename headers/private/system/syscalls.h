@@ -84,18 +84,18 @@ extern status_t		_kern_event_queue_select(int queue,
 extern ssize_t		_kern_event_queue_wait(int queue, struct event_wait_info* infos,
 						int numInfos, uint32 flags, bigtime_t timeout);
 
-/* eventfd (Haiku Community Edition; user API in libgnu) */
+/* eventfd (Renga; user API in libgnu) */
 extern int			_kern_eventfd(uint32 initialValue, int openFlags,
 						bool semaphore);
 
-/* timerfd (Haiku Community Edition; user API in libgnu) */
+/* timerfd (Renga; user API in libgnu) */
 extern int			_kern_timerfd_create(clockid_t clock, int openFlags);
 extern status_t		_kern_timerfd_settime(int fd, bool absolute,
 						const struct itimerspec* newValue,
 						struct itimerspec* oldValue);
 extern status_t		_kern_timerfd_gettime(int fd, struct itimerspec* value);
 
-/* POSIX message queues (Haiku Community Edition) */
+/* POSIX message queues (Renga) */
 extern int			_kern_mqueue_open(const char* name, int openFlags,
 						mode_t mode, const struct mq_attr* attr);
 extern status_t		_kern_mqueue_unlink(const char* name);
@@ -111,7 +111,7 @@ extern status_t		_kern_mqueue_notify(int fd, const struct sigevent* event,
 						const struct thread_creation_attributes*
 							threadAttributes);
 
-/* System V shared memory (Haiku Community Edition) */
+/* System V shared memory (Renga) */
 extern int			_kern_xsi_shmget(key_t key, size_t size, int flags);
 extern status_t		_kern_xsi_shmat(int id, const void* address, int flags,
 						void** _address);

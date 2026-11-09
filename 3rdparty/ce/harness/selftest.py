@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright 2026, Haiku Community Edition contributors.
+# Copyright 2026, Renga contributors.
 # Distributed under the terms of the MIT License.
 #
 """Self-test for ce-test.py's result analysis.
