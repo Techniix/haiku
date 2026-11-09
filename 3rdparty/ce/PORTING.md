@@ -21,7 +21,7 @@ updates this file in the same commit.
 | `memfd_create()` | `<sys/mman.h>` | `-lgnu` | Missing | Available |
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
 | `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback) |
-| `epoll` | `<sys/epoll.h>` | | Missing | Planned |
+| `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify` | `<sys/inotify.h>` | | Missing | Planned |
 | `signalfd` | `<sys/signalfd.h>` | | Missing | Planned |
 | System V shared memory (`shmget`, ...) | `<sys/shm.h>` | libroot (nothing extra) | Missing | Available |
@@ -74,6 +74,70 @@ if HaikuPorts has a newer version. Bump the Techniix package when HaikuPorts
 updates, or drop it from the repository once upstream has what it needed.
 
 ## Feature details
+
+### epoll
+
+`epoll_create()`, `epoll_create1()`, `epoll_ctl()`, `epoll_wait()`,
+`epoll_pwait()` and `epoll_pwait2()`, with Linux's names, values and
+`struct epoll_event` layout (packed on x86_64, as on Linux), so event loops
+written for Linux (libuv and with it Node.js and Electron, libevent,
+Chromium's `base/message_loop`, Wine, nginx-style servers) can use their
+epoll backend instead of a `poll()` fallback.
+
+- Works with everything that works with `poll()`: sockets (TCP, UDP,
+  UNIX), pipes and FIFOs, `eventfd`, `timerfd`, message queues, terminals,
+  and other epoll descriptors (nesting). Regular files and directories are
+  refused with `EPERM`, as on Linux.
+- Level-triggered (default), `EPOLLET` and `EPOLLONESHOT` (re-armed with
+  `EPOLL_CTL_MOD`) behave as on Linux. Level-triggered descriptors that
+  stay ready are reported round-robin when `maxevents` is smaller than the
+  ready set. Every report reflects the descriptor's state at the time of
+  the call, not an earlier notification.
+- Events: `EPOLLIN`, `EPOLLOUT`, `EPOLLPRI`, `EPOLLRDNORM`, `EPOLLRDBAND`,
+  `EPOLLWRNORM`, `EPOLLWRBAND`; `EPOLLERR` and `EPOLLHUP` always. `data` is
+  returned exactly as given (`ptr`, `fd`, `u32`, `u64`).
+- Registrations belong to the open file description, as on Linux: they
+  survive `close()` while a `dup()`ed or inherited descriptor keeps it
+  open, and go away with the last one. An epoll descriptor is inherited
+  by `fork()` and shared: parent and child see the same registrations.
+  `EPOLL_CLOEXEC` and `EPOLL_CLOFORK` (Haiku extension) are supported.
+- The epoll descriptor itself is readable to `poll()`/`select()`/another
+  epoll exactly when `epoll_wait()` would return something. Loops and
+  nesting deeper than Linux allows fail with `ELOOP`.
+- Timeouts: -1 waits forever, 0 does not wait, otherwise milliseconds
+  (`epoll_pwait2()`: a `timespec`, rounded up to microseconds). A signal
+  handler interrupts the wait with `EINTR`, even with `SA_RESTART`, as on
+  Linux. `epoll_pwait()` swaps the signal mask atomically like `ppoll()`.
+- Error codes follow epoll_ctl(2)/epoll_wait(2): `EBADF`, `EINVAL`
+  (not an epoll fd, fd is the epoll fd, bad op, `maxevents` <= 0),
+  `EEXIST`, `ENOENT`, `EPERM`, `ELOOP`, `EFAULT`. Unknown event bits are
+  ignored, as on Linux.
+- **Differences from Linux:**
+  - `EPOLLEXCLUSIVE` is accepted on `EPOLL_CTL_ADD` (with Linux's
+    restrictions: not with `EPOLLONESHOT`, not on `MOD`, not for epoll
+    descriptors) and has no effect: every waiting instance is woken.
+    Correct, only less efficient for many processes accepting on one
+    socket.
+  - `EPOLLWAKEUP` is accepted and ignored; `EPOLLMSG` is never reported.
+  - `EPOLLRDHUP` is reported together with `EPOLLHUP` when the descriptor
+    reports a disconnect. A peer's half-close (`shutdown(SHUT_WR)`) shows
+    only as `EPOLLIN` with `read()` returning 0.
+  - Closing the epoll descriptor while another thread waits on it wakes
+    that thread with `EBADF` (Linux keeps it waiting).
+  - One call returns at most 1024 events (the rest come with the next).
+- Cost: every reported descriptor is re-checked when it is reported (as
+  Linux re-polls it); 100 waits over 500 ready eventfds took about 0.5 to
+  1 s under QEMU TCG, i.e. about 10-20 µs per reported event there.
+
+Implementation: `src/system/kernel/events/epoll.cpp` (the design comment
+there explains why it is built on the select hooks and select_sync like
+Haiku's event_queue rather than on the event_queue itself). Pipes now
+notify `select()`ors of every write, which edge-triggered epoll needs;
+`ppoll()`/`pselect()` restore the caller's signal mask correctly after a
+handler (an upstream bug, fixed with this work).
+
+Since: the commit that added `src/system/kernel/events/epoll.cpp`.
+Tests: `3rdparty/ce/tests/posix_compat/epoll_test.cpp` (84 checks).
 
 ### eventfd
 
@@ -336,7 +400,7 @@ If a port needs one of these, note it rather than writing a Haiku-specific
 workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
-- `epoll` (on top of the kernel's event queue), then `inotify`.
+- `inotify` (on top of node monitoring).
 - `signalfd`.
 - File sealing for `memfd_create()`; `TFD_TIMER_CANCEL_ON_SET`.
 - Linux driver support through LinuxKPI, and Linux binary compatibility

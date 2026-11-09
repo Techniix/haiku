@@ -5,6 +5,12 @@ SubDir HAIKU_TOP 3rdparty ce tests posix_compat ;
 
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
 
+# epoll; uses eventfd and timerfd as event sources.
+Application epoll_test :
+	epoll_test.cpp
+	: libgnu.so network
+;
+
 Application eventfd_test :
 	eventfd_test.cpp
 	: libgnu.so
@@ -61,6 +67,6 @@ Application timerfd_test :
 ;
 
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test libc_ext_test memfd_test
+	AddFilesToHaikuImage system non-packaged bin ce-tests : epoll_test eventfd_test libc_ext_test memfd_test
 		mqueue_test shm_test tcp_close_test tcp_info_test tcp_keepalive_test timerfd_test ucontext_test ;
 }

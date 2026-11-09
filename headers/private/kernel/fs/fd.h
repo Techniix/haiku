@@ -64,6 +64,9 @@ struct file_descriptor {
 	void	*cookie;
 	int32	open_mode;
 	off_t	pos;
+	void	*epoll_items;
+		// Renga: epoll registrations watching this open file description
+		// (struct EpollItem list, see kernel/events/epoll.cpp)
 };
 
 

@@ -23,6 +23,7 @@
 #include <debug.h>
 #include <disk_device_manager/ddm_userland_interface.h>
 #include <elf.h>
+#include <epoll.h>
 #include <event_queue.h>
 #include <eventfd.h>
 #include <timerfd.h>

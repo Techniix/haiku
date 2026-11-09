@@ -59,6 +59,7 @@ KernelMergeObject kernel_core.o :
 	# events
 	wait_for_objects.cpp
 	Notifications.cpp
+	epoll.cpp
 	event_queue.cpp
 	eventfd.cpp
 	timerfd.cpp

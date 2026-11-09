@@ -23,6 +23,7 @@ extern "C" {
 
 struct attr_info;
 struct dirent;
+struct epoll_event;
 struct event_wait_info;
 struct fd_info;
 struct fd_set;
@@ -83,6 +84,15 @@ extern status_t		_kern_event_queue_select(int queue,
 						struct event_wait_info* userInfos, int numInfos);
 extern ssize_t		_kern_event_queue_wait(int queue, struct event_wait_info* infos,
 						int numInfos, uint32 flags, bigtime_t timeout);
+
+/* epoll (Renga; user API in libgnu). The timeout is relative, in
+   microseconds; negative waits forever. */
+extern int			_kern_epoll_create(int openFlags);
+extern status_t		_kern_epoll_ctl(int epfd, int op, int fd,
+						const struct epoll_event* event);
+extern ssize_t		_kern_epoll_wait(int epfd, struct epoll_event* events,
+						int maxEvents, bigtime_t timeout,
+						const sigset_t* sigMask);
 
 /* eventfd (Renga; user API in libgnu) */
 extern int			_kern_eventfd(uint32 initialValue, int openFlags,

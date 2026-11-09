@@ -1064,6 +1064,9 @@ void _kern_dup() {}
 void _kern_dup2() {}
 void _kern_entry_ref_to_path() {}
 void _kern_estimate_max_scheduling_latency() {}
+void _kern_epoll_create() {}
+void _kern_epoll_ctl() {}
+void _kern_epoll_wait() {}
 void _kern_event_queue_create() {}
 void _kern_event_queue_select() {}
 void _kern_event_queue_wait() {}

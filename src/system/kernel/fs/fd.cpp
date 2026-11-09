@@ -18,6 +18,7 @@
 
 #include <AutoDeleter.h>
 #include <AutoDeleterDrivers.h>
+#include <epoll.h>
 #include <BytePointer.h>
 #include <StackOrHeapArray.h>
 
@@ -87,6 +88,7 @@ alloc_fd(void)
 	descriptor->open_count = 0;
 	descriptor->open_mode = 0;
 	descriptor->pos = -1;
+	descriptor->epoll_items = NULL;
 
 	return descriptor;
 }
@@ -202,6 +204,9 @@ put_fd(struct file_descriptor* descriptor)
 		// be accessed anymore, let's close it (no one is
 		// currently accessing this descriptor)
 
+		// Renga: drop epoll registrations before the object goes away.
+		epoll_descriptor_closed(descriptor);
+
 		if (descriptor->ops->fd_close)
 			descriptor->ops->fd_close(descriptor);
 		if (descriptor->ops->fd_free)
@@ -229,6 +234,11 @@ close_fd(struct io_context* context, struct file_descriptor* descriptor)
 
 	if (atomic_add(&descriptor->open_count, -1) == 1) {
 		vfs_unlock_vnode_if_locked(descriptor);
+
+		// Renga: the last reference to the open file description is gone,
+		// so its epoll registrations go too (as on Linux), before the
+		// object's close hook can tear down its select pools.
+		epoll_descriptor_closed(descriptor);
 
 		if (descriptor->ops != NULL && descriptor->ops->fd_close != NULL)
 			descriptor->ops->fd_close(descriptor);

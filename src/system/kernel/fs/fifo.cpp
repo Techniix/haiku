@@ -748,11 +748,15 @@ Inode::NotifyReadDone()
 void
 Inode::NotifyBytesWritten(bool wasEmpty)
 {
+	// Renga: notify select()ors of every write, not only of the first one
+	// into an empty buffer. poll() does not care, but an edge-triggered
+	// epoll registration is reported once per arrival of new data, as on
+	// Linux (which wakes pipe readers on every write for that reason).
+	if (fBuffer.Readable() > 0 && fReadSelectSyncPool != NULL)
+		notify_select_event_pool(fReadSelectSyncPool, B_SELECT_READ);
+
 	// notify reader, if something can be read now
 	if (wasEmpty && fBuffer.Readable() > 0) {
-		if (fReadSelectSyncPool != NULL)
-			notify_select_event_pool(fReadSelectSyncPool, B_SELECT_READ);
-
 		InterruptsSpinLocker _(fReadRequestsLock);
 		if (ReadRequest* request = fReadRequests.First())
 			request->Notify();
