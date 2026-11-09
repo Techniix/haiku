@@ -96,3 +96,13 @@ silently.
   layout, buffer cycles, frame counters and real-time pacing. The harness
   then checks that every phase is present in the recording, on the right
   channels, without gaps or corruption.
+
+## Revision tags
+
+The build names itself after the nearest upstream `hrev` tag. The
+`CE hrev tag` workflow (`.github/workflows/ce-hrev-tag.yml`) publishes that
+tag automatically on every push to `ce/main`, so a fresh clone of the fork
+builds without setting `HAIKU_REVISION`. Fetch it with `git fetch --tags
+origin`. If ce/main is rebased onto a newer upstream revision, the next push
+publishes the new tag; "Run workflow" on the Actions tab does the same on
+demand.
