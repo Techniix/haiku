@@ -67,7 +67,7 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 - Identity: live-animated Renga boot splash, Renga branding, `renga-raw`/`renga-anyboot`/`renga-vmware` build profiles, Techniix repository preferred over HaikuPorts, Ctrl as the default shortcut key with a switch back to Alt.
 - Upstream bugs found and fixed in the fork (10 written up for later reporting, plus 2 newer ones): see [Section 10.2](#102-upstream-haiku-bugs-found-and-fixed-in-renga).
 
-**What is being developed now?** The small Chromium OS gaps (`F-43` phase A) are next, then periodic NTP sync (`F-30`). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
+**What is being developed now?** The small Chromium OS gaps (`F-43` phase A), then the Media Kit (`F-31`, starting with `virtio_sound` capture). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
 
 **What is blocked?**
 - NVMe multi-namespace (`F-04`) cannot reach Hardware Tested until the maintainer runs it on his real NVMe PC (pending, by his choice).
@@ -441,7 +441,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 3 (audit Tier 1) |
 | Risk | Low |
 | Testing status | 33 `virtio_sound.*` checks + 4 `audio.*` recording checks + `qemu.virtio_sound`, every run; real-time pacing within 0.3% |
-| Next milestone | Capture (agreed work order item 7) |
+| Next milestone | Capture (agreed work order item 5) |
 | Recommended next action | Implement the RX queue with a loopback-style harness check (QEMU input from a WAV file) |
 | Links | PORTING.md "virtio-sound" |
 
@@ -533,7 +533,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 2 (audit Tier 1) |
 | Risk | Low |
 | Testing status | None |
-| Next milestone | Agreed work order item 5 |
+| Next milestone | Agreed work order item 8 |
 | Recommended next action | A conditional launch_daemon job; harness check that skews the guest clock and expects correction (QEMU user networking provides an NTP-reachable path only if configured; verify first) |
 | Links | Audit Tier 1 |
 
@@ -1084,7 +1084,7 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Risk | Low to medium (backup and restore: medium, user data) |
 | Testing status | None. Each item gets a harness check where it can run headless (archive round trips, share mounts against QEMU's built-in SMB server, backup/restore round trips, package-state restore) plus screenshots for the GUIs |
 | Next milestone | Batch 1 (see section 5.1) |
-| Recommended next action | Start batch 1 after periodic NTP sync |
+| Recommended next action | Start batch 1 after periodic NTP sync (work order item 9) |
 | Links | Gap review in the 2026-11-09 conversation; decisions log |
 
 Skipped for now by the maintainer: disk encryption, calendar and CalDAV/CardDAV, night light; later consideration: Mail, DeskCalc, ShowImage and remote desktop updates, a camera app.
@@ -1348,11 +1348,11 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 2. **`epoll`, `inotify`, `signalfd`** (`F-15`): done 2026-11-09 (QEMU Tested).
 3. **Harness quick mode and timing**: done 2026-11-09 (`c36db227`): `--only` partial runs (never a pass), per-program timing, `harness.tests_ran`.
 4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too.
-5. **Periodic NTP sync** (`F-30`).
-6. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
-7. **`virtio_sound` capture** (`F-02`).
-8. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
-9. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+5. **`virtio_sound` capture** (`F-02`). Done first, as step 0 of the Media Kit (its loopback and recording tests need it).
+6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
+7. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+8. **Periodic NTP sync** (`F-30`).
+9. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
 10. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
 11. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
 12. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
@@ -1442,7 +1442,7 @@ Milestone count: 6 of 6 (100%).
 
 | # | Item | Done |
 | --- | --- | --- |
-| 1 | Periodic NTP sync | No (work order item 5) |
+| 1 | Periodic NTP sync | No (work order item 8) |
 | 2 | Finish and ship `virtio_sound` | Yes (playback) `658d1756`, `fbbb290a` |
 | 3 | `virtio_block` DISCARD/WRITE_ZEROES | Yes `5b068a5e` |
 | 4 | NVMe multi-namespace + teardown TODOs | Yes `0758b116` (one TODO remains) |
@@ -1470,7 +1470,7 @@ Milestone count: 8 of 14 (57%).
 | 5 | Partition resize backend + DriveSetup queue | Open |
 | 6 | Visual identity pack | Partial: splash and logos only |
 | 7 | Porting API pack 1 | Done |
-| 8 | Media pack 1 (encoders, per-app volume) | Open (work order item 8) |
+| 8 | Media pack 1 (encoders, per-app volume) | Open (work order item 6) |
 | 9 | Lumina in-tree engine | Open |
 | 10 | Installer wizard | Open |
 
@@ -1828,6 +1828,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Lumina's settings and customization live in the Control Panel, as part of the Appearance tool (modes and personalities, window engine, panel, effects), built with the Interface Kit. No separate Lumina Settings Center (Qt/QML) and no separate "Lumina Mode" preferences app in the end state; the `lumina` command stays for scripting and tests | `F-25`, `F-28` |
 | 2026-11-09 | Bundled applications (`F-44`): add network shares, backup and restore integrated with package states, a document viewer built on existing open-source code, a programmer's editor, archive creation in Expander with Tracker actions, an on-screen keyboard, a search launcher tied to Tracker and Lumina, screen recording in Screenshot, a task manager in ActivityMonitor; low priority: notification history, clipboard history, a passwords app. Skipped for now: disk encryption, calendar, night light | `F-44` |
 | 2026-11-09 | Separate ports for Renga: `Techniix/RengaPorts` (recipes and package repository, packages require `renga`), apart from the Techniix ports for stock Haiku (`haiku-packages`) | `F-45`, `F-13` |
+| 2026-11-09 | Media Kit right after `F-43` phase A (with `virtio_sound` capture as its first step), then LinuxKPI; NTP sync and bundled applications batch 1 move after them | Section 5.1 |
 
 ---
 
