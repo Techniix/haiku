@@ -323,6 +323,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-39 | Networking beyond TCP | Not Started | None |
 | F-40 | Visual identity pack (themes) | Not Started | None |
 | F-41 | Deskbar modernisation | Investigating (requirements set) | None |
+| F-42 | Gamepad support and configurator | Investigating (requirements set) | None |
 
 ---
 
@@ -936,6 +937,24 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 
 **Approach (maintainer's decision, 2026-11-09): a hybrid, "somewhere in the middle".** Deskbar stays the host: its process, its public `BDeskbar` API and its replicant tray are kept, so existing tray add-ons and apps that talk to Deskbar keep working. Its insides are modernised by sharing Lumina's parts instead of duplicating them: liblumina's configuration, rules and profiles, its animation and effects, and Lumina Panel's widgets (search, pinned apps, grouped window list, status items) built as components both can use. Lumina Panel's other layouts (for example modern mode) are separate front ends on the same components. One implementation of each feature, two presentations, the same principle as the shared disk engine for the Installer and partition manager (`F-23`, `F-24`).
 
+#### F-42 Gamepad support and configurator
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Joystick API (`BJoystick`) from BeOS times; `usb_hid` handles generic HID joysticks; no XInput support, no rumble, no standard button layout, no mapping database; the audit lists "Gamepad API with SDL mapping database" (difficulty 5, size M) |
+| Renga maturity | None in-tree. The maintainer has a separate patched `usb_hid` XInput driver for his 8BitDo Ultimate 2C (outside this repo) |
+| Status | **Investigating** (requirements set by the maintainer, 2026-11-09) |
+| Completed | None |
+| Remaining | Full-featured USB gamepad support: XInput and common HID pads, analog sticks and triggers with dead zones, D-pad and hats, rumble, LEDs and player numbers, battery level where reported, hot-plug; a standard gamepad layout so games see the same buttons on every pad; a gamepad configurator app (button mapping, calibration, dead zones, rumble test, per-game profiles; a page in the Control Panel `F-28`); everything SDL needs for full-featured support (SDL's gamepad/joystick backend for Renga, the SDL controller mapping database, rumble, sensors where present, hot-plug events). Build on what Linux has (the `xpad` driver's device table and protocol handling, the evdev gamepad conventions, SDL's mapping format) and on what exists in Haiku and Renga, rather than starting from scratch. The 8BitDo Ultimate 2C must work flawlessly, including its modes (XInput, D-input, Bluetooth via its dongle) |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `usb_hid`; SDL port (HaikuPorts); `F-28` for the configurator page; Bluetooth pads depend on the Bluetooth stack |
+| Difficulty | 5 (audit: gamepad API with mapping database) and more for the full scope |
+| Risk | Medium |
+| Testing status | None. QEMU can attach a USB host device but not an emulated XInput pad; harness tests can use a synthetic USB HID gamepad or replayed reports; the 8BitDo needs the maintainer's hardware |
+| Next milestone | Design: gamepad API, driver plan (merge the maintainer's XInput work), configurator mockup in the Control Panel style |
+| Recommended next action | Start after LinuxKPI integration (`F-26`); bring the maintainer's patched `usb_hid` XInput driver in first |
+| Links | Audit "Gamepad API with SDL mapping database" |
+
 #### F-28 Control Panel suite
 
 | Field | Value |
@@ -1207,8 +1226,10 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 2. **`epoll`, `inotify`, `signalfd`** (`F-15`).
 3. **Periodic NTP sync** (`F-30`).
 4. **`virtio_sound` capture** (`F-02`).
-5. **Media Kit** (`F-31`), then **audio settings redesign** (`F-32`).
-6. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+5. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
+6. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+7. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
+8. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
 
@@ -1664,6 +1685,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Deskbar to be modernised in design and functionality as part of the Lumina work: easy to use and full featured | `F-41` |
 | 2026-11-09 | Deskbar approach: hybrid; keep Deskbar as the host (API, replicants) and build its new features from components shared with Lumina Panel | `F-41` |
 | 2026-11-09 | Audio GUI reworked together with the Media Kit phases, exposing every new feature as it lands | `F-31`, `F-32` |
+| 2026-11-09 | After the Media Kit: LinuxKPI integration for Wi-Fi on real hardware, then full gamepad support with a configurator and complete SDL support (8BitDo Ultimate 2C flawless) | `F-26`, `F-34`, `F-42`; section 5.1 |
 
 ---
 
