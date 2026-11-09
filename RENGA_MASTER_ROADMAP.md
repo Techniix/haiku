@@ -978,6 +978,21 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 
 **Target design (maintainer's choice, 2026-11-09): concept 1, "Sidebar & search"**, from the [desktop and Control Panel concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq). One window with categories in a sidebar and a global search; pages such as Sound (per-app volume, routing, loopback), Keyboard (Ctrl or Alt shortcut key), Software (packages, updates, repositories), Hardware (devices and the LinuxKPI device manager). Lumina's customisation settings get their own pages here.
 
+**Where Lumina's settings go (maintainer's direction, 2026-11-09: Lumina settings live in the Control Panel, as part of Appearance; sorted where they make sense).** Everyday choices sit on the category pages; anything that needs its own editor opens as a configurator window from that page. Every option is reachable from the global search.
+
+| Control Panel category | Page | Lumina settings (from Lumina's personality files) and existing preflets merged in | Configurator windows |
+| --- | --- | --- | --- |
+| Appearance | Style | Personality (Classic, Modern, Minimal, Power user, Stock) with live preview; colours, fonts, scroll bars (today's Appearance preflet); decorator style; Renga themes (`F-40`) | Personality editor: save the current settings as a personality, import or export one |
+| Appearance | Windows | Window engine on or off; snapping (on or off, edge distance, layout: halves, halves and quarters); window animation (on or off, curve, duration; spring stiffness and damping under Advanced; resize mode, frame-rate cap) | Window rules editor (per-application rules); snap layout editor |
+| Appearance | Effects | Quality preset (off, low, medium, high), frame budget; panel glass (blur radius, tint and amount, saturation, refresh rate); window proxies | None |
+| Desktop and taskbar | Deskbar and panels | Deskbar mode (normal, auto-hide, hidden); each panel's edge, thickness, length, alignment, style, reserved space and spacing; Deskbar's own options (today's Deskbar settings) | Panel layout editor: add, remove and reorder applets (launcher, window list, workspaces, clock, tray) by dragging |
+| Desktop and taskbar | Workspaces and desktop | Workspace count and layout (today's Workspaces preflet), desktop background and icons (today's Backgrounds and Tracker desktop settings) | None |
+| Keyboard | Shortcuts | Lumina's window and panel shortcuts next to the system shortcuts (today's Shortcuts preflet) and the Ctrl or Alt shortcut-key choice (`F-18`); the emergency restore chord (Ctrl+Alt+Shift+Backspace) is shown here but cannot be removed | Shortcut editor (today's Shortcuts preflet) |
+| Accessibility | Motion and transparency | "Reduce motion" (turns window animation and snapping motion off) and "Reduce transparency" (turns glass effects off), overriding the personality | None |
+| System | Desktop shell | Lumina on or off at login; "Restore the stock desktop now"; engine status (active, or inactive with the reason); what happens after repeated shell crashes (fall back to stock, notify) | None |
+
+Not settings and therefore not in the Control Panel: the `lumina` command (scripting, tests) and Lumina's developer experiments.
+
 #### F-40 Visual identity pack (themes)
 
 | Field | Value |
