@@ -1,0 +1,105 @@
+# Haiku Community Edition: publish the hrev tag that ce/main is based on.
+#
+# Haiku's build names itself after the nearest reachable upstream tag
+# ("git describe --tags --match=hrev*", see
+# build/scripts/determine_haiku_revision). A fresh clone of this fork has no
+# hrev tags, so the build either fails or needs HAIKU_REVISION set by hand.
+#
+# On every push to ce/main this job:
+#   1. fetches ce/main's commit graph from this repository (commits only,
+#      no trees or file contents: a few seconds of transfer),
+#   2. lists upstream's hrev tags from review.haiku-os.org (the GitHub
+#      mirror haiku/haiku carries no tags; upstream's are lightweight tags
+#      pointing straight at commits),
+#   3. picks the highest-numbered hrev tag whose commit is an ancestor of
+#      the pushed commit, i.e. the tag "git describe" will find,
+#   4. pushes that tag to this repository if it is missing. The commit is
+#      already here (it is part of ce/main), so no objects are transferred.
+#
+# Only the nearest tag is published, not all ~58000: that is all
+# "git describe" needs, and it keeps the fork's tag list readable.
+#
+# It never touches branches, so master stays identical to upstream.
+# Pushes made with GITHUB_TOKEN do not trigger workflows, so the tag push
+# cannot re-run this job. "Run workflow" (workflow_dispatch) re-checks the
+# tip of the branch it is started on.
+
+name: CE hrev tag
+
+on:
+  push:
+    branches: [ce/main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ce-hrev-tag
+  cancel-in-progress: false
+
+jobs:
+  publish-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UPSTREAM: https://review.haiku-os.org/haiku
+    steps:
+      - name: Fetch ce/main commit graph and upstream tag list
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          git init -q work
+          cd work
+          git remote add origin \
+            "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # tree:0 = commits only; finding ancestors needs nothing else.
+          git fetch -q --no-tags --filter=tree:0 origin \
+            "+${GITHUB_SHA}:refs/heads/ce-head"
+          git ls-remote --tags "$UPSTREAM" 'refs/tags/hrev*' > upstream-tags
+          echo "upstream hrev tags: $(wc -l < upstream-tags)"
+          echo "ce/main commits: $(git rev-list --count ce-head)"
+
+      - name: Publish the nearest hrev tag
+        working-directory: work
+        run: |
+          set -eu
+          export LC_ALL=C   # sort and join must agree on ordering
+          # "<sha> <number>" for every numeric hrev tag (peeled lines of
+          # annotated tags, if upstream ever uses them, replace the tag
+          # object id with the commit id).
+          sed -n 's#^\([0-9a-f]*\)\trefs/tags/hrev\([0-9]*\)\(^{}\)\{0,1\}$#\1 \2#p' \
+            upstream-tags | sort -k1,1 > tag-commits
+          git rev-list ce-head | sort > ancestors
+          best=$(join -j1 tag-commits ancestors | sort -k2,2n | tail -n1)
+          if [ -z "$best" ]; then
+            echo "::error::no upstream hrev tag is an ancestor of ${GITHUB_SHA}"
+            exit 1
+          fi
+          commit=${best% *}
+          tag="hrev${best#* }"
+
+          git tag "$tag" "$commit"
+          revision=$(git describe --tags --abbrev=1 --match='hrev[0-9]*' ce-head)
+          echo "ce/main ${GITHUB_SHA} describes as ${revision}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
+              >/dev/null; then
+            echo "${tag} is already published"
+            status="already published"
+          else
+            git push -q origin "refs/tags/${tag}"
+            echo "published ${tag} -> ${commit}"
+            status="published"
+          fi
+
+          {
+            echo "### CE hrev tag"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| commit | \`${GITHUB_SHA}\` |"
+            echo "| revision | \`${revision}\` |"
+            echo "| tag | \`${tag}\` -> \`${commit}\` (${status}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
