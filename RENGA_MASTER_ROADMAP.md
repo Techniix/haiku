@@ -908,8 +908,8 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Renga maturity | External repository at `53f2467`; about 18k lines; never run on Haiku |
 | Status | **In Development** |
 | Completed | Portable core (config, profiles, rules, animation, fx) tested on the host: 43 unit tests, 480+ checks. liblumina, Window Engine (decorator add-on), lumina_server, Panel, CLI, Mode preflet, input filter: compile-verified only. An independent review on 2026-11-07 found 12 issues, all fixed. |
-| Remaining | S1-S8 acceptance checklist (S1 classic mode identical; S2 window list matches Deskbar; S3 snap with spring motion; S4 stock mode ×20 snapshot stable; S5 server crash ×3 restores stock; S6 Safe Mode and emergency chord; S7 wrong-hrev engine inactive; S8 fx experiments complete). Then the audit plan: built-in ShellListener in app_server (6), work-area API (4-5), Deskbar tray protocol in the Panel (5), native Settings Center (3), image integration (2), optional compositor (9). |
-| Known bugs/limitations | Lumina status lists 13 known limitations (e.g. Stack & Tile not notified of engine moves; panel polls once a second). Conflict: Lumina docs still plan a Qt 6/QML Settings Center; the audit recommends dropping it for an Interface Kit one. |
+| Remaining | S1-S8 acceptance checklist (S1 classic mode identical; S2 window list matches Deskbar; S3 snap with spring motion; S4 stock mode ×20 snapshot stable; S5 server crash ×3 restores stock; S6 Safe Mode and emergency chord; S7 wrong-hrev engine inactive; S8 fx experiments complete). Then the audit plan: built-in ShellListener in app_server (6), work-area API (4-5), Deskbar tray protocol in the Panel (5), Lumina settings in the Control Panel's Appearance tool (3, decided 2026-11-09), image integration (2), optional compositor (9). |
+| Known bugs/limitations | Lumina status lists 13 known limitations (e.g. Stack & Tile not notified of engine moves; panel polls once a second). Lumina's docs still plan a separate Qt 6/QML Settings Center; superseded for Renga by the 2026-11-09 decision (Lumina settings and customization live in the Control Panel, in Appearance). |
 | Dependencies | `F-01` key/pointer injection and screenshots (`F-19`) for automation; `F-18` image integration |
 | Difficulty | S1-S8 run 3; ShellListener 6 |
 | Risk | Medium (lock nesting in app_server hooks; private API details) |
@@ -1746,6 +1746,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Chromium: run natively and fully featured; take the fastest route and reuse existing work (FreeBSD patch set + converter, OpenBSD sandbox model, freedesktop portal/D-Bus interfaces, VA-API, Mesa/ANGLE, HaikuPorts QtWebEngine media code) | `F-43` |
 | 2026-11-09 | `F-43` phase A goes right after the harness speed-up, before NTP sync | `F-43`, section 5.1 |
 | 2026-11-09 | Lumina is developed as part of Renga, not as an add-on that must fit around stock Haiku: where it serves the goals better, Lumina's features go into app_server, input_server, Deskbar and the Interface Kit directly, built in-tree with the image, instead of working around them (revision-pinned decorator add-on, private-header builds, effect workarounds). The fallback to the stock look (Lumina S5/S6) stays | `F-25`, `F-41` |
+| 2026-11-09 | Lumina's settings and customization live in the Control Panel, as part of the Appearance tool (modes and personalities, window engine, panel, effects), built with the Interface Kit. No separate Lumina Settings Center (Qt/QML) and no separate "Lumina Mode" preferences app in the end state; the `lumina` command stays for scripting and tests | `F-25`, `F-28` |
 
 ---
 
@@ -1816,4 +1817,4 @@ Open questions (add an answer row to [10.3](#103-decisions-log) when decided):
 4. **Reserved syscall range for fork-only syscalls** (audit risk register). Not yet defined, although several syscalls have been added.
 5. **Rebase cadence.** The audit proposes fortnightly; no rebase done yet.
 6. **Techniix `repo.info` priority.** Lower it so hand-added configurations also prefer Techniix?
-7. **Lumina Settings Center.** The audit recommends an Interface Kit settings window; Lumina's status doc still plans Qt 6/QML (milestone 6).
+7. ~~**Lumina Settings Center.**~~ Resolved 2026-11-09: no separate settings app; Lumina's settings and customization go into the Control Panel, as part of Appearance (decisions log).
