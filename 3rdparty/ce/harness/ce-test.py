@@ -376,12 +376,57 @@ def make_decoy(image, decoy):
 	return True
 
 
-def make_menu_timeout_image(args, image, copy):
-	"""Copies the test image for --boot-menu-timeout and sets
-	"boot_menu_timeout <seconds>" in the copy's kernel settings file, through
-	the build's bfs_shell. The file written is the image's own (the tree's
-	data/settings/kernel/drivers/kernel, which the build copies) plus that
-	line. Returns an error text, or None on success."""
+def installed_tests():
+	"""Names of the test programs harness images carry, in the order the
+	guest runner runs them (it runs /boot/system/non-packaged/bin/ce-tests/*,
+	sorted by the shell's glob): every name listed after "bin ce-tests :" in
+	an AddFilesToHaikuImage rule of the 3rdparty/ce/tests Jamfiles."""
+	names = set()
+	for jamfile in glob.glob(os.path.join(HAIKU_TOP, "3rdparty", "ce",
+			"tests", "*", "Jamfile")):
+		with open(jamfile) as jamFile:
+			text = jamFile.read()
+		for match in re.finditer(r"\bbin\s+ce-tests\s*:\s*([^;]*);", text):
+			names.update(match.group(1).split())
+	return sorted(names)
+
+
+def selected_tests(text, available):
+	"""Parses --only: comma-separated test program names, with or without
+	their "_test" ending ("epoll,vsnd" or "epoll_test,vsnd_test")."""
+	selection = []
+	for word in text.split(","):
+		word = word.strip()
+		if not word:
+			continue
+		name = word if word in available else word + "_test"
+		if name not in available:
+			raise ValueError("unknown test %s (choose from %s)" % (word,
+				", ".join(t.replace("_test", "") for t in available)))
+		if name not in selection:
+			selection.append(name)
+	if not selection:
+		raise ValueError("--only needs at least one test")
+	return selection
+
+
+SELECTION_FILE = "/myfs/system/non-packaged/data/ce-harness/only"
+KERNEL_SETTINGS_FILE = "/myfs/home/config/settings/kernel/drivers/kernel"
+
+
+def make_patched_image(args, image, copy):
+	"""Copies the test image and changes files in the copy through the
+	build's bfs_shell, in one session:
+
+	- --boot-menu-timeout: "boot_menu_timeout <seconds>" in the kernel
+	  settings file. The file written is the image's own (the tree's
+	  data/settings/kernel/drivers/kernel, which the build copies) plus that
+	  line.
+	- --only: the runner's selection file (data/ce-harness/only), one test
+	  program name per line; runner.sh then runs only those.
+
+	Everything else in the image stays as built. Returns an error text, or
+	None on success."""
 	offset = bfs_volume_offset(image)
 	if offset is None:
 		return "no BFS volume in " + image
@@ -390,25 +435,35 @@ def make_menu_timeout_image(args, image, copy):
 	if not shells:
 		return "bfs_shell not built (jam -q '<build>bfs_shell')"
 
-	with open(os.path.join(HAIKU_TOP, "data", "settings", "kernel",
-			"drivers", "kernel")) as original:
-		settings = original.read()
-	settings_path = copy + ".kernel-settings"
-	with open(settings_path, "w") as patched:
-		patched.write(settings.rstrip("\n") + "\n\nboot_menu_timeout %d\n"
-			% args.boot_menu_timeout)
+	files = []	# (host path, image path, text the copy must then contain)
+	if args.boot_menu_timeout:
+		with open(os.path.join(HAIKU_TOP, "data", "settings", "kernel",
+				"drivers", "kernel")) as original:
+			settings = original.read()
+		files.append((copy + ".kernel-settings", KERNEL_SETTINGS_FILE,
+			settings.rstrip("\n") + "\n\nboot_menu_timeout %d\n"
+				% args.boot_menu_timeout,
+			"boot_menu_timeout %d" % args.boot_menu_timeout))
+	if args.only:
+		files.append((copy + ".only", SELECTION_FILE,
+			"\n".join(args.only) + "\n", "\n".join(args.only)))
+
+	commands = ""
+	for host, target, text, expected in files:
+		with open(host, "w") as hostFile:
+			hostFile.write(text)
+		commands += "cp -f :%s %s\ncat %s\n" % (host, target, target)
 
 	shutil.copyfile(image, copy)
-	target = "/myfs/home/config/settings/kernel/drivers/kernel"
 	result = subprocess.run([shells[0], "--start-offset", str(offset), copy],
-		input=("cp -f :%s %s\ncat %s\nsync\nquit\n" % (settings_path, target,
-			target)).encode(), stdout=subprocess.PIPE,
+		input=(commands + "sync\nquit\n").encode(), stdout=subprocess.PIPE,
 		stderr=subprocess.STDOUT, timeout=120)
-	os.remove(settings_path)
 	output = result.stdout.decode("utf-8", "replace")
-	if result.returncode != 0 \
-			or "boot_menu_timeout %d" % args.boot_menu_timeout not in output:
-		return "bfs_shell could not update the settings: " + output[-300:]
+	for host, target, text, expected in files:
+		os.remove(host)
+		if result.returncode != 0 or expected not in output:
+			return "bfs_shell could not write %s: %s" % (target,
+				output[-300:])
 	return None
 
 
@@ -813,9 +868,9 @@ def boot(args, results_dir, report):
 			os.unlink(path)
 
 	patched = None
-	if args.boot_menu_timeout:
-		patched = os.path.join(results_dir, "menu-timeout.img")
-		error = make_menu_timeout_image(args, image, patched)
+	if args.boot_menu_timeout or args.only:
+		patched = os.path.join(results_dir, "patched.img")
+		error = make_patched_image(args, image, patched)
 		if error is not None:
 			report["boot"] = {"status": "image-setup-failed", "image": image,
 				"error": error}
@@ -1038,6 +1093,56 @@ def parse_serial(results_dir, report):
 			"pass": len(errors) == 0,
 			"detail": "%d error line(s)%s" % (len(errors),
 				": " + errors[0].strip() if errors else "")})
+
+	# Which test programs ran, and for how long: runner.sh prints
+	# "CE-INFO running <name>" and "CE-INFO <name> exited with <status>";
+	# the host time comes from the time-stamped copy of the serial log.
+	timing = []
+	timed = {}
+	try:
+		with open(serial_log.replace(".log", ".timed.log"), "rb") as timedFile:
+			timed_text = timedFile.read().decode("latin-1")
+	except OSError:
+		timed_text = ""
+	for line in timed_text.splitlines():
+		match = re.match(r"^\[\s*([0-9.]+)\] (CE-INFO|CE-HARNESS) (.*)$",
+			line.rstrip("\r"))
+		if not match:
+			continue
+		stamp, kind, rest = float(match.group(1)), match.group(2), \
+			match.group(3)
+		if kind == "CE-HARNESS" and rest.startswith("START"):
+			timed["runner_start"] = stamp
+		elif kind == "CE-HARNESS" and rest.startswith("END"):
+			timed["runner_end"] = stamp
+		elif rest.startswith("running "):
+			timing.append({"test": rest.split()[1], "start": stamp})
+		else:
+			exited = re.match(r"^(\S+) exited with (-?\d+)", rest)
+			if exited and timing and timing[-1]["test"] == exited.group(1):
+				timing[-1]["seconds"] = round(stamp - timing[-1]["start"], 1)
+				timing[-1]["status"] = int(exited.group(2))
+	report["timing"] = {"tests": timing,
+		"boot_to_runner": timed.get("runner_start"),
+		"runner_seconds": round(timed["runner_end"] - timed["runner_start"], 1)
+			if "runner_start" in timed and "runner_end" in timed else None}
+
+	# Every test program that should have run did, to the end: all of them
+	# in a full run, the --only selection in a partial one. A program that
+	# is missing from the image or never returns would otherwise only show
+	# as fewer checks.
+	expected = report.get("selected_tests") or report.get("installed_tests")
+	if expected:
+		finished = [t["test"] for t in timing if "seconds" in t]
+		missing = [name for name in expected if name not in finished]
+		extra = [name for name in finished if name not in expected]
+		tests.append({"name": "harness.tests_ran",
+			"pass": not missing and not extra,
+			"detail": "%d of %d test programs ran to the end%s%s" % (
+				len(expected) - len(missing), len(expected),
+				"; missing: " + ", ".join(missing) if missing else "",
+				"; not selected but ran: " + ", ".join(extra)
+					if extra else "")})
 
 	report["tests"] = tests
 	report["suites"] = suites
@@ -1515,15 +1620,30 @@ def write_report(results_dir, report):
 		"checks": len(checks),
 		"failed": len(failed),
 	}
+	# A run with --only is never a pass: it did not run everything, so it
+	# cannot stand in for a full run (default, --smp 2, UEFI) before a
+	# commit. Its verdict says PARTIAL; ce-test.py exits with 2.
+	partial = bool(report.get("selected_tests"))
+	report["verdict"]["partial"] = partial
+	if partial:
+		report["verdict"]["selection_passed"] = report["verdict"]["pass"]
+		report["verdict"]["pass"] = False
 
 	with open(os.path.join(results_dir, "results.json"), "w") as jsonFile:
 		json.dump(report, jsonFile, indent=2, default=str)
 
 	lines = ["# Renga test run %s" % report["started"], ""]
 	verdict = report["verdict"]
-	lines.append("**Verdict: %s** (%d checks, %d failed)" % (
-		"PASS" if verdict["pass"] else "FAIL", verdict["checks"],
-		verdict["failed"]))
+	if verdict["partial"]:
+		lines.append("**Verdict: PARTIAL, %s** (%d checks, %d failed). Only "
+			"%s ran (--only); this run does not count as a test pass." % (
+			"selection passed" if verdict["selection_passed"]
+				else "selection FAILED", verdict["checks"], verdict["failed"],
+			", ".join(report["selected_tests"])))
+	else:
+		lines.append("**Verdict: %s** (%d checks, %d failed)" % (
+			"PASS" if verdict["pass"] else "FAIL", verdict["checks"],
+			verdict["failed"]))
 	lines.append("")
 	lines.append("Image `%s`, %s firmware, booted as %s." % (
 		report.get("profile"), report.get("firmware"),
@@ -1564,6 +1684,21 @@ def write_report(results_dir, report):
 		if boot.get("kdl_log"):
 			lines.append("- full kernel debugger session: %s"
 				% boot["kdl_log"])
+		lines.append("")
+
+	timing = report.get("timing")
+	if timing and timing.get("tests"):
+		lines.append("## Timing")
+		lines.append("- boot to runner start: %ss; runner: %ss" % (
+			timing.get("boot_to_runner"), timing.get("runner_seconds")))
+		lines.append("")
+		lines.append("| Test program | Seconds | Exit status |")
+		lines.append("| --- | --- | --- |")
+		for entry in sorted(timing["tests"],
+				key=lambda e: -e.get("seconds", 1e9)):
+			lines.append("| %s | %s | %s |" % (entry["test"],
+				entry.get("seconds", "did not finish"),
+				entry.get("status", "-")))
 		lines.append("")
 
 	if checks:
@@ -1655,6 +1790,14 @@ def main():
 		default="xhci",
 		help="host controller of the USB tablet (default: xhci; VirtualBox "
 			"uses ohci+ehci or xhci)")
+	parser.add_argument("--only", default="", metavar="TESTS",
+		help="quick check while developing: boot a copy of the image that "
+			"runs only these test programs (comma-separated, e.g. "
+			"epoll,signalfd); host-side checks of the other programs are "
+			"skipped. The verdict is PARTIAL and the exit status 2, never a "
+			"pass: commits still need full runs")
+	parser.add_argument("--list-tests", action="store_true",
+		help="list the test programs harness images carry and exit")
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
@@ -1672,6 +1815,15 @@ def main():
 		help="build the drivers under test with their TRACE() output on")
 	args = parser.parse_args()
 	args.output = os.path.abspath(args.output)
+	available = installed_tests()
+	if args.list_tests:
+		print("\n".join(available))
+		return 0
+	try:
+		args.only = selected_tests(args.only, available) if args.only \
+			else []
+	except ValueError as error:
+		parser.error(str(error))
 	if args.two_installs and (args.media == "cdrom"
 			or args.firmware != "uefi"):
 		parser.error("--two-installs tests the EFI boot loader's choice "
@@ -1702,7 +1854,9 @@ def main():
 		"boot_menu_timeout": args.boot_menu_timeout,
 		"pointer_devices": args.pointer_devices,
 		"usb_controller": args.usb_controller,
-		"compile_only": args.compile_only}
+		"compile_only": args.compile_only,
+		"installed_tests": available,
+		"selected_tests": args.only}
 
 	ok = True
 	if not args.no_build:
@@ -1718,11 +1872,14 @@ def main():
 		check_branding(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
 		check_boot_menu(args, results_dir, report)
-		analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
+		if not args.only or "vsnd_test" in args.only:
+			analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)
 	log("results in " + results_dir)
+	if report["verdict"].get("partial"):
+		return 2 if report["verdict"]["selection_passed"] else 1
 	return 0 if passed else 1
 
 

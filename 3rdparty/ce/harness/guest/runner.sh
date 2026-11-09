@@ -33,7 +33,21 @@ fi
 sleep 2
 
 # Every test program installed by 3rdparty/ce/tests runs, one after the other.
+# A copy of the image made by "ce-test.py --only" carries a selection file
+# (one program name per line); then only those run, and the host labels the
+# run PARTIAL. Built images never have the file.
+selection=/boot/system/non-packaged/data/ce-harness/only
+if [ -f "$selection" ]; then
+	echo "CE-INFO selection: $(tr '\n' ' ' < "$selection")"
+fi
 for test in /boot/system/non-packaged/bin/ce-tests/*; do
+	if [ -f "$selection" ]; then
+		wanted=no
+		while read -r name; do
+			[ "$name" = "$(basename "$test")" ] && wanted=yes
+		done < "$selection"
+		[ "$wanted" = yes ] || continue
+	fi
 	if [ -x "$test" ]; then
 		echo "CE-INFO running $(basename "$test")"
 		"$test"

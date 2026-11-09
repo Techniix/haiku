@@ -39,8 +39,31 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --boot-menu-timeout 2   # boot menu countdown
 3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
 3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
+3rdparty/ce/harness/ce-test.py --only epoll,signalfd  # quick, PARTIAL run
+3rdparty/ce/harness/ce-test.py --list-tests     # test programs in the image
 3rdparty/ce/harness/selftest.py                 # check the harness itself
 ```
+
+`--only <tests>` is for quick checks while developing. It boots a copy of
+the image, changed with `bfs_shell` to carry a selection file
+(`system/non-packaged/data/ce-harness/only`); the guest runner then runs only
+the named test programs. Names are those `--list-tests` prints, with or
+without `_test`. The QEMU machine, its devices and the image's other files
+stay exactly as in a full run, so a test behaves the same either way. Host
+checks of programs that did not run (the audio recording of `vsnd_test`, the
+scratch disks of `vblk_test` and `nvme_test`, the pointer devices of
+`pointer_test`) are skipped. The verdict reads **PARTIAL** and the exit
+status is 2 when the selection passed (1 when it failed), never 0: a partial
+run does not count. Before a commit, the full runs are still required
+(default, `--smp 2`, `--firmware uefi`).
+
+Every run, full or partial, checks `harness.tests_ran`: every program that
+should have run (all of them, or the selection) printed its start and exit.
+A program missing from the image, or one that never returns, fails it
+instead of only showing as fewer checks. The **Timing** section of
+`summary.md` lists the seconds from QEMU start to the runner, the runner's
+total, and each program's run time and exit status, slowest first, taken
+from `serial.timed.log`.
 
 `--firmware uefi` and `--media cdrom` switch the image to `minimum-anyboot`
 (only anyboot images have an EFI system partition and a CD boot catalog);
@@ -96,7 +119,7 @@ Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 | `build.log` | Full build output |
 | `audio.wav` | What the guest played on the virtio sound card |
 
-The exit status is 0 only if the build succeeded, the guest ran to the end
+The exit status is 0 only for a full run in which the build succeeded, the guest ran to the end
 without a kernel crash, and every check passed.
 
 ## How a run works
