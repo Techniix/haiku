@@ -406,7 +406,14 @@ reschedule(int32 nextState)
 			useOldThreadMask = !oldThreadMask.IsEmpty();
 			fetchedOldThreadMask = true;
 		}
-		bool oldThreadShouldMigrate = useOldThreadMask && !oldThreadMask.GetBit(thisCPU);
+		// Only a thread that stays runnable can be moved to another CPU. One
+		// that is going to sleep or dying (THREAD_STATE_FREE_ON_RESCHED) must
+		// not be enqueued again just because its CPU mask now excludes this
+		// CPU: that made a sleeping thread runnable, and a dying one tripped
+		// the undertaker's state assertion (seen once another thread's
+		// affinity could be set while it was running here).
+		bool oldThreadShouldMigrate = enqueueOldThread && useOldThreadMask
+			&& !oldThreadMask.GetBit(thisCPU);
 		if (oldThreadShouldMigrate)
 			enqueueOldThread = false;
 
