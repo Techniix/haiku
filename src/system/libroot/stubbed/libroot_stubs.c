@@ -1318,6 +1318,10 @@ void _kern_xsi_msgsnd() {}
 void _kern_xsi_semctl() {}
 void _kern_xsi_semget() {}
 void _kern_xsi_semop() {}
+void _kern_xsi_shmat() {}
+void _kern_xsi_shmctl() {}
+void _kern_xsi_shmdt() {}
+void _kern_xsi_shmget() {}
 void _longjmp() {}
 void _lstat_beos() {}
 void _lstat_current() {}
@@ -2416,6 +2420,10 @@ void sgetspent() {}
 void sgetspent_r() {}
 void shm_open() {}
 void shm_unlink() {}
+void shmat() {}
+void shmctl() {}
+void shmdt() {}
+void shmget() {}
 void sigaltstack() {}
 void siglongjmp() {}
 void signgam() {}

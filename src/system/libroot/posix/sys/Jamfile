@@ -33,6 +33,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			utimes.c
 			wait.cpp
 			xsi_msg_queue.cpp
+			xsi_shm.cpp
 			xsi_sem.cpp
 			;
 	}

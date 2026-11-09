@@ -18,4 +18,11 @@ if $(CE_HARNESS) {
 	SEARCH on $(runner) $(job) = $(guestDir) ;
 	AddFilesToHaikuImage system non-packaged data ce-harness : $(runner) ;
 	AddFilesToHaikuImage system settings launch : $(job) ;
+
+	# Crashing programs are killed instead of waiting for a user to answer
+	# debug_server's alert (see the file for details).
+	local debugSettings = <ce-harness-debug_server>settings ;
+	SEARCH on $(debugSettings) = [ FDirName $(guestDir) debug_server ] ;
+	AddFilesToHaikuImage home config settings system debug_server
+		: $(debugSettings) ;
 }

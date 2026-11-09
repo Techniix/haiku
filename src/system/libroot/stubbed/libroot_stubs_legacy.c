@@ -1284,6 +1284,10 @@ void _kern_xsi_msgsnd() {}
 void _kern_xsi_semctl() {}
 void _kern_xsi_semget() {}
 void _kern_xsi_semop() {}
+void _kern_xsi_shmat() {}
+void _kern_xsi_shmctl() {}
+void _kern_xsi_shmdt() {}
+void _kern_xsi_shmget() {}
 void _kfind_thread_() {}
 void _kget_cpu_state_() {}
 void _kget_thread_stacks_() {}
@@ -2415,6 +2419,10 @@ void sgetspent() {}
 void sgetspent_r() {}
 void shm_open() {}
 void shm_unlink() {}
+void shmat() {}
+void shmctl() {}
+void shmdt() {}
+void shmget() {}
 void sigaltstack() {}
 void siglongjmp() {}
 void signgam() {}

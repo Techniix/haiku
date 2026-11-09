@@ -37,6 +37,7 @@ struct rlimit;
 struct scheduling_analysis;
 struct _sem_t;
 struct sembuf;
+struct shmid_ds;
 union semun;
 struct sigaction;
 struct signal_frame_data;
@@ -109,6 +110,14 @@ extern status_t		_kern_mqueue_getsetattr(int fd,
 extern status_t		_kern_mqueue_notify(int fd, const struct sigevent* event,
 						const struct thread_creation_attributes*
 							threadAttributes);
+
+/* System V shared memory (Haiku Community Edition) */
+extern int			_kern_xsi_shmget(key_t key, size_t size, int flags);
+extern status_t		_kern_xsi_shmat(int id, const void* address, int flags,
+						void** _address);
+extern status_t		_kern_xsi_shmdt(const void* address);
+extern status_t		_kern_xsi_shmctl(int id, int command,
+						struct shmid_ds* buffer);
 
 /* user mutex functions */
 extern status_t		_kern_mutex_lock(int32* mutex, const char* name,

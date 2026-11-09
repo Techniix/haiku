@@ -40,6 +40,7 @@
 #include <port.h>
 #include <posix/mqueue.h>
 #include <posix/realtime_sem.h>
+#include <posix/xsi_shared_memory.h>
 #include <posix/xsi_message_queue.h>
 #include <posix/xsi_semaphore.h>
 #include <real_time_clock.h>

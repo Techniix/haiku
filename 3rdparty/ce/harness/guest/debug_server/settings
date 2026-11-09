@@ -1,0 +1,5 @@
+# Harness images only (CE_HARNESS): kill a crashing program instead of
+# asking the user. There is nobody to answer the "Crashed program" alert in
+# a headless test run, so the default action would hang the whole run.
+# A crashed test shows up as a suite without its "DONE" line.
+default_action kill

@@ -5,6 +5,7 @@ UsePrivateHeaders shared ;
 KernelMergeObject kernel_posix.o :
 	mqueue.cpp
 	realtime_sem.cpp
+	xsi_shared_memory.cpp
 	xsi_message_queue.cpp
 	xsi_semaphore.cpp
 

@@ -24,7 +24,7 @@ updates this file in the same commit.
 | `epoll` | `<sys/epoll.h>` | | Missing | Planned |
 | `inotify` | `<sys/inotify.h>` | | Missing | Planned |
 | `signalfd` | `<sys/signalfd.h>` | | Missing | Planned |
-| System V shared memory (`shmget`, ...) | `<sys/shm.h>` | | Missing | Planned |
+| System V shared memory (`shmget`, ...) | `<sys/shm.h>` | libroot (nothing extra) | Missing | Available |
 | `getrandom()`, `getauxval()`, `copy_file_range()`, `sendmmsg()` | | | Missing | Planned |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -129,6 +129,28 @@ Since: commit `e671e003`. Tests: `memfd_test.cpp`.
 
 Since: commit `06fb0d25`. Tests: `mqueue_test.cpp`.
 
+### System V shared memory
+
+`shmget()`, `shmat()`, `shmdt()`, `shmctl()` (`IPC_STAT`, `IPC_SET`,
+`IPC_RMID`), as specified by POSIX.1-2017, in libroot.
+
+- `shm_nattch` is exact: it counts every process with the segment
+  attached, including children that inherited it by `fork()`, and drops
+  when a process exits or `exec()`s without calling `shmdt()`. PostgreSQL's
+  check for a running server relies on this.
+- Attached segments are shared across `fork()` and dropped on `exec()`.
+  `SHM_RDONLY` attaches are really read-only (writes fault).
+- `IPC_RMID` removes the identifier at once; attached processes keep using
+  the memory, which is freed after the last detach.
+- Memory is allocated lazily: an untouched segment costs nothing.
+- `SHMLBA` is 4096; `SHM_RND` rounds an attach address down to it.
+- Limits: 4096 segments, each up to half of physical memory, all together
+  up to the size of physical memory. Linux-only commands (`IPC_INFO`,
+  `SHM_INFO`, `SHM_LOCK`) fail with `EINVAL`.
+
+Since: see the System V shared memory commit on `ce/main`. Tests:
+`shm_test.cpp`.
+
 ### virtio-sound
 
 Audio output in virtual machines (QEMU `-device virtio-sound-pci`) through
@@ -144,7 +166,6 @@ removed again.
 
 - `epoll` (on top of the kernel's event queue), then `inotify`.
 - `signalfd`.
-- System V shared memory (`<sys/shm.h>`).
 - libc additions: `getrandom()`, `getauxval()`, `backtrace()`,
   `makecontext()`/`swapcontext()`, `sendmmsg()`, `copy_file_range()`,
   `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT`.

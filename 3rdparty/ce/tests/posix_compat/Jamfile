@@ -20,6 +20,11 @@ Application mqueue_test :
 	mqueue_test.cpp
 ;
 
+# System V shared memory lives in libroot too.
+Application shm_test :
+	shm_test.cpp
+;
+
 Application timerfd_test :
 	timerfd_test.cpp
 	: libgnu.so
@@ -27,5 +32,5 @@ Application timerfd_test :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test memfd_test mqueue_test
-		timerfd_test ;
+		shm_test timerfd_test ;
 }
