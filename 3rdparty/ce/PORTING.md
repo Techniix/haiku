@@ -184,7 +184,7 @@ Since: commit `c6cbef2e`. Tests:
   `sendmsg()`/`recvmsg()` with Linux's error and `MSG_WAITFORONE`/timeout
   semantics. Correct, not yet faster than single calls.
 
-Since: see the libc additions commit on `ce/main`. Tests:
+Since: commit `9fef005a`. Tests:
 `libc_ext_test.cpp`.
 
 ### virtio-sound
