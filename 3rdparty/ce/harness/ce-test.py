@@ -63,8 +63,8 @@ VIRTIO_SOUND_PHASES = [
 WATCHED_DRIVERS = ("virtio_sound",)
 
 # Compile-only targets: fast feedback before the image build.
-COMPILE_TARGETS = ["kernel_x86_64", "libgnu.so", "virtio_sound",
-	"vsnd_test", "eventfd_test", "memfd_test", "timerfd_test"]
+COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so", "virtio_sound",
+	"vsnd_test", "eventfd_test", "memfd_test", "mqueue_test", "timerfd_test"]
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
 TRACE_SOURCES = [
@@ -73,6 +73,7 @@ TRACE_SOURCES = [
 
 # Serial console patterns
 KDL_PATTERNS = ("Welcome to Kernel Debugging Land", "kdebug>")
+KDL_MAX_BACKTRACES = 120
 PANIC_PATTERN = re.compile(r"PANIC: (.*)")
 TEST_PATTERN = re.compile(r"^CE-TEST (\S+) (PASS|FAIL) ?(.*)")
 SUITE_PATTERN = re.compile(r"^CE-SUITE (\S+) (START|DONE)(.*)")
@@ -224,7 +225,10 @@ class SerialReader(threading.Thread):
 		self.done = threading.Event()
 		self.kdl = threading.Event()
 		self.finished = threading.Event()
+		self.debug_done = threading.Event()
 		self.last_output = time.time()
+		self.lock = threading.Lock()
+		self.kdl_text = ""	# everything printed since KDL was entered
 
 	def run(self):
 		buffer = b""
@@ -253,20 +257,88 @@ class SerialReader(threading.Thread):
 				text = buffer.decode("latin-1")
 				if "CE-HARNESS END" in text:
 					self.finished.set()
-				if not self.kdl.is_set() and any(p in text
-						for p in KDL_PATTERNS):
+				if self.kdl.is_set():
+					with self.lock:
+						self.kdl_text += chunk.decode("latin-1")
+				elif any(p in text for p in KDL_PATTERNS):
+					with self.lock:
+						self.kdl_text = text
 					self.kdl.set()
-					self._debug_commands()
+					# The session runs in its own thread so that this one
+					# keeps draining the serial port while it waits.
+					threading.Thread(target=self._debug_session,
+						daemon=True).start()
 		self.done.set()
 
-	def _debug_commands(self):
+	def _send(self, command, settle=1.0):
 		try:
-			for command in (b"bt\n", b"threads\n"):
-				time.sleep(1)
-				self.process.stdin.write(command)
-				self.process.stdin.flush()
+			self.process.stdin.write(command.encode() + b"\n")
+			self.process.stdin.flush()
 		except OSError:
-			pass
+			return False
+		time.sleep(settle)
+		return True
+
+	def _debug_session(self):
+		"""Collects what is needed to debug a panic or hang without a
+		second run: the current stack, all threads, the backtrace of every
+		thread that is waiting or running (bounded), and the lock owners."""
+		try:
+			time.sleep(1)
+			self._send("bt", 2)
+			self._send("threads", 4)
+			with self.lock:
+				listing = self.kdl_text
+			ids = []
+			mutexes = []
+			for line in listing.splitlines():
+				fields = line.split()
+				# "0xffff... <id> <state> [<wait type> <object>] ..." rows
+				if len(fields) >= 3 and fields[0].startswith("0x") \
+						and fields[1].isdigit():
+					if fields[2] in ("waiting", "running", "ready"):
+						ids.append(fields[1])
+					if len(fields) >= 5 and fields[3] == "mutex" \
+							and fields[4] not in mutexes:
+						mutexes.append(fields[4])
+			# For a deadlock, the holder of each contended mutex is the key
+			# fact: print it, and backtrace holders the list did not show
+			# (the thread list stops early if a thread is being created).
+			for address in mutexes:
+				self._send("mutex " + address, 0.6)
+			with self.lock:
+				infos = self.kdl_text[len(listing):]
+			for holder in re.findall(r"holder:\s+(\d+)", infos):
+				if holder not in ids and holder != "-1":
+					ids.insert(0, holder)
+			if ids:
+				# Threads created after the list broke off: probe the next
+				# ids, cheap and often where the culprit is.
+				highest = max(int(i) for i in ids)
+				ids += [str(i) for i in range(highest + 1, highest + 25)]
+			for thread_id in ids[:KDL_MAX_BACKTRACES]:
+				if not self._send("bt " + thread_id, 0.4):
+					break
+			self._send("running", 2)
+		finally:
+			self.debug_done.set()
+
+
+def monitor_command(path, command):
+	"""Sends one command to the QEMU human monitor socket."""
+	import socket
+	try:
+		with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+			sock.settimeout(5)
+			sock.connect(path)
+			time.sleep(0.3)
+			sock.recv(4096)		# banner
+			sock.sendall(command.encode() + b"\n")
+			time.sleep(0.5)
+		return True
+	except OSError as error:
+		log("monitor command failed: %s" % error)
+		return False
 
 
 def boot(args, results_dir, report):
@@ -277,6 +349,10 @@ def boot(args, results_dir, report):
 
 	serial_log = os.path.join(results_dir, "serial.log")
 	audio = os.path.join(results_dir, "audio.wav")
+	# Unix socket paths are limited to ~107 bytes; keep it short.
+	monitor_path = "/tmp/ce-monitor-%d.sock" % os.getpid()
+	if os.path.exists(monitor_path):
+		os.unlink(monitor_path)
 
 	qemu = [
 		"qemu-system-x86_64",
@@ -285,7 +361,8 @@ def boot(args, results_dir, report):
 		"-display", "none",
 		"-vga", "std",
 		"-serial", "stdio",
-		"-monitor", "none",
+		# A monitor socket lets the harness press keys when the guest stalls.
+		"-monitor", "unix:%s,server=on,wait=off" % monitor_path,
 		"-no-reboot",
 		"-snapshot",
 		"-drive", "file=%s,format=raw,if=ide" % image,
@@ -313,12 +390,33 @@ def boot(args, results_dir, report):
 	reader.start()
 
 	status = "exited"
+	stalled_at = None
 	while process.poll() is None:
 		time.sleep(1)
 		elapsed = time.time() - started
 		if reader.kdl.is_set():
-			time.sleep(6)	# let the backtrace commands finish
-			status = "kernel-debugger"
+			reader.debug_done.wait(timeout=KDL_MAX_BACKTRACES * 0.5 + 30)
+			time.sleep(2)
+			status = "stall-kernel-debugger" if stalled_at else \
+				"kernel-debugger"
+			break
+		silent = time.time() - reader.last_output
+		if stalled_at is None and silent > args.stall \
+				and not reader.finished.is_set():
+			# No serial output for a long time: press Alt+SysRq+D, Haiku's
+			# emergency key for the kernel debugger, so that the session
+			# above records where every thread is stuck.
+			stalled_at = elapsed
+			log("no serial output for %.0fs: entering the kernel debugger"
+				% silent)
+			report["boot"]["stall_after_seconds"] = round(elapsed - silent, 1)
+			if not monitor_command(monitor_path, "sendkey alt-sysrq-d"):
+				status = "stall"
+				break
+		if stalled_at is not None and not reader.kdl.is_set() \
+				and elapsed - stalled_at > 30:
+			log("the kernel debugger did not respond (interrupts off?)")
+			status = "stall"
 			break
 		if elapsed > args.timeout:
 			status = "timeout"
@@ -337,6 +435,14 @@ def boot(args, results_dir, report):
 	reader.done.wait(timeout=10)
 
 	qemu_stderr.close()
+	if reader.kdl.is_set():
+		# The whole debugger session (every backtrace); summary.md only
+		# shows the start of it.
+		with open(os.path.join(results_dir, "kdl.log"), "w") as kdlFile:
+			kdlFile.write(reader.kdl_text.replace("\r", ""))
+		report["boot"]["kdl_log"] = "kdl.log"
+	if os.path.exists(monitor_path):
+		os.unlink(monitor_path)
 	report["boot"]["status"] = status
 	report["boot"]["seconds"] = round(time.time() - started, 1)
 	report["boot"]["runner_finished"] = reader.finished.is_set()
@@ -610,6 +716,12 @@ def write_report(results_dir, report):
 		lines.append("- %s after %ss, runner finished: %s" % (
 			boot.get("status"), boot.get("seconds"),
 			boot.get("runner_finished")))
+		if "stall_after_seconds" in boot:
+			lines.append("- serial output stopped at %ss; the harness pressed "
+				"Alt+SysRq+D" % boot["stall_after_seconds"])
+		if boot.get("kdl_log"):
+			lines.append("- full kernel debugger session: %s"
+				% boot["kdl_log"])
 		lines.append("")
 
 	if checks:
@@ -674,6 +786,9 @@ def main():
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
+	parser.add_argument("--stall", type=int, default=90,
+		help="seconds without serial output before the harness enters the "
+			"kernel debugger to record backtraces")
 	parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
 	parser.add_argument("--verbose", action="store_true",
 		help="build the drivers under test with their TRACE() output on")

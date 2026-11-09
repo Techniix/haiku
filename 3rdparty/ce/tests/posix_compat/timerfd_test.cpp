@@ -391,21 +391,26 @@ static void
 test_stress()
 {
 	// Closing armed fast periodic timers exercises the teardown path
-	// (cancel_timer + DPC cancel) while the hook is firing.
+	// (cancel_timer + DPCQueue::Cancel) while the timer's DPC may be
+	// running. That path once panicked (DPCQueue::Cancel used an
+	// uninitialized condition variable); the harness hit it about once in
+	// 30 boots with 300 iterations, so this runs many more, with a 100 us
+	// period and varied delays to land closes inside the DPC.
+	const int kIterations = 2000;
 	bigtime_t start = system_time();
 	int created = 0;
-	for (int i = 0; i < 300; i++) {
+	for (int i = 0; i < kIterations; i++) {
 		int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
 		if (fd < 0)
 			break;
 		created++;
-		set_relative(fd, 500, 500);
-		if ((i % 3) == 0)
-			snooze(1000);
+		set_relative(fd, 100, 100);
+		snooze(50 + (i % 7) * 40);
 		close(fd);
 	}
-	report("stress_close_armed", created == 300, "%d timers in %lld us",
-		created, (long long)(system_time() - start));
+	report("stress_close_armed", created == kIterations,
+		"%d timers in %lld us", created,
+		(long long)(system_time() - start));
 
 	// Re-arming a fast timer over and over must never leave stale
 	// expirations from the previous setting behind.
