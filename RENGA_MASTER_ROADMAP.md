@@ -321,6 +321,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-38 | Multi-monitor and HiDPI | Not Started | None |
 | F-39 | Networking beyond TCP | Not Started | None |
 | F-40 | Visual identity pack (themes) | Not Started | None |
+| F-41 | Deskbar modernisation | Investigating (requirements set) | None |
 
 ---
 
@@ -913,6 +914,24 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Links | [docs/status.md](https://github.com/Techniix/Lumina_HaikuOS/blob/main/docs/status.md), [tools/vm/README.md](https://github.com/Techniix/Lumina_HaikuOS/blob/main/tools/vm/README.md); audit section 5 |
 
 **Target default desktop (maintainer's choice, 2026-11-09): concept A, "Haiku Evolved"**, from the [desktop and Control Panel concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq) ("pretty close"). Stock Haiku refined: gold tabbed window titles, a Deskbar whose menu has search, light leaf accents in the Renga palette; this is Lumina's classic mode as the default look. On top of it, the advanced features and customisation that Lumina brings (modern mode with edge snapping, rules and profiles, effects, mode switching) stay available as options rather than the default. The mockup is a reference for the look, not a pixel specification.
+
+#### F-41 Deskbar modernisation
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Deskbar A (stable, fast; dated design; launcher menu without search; replicant tray; window list per team) |
+| Renga maturity | Branding only ("About Renga" menu item, `22bf89ca`) |
+| Status | **Investigating** (requirements set by the maintainer, 2026-11-09; design to follow) |
+| Completed | None |
+| Remaining | Modernise both the design and the functionality as part of the Lumina work, in the look of desktop concept A; easy to use and full featured (maintainer). Proposed feature set, to be confirmed in the design step: search in the main menu (apps, settings, files, recent items); pinned apps; window list grouped per app with keyboard navigation (and window previews once the optional compositor exists, `F-33`); modern status area (network and Wi-Fi, sound with per-app volume from `F-31`/`F-32`, battery, notifications, clock with calendar); workspace switcher; power and session menu; positions and auto-hide; per-monitor Deskbars with `F-38`; drag and drop to pinned apps; settings in the Control Panel (`F-28`); existing replicants keep working |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-25` (Lumina: panel, rules, modes), `F-28` (settings pages); optional `F-33` (previews), `F-38` (multi-monitor), `F-31`/`F-32` (per-app sound) |
+| Difficulty | Not rated yet |
+| Risk | Medium (central UI; must stay as fast and reliable as today's Deskbar) |
+| Testing status | None |
+| Next milestone | Design: feature list and mockups in the concept A style, decide whether it evolves Deskbar's code or becomes Lumina Panel's "classic" layout |
+| Recommended next action | Do the design step together with the Lumina phase (after S1-S8) |
+| Links | [Concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq) (concept A shows the starting point) |
 
 #### F-28 Control Panel suite
 
@@ -1629,6 +1648,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Media Kit scope: six phases (mixing/routing, devices incl. UVC, capture APIs, codecs/streaming, hardware video later, audio settings) | `F-31` |
 | 2026-11-09 | Installer requirements incl. migration, dual boot, OS detection, EFI entries, validation, previews, rollback; installer and partition manager share one disk engine | `F-23`, `F-24` |
 | 2026-11-09 | Target design: desktop concept A "Haiku Evolved" (Lumina classic as the default look, Lumina's advanced features as options) and Control Panel concept 1 "Sidebar & search" | `F-25`, `F-28`; [concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq) |
+| 2026-11-09 | Deskbar to be modernised in design and functionality as part of the Lumina work: easy to use and full featured | `F-41` |
 
 ---
 
