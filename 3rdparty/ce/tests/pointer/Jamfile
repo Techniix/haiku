@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP 3rdparty ce tests pointer ;
+
+# Absolute pointing devices (VM mouse integration): the USB and virtio
+# tablets the harness attaches, moved by the host through QMP.
+UsePrivateHeaders input ;
+
+Application pointer_test :
+	pointer_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : pointer_test ;
+}

@@ -373,6 +373,33 @@ expect("identity: priority after the list (another CE- line) is ignored",
 	and ce_test.repository_priorities("CE-INFO pkgman list-repos:\r\n"
 		"        Techniix\r\nCE-INFO x\r\n\t\tpriority:  1\r\n") == {})
 
+# Pointer devices: every attached device must have been tested in the guest
+# and every pointer request carried out; an image without a desktop skips.
+def pointer_checks(tests, requests, serial=""):
+	directory = tempfile.mkdtemp()
+	with open(os.path.join(directory, "serial.log"), "w") as log:
+		log.write(serial)
+	args = type("Args", (), {"pointer_devices": ["usb", "virtio"]})()
+	report = {"suites": {"pointer": ["START", "DONE failures=0"]},
+		"tests": [{"name": n, "pass": True, "detail": ""} for n in tests],
+		"boot": {"host_requests": requests}}
+	ce_test.check_pointer_devices(args, directory, report)
+	return {c["name"]: c["pass"] for c in report.get("host_checks", [])}
+
+pointerOk = {"request": "pointer usb 0 0", "accepted": True, "error": None}
+both = ["pointer.usb.pos.top_left", "pointer.virtio.pos.top_left"]
+expect("pointer: both devices tested passes", all(pointer_checks(both,
+	[pointerOk]).values()) and len(pointer_checks(both, [pointerOk])) == 3)
+expect("pointer: an attached device the guest did not test fails",
+	not pointer_checks(both[:1], [pointerOk])["host.pointer_virtio_tested"])
+expect("pointer: a request QEMU did not carry out fails",
+	not pointer_checks(both, [pointerOk, {"request": "pointer usb 1 1",
+		"accepted": True, "error": "no mouse"}])["host.pointer_requests"])
+expect("pointer: no requests at all fails",
+	not pointer_checks(both, [])["host.pointer_requests"])
+expect("pointer: no desktop skips the checks",
+	pointer_checks([], [], "CE-INFO pointer: no desktop (x), skipped\n") == {})
+
 for words, allowed in [
 		(["sendkey", "ctrl-v"], True),
 		(["sendkey", "ctrl-shift-v"], True),
@@ -384,6 +411,19 @@ for words, allowed in [
 		(["sendkey", "ctrl-ctrl-v"], False),
 		(["sendkey", "ctrl-v", "extra"], False),
 		(["sendkey", "ctrl-v;quit"], False),
+		(["pointer", "usb", "0", "32767"], True),
+		(["pointer", "virtio", "16384", "100"], True),
+		(["pointer", "usb", "32768", "0"], False),
+		(["pointer", "usb", "-1", "0"], False),
+		(["pointer", "ps2", "0", "0"], False),
+		(["pointer", "usb", "0"], False),
+		(["pointer", "usb", "0", "0;quit"], False),
+		(["pointer_rel", "40", "-30"], True),
+		(["pointer_rel", "201", "0"], False),
+		(["pointer_rel", "0x10", "0"], False),
+		(["screenshot", "pointer_usb"], True),
+		(["screenshot", "../evil"], False),
+		(["screenshot", "a;quit"], False),
 		(["quit"], False),
 		(["block_resize", "vblk0", "128M"], True),
 		(["block_resize", "hda", "128M"], False)]:

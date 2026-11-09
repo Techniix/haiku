@@ -70,7 +70,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
 	"virtio_block", "vblk_test", "nvme_disk", "nvme_test",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",
-	"input_server", "Terminal", "Keymap"]
+	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
+	"virtio_input", "<input>tablet", "<input>virtio"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -103,6 +104,28 @@ NVME_NAMESPACES = [
 	("nvme_ns1", 1, 48 * 1024 * 1024, 512, 0xa1),
 	("nvme_ns2", 2, 80 * 1024 * 1024, 4096, 0xb2),
 ]
+
+# Absolute pointing devices --pointer-devices can attach next to QEMU's PS/2
+# mouse, for the pointer suite: the QEMU options, and the name QEMU's
+# "info mice" lists the device under (the harness selects it by that name
+# with "mouse_set" before it sends a position). All of them take absolute
+# positions 0..32767 (INPUT_EVENT_ABS_MAX) on both axes.
+POINTER_DEVICES = {
+	# What QEMU, VirtualBox and VMware call a USB tablet: a HID mouse
+	# collection with absolute X/Y, on the controller --usb-controller picks.
+	"usb": (["-device", "usb-tablet,bus=ptrusb.0"], "QEMU HID Tablet"),
+	# virtio-input with EV_ABS axes.
+	"virtio": (["-device", "virtio-tablet-pci"], "QEMU Virtio Tablet"),
+}
+# --usb-controller: the QEMU device of the USB tablet's host controller.
+USB_CONTROLLERS = {
+	"xhci": "qemu-xhci",
+	"ehci": "usb-ehci",
+	"uhci": "piix3-usb-uhci",
+	"ohci": "pci-ohci",
+}
+POINTER_ABS_MAX = 32767
+POINTER_REL_MAX = 200
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
 TRACE_SOURCES = [
@@ -479,11 +502,13 @@ class SerialReader(threading.Thread):
 	syslog tail, then lets the main thread stop the VM.
 	"""
 
-	def __init__(self, process, log_path, monitor_path=None):
+	def __init__(self, process, log_path, monitor_path=None, qmp_path=None):
 		threading.Thread.__init__(self, daemon=True)
 		self.process = process
 		self.log_path = log_path
 		self.monitor_path = monitor_path
+		self.qmp_path = qmp_path
+		self.screenshots = []	# saved on request, as PPM
 		self.line = b""		# incomplete last line, for CE-HOST requests
 		self.host_requests = []
 		self.done = threading.Event()
@@ -549,6 +574,19 @@ class SerialReader(threading.Thread):
 		      at most two of ctrl, alt and shift, then a letter, a digit,
 		      ret, tab or esc (no sysrq, so no kernel debugger, and no
 		      delete, so no Team monitor)
+		  CE-HOST pointer <device> <x> <y>
+		      put the pointer of an absolute device the harness attached
+		      (POINTER_DEVICES: usb, virtio) at x, y in its coordinates,
+		      0..32767 on both axes
+		  CE-HOST pointer_rel <dx> <dy>
+		      move the PS/2 mouse by dx, dy (at most 200 either way)
+		  CE-HOST screenshot <name>
+		      save the screen as screen-<name>.png in the results (name:
+		      up to 40 lower-case letters, digits and underscores)
+
+		Pointer and screenshot requests are carried out before the next
+		line is read, so they happen in order and before anything the test
+		prints after them.
 		"""
 		self.line += chunk
 		lines = self.line.split(b"\n")
@@ -559,13 +597,24 @@ class SerialReader(threading.Thread):
 				continue
 			words = line.split()[1:]
 			accepted = host_request_allowed(words)
-			if accepted and self.monitor_path is not None:
+			request = {"request": " ".join(words), "accepted": accepted}
+			if accepted and words[0] in ("pointer", "pointer_rel"):
+				if self.qmp_path is not None:
+					request["error"] = qmp_pointer(self.qmp_path, words)
+			elif accepted and words[0] == "screenshot":
+				path = os.path.join(os.path.dirname(self.log_path),
+					"screen-%s.ppm" % words[1])
+				if self.monitor_path is not None \
+						and monitor_command(self.monitor_path,
+							"screendump " + path):
+					self.screenshots.append(path)
+			elif accepted and self.monitor_path is not None:
 				threading.Thread(target=monitor_command, daemon=True,
 					args=(self.monitor_path, " ".join(words))).start()
-			self.host_requests.append({"request": " ".join(words),
-				"accepted": accepted})
-			log("guest request %s: %s" % ("carried out" if accepted
-				else "refused", " ".join(words)))
+			self.host_requests.append(request)
+			log("guest request %s: %s%s" % ("carried out" if accepted
+				else "refused", " ".join(words), ": " + request["error"]
+				if request.get("error") else ""))
 
 	def _send(self, command, settle=1.0):
 		try:
@@ -632,7 +681,84 @@ def host_request_allowed(words):
 			r"(?:[a-z0-9]|ret|tab|esc)", words[1]) is not None \
 			and len(set(words[1].split("-")[:-1])) \
 				== len(words[1].split("-")[:-1])
+	if len(words) == 4 and words[0] == "pointer":
+		return words[1] in POINTER_DEVICES \
+			and all(re.fullmatch(r"\d{1,5}", w) is not None
+				and int(w) <= POINTER_ABS_MAX for w in words[2:])
+	if len(words) == 2 and words[0] == "screenshot":
+		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None
+	if len(words) == 3 and words[0] == "pointer_rel":
+		return all(re.fullmatch(r"-?\d{1,3}", w) is not None
+			and abs(int(w)) <= POINTER_REL_MAX for w in words[1:])
 	return False
+
+
+def qmp_pointer(path, words):
+	"""Carries out an accepted pointer request (see
+	SerialReader._host_requests) through QEMU's QMP socket. Returns None,
+	or what went wrong.
+
+	Absolute events go to the active absolute mouse handler, so "pointer"
+	first makes the device active with HMP's "mouse_set" (by the index
+	"info mice" gives it); relative events go to the first handler that
+	takes them, the PS/2 mouse (the tablets take none).
+	"""
+	import socket
+	try:
+		with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+			sock.settimeout(5)
+			sock.connect(path)
+			stream = sock.makefile("rw")
+			stream.readline()		# greeting
+
+			def execute(command, **arguments):
+				message = {"execute": command}
+				if arguments:
+					message["arguments"] = arguments
+				stream.write(json.dumps(message) + "\n")
+				stream.flush()
+				while True:
+					answer = json.loads(stream.readline())
+					if "event" not in answer:
+						break
+				if "error" in answer:
+					raise RuntimeError("%s: %s" % (command,
+						answer["error"].get("desc")))
+				return answer.get("return")
+
+			def hmp(command):
+				output = execute("human-monitor-command",
+					**{"command-line": command})
+				if output.startswith("Error") or "not a mouse" in output:
+					raise RuntimeError("%s: %s" % (command, output.strip()))
+				return output
+
+			execute("qmp_capabilities")
+			if words[0] == "pointer":
+				name = POINTER_DEVICES[words[1]][1]
+				index = None
+				for line in hmp("info mice").splitlines():
+					match = re.match(r"\W*Mouse #(\d+): (.*?)( \(absolute\))?$",
+						line.strip())
+					if match and match.group(2) == name:
+						index = match.group(1)
+				if index is None:
+					return "no mouse \"%s\" in info mice" % name
+				hmp("mouse_set " + index)
+				execute("input-send-event", events=[
+					{"type": "abs", "data": {"axis": "x",
+						"value": int(words[2])}},
+					{"type": "abs", "data": {"axis": "y",
+						"value": int(words[3])}}])
+			else:
+				execute("input-send-event", events=[
+					{"type": "rel", "data": {"axis": "x",
+						"value": int(words[1])}},
+					{"type": "rel", "data": {"axis": "y",
+						"value": int(words[2])}}])
+		return None
+	except (OSError, ValueError, RuntimeError) as error:
+		return str(error)
 
 
 def monitor_command(path, command):
@@ -681,8 +807,10 @@ def boot(args, results_dir, report):
 	audio = os.path.join(results_dir, "audio.wav")
 	# Unix socket paths are limited to ~107 bytes; keep it short.
 	monitor_path = "/tmp/ce-monitor-%d.sock" % os.getpid()
-	if os.path.exists(monitor_path):
-		os.unlink(monitor_path)
+	qmp_path = "/tmp/ce-qmp-%d.sock" % os.getpid()
+	for path in (monitor_path, qmp_path):
+		if os.path.exists(path):
+			os.unlink(path)
 
 	patched = None
 	if args.boot_menu_timeout:
@@ -711,6 +839,8 @@ def boot(args, results_dir, report):
 		"-serial", "stdio",
 		# A monitor socket lets the harness press keys when the guest stalls.
 		"-monitor", "unix:%s,server=on,wait=off" % monitor_path,
+		# QMP sends the pointer positions the pointer suite asks for.
+		"-qmp", "unix:%s,server=on,wait=off" % qmp_path,
 		"-no-reboot",
 		"-snapshot",
 	] + boot_drive(args, image, decoy) + [
@@ -731,6 +861,10 @@ def boot(args, results_dir, report):
 				"discard=unmap" % (path, name),
 			"-device", "virtio-blk-pci,drive=%s,%s" % (name, properties),
 		]
+	if "usb" in args.pointer_devices:
+		qemu += ["-device", "%s,id=ptrusb" % USB_CONTROLLERS[args.usb_controller]]
+	for device in args.pointer_devices:
+		qemu += POINTER_DEVICES[device][0]
 	if NVME_NAMESPACES:
 		qemu += ["-device", "nvme,id=nvme0,serial=renga0"]
 	for name, nsid, size, block_size, _ in NVME_NAMESPACES:
@@ -772,7 +906,7 @@ def boot(args, results_dir, report):
 	qemu_stderr = open(os.path.join(results_dir, "qemu.stderr.log"), "wb")
 	process = subprocess.Popen(qemu, stdin=subprocess.PIPE,
 		stdout=subprocess.PIPE, stderr=qemu_stderr)
-	reader = SerialReader(process, serial_log, monitor_path)
+	reader = SerialReader(process, serial_log, monitor_path, qmp_path)
 	reader.start()
 
 	status = "exited"
@@ -832,15 +966,17 @@ def boot(args, results_dir, report):
 		# Full copies of the image, only needed while the guest runs.
 		if copy is not None:
 			os.remove(copy)
-	report["boot"]["screenshots"] = convert_screenshots(shots)
+	report["boot"]["screenshots"] = convert_screenshots(shots
+		+ reader.screenshots)
 	if reader.kdl.is_set():
 		# The whole debugger session (every backtrace); summary.md only
 		# shows the start of it.
 		with open(os.path.join(results_dir, "kdl.log"), "w") as kdlFile:
 			kdlFile.write(reader.kdl_text.replace("\r", ""))
 		report["boot"]["kdl_log"] = "kdl.log"
-	if os.path.exists(monitor_path):
-		os.unlink(monitor_path)
+	for path in (monitor_path, qmp_path):
+		if os.path.exists(path):
+			os.unlink(path)
 	report["boot"]["status"] = status
 	report["boot"]["seconds"] = round(time.time() - started, 1)
 	report["boot"]["runner_finished"] = reader.finished.is_set()
@@ -1118,6 +1254,42 @@ def check_branding(args, results_dir, report):
 			and "haiku" not in volume_id.lower(),
 		"detail": "volume ID %s (want renga-<version>-<arch>)" % (
 			'"%s"' % volume_id if volume_id is not None else "not readable")})
+
+
+def check_pointer_devices(args, results_dir, report):
+	"""Host-side half of the pointer suite: every absolute device the
+	harness attached was found and tested in the guest, unless the image
+	has no desktop to test with, and QEMU took every pointer request."""
+	checks = report.setdefault("host_checks", [])
+	if not args.pointer_devices or "pointer" not in report.get("suites", {}):
+		return
+	try:
+		with open(os.path.join(results_dir, "serial.log"), "rb") as serial:
+			text = serial.read().decode("latin-1")
+	except OSError:
+		text = ""
+	if "CE-INFO pointer: no desktop" in text:
+		return
+	names = [t["name"] for t in report.get("tests", [])]
+	for device in args.pointer_devices:
+		positions = [n for n in names
+			if n.startswith("pointer.%s.pos." % device)]
+		checks.append({
+			"name": "host.pointer_%s_tested" % device,
+			"pass": len(positions) > 0,
+			"detail": "%d positions checked in the guest for the attached "
+				"%s" % (len(positions), POINTER_DEVICES[device][1]),
+		})
+	requests = [r for r in report.get("boot", {}).get("host_requests", [])
+		if r["request"].split()[0] in ("pointer", "pointer_rel")]
+	failed = [r for r in requests if not r["accepted"] or r.get("error")]
+	checks.append({
+		"name": "host.pointer_requests",
+		"pass": len(requests) > 0 and not failed,
+		"detail": "%d of %d carried out%s" % (len(requests) - len(failed),
+			len(requests), "; first problem: %s (%s)" % (failed[0]["request"],
+				failed[0].get("error", "refused")) if failed else ""),
+	})
 
 
 def check_scratch_disks(results_dir, report):
@@ -1473,6 +1645,16 @@ def main():
 		metavar="SECONDS",
 		help="boot a copy of the image with boot_menu_timeout SECONDS in its "
 			"kernel settings and check the boot loader's countdown")
+	parser.add_argument("--pointer-devices", default="usb,virtio",
+		type=lambda text: [t for t in text.split(",")
+			if t.strip() and t != "none"],
+		help="comma-separated absolute pointing devices to attach for the "
+			"pointer suite: %s, or none (default: usb,virtio)"
+			% ", ".join(sorted(POINTER_DEVICES)))
+	parser.add_argument("--usb-controller", choices=sorted(USB_CONTROLLERS),
+		default="xhci",
+		help="host controller of the USB tablet (default: xhci; VirtualBox "
+			"uses ohci+ehci or xhci)")
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
@@ -1494,6 +1676,10 @@ def main():
 			or args.firmware != "uefi"):
 		parser.error("--two-installs tests the EFI boot loader's choice "
 			"between hard disks; it needs --firmware uefi and --media disk")
+	for device in args.pointer_devices:
+		if device not in POINTER_DEVICES:
+			parser.error("unknown pointer device %s (choose from %s)"
+				% (device, ", ".join(sorted(POINTER_DEVICES))))
 	if args.profile is None:
 		args.profile = "minimum-anyboot" \
 			if args.firmware == "uefi" or args.media == "cdrom" \
@@ -1514,6 +1700,8 @@ def main():
 		"media": args.media, "disk_bus": args.disk_bus,
 		"two_installs": args.two_installs,
 		"boot_menu_timeout": args.boot_menu_timeout,
+		"pointer_devices": args.pointer_devices,
+		"usb_controller": args.usb_controller,
 		"compile_only": args.compile_only}
 
 	ok = True
@@ -1524,6 +1712,7 @@ def main():
 		parse_serial(results_dir, report)
 		parse_qemu_log(results_dir, report)
 		check_scratch_disks(results_dir, report)
+		check_pointer_devices(args, results_dir, report)
 		check_nvme_namespaces(results_dir, report)
 		check_image_identity(args, results_dir, report)
 		check_branding(args, results_dir, report)

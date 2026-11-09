@@ -37,6 +37,8 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --media cdrom    # anyboot as a CD (El Torito)
 3rdparty/ce/harness/ce-test.py --firmware uefi --two-installs   # pick the right disk
 3rdparty/ce/harness/ce-test.py --boot-menu-timeout 2   # boot menu countdown
+3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
+3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
 3rdparty/ce/harness/selftest.py                 # check the harness itself
 ```
 
@@ -66,6 +68,15 @@ countdown ("boot menu: ..." lines) on the serial console; the `boot.menu`
 check wants the configured start, one line per second and the timeout, after
 about the configured time. Every other run checks that no boot menu appears.
 Works with either firmware.
+
+Every run attaches two absolute pointing devices next to QEMU's PS/2 mouse
+for the `pointer` suite: a USB tablet (`usb-tablet`, on a `qemu-xhci`
+controller unless `--usb-controller ehci|uhci|ohci` picks another) and a
+virtio tablet (`virtio-tablet-pci`). `--pointer-devices usb`, `virtio` or
+`none` attaches fewer. The USB tablet was also checked on `ehci`, `uhci`
+and `ohci`. For each attached device, `host.pointer_<device>_tested`
+fails if the guest did not test it, and `host.pointer_requests` fails if QEMU
+did not carry out a pointer request.
 
 Every run also checks the branding: `branding.boot_loader` wants "Welcome to
 the Renga boot loader!" on the serial console, and for anyboot images
@@ -258,6 +269,45 @@ digit, ret, tab or esc; never sysrq or delete). Ctrl+V must paste into a
 BTextView and Alt+V must not; in Terminal, Ctrl+C must interrupt a `sleep`
 (a trap records SIGINT) and Ctrl+Shift+V must paste a line the shell reads.
 
+## Mouse integration in virtual machines
+
+With an absolute pointing device the pointer moves into and out of the VM
+window freely, is never captured, and lands exactly on the host pointer.
+Renga handles these:
+
+| Hypervisor | Setting |
+| --- | --- |
+| QEMU | `-device qemu-xhci -device usb-tablet` (or `-usb -device usb-tablet`), or `-device virtio-tablet-pci` |
+| VirtualBox | Settings > System > Pointing Device: *USB Tablet*, with a USB controller enabled (Settings > USB); the same driver path as QEMU's USB tablet, but not tested in VirtualBox here |
+| VMware | a USB controller and its virtual USB mouse (`mouse.vusb.enable = "TRUE"` in the .vmx), which is absolute unless `mouse.vusb.absDisabled = "TRUE"`; not tested here, its HID descriptor may differ from QEMU's |
+
+Not supported: VMware's vmmouse backdoor (QEMU `-device vmmouse`) and
+VirtualBox's PS/2 mouse integration, which needs the guest additions'
+VMMDev driver.
+
+The USB tablet goes through `usb_hid`'s `TabletProtocolHandler` and
+input_server's `tablet` add-on, the virtio tablet through the
+`virtio_input` driver and the `virtio` add-on. Both hand input_server
+positions from 0 to 1; input_server spreads them over all W pixels of the
+screen (0..1 times W, rounded, the last pixel for 1). Hypervisors send pixel
+px as px * 32767 / W, so that lands on px again; scaling to W - 1, as before,
+put the pointer one pixel left of the host pointer on the right half of the
+screen and one above it on the lower half. The virtio add-on takes the axis
+ranges from the device's configuration instead of assuming 0..32767.
+
+The `pointer` suite tests it: for each attached device it prints
+`CE-HOST pointer <device> <x> <y>` with the device coordinates QEMU's display
+sends for a pixel, and the harness sends them through QMP
+(`mouse_set` to make the device the active one, then `input-send-event`).
+The pointer (`get_mouse()`) has to land exactly on that pixel, for the
+corners, the center and points between, and for device coordinates 0 and
+32767. A PS/2 move afterwards (`CE-HOST pointer_rel <dx> <dy>`) has to start
+from where the tablet left the pointer. After a switch to 800x600 (BIOS
+images; the UEFI framebuffer has one mode) the corners are checked again.
+`CE-HOST screenshot <name>` saves `screen-<name>.png`; the suite saves one
+per device with the pointer at 12.5 %, 87.5 % of the screen. Without a
+desktop the suite prints an INFO line and reports nothing.
+
 ## Current suites
 
 - **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
@@ -274,6 +324,7 @@ BTextView and Alt+V must not; in Terminal, Ctrl+C must interrupt a `sleep`
   1 and 2, the preferred one with the older version. `pkgman install -R`,
   answered "no", has to plan the package from the repository with priority
   1. Nothing is installed; the test removes what it made.
+- **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **posix_compat**: eventfd, timerfd, memfd, POSIX message queues, System V
   shared memory, the libc additions, user contexts, and TCP (keepalive,
   `TCP_INFO`, orderly and abortive close).
