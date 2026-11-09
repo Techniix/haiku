@@ -205,7 +205,7 @@ need their own small assembly file).
   NULL `uc_link` the process exits with status 0 (glibc's behaviour).
 - `<sys/ucontext.h>` exists for code that includes it.
 
-Since: see the user contexts commit on `ce/main`. Tests:
+Since: commit `e3e8cb3b`. Tests:
 `ucontext_test.cpp`.
 
 ### virtio-sound
