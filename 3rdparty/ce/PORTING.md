@@ -68,15 +68,16 @@ ones. Typical checks: `check_symbol_exists(eventfd "sys/eventfd.h" ...)`,
 
 **Packaging caveat.** A binary that uses any of these will not load on stock
 Haiku, because the symbols are missing there. Packages built against Renga
-belong in the Renga package repository
-([Techniix/haiku-packages](https://github.com/Techniix/haiku-packages)),
-not in a repository meant for stock Haiku. If one source tree has to serve
+belong in the Renga package repository,
+[Techniix/RengaPorts](https://github.com/Techniix/RengaPorts) (recipes and
+packages), not in [Techniix/haiku-packages](https://github.com/Techniix/haiku-packages)
+or any other repository meant for stock Haiku. If one source tree has to serve
 both, keep the fallback path and choose at build time.
 
-On Renga images the Techniix repository has a better priority than
+On Renga images the Renga repository has a better priority than
 HaikuPorts, so a package published there under the same name as a
 HaikuPorts package replaces the HaikuPorts one on install and update, even
-if HaikuPorts has a newer version. Bump the Techniix package when HaikuPorts
+if HaikuPorts has a newer version. Bump the Renga package when HaikuPorts
 updates, or drop it from the repository once upstream has what it needed.
 
 ## Feature details
@@ -721,10 +722,13 @@ removed again.
 When helping port software to Haiku and the target is Renga:
 
 1. Read this file from `ce/main` first; it is the source of truth for what
-   exists.
+   exists. For the porting workflow (Haiku or Renga port, native
+   integration, building, testing, packaging), read the briefing in
+   RengaPorts:
+   [docs/PORTING-TO-RENGA.md](https://github.com/Techniix/RengaPorts/blob/main/docs/PORTING-TO-RENGA.md).
 2. Prefer the native API listed here over Haiku-specific fallbacks in the
    upstream project, and remove `__HAIKU__` special cases that only exist
    because the API was missing.
 3. For anything under "Planned", leave a short note in the port instead of
    a workaround.
-4. Remember the packaging caveat: Renga builds go to the Renga package repository.
+4. Remember the packaging caveat: Renga builds go to RengaPorts.
