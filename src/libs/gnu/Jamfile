@@ -16,12 +16,16 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 		}
 
 		SharedLibrary [ MultiArchDefaultGristFiles libgnu.so ] :
+			copy_file_range.cpp
 			crypt.cpp
 			eventfd.cpp
+			execinfo.cpp
+			getauxval.cpp
+			getrandom.cpp
 			memfd.cpp
-			timerfd.cpp
 			sched_affinity.cpp
 			sched_getcpu.cpp
+			timerfd.cpp
 			xattr.cpp
 			;
 	}

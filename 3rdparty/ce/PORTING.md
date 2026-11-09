@@ -25,7 +25,13 @@ updates this file in the same commit.
 | `inotify` | `<sys/inotify.h>` | | Missing | Planned |
 | `signalfd` | `<sys/signalfd.h>` | | Missing | Planned |
 | System V shared memory (`shmget`, ...) | `<sys/shm.h>` | libroot (nothing extra) | Missing | Available |
-| `getrandom()`, `getauxval()`, `copy_file_range()`, `sendmmsg()` | | | Missing | Planned |
+| `getrandom()` | `<sys/random.h>` | `-lgnu` | Missing (`getentropy()` only) | Available |
+| `getauxval()` | `<sys/auxv.h>` | `-lgnu` | Missing | Available |
+| `backtrace()`, `backtrace_symbols()`, `backtrace_symbols_fd()` | `<execinfo.h>` | `-lgnu` | Missing | Available |
+| `copy_file_range()` | `<unistd.h>` | `-lgnu` | Missing | Available |
+| `sendmmsg()`, `recvmmsg()` | `<sys/socket.h>` | libnetwork (nothing extra) | Missing | Available |
+| `makecontext()`/`swapcontext()` | `<ucontext.h>` | | Missing | Planned |
+| `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT` | `<netinet/tcp.h>` | | Missing (no TCP keepalive at all) | Planned |
 
 All descriptors below are real file descriptors: they work with `select()`,
 `poll()` and `wait_for_objects()`, are inherited by `fork()`, and honour
@@ -151,6 +157,36 @@ Since: commit `06fb0d25`. Tests: `mqueue_test.cpp`.
 Since: commit `c6cbef2e`. Tests:
 `shm_test.cpp`.
 
+### libc additions
+
+- `getrandom()`: the kernel generator `getentropy()` uses, without its
+  256-byte limit (up to 32 MiB per call, as Linux). Haiku's generator is
+  seeded before any program runs, so it never blocks and the `GRND_*`
+  flags change nothing.
+- `getauxval()`: Haiku has no auxiliary vector, so the values are derived
+  from the process and program image: `AT_PHDR`/`AT_PHENT`/`AT_PHNUM`/
+  `AT_ENTRY` (from the program's ELF header), `AT_BASE` (runtime loader),
+  `AT_PAGESZ`, `AT_HWCAP` (x86: CPUID 1 EDX, as Linux), `AT_HWCAP2` (0),
+  `AT_RANDOM` (16 bytes per process), `AT_EXECFN`, `AT_PLATFORM`,
+  `AT_CLKTCK`, `AT_UID`/`AT_EUID`/`AT_GID`/`AT_EGID`, `AT_SECURE`,
+  `AT_MINSIGSTKSZ`. Others (including `AT_SYSINFO_EHDR`: no vDSO) return 0
+  with `ENOENT`, as glibc does.
+- `backtrace()` and friends: frames come from the unwind tables, so code
+  built without frame pointers works. A frame is only named after a
+  function it lies inside (dynamic symbol and its size); frames in static
+  functions print as `image(+0xoffset)`, resolvable with `addr2line`,
+  instead of the misleading nearest-symbol names glibc can print.
+  `backtrace_symbols_fd()` does not allocate (usable in crash handlers).
+- `copy_file_range()`: user-space copy through a buffer; works across file
+  systems; `EINVAL` for flags, non-regular files and overlapping ranges in
+  one file, `EBADF` for an `O_APPEND` output.
+- `sendmmsg()`/`recvmmsg()`: in libnetwork, as loops over
+  `sendmsg()`/`recvmsg()` with Linux's error and `MSG_WAITFORONE`/timeout
+  semantics. Correct, not yet faster than single calls.
+
+Since: see the libc additions commit on `ce/main`. Tests:
+`libc_ext_test.cpp`.
+
 ### virtio-sound
 
 Audio output in virtual machines (QEMU `-device virtio-sound-pci`) through
@@ -166,9 +202,9 @@ removed again.
 
 - `epoll` (on top of the kernel's event queue), then `inotify`.
 - `signalfd`.
-- libc additions: `getrandom()`, `getauxval()`, `backtrace()`,
-  `makecontext()`/`swapcontext()`, `sendmmsg()`, `copy_file_range()`,
-  `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT`.
+- `makecontext()`/`swapcontext()` (`<ucontext.h>`).
+- TCP keepalive (`SO_KEEPALIVE` probes and `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/
+  `TCP_KEEPCNT`): Haiku's TCP does not send keepalive probes at all yet.
 - File sealing for `memfd_create()`; `TFD_TIMER_CANCEL_ON_SET`.
 - Linux driver support through LinuxKPI, and Linux binary compatibility
   through Renguin: both build on the APIs above.

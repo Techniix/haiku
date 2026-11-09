@@ -2,6 +2,8 @@ SubDir HAIKU_TOP src system libnetwork ;
 
 UsePrivateHeaders libroot net shared ;
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility bsd ] : true ;
+# For the Linux socket extensions (struct mmsghdr) implemented in mmsg.cpp.
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
 
 local architectureObject ;
 for architectureObject in [ MultiArchSubDirSetup ] {
@@ -15,6 +17,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			init.cpp
 			interfaces.cpp
 			getifaddrs.cpp
+			mmsg.cpp
 			socket.cpp
 			r5_compatibility.cpp
 			:
