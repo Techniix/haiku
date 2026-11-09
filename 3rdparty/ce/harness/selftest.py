@@ -145,5 +145,47 @@ expect("host requests: only safe ones accepted",
 	[r["accepted"] for r in reader.host_requests] == [True, False, False, False],
 	str(reader.host_requests))
 
+# NVMe namespaces: a backing file with exactly the expected content passes;
+# data that belongs to the other namespace, or a missing write, fails.
+def nvme_check(mutate):
+	directory = tempfile.mkdtemp()
+	size = 8 * 1024 * 1024
+	namespaces = [("nvme_ns2", 2, size, 4096, 0xb2)]
+	content = bytearray(size)
+	for offset, data in ce_test.nvme_expected_layout(2, size, 4096, 0xb2):
+		content[offset:offset + len(data)] = data
+	mutate(content)
+	# Written sparse, like the guest leaves it: only blocks with data.
+	with open(os.path.join(directory, "nvme_ns2.img"), "wb") as image:
+		image.truncate(size)
+		for offset in range(0, size, 4096):
+			block = bytes(content[offset:offset + 4096])
+			if block.count(0) != len(block):
+				image.seek(offset)
+				image.write(block)
+	report = {"suites": {"nvme": ["START", "DONE failures=0"]}}
+	ce_test.check_nvme_namespaces(directory, report, namespaces)
+	return {c["name"]: c for c in report["host_checks"]}
+
+checks = nvme_check(lambda content: None)
+expect("nvme: exact content passes", checks["host.nvme_ns2_content"]["pass"]
+	and checks["host.nvme_ns2_space_returned"]["pass"], str(checks))
+def untrimmed(content):
+	content[1024 * 1024:1536 * 1024] = bytes([0xb2]) * (512 * 1024)
+checks = nvme_check(untrimmed)
+expect("nvme: untrimmed space fails",
+	not checks["host.nvme_ns2_space_returned"]["pass"], str(checks))
+def cross_talk(content):
+	content[1024 * 1024 + 600 * 1024] = 0xa1
+checks = nvme_check(cross_talk)
+expect("nvme: other namespace's data fails",
+	not checks["host.nvme_ns2_content"]["pass"]
+	and "1662976" in checks["host.nvme_ns2_content"]["detail"], str(checks))
+def missing_tail(content):
+	content[-4096:] = bytes(4096)
+checks = nvme_check(missing_tail)
+expect("nvme: missing write fails", not checks["host.nvme_ns2_content"]["pass"],
+	str(checks))
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

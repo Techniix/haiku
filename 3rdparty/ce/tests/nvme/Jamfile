@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP 3rdparty ce tests nvme ;
+
+# Several namespaces on one controller in the nvme_disk driver; needs the
+# NVMe controller and scratch namespaces the harness attaches.
+Application nvme_test :
+	nvme_test.cpp
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : nvme_test ;
+}

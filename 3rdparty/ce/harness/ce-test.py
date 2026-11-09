@@ -60,14 +60,14 @@ VIRTIO_SOUND_PHASES = [
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
-WATCHED_DRIVERS = ("virtio_sound", "virtio_block")
+WATCHED_DRIVERS = ("virtio_sound", "virtio_block", "nvme_disk")
 
 # Compile-only targets: fast feedback before the image build.
 COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"libnetwork.so", "libc_ext_test", "virtio_sound",
 	"vsnd_test", "eventfd_test", "memfd_test", "mqueue_test", "shm_test", "timerfd_test",
 	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
-	"virtio_block", "vblk_test"]
+	"virtio_block", "vblk_test", "nvme_disk", "nvme_test"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -83,6 +83,19 @@ SCRATCH_DISKS = [
 # range, then rewrites 4 KiB; so between 4 and 6 MiB stay allocated. Without
 # working trims all 8 MiB would.
 SCRATCH_ALLOCATED_RANGE = (4 * 1024 * 1024, 6 * 1024 * 1024)
+
+# Scratch namespaces for nvme_test: one NVMe controller with two namespaces
+# of different sizes and logical block sizes, each backed by its own sparse
+# file (attached without -snapshot like the scratch disks above). Entries are
+# the file name, nsid, size, logical block size and the byte nvme_test fills
+# its range with. The guest sees the first namespace as
+# /dev/disk/nvme/<id>/raw and the second as /dev/disk/nvme/<id>/ns2/raw.
+# Each file starts with an MBR (nvme_mbr()) with one partition from 4 to
+# 8 MiB, so the guest also publishes a partition device per namespace.
+NVME_NAMESPACES = [
+	("nvme_ns1", 1, 48 * 1024 * 1024, 512, 0xa1),
+	("nvme_ns2", 2, 80 * 1024 * 1024, 4096, 0xb2),
+]
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
 TRACE_SOURCES = [
@@ -475,6 +488,20 @@ def boot(args, results_dir, report):
 				"discard=unmap" % (path, name),
 			"-device", "virtio-blk-pci,drive=%s,%s" % (name, properties),
 		]
+	if NVME_NAMESPACES:
+		qemu += ["-device", "nvme,id=nvme0,serial=renga0"]
+	for name, nsid, size, block_size, _ in NVME_NAMESPACES:
+		path = os.path.join(results_dir, name + ".img")
+		with open(path, "wb") as scratch:
+			scratch.truncate(size)
+			scratch.write(nvme_mbr(block_size))
+		qemu += [
+			"-drive", "file=%s,if=none,id=%s,format=raw,snapshot=off,"
+				"discard=unmap" % (path, name),
+			"-device", "nvme-ns,drive=%s,bus=nvme0,nsid=%d,"
+				"logical_block_size=%d,physical_block_size=%d"
+				% (name, nsid, block_size, block_size),
+		]
 	if os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.W_OK):
 		qemu += ["-enable-kvm", "-cpu", "host"]
 	if args.firmware == "uefi":
@@ -768,6 +795,94 @@ def check_scratch_disks(results_dir, report):
 		os.remove(path)
 
 
+def nvme_mbr(block_size):
+	"""A master boot record with one partition from 4 to 8 MiB, in units of
+	the namespace's logical block size (which is what an MBR counts in)."""
+	MiB = 1024 * 1024
+	entry = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0x83,
+		b"\xfe\xff\xff", 4 * MiB // block_size, 4 * MiB // block_size)
+	return bytes(446) + entry + bytes(48) + b"\x55\xaa"
+
+
+def nvme_expected_layout(nsid, size, block_size, pattern):
+	"""What a namespace holds after nvme_test: (offset, data) in the order
+	it was written; everything else must be zero. Keep this in step with the
+	layout comment in tests/nvme/nvme_test.cpp."""
+	KiB = 1024
+	MiB = 1024 * KiB
+	fill = lambda length, value: bytes([value]) * length
+	layout = [
+		(0, nvme_mbr(block_size)),				# written by the harness
+		(1 * MiB, fill(1 * MiB, pattern)),		# the pattern ...
+		(size - 4 * KiB, fill(4 * KiB, pattern)),	# ... and the last blocks
+		(4 * MiB, fill(64 * KiB, 0xe5)),		# through the partition ...
+		(8 * MiB - 4 * KiB, fill(4 * KiB, 0xe5)),	# ... start and end
+	]
+	if nsid == 2:
+		layout += [
+			(1 * MiB + 768 * KiB, fill(64 * KiB, 0xc3)),	# cross-talk write
+			(2 * MiB - 4086, fill(100, 0xd4)),			# unaligned write
+		]
+	layout.append((1 * MiB, fill(512 * KiB, 0)))	# trimmed at the end
+	return layout
+
+
+def check_nvme_namespaces(results_dir, report, namespaces=None):
+	"""Host-side half of nvme_test: each namespace's backing file must hold
+	exactly what the guest wrote to that namespace, at the same offsets, and
+	nothing else (a request sent to the wrong namespace shows up as data in
+	the other file, or as missing data in this one); and the trimmed space
+	must have been given back."""
+	if namespaces is None:
+		namespaces = NVME_NAMESPACES
+	checks = report.setdefault("host_checks", [])
+	ran = "nvme" in report.get("suites", {})
+	for name, nsid, size, block_size, pattern in namespaces:
+		path = os.path.join(results_dir, name + ".img")
+		if not os.path.exists(path):
+			continue
+		if not ran:
+			os.remove(path)
+			continue
+		with open(path, "rb") as image:
+			data = image.read()
+		expected = bytearray(size)
+		for offset, content in nvme_expected_layout(nsid, size, block_size,
+				pattern):
+			expected[offset:offset + len(content)] = content
+		problem = None
+		if len(data) != size:
+			problem = "file is %d bytes, want %d" % (len(data), size)
+		elif data != expected:
+			chunk = 4096
+			start = next(i for i in range(0, size, chunk)
+				if data[i:i + chunk] != expected[i:i + chunk])
+			first = next(i for i in range(start, min(size, start + chunk))
+				if data[i] != expected[i])
+			problem = "first difference at %d: 0x%02x, want 0x%02x" % (
+				first, data[first], expected[first])
+		written = size - expected.count(0)
+		checks.append({
+			"name": "host.%s_content" % name,
+			"pass": problem is None,
+			"detail": "%s (nsid %d, %d-byte blocks, %d non-zero bytes "
+				"expected)" % (problem or "exactly what the guest wrote here",
+				nsid, block_size, written),
+		})
+		# 1 MiB + 4 KiB is written, then 512 KiB of it trimmed; the MBR and
+		# the partition writes add 76 KiB.
+		allocated = os.stat(path).st_blocks * 512
+		low, high = 512 * 1024, 1024 * 1024
+		checks.append({
+			"name": "host.%s_space_returned" % name,
+			"pass": low <= allocated < high,
+			"detail": "%.2f MiB allocated after the run (want %.2f to under "
+				"%.2f MiB; more means the trim never reached the file)" % (
+				allocated / 1048576.0, low / 1048576.0, high / 1048576.0),
+		})
+		os.remove(path)
+
+
 def analyze_audio(results_dir, report, phases):
 	"""Splits the recording into 100 ms windows, finds the dominant test tone
 	per channel, groups windows into segments and compares them with the
@@ -1037,6 +1152,7 @@ def main():
 		parse_serial(results_dir, report)
 		parse_qemu_log(results_dir, report)
 		check_scratch_disks(results_dir, report)
+		check_nvme_namespaces(results_dir, report)
 		check_image_identity(args, results_dir, report)
 		analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 

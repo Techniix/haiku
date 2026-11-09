@@ -11,6 +11,7 @@
 #include <stdlib.h>
 
 #include <algorithm>
+#include <new>
 #include <condition_variable.h>
 #include <AutoDeleter.h>
 #include <kernel.h>
@@ -101,26 +102,67 @@ struct RequestOwnerHashDefinition {
 typedef BOpenHashTable<RequestOwnerHashDefinition, false> RequestOwnerHashTable;
 
 
-typedef struct {
-	device_node*			node;
-	pci_info				info;
+struct nvme_disk_driver_info;
 
-	struct nvme_ctrlr*		ctrlr;
+
+/*!	One active namespace of a controller, published as its own disk.
+
+	Everything that depends on the namespace's size and logical block size
+	lives here, and so does what serialises I/O on one disk: the request
+	owners (see nvme_disk_io()) and the rounded-write lock (see do_io()).
+	The queue pairs, the interrupt and the DMA resource belong to the
+	controller and are shared by all of its namespaces; the DMA resource
+	works in B_PAGE_SIZE units, which is a multiple of every block size we
+	accept (see nvme_disk_open_namespaces()).
+*/
+typedef struct {
+	nvme_disk_driver_info*	controller;
 
 	struct nvme_ns*			ns;
+	uint32					nsid;
+	char					path[64];
+		// devfs path published for this namespace, e.g. "disk/nvme/0/raw"
+
 	uint64					capacity;
 	uint32					block_size;
 	uint32					max_io_blocks;
 	status_t				media_status;
 
-	DMAResource				dma_resource;
-	sem_id					dma_buffers_sem;
-
 	RequestOwnerHashTable	request_owners;
 	mutex					request_owners_lock;
 
 	rw_lock					rounded_write_lock;
+} nvme_disk_namespace_info;
 
+
+/*!	One controller. It is brought up in init_driver() and stays up until the
+	device goes away (the node is registered with B_KEEP_DRIVER_LOADED), not
+	in init_device() as it used to be: the namespaces must be known in
+	register_child_devices() to publish one device per namespace, and all
+	those devices share the controller, which libnvme only lets us open
+	once, so no single device's init_device()/uninit_device() may own it.
+*/
+typedef struct nvme_disk_driver_info {
+	device_node*			node;
+	pci_info				info;
+	pci_device_module_info*	pci;
+	pci_device*				pci_dev;
+		// the PCI bus manager's handle for the controller
+	struct pci_device*		nvme_pci_device;
+		// what libnvme was given in nvme_ctrlr_open()
+
+	struct nvme_ctrlr*		ctrlr;
+
+	nvme_disk_namespace_info* namespaces;
+	uint32					namespace_count;
+
+	DMAResource				dma_resource;
+	sem_id					dma_buffers_sem;
+
+	uint32					irq;
+	bool					interrupt_installed;
+	bool					msi_enabled;
+		// MSI or MSI-X
 	ConditionVariable		interrupt;
 	int32					polling;
 
@@ -134,16 +176,17 @@ typedef nvme_disk_driver_info::qpair_info qpair_info;
 
 typedef struct {
 	nvme_disk_driver_info*		info;
+	nvme_disk_namespace_info*	ns;
 } nvme_disk_handle;
 
 
 static status_t
 get_geometry(nvme_disk_handle* handle, device_geometry* geometry)
 {
-	nvme_disk_driver_info* info = handle->info;
+	nvme_disk_namespace_info* ns = handle->ns;
 
-	devfs_compute_geometry_size(geometry, info->capacity, info->block_size);
-	geometry->bytes_per_physical_sector = info->block_size;
+	devfs_compute_geometry_size(geometry, ns->capacity, ns->block_size);
+	geometry->bytes_per_physical_sector = ns->block_size;
 
 	geometry->device_type = B_DISK;
 	geometry->removable = false;
@@ -161,40 +204,173 @@ get_geometry(nvme_disk_handle* handle, device_geometry* geometry)
 
 
 static void
-nvme_disk_set_capacity(nvme_disk_driver_info* info, uint64 capacity,
+nvme_disk_set_capacity(nvme_disk_namespace_info* ns, uint64 capacity,
 	uint32 blockSize)
 {
-	TRACE("set_capacity(device = %p, capacity = %" B_PRIu64 ", blockSize = %" B_PRIu32 ")\n",
-		info, capacity, blockSize);
+	TRACE("set_capacity(namespace = %" B_PRIu32 ", capacity = %" B_PRIu64
+		", blockSize = %" B_PRIu32 ")\n", ns->nsid, capacity, blockSize);
 
-	info->capacity = capacity;
-	info->block_size = blockSize;
+	ns->capacity = capacity;
+	ns->block_size = blockSize;
 }
 
 
-//	#pragma mark - device module API
+//	#pragma mark - controller and namespace setup
 
 
 static int32 nvme_interrupt_handler(void* _info);
 
 
+/*!	Opens every active namespace of the controller and sets up an
+	nvme_disk_namespace_info for each, in namespace ID order.
+
+	libnvme lists every namespace ID up to the controller's "number of
+	namespaces" (Identify Controller NN; QEMU reports 256) whether or not a
+	namespace is attached under it. An inactive ID identifies as all zeroes,
+	so a namespace counts as active if it has a nonzero size.
+*/
 static status_t
-nvme_disk_init_device(void* _info, void** _cookie)
+nvme_disk_open_namespaces(nvme_disk_driver_info* info,
+	const struct nvme_ctrlr_stat* cstat)
+{
+	uint32* active = (uint32*)malloc(sizeof(uint32) * max_c(cstat->nr_ns, 1));
+	if (active == NULL)
+		return B_NO_MEMORY;
+	MemoryDeleter activeDeleter(active);
+
+	uint32 activeCount = 0;
+	for (uint32 i = 0; i < cstat->nr_ns; i++) {
+		struct nvme_ns* ns = nvme_ns_open(info->ctrlr, cstat->ns_ids[i]);
+		if (ns == NULL)
+			continue;
+
+		struct nvme_ns_stat nsstat;
+		bool usable = nvme_ns_stat(ns, &nsstat) == 0 && nsstat.sectors > 0;
+		if (usable && (nsstat.sector_size < 512
+				|| nsstat.sector_size > B_PAGE_SIZE
+				|| (nsstat.sector_size & (nsstat.sector_size - 1)) != 0)) {
+			// The DMA resource and the bounce logic work in B_PAGE_SIZE
+			// units, which only works for block sizes that divide it.
+			TRACE_ALWAYS("namespace %u: unsupported block size %" B_PRIuSIZE
+				", ignored\n", cstat->ns_ids[i], nsstat.sector_size);
+			usable = false;
+		}
+		nvme_ns_close(ns);
+
+		if (usable)
+			active[activeCount++] = cstat->ns_ids[i];
+	}
+
+	if (activeCount == 0) {
+		TRACE_ERROR("no active namespace found!\n");
+		return B_DEVICE_NOT_FOUND;
+	}
+
+	info->namespaces = new(std::nothrow) nvme_disk_namespace_info[activeCount];
+	if (info->namespaces == NULL)
+		return B_NO_MEMORY;
+
+	for (uint32 i = 0; i < activeCount; i++) {
+		nvme_disk_namespace_info* ns = &info->namespaces[i];
+		ns->controller = info;
+		ns->nsid = active[i];
+		ns->path[0] = '\0';
+		ns->media_status = B_OK;
+
+		ns->ns = nvme_ns_open(info->ctrlr, ns->nsid);
+		struct nvme_ns_stat nsstat;
+		if (ns->ns == NULL || nvme_ns_stat(ns->ns, &nsstat) != 0) {
+			TRACE_ERROR("failed to open namespace %" B_PRIu32 "!\n",
+				ns->nsid);
+			if (ns->ns != NULL)
+				nvme_ns_close(ns->ns);
+			ns->ns = NULL;
+			return B_ERROR;
+		}
+
+		TRACE_ALWAYS("namespace %" B_PRIu32 "\n", ns->nsid);
+		TRACE_ALWAYS("\tblock size: %" B_PRIuSIZE ", stripe size: %u\n",
+			nsstat.sector_size, ns->ns->stripe_size);
+		nvme_disk_set_capacity(ns, nsstat.sectors, nsstat.sector_size);
+		ns->max_io_blocks = cstat->max_xfer_size / nsstat.sector_size;
+
+		if (ns->request_owners.Init(info->qpair_count * 2) != B_OK)
+			return B_NO_MEMORY;
+		mutex_init(&ns->request_owners_lock, "nvme request owners");
+		rw_lock_init(&ns->rounded_write_lock, "nvme rounded writes");
+
+		// Only now does nvme_disk_uninit_controller() tear this one down.
+		info->namespace_count++;
+	}
+
+	return B_OK;
+}
+
+
+/*!	Undoes nvme_disk_init_controller(), also after it failed half-way. */
+static void
+nvme_disk_uninit_controller(nvme_disk_driver_info* info)
+{
+	for (uint32 i = 0; i < info->namespace_count; i++) {
+		nvme_disk_namespace_info* ns = &info->namespaces[i];
+		rw_lock_destroy(&ns->rounded_write_lock);
+		mutex_destroy(&ns->request_owners_lock);
+		nvme_ns_close(ns->ns);
+	}
+	delete[] info->namespaces;
+	info->namespaces = NULL;
+	info->namespace_count = 0;
+
+	// Closing the controller shuts it down, so it raises no more interrupts
+	// once this returns; only then are the handler and the vectors removed.
+	if (info->ctrlr != NULL)
+		nvme_ctrlr_close(info->ctrlr);
+	info->ctrlr = NULL;
+	info->qpair_count = 0;
+
+	if (info->interrupt_installed) {
+		remove_io_interrupt_handler(info->irq, nvme_interrupt_handler,
+			(void*)info);
+		info->interrupt_installed = false;
+	}
+	if (info->msi_enabled) {
+		info->pci->disable_msi(info->pci_dev);
+		info->pci->unconfigure_msi(info->pci_dev);
+		info->msi_enabled = false;
+	}
+
+	if (info->dma_buffers_sem >= 0)
+		delete_sem(info->dma_buffers_sem);
+	info->dma_buffers_sem = -1;
+
+	delete info->nvme_pci_device;
+	info->nvme_pci_device = NULL;
+	// TODO: Deallocate PCI (the bus master and memory space bits set in
+	// nvme_disk_init_controller() stay set).
+}
+
+
+/*!	Brings up the controller: interrupts, power management, queue pairs,
+	the DMA resource and all active namespaces. On failure the caller must
+	call nvme_disk_uninit_controller().
+*/
+static status_t
+nvme_disk_init_controller(nvme_disk_driver_info* info)
 {
 	CALLED();
-	nvme_disk_driver_info* info = (nvme_disk_driver_info*)_info;
 	ASSERT(info->ctrlr == NULL);
 
-	pci_device_module_info* pci;
-	pci_device* pcidev;
 	device_node* parent = sDeviceManager->get_parent_node(info->node);
-	sDeviceManager->get_driver(parent, (driver_module_info**)&pci,
-		(void**)&pcidev);
-	pci->get_pci_info(pcidev, &info->info);
+	sDeviceManager->get_driver(parent, (driver_module_info**)&info->pci,
+		(void**)&info->pci_dev);
 	sDeviceManager->put_node(parent);
+	pci_device_module_info* pci = info->pci;
+	pci_device* pcidev = info->pci_dev;
+	pci->get_pci_info(pcidev, &info->info);
 
 	// construct the libnvme pci_device struct
 	pci_device* device = new pci_device;
+	info->nvme_pci_device = device;
 	device->vendor_id = info->info.vendor_id;
 	device->device_id = info->info.device_id;
 	device->subvendor_id = 0;
@@ -227,35 +403,12 @@ nvme_disk_init_device(void* _info, void** _cookie)
 	int err = nvme_ctrlr_stat(info->ctrlr, cstat);
 	if (err != 0) {
 		TRACE_ERROR("failed to get controller information!\n");
-		nvme_ctrlr_close(info->ctrlr);
 		return err;
 	}
 
 	TRACE_ALWAYS("attached to NVMe device \"%s (%s)\"\n", cstat->mn, cstat->sn);
 	TRACE_ALWAYS("\tmaximum transfer size: %" B_PRIuSIZE "\n", cstat->max_xfer_size);
 	TRACE_ALWAYS("\tqpair count: %d\n", cstat->io_qpairs);
-
-	// TODO: export more than just the first namespace!
-	info->ns = nvme_ns_open(info->ctrlr, cstat->ns_ids[0]);
-	if (info->ns == NULL) {
-		TRACE_ERROR("failed to open namespace!\n");
-		nvme_ctrlr_close(info->ctrlr);
-		return B_ERROR;
-	}
-	TRACE_ALWAYS("namespace 0\n");
-
-	struct nvme_ns_stat nsstat;
-	err = nvme_ns_stat(info->ns, &nsstat);
-	if (err != 0) {
-		TRACE_ERROR("failed to get namespace information!\n");
-		nvme_ctrlr_close(info->ctrlr);
-		return err;
-	}
-
-	// store capacity information
-	TRACE_ALWAYS("\tblock size: %" B_PRIuSIZE ", stripe size: %u\n",
-		nsstat.sector_size, info->ns->stripe_size);
-	nvme_disk_set_capacity(info, nsstat.sectors, nsstat.sector_size);
 
 	command = pci->read_pci_config(pcidev, PCI_command, 2);
 	command &= ~(PCI_command_int_disable);
@@ -271,6 +424,7 @@ nvme_disk_init_device(void* _info, void** _cookie)
 			&& pci->enable_msix(pcidev) == B_OK) {
 			TRACE_ALWAYS("using MSI-X\n");
 			irq = msixVector;
+			info->msi_enabled = true;
 		}
 	} else if (pci->get_msi_count(pcidev) >= 1) {
 		uint32 msiVector = 0;
@@ -278,6 +432,7 @@ nvme_disk_init_device(void* _info, void** _cookie)
 			&& pci->enable_msi(pcidev) == B_OK) {
 			TRACE_ALWAYS("using message signaled interrupts\n");
 			irq = msiVector;
+			info->msi_enabled = true;
 		}
 	}
 
@@ -289,7 +444,13 @@ nvme_disk_init_device(void* _info, void** _cookie)
 		info->polling = 0;
 	}
 	info->interrupt.Init(info, "nvme_disk interrupt");
-	install_io_interrupt_handler(irq, nvme_interrupt_handler, (void*)info, B_NO_HANDLED_INFO);
+	// Remember the vector actually used: with MSI(-X) it is not the PCI
+	// interrupt line, which the old uninit code wrongly removed.
+	info->irq = irq;
+	if (install_io_interrupt_handler(irq, nvme_interrupt_handler, (void*)info,
+			B_NO_HANDLED_INFO) == B_OK) {
+		info->interrupt_installed = true;
+	}
 
 	if (info->ctrlr->feature_supported[NVME_FEAT_INTERRUPT_COALESCING]) {
 		uint32 microseconds = 16, threshold = 32;
@@ -387,7 +548,6 @@ nvme_disk_init_device(void* _info, void** _cookie)
 	}
 	if (info->qpair_count == 0) {
 		TRACE_ERROR("failed to allocate qpairs!\n");
-		nvme_ctrlr_close(info->ctrlr);
 		return B_NO_MEMORY;
 	}
 	if (info->qpair_count != try_qpairs) {
@@ -404,29 +564,39 @@ nvme_disk_init_device(void* _info, void** _cookie)
 		// of the block size.
 	restrictions.max_segment_count = (NVME_MAX_SGL_DESCRIPTORS / 2);
 	restrictions.max_transfer_size = cstat->max_xfer_size;
-	info->max_io_blocks = cstat->max_xfer_size / nsstat.sector_size;
 
+	// The DMA resource, and with it the bounce buffers, are shared by all
+	// namespaces; its B_PAGE_SIZE blocks suit every namespace block size
+	// nvme_disk_open_namespaces() accepts.
 	err = info->dma_resource.Init(restrictions, B_PAGE_SIZE, buffers, buffers);
 	if (err != 0) {
 		TRACE_ERROR("failed to initialize DMA resource!\n");
-		nvme_ctrlr_close(info->ctrlr);
 		return err;
 	}
 
 	info->dma_buffers_sem = create_sem(buffers, "nvme buffers sem");
 	if (info->dma_buffers_sem < 0) {
 		TRACE_ERROR("failed to create DMA buffers semaphore!\n");
-		nvme_ctrlr_close(info->ctrlr);
 		return info->dma_buffers_sem;
 	}
 
-	if (info->request_owners.Init(buffers) != B_OK)
-		return B_ERROR;
+	return nvme_disk_open_namespaces(info, cstat);
+}
 
-	mutex_init(&info->request_owners_lock, "nvme request owners");
 
-	// set up rounded-write lock
-	rw_lock_init(&info->rounded_write_lock, "nvme rounded writes");
+//	#pragma mark - device module API
+
+
+/*!	The controller is already up (see nvme_disk_init_driver()); every
+	namespace's device shares it, so there is nothing to do per device.
+*/
+static status_t
+nvme_disk_init_device(void* _info, void** _cookie)
+{
+	CALLED();
+	nvme_disk_driver_info* info = (nvme_disk_driver_info*)_info;
+	if (info->ctrlr == NULL)
+		return B_NO_INIT;
 
 	*_cookie = info;
 	return B_OK;
@@ -437,18 +607,7 @@ static void
 nvme_disk_uninit_device(void* _cookie)
 {
 	CALLED();
-	nvme_disk_driver_info* info = (nvme_disk_driver_info*)_cookie;
-
-	remove_io_interrupt_handler(info->info.u.h0.interrupt_line,
-		nvme_interrupt_handler, (void*)info);
-
-	rw_lock_destroy(&info->rounded_write_lock);
-
-	nvme_ns_close(info->ns);
-	nvme_ctrlr_close(info->ctrlr);
-
-	// TODO: Deallocate MSI(-X).
-	// TODO: Deallocate PCI.
+	// The controller is torn down in nvme_disk_uninit_driver().
 }
 
 
@@ -458,12 +617,37 @@ nvme_disk_open(void* _info, const char* path, int openMode, void** _cookie)
 	CALLED();
 
 	nvme_disk_driver_info* info = (nvme_disk_driver_info*)_info;
+
+	// All namespaces are published with this device module, so the path
+	// (relative to /dev) must tell which one is being opened. Each namespace
+	// has a directory of its own: its raw device, and the partitions the
+	// disk device manager publishes next to it. devfs opens a partition
+	// through the raw device's module but passes the partition's path (e.g.
+	// "disk/nvme/0/0"), so compare directories, not whole paths.
+	const char* slash = strrchr(path, '/');
+	size_t directoryLength = slash != NULL ? slash - path : 0;
+	nvme_disk_namespace_info* ns = NULL;
+	for (uint32 i = 0; i < info->namespace_count; i++) {
+		const char* nsPath = info->namespaces[i].path;
+		const char* nsSlash = strrchr(nsPath, '/');
+		if (nsSlash != NULL && (size_t)(nsSlash - nsPath) == directoryLength
+			&& strncmp(path, nsPath, directoryLength) == 0) {
+			ns = &info->namespaces[i];
+			break;
+		}
+	}
+	if (ns == NULL) {
+		TRACE_ERROR("open: no namespace published as \"%s\"\n", path);
+		return B_ENTRY_NOT_FOUND;
+	}
+
 	nvme_disk_handle* handle = (nvme_disk_handle*)malloc(
 		sizeof(nvme_disk_handle));
 	if (handle == NULL)
 		return B_NO_MEMORY;
 
 	handle->info = info;
+	handle->ns = ns;
 
 	*_cookie = handle;
 	return B_OK;
@@ -612,19 +796,20 @@ ior_next_sge(nvme_io_request* request, uint64_t* address, uint32_t* length)
 
 
 static status_t
-do_nvme_io_request(nvme_disk_driver_info* info, nvme_io_request* request)
+do_nvme_io_request(nvme_disk_namespace_info* ns, nvme_io_request* request)
 {
+	nvme_disk_driver_info* info = ns->controller;
 	request->status = EINPROGRESS;
 
 	qpair_info* qpinfo = get_qpair(info);
 	int ret = -1;
 	if (request->write) {
-		ret = nvme_ns_writev(info->ns, qpinfo->qpair, request->lba_start,
+		ret = nvme_ns_writev(ns->ns, qpinfo->qpair, request->lba_start,
 			request->lba_count, (nvme_cmd_cb)io_finished_callback, request,
 			0, (nvme_req_reset_sgl_cb)ior_reset_sgl,
 			(nvme_req_next_sge_cb)ior_next_sge);
 	} else {
-		ret = nvme_ns_readv(info->ns, qpinfo->qpair, request->lba_start,
+		ret = nvme_ns_readv(ns->ns, qpinfo->qpair, request->lba_start,
 			request->lba_count, (nvme_cmd_cb)io_finished_callback, request,
 			0, (nvme_req_reset_sgl_cb)ior_reset_sgl,
 			(nvme_req_next_sge_cb)ior_next_sge);
@@ -658,7 +843,7 @@ nvme_disk_bounced_io(nvme_disk_handle* handle, io_request* request)
 
 	WriteLocker writeLocker;
 	if (request->IsWrite())
-		writeLocker.SetTo(handle->info->rounded_write_lock, false);
+		writeLocker.SetTo(handle->ns->rounded_write_lock, false);
 
 	status_t status = acquire_sem(handle->info->dma_buffers_sem);
 	if (status != B_OK) {
@@ -666,7 +851,7 @@ nvme_disk_bounced_io(nvme_disk_handle* handle, io_request* request)
 		return status;
 	}
 
-	const size_t block_size = handle->info->block_size;
+	const size_t block_size = handle->ns->block_size;
 
 	TRACE("%p: IOR Offset: %" B_PRIdOFF "; Length %" B_PRIuGENADDR
 		"; Write %s\n", request, request->Offset(), request->Length(),
@@ -690,7 +875,7 @@ nvme_disk_bounced_io(nvme_disk_handle* handle, io_request* request)
 			nvme_request.iovecs = (physical_entry*)operation.Vecs();
 			nvme_request.iovec_count = operation.VecCount();
 
-			status = do_nvme_io_request(handle->info, &nvme_request);
+			status = do_nvme_io_request(handle->ns, &nvme_request);
 
 			operation.SetStatus(status,
 				status == B_OK ? operation.Length() : 0);
@@ -727,7 +912,7 @@ do_io(nvme_disk_handle* handle, io_request* request)
 {
 	CALLED();
 
-	const off_t ns_end = (handle->info->capacity * handle->info->block_size);
+	const off_t ns_end = (handle->ns->capacity * handle->ns->block_size);
 	if ((request->Offset() + (off_t)request->Length()) > ns_end)
 		return ERANGE;
 
@@ -794,7 +979,7 @@ do_io(nvme_disk_handle* handle, io_request* request)
 	}
 
 	// See if we need to bounce anything other than the first or last vec.
-	const size_t block_size = handle->info->block_size;
+	const size_t block_size = handle->ns->block_size;
 	bool bounceAll = (nvme_request.iovecs == NULL);
 	for (int32 i = 1; !bounceAll && i < (nvme_request.iovec_count - 1); i++) {
 		if ((nvme_request.iovecs[i].address % B_PAGE_SIZE) != 0)
@@ -840,7 +1025,7 @@ do_io(nvme_disk_handle* handle, io_request* request)
 	// No bouncing was required.
 	ReadLocker readLocker;
 	if (nvme_request.write)
-		readLocker.SetTo(handle->info->rounded_write_lock, false);
+		readLocker.SetTo(handle->ns->rounded_write_lock, false);
 
 	// Error check before actually doing I/O.
 	if (status != B_OK) {
@@ -849,7 +1034,7 @@ do_io(nvme_disk_handle* handle, io_request* request)
 		return status;
 	}
 
-	const uint32 max_io_blocks = handle->info->max_io_blocks;
+	const uint32 max_io_blocks = handle->ns->max_io_blocks;
 	int32 remaining = nvme_request.iovec_count;
 	nvme_request.lba_start = rounded_pos / block_size;
 	while (remaining > 0) {
@@ -870,7 +1055,7 @@ do_io(nvme_disk_handle* handle, io_request* request)
 			nvme_request.lba_count = new_lba_count;
 		}
 
-		status = do_nvme_io_request(handle->info, &nvme_request);
+		status = do_nvme_io_request(handle->ns, &nvme_request);
 		if (status != B_OK)
 			break;
 
@@ -897,11 +1082,14 @@ nvme_disk_io(void* cookie, io_request* request)
 	CALLED();
 	nvme_disk_handle* handle = (nvme_disk_handle*)cookie;
 
-	MutexLocker requestOwnersLocker(handle->info->request_owners_lock);
+	MutexLocker requestOwnersLocker(handle->ns->request_owners_lock);
 
 	// Use a RequestOwner per-thread to avoid recursion due to
 	// requests being queued inside other requests' notify callbacks.
-	NVMeRequestOwner* existingOwner = handle->info->request_owners.Lookup(
+	// The owners are per namespace: a queued request is carried out with
+	// the handle of the call that owns the queue, so a request for another
+	// namespace must never end up in it.
+	NVMeRequestOwner* existingOwner = handle->ns->request_owners.Lookup(
 		thread_get_current_thread_id());
 	if (existingOwner != NULL) {
 		existingOwner->requests_queue.Add(request);
@@ -912,7 +1100,7 @@ nvme_disk_io(void* cookie, io_request* request)
 	owner.team = thread_get_current_thread()->team->id;
 	owner.thread = thread_get_current_thread_id();
 	owner.priority = thread_get_io_priority(owner.thread);
-	handle->info->request_owners.InsertUnchecked(&owner);
+	handle->ns->request_owners.InsertUnchecked(&owner);
 	requestOwnersLocker.Unlock();
 
 	owner.requests_queue.Add(request);
@@ -925,7 +1113,7 @@ nvme_disk_io(void* cookie, io_request* request)
 	}
 
 	requestOwnersLocker.Lock();
-	handle->info->request_owners.Remove(&owner);
+	handle->ns->request_owners.Remove(&owner);
 	return B_OK;
 }
 
@@ -936,7 +1124,7 @@ nvme_disk_read(void* cookie, off_t pos, void* buffer, size_t* length)
 	CALLED();
 	nvme_disk_handle* handle = (nvme_disk_handle*)cookie;
 
-	const off_t ns_end = (handle->info->capacity * handle->info->block_size);
+	const off_t ns_end = (handle->ns->capacity * handle->ns->block_size);
 	if (pos >= ns_end)
 		return B_BAD_VALUE;
 	if ((pos + (off_t)*length) > ns_end)
@@ -959,7 +1147,7 @@ nvme_disk_write(void* cookie, off_t pos, const void* buffer, size_t* length)
 	CALLED();
 	nvme_disk_handle* handle = (nvme_disk_handle*)cookie;
 
-	const off_t ns_end = (handle->info->capacity * handle->info->block_size);
+	const off_t ns_end = (handle->ns->capacity * handle->ns->block_size);
 	if (pos >= ns_end)
 		return B_BAD_VALUE;
 	if ((pos + (off_t)*length) > ns_end)
@@ -977,13 +1165,14 @@ nvme_disk_write(void* cookie, off_t pos, const void* buffer, size_t* length)
 
 
 static status_t
-nvme_disk_flush(nvme_disk_driver_info* info)
+nvme_disk_flush(nvme_disk_namespace_info* ns)
 {
 	CALLED();
+	nvme_disk_driver_info* info = ns->controller;
 	status_t status = EINPROGRESS;
 
 	qpair_info* qpinfo = get_qpair(info);
-	int ret = nvme_ns_flush(info->ns, qpinfo->qpair,
+	int ret = nvme_ns_flush(ns->ns, qpinfo->qpair,
 		(nvme_cmd_cb)io_finished_callback, &status);
 	if (ret != 0)
 		return ret;
@@ -994,12 +1183,13 @@ nvme_disk_flush(nvme_disk_driver_info* info)
 
 
 static status_t
-nvme_disk_trim(nvme_disk_driver_info* info, fs_trim_data* trimData)
+nvme_disk_trim(nvme_disk_namespace_info* ns, fs_trim_data* trimData)
 {
 	CALLED();
+	nvme_disk_driver_info* info = ns->controller;
 	trimData->trimmed_size = 0;
 
-	const off_t deviceSize = info->capacity * info->block_size; // in bytes
+	const off_t deviceSize = ns->capacity * ns->block_size; // in bytes
 	if (deviceSize < 0)
 		return B_BAD_VALUE;
 
@@ -1030,28 +1220,28 @@ nvme_disk_trim(nvme_disk_driver_info* info, fs_trim_data* trimData)
 
 		// Round up offset and length to the block size.
 		// (Some space at the beginning and end may thus not be trimmed.)
-		offset = ROUNDUP(offset, info->block_size);
+		offset = ROUNDUP(offset, ns->block_size);
 		length -= offset - trimData->ranges[i].offset;
-		length = ROUNDDOWN(length, info->block_size);
+		length = ROUNDDOWN(length, ns->block_size);
 
 		if (length == 0)
 			continue;
-		if ((length / info->block_size) > UINT32_MAX)
-			length = uint64(UINT32_MAX) * info->block_size;
+		if ((length / ns->block_size) > UINT32_MAX)
+			length = uint64(UINT32_MAX) * ns->block_size;
 			// TODO: Break into smaller trim ranges!
 
 		TRACE("trim %" B_PRIu64 " bytes from %" B_PRIu64 "\n", length, offset);
 
 		dsmRanges[i].attributes = 0;
-		dsmRanges[i].length = length / info->block_size;
-		dsmRanges[i].starting_lba = offset / info->block_size;
+		dsmRanges[i].length = length / ns->block_size;
+		dsmRanges[i].starting_lba = offset / ns->block_size;
 
 		trimmingSize += length;
 	}
 
 	status_t status = EINPROGRESS;
 	qpair_info* qpair = get_qpair(info);
-	if (nvme_ns_deallocate(info->ns, qpair->qpair, dsmRanges, trimData->range_count,
+	if (nvme_ns_deallocate(ns->ns, qpair->qpair, dsmRanges, trimData->range_count,
 			(nvme_cmd_cb)io_finished_callback, &status) != 0)
 		return B_IO_ERROR;
 
@@ -1070,18 +1260,19 @@ nvme_disk_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 	CALLED();
 	nvme_disk_handle* handle = (nvme_disk_handle*)cookie;
 	nvme_disk_driver_info* info = handle->info;
+	nvme_disk_namespace_info* ns = handle->ns;
 
 	TRACE("ioctl(op = %" B_PRId32 ")\n", op);
 
 	switch (op) {
 		case B_GET_MEDIA_STATUS:
 		{
-			return user_memcpy(buffer, &info->media_status, sizeof(status_t));
+			return user_memcpy(buffer, &ns->media_status, sizeof(status_t));
 		}
 
 		case B_GET_DEVICE_SIZE:
 		{
-			size_t size = info->capacity * info->block_size;
+			size_t size = ns->capacity * ns->block_size;
 			return user_memcpy(buffer, &size, sizeof(size_t));
 		}
 
@@ -1133,11 +1324,11 @@ nvme_disk_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 		}
 
 		case B_FLUSH_DRIVE_CACHE:
-			return nvme_disk_flush(info);
+			return nvme_disk_flush(ns);
 
 		case B_TRIM_DEVICE:
 			ASSERT(IS_KERNEL_ADDRESS(buffer));
-			return nvme_disk_trim(info, (fs_trim_data*)buffer);
+			return nvme_disk_trim(ns, (fs_trim_data*)buffer);
 	}
 
 	return B_DEV_INVALID_IOCTL;
@@ -1178,6 +1369,10 @@ nvme_disk_register_device(device_node* parent)
 
 	device_attr attrs[] = {
 		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { .string = "NVMe Disk" } },
+		// The controller is brought up in init_driver() and must stay up
+		// for as long as its namespaces are published (see
+		// nvme_disk_driver_info).
+		{ B_DEVICE_FLAGS, B_UINT32_TYPE, { .ui32 = B_KEEP_DRIVER_LOADED } },
 		{ NULL }
 	};
 
@@ -1197,14 +1392,30 @@ nvme_disk_init_driver(device_node* node, void** cookie)
 		return ret;
 	}
 
-	nvme_disk_driver_info* info = new nvme_disk_driver_info;
+	nvme_disk_driver_info* info = new(std::nothrow) nvme_disk_driver_info;
 	if (info == NULL)
 		return B_NO_MEMORY;
 
-	info->media_status = B_OK;
 	info->node = node;
-
+	info->pci = NULL;
+	info->pci_dev = NULL;
+	info->nvme_pci_device = NULL;
 	info->ctrlr = NULL;
+	info->namespaces = NULL;
+	info->namespace_count = 0;
+	info->dma_buffers_sem = -1;
+	info->irq = 0;
+	info->interrupt_installed = false;
+	info->msi_enabled = false;
+	info->polling = 0;
+	info->qpair_count = 0;
+
+	status_t status = nvme_disk_init_controller(info);
+	if (status != B_OK) {
+		nvme_disk_uninit_controller(info);
+		delete info;
+		return status;
+	}
 
 	*cookie = info;
 	return B_OK;
@@ -1217,7 +1428,8 @@ nvme_disk_uninit_driver(void* _cookie)
 	CALLED();
 
 	nvme_disk_driver_info* info = (nvme_disk_driver_info*)_cookie;
-	free(info);
+	nvme_disk_uninit_controller(info);
+	delete info;
 }
 
 
@@ -1233,15 +1445,39 @@ nvme_disk_register_child_devices(void* _cookie)
 	if (id < 0)
 		return id;
 
-	char name[64];
-	snprintf(name, sizeof(name), "disk/nvme/%" B_PRId32 "/raw",
-		id);
+	// One disk per active namespace. The first keeps the path a controller
+	// always had, so existing installations and scripts see no change; the
+	// others get a directory of their own inside it, named after their
+	// namespace ID (which, unlike their position, does not change when
+	// another namespace is deleted). Each disk needs its own directory, as
+	// its partitions are published next to its raw device.
+	for (uint32 i = 0; i < info->namespace_count; i++) {
+		nvme_disk_namespace_info* ns = &info->namespaces[i];
+		if (i == 0) {
+			snprintf(ns->path, sizeof(ns->path), "disk/nvme/%" B_PRId32
+				"/raw", id);
+		} else {
+			snprintf(ns->path, sizeof(ns->path), "disk/nvme/%" B_PRId32
+				"/ns%" B_PRIu32 "/raw", id, ns->nsid);
+		}
 
-	status = sDeviceManager->publish_device(info->node, name,
-		NVME_DISK_DEVICE_MODULE_NAME);
-	if (status != B_OK)
-		sDeviceManager->free_id(NVME_DISK_DEVICE_ID_GENERATOR, id);
-	return status;
+		status = sDeviceManager->publish_device(info->node, ns->path,
+			NVME_DISK_DEVICE_MODULE_NAME);
+		if (status != B_OK) {
+			TRACE_ERROR("failed to publish namespace %" B_PRIu32 " as %s: "
+				"%s\n", ns->nsid, ns->path, strerror(status));
+			ns->path[0] = '\0';
+			if (i == 0) {
+				sDeviceManager->free_id(NVME_DISK_DEVICE_ID_GENERATOR, id);
+				return status;
+			}
+			continue;
+		}
+		TRACE_ALWAYS("namespace %" B_PRIu32 ": %" B_PRIu64 " blocks of %"
+			B_PRIu32 " bytes, published as /dev/%s\n", ns->nsid,
+			ns->capacity, ns->block_size, ns->path);
+	}
+	return B_OK;
 }
 
 
