@@ -13,6 +13,8 @@ enum {
 	virtioInputRead = B_DEVICE_OP_CODES_END + 1,
 	virtioInputCancelIO = B_DEVICE_OP_CODES_END + 2,
 	virtioInputGetType = B_DEVICE_OP_CODES_END + 3,
+	virtioInputGetAbsRange = B_DEVICE_OP_CODES_END + 4,
+		// VirtioInputAbsRange: a tablet's ABS_X and ABS_Y ranges
 };
 
 
@@ -20,6 +22,14 @@ enum VirtioInputType {
 	kVirtioInputUnknown = 0,
 	kVirtioInputTablet,
 	kVirtioInputKeyboard,
+};
+
+
+// The value ranges of a tablet's absolute axes, as its device configuration
+// gives them (VIRTIO_INPUT_CFG_ABS_INFO).
+struct VirtioInputAbsRange {
+	int32 xMin, xMax;
+	int32 yMin, yMax;
 };
 
 

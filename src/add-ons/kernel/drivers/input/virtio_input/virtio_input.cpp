@@ -20,6 +20,8 @@
 #include <util/AutoLock.h>
 #include <virtio_input_driver.h>
 
+#include <ByteOrder.h>
+
 #include <AutoDeleter.h>
 #include <AutoDeleterDrivers.h>
 #include <AutoDeleterOS.h>
@@ -86,6 +88,7 @@ struct VirtioInputDevice {
 
 	uint64 features {};
 	VirtioInputType type;
+	VirtioInputAbsRange absRange {};
 
 	PacketQueue packetQueue;
 };
@@ -239,6 +242,30 @@ IdentifyDevice(VirtioInputDevice* dev)
 }
 
 
+/*!	Reads the range of absolute axis \a axis from the device configuration.
+	Falls back to 0..32767, what QEMU's tablets use, if the device gives no
+	usable range.
+*/
+static void
+QueryAbsRange(VirtioInputDevice* dev, uint8 axis, int32& min, int32& max)
+{
+	VirtioInputConfig config = {};
+	min = 0;
+	max = 32767;
+	if (QueryConfig(dev, kVirtioInputCfgAbsInfo, axis, &config) != B_OK
+		|| config.size < offsetof(VirtioInputAbsinfo, max) + sizeof(int32)
+		|| B_LENDIAN_TO_HOST_INT32(config.abs.max)
+			<= B_LENDIAN_TO_HOST_INT32(config.abs.min)) {
+		ERROR("no range for absolute axis %u, assuming %" B_PRId32 "..%"
+			B_PRId32 "\n", axis, min, max);
+		return;
+	}
+	min = B_LENDIAN_TO_HOST_INT32(config.abs.min);
+	max = B_LENDIAN_TO_HOST_INT32(config.abs.max);
+	TRACE("absolute axis %u: %" B_PRId32 "..%" B_PRId32 "\n", axis, min, max);
+}
+
+
 static void
 virtio_input_callback(void* driverCookie, void* cookie)
 {
@@ -361,6 +388,12 @@ virtio_input_init_device(void* _info, void** _cookie)
 	info->virtio->negotiate_features(info->virtioDevice, 0, &info->features, NULL);
 
 	info->type = IdentifyDevice(info);
+	if (info->type == kVirtioInputTablet) {
+		QueryAbsRange(info, kVirtioInputAbsX, info->absRange.xMin,
+			info->absRange.xMax);
+		QueryAbsRange(info, kVirtioInputAbsY, info->absRange.yMin,
+			info->absRange.yMax);
+	}
 
 	status_t status = B_OK;
 
@@ -496,6 +529,16 @@ virtio_input_control(void* cookie, uint32 op, void* buffer, size_t length)
 				return B_BAD_VALUE;
 
 			return user_memcpy(buffer, &info->type, sizeof(VirtioInputType));
+		}
+		case virtioInputGetAbsRange:
+		{
+			if (info->type != kVirtioInputTablet)
+				return B_DEV_INVALID_IOCTL;
+			if (buffer == NULL || length < sizeof(VirtioInputAbsRange))
+				return B_BAD_VALUE;
+
+			return user_memcpy(buffer, &info->absRange,
+				sizeof(VirtioInputAbsRange));
 		}
 	}
 

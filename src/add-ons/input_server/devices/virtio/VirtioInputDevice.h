@@ -11,6 +11,8 @@
 #include <Locker.h>
 #include <add-ons/input_server/InputServerDevice.h>
 
+#include <virtio_input_driver.h>
+
 
 struct VirtioInputPacket;
 
@@ -125,7 +127,8 @@ class TabletHandler : public VirtioInputHandler
 {
 public:
 							TabletHandler(VirtioInputDevice* dev,
-								const char* name);
+								const char* name,
+								const VirtioInputAbsRange& range);
 
 	virtual	void			Reset();
 	virtual	status_t		Control(uint32 command, BMessage* message);
@@ -133,8 +136,10 @@ public:
 
 private:
 	static	bool			_FillMessage(BMessage& msg, const TabletState& s);
+	static	float			_Scale(int32 value, int32 min, int32 max);
 
 private:
+			VirtioInputAbsRange	fRange;
 			TabletState		fState;
 			TabletState		fNewState;
 			bigtime_t		fLastClick;

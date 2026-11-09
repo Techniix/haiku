@@ -207,10 +207,21 @@ VirtioInputDevice::InitCheck()
 				handler.SetTo(new(std::nothrow) KeyboardHandler(this, name));
 				break;
 			case kVirtioInputTablet:
+			{
 				TRACE("Identified %s as a tablet\n", path.Path());
 				snprintf(name, sizeof(name), "VirtIO Tablet %" B_PRId32, index);
-				handler.SetTo(new(std::nothrow) TabletHandler(this, name));
+				// The axis ranges the device reports; QEMU's 0..32767 if the
+				// driver cannot tell.
+				VirtioInputAbsRange range = { 0, 32767, 0, 32767 };
+				if (ioctl(fd.Get(), virtioInputGetAbsRange, &range,
+						sizeof(range)) != B_OK) {
+					TRACE("virtioInputGetAbsRange failed (%s)\n",
+						strerror(errno));
+				}
+				handler.SetTo(new(std::nothrow) TabletHandler(this, name,
+					range));
 				break;
+			}
 			case kVirtioInputUnknown:
 				ERROR("Unrecognized device %s\n", path.Path());
 				break;
@@ -700,10 +711,26 @@ KeyboardHandler::_StateChanged()
 //#pragma mark TabletHandler
 
 
-TabletHandler::TabletHandler(VirtioInputDevice* dev, const char* name)
+TabletHandler::TabletHandler(VirtioInputDevice* dev, const char* name,
+	const VirtioInputAbsRange& range)
 	:
-	VirtioInputHandler(dev, name, B_POINTING_DEVICE)
+	VirtioInputHandler(dev, name, B_POINTING_DEVICE),
+	fRange(range)
 {
+}
+
+
+/*!	Maps \a value of an axis with the range \a min..\a max to 0..1, the
+	range input_server spreads over the whole screen. Dividing by 32768 put
+	QEMU's maximum, 32767, short of 1, and ignored devices with other ranges.
+*/
+float
+TabletHandler::_Scale(int32 value, int32 min, int32 max)
+{
+	if (max <= min)
+		return 0.5f;
+	float scaled = float(int64(value) - min) / float(int64(max) - min);
+	return scaled < 0 ? 0 : scaled > 1 ? 1 : scaled;
 }
 
 
@@ -743,10 +770,10 @@ TabletHandler::PacketReceived(const VirtioInputPacket &pkt)
 		case kVirtioInputEvAbs: {
 			switch (pkt.code) {
 				case kVirtioInputAbsX:
-					fNewState.x = float(pkt.value) / 32768.0f;
+					fNewState.x = _Scale(pkt.value, fRange.xMin, fRange.xMax);
 					break;
 				case kVirtioInputAbsY:
-					fNewState.y = float(pkt.value) / 32768.0f;
+					fNewState.y = _Scale(pkt.value, fRange.yMin, fRange.yMax);
 					break;
 			}
 			break;
