@@ -148,7 +148,7 @@ Since: commit `06fb0d25`. Tests: `mqueue_test.cpp`.
   up to the size of physical memory. Linux-only commands (`IPC_INFO`,
   `SHM_INFO`, `SHM_LOCK`) fail with `EINVAL`.
 
-Since: see the System V shared memory commit on `ce/main`. Tests:
+Since: commit `c6cbef2e`. Tests:
 `shm_test.cpp`.
 
 ### virtio-sound
