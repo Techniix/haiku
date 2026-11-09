@@ -17,6 +17,11 @@ Application inotify_test :
 	: libgnu.so [ TargetLibstdc++ ]
 ;
 
+# CPU affinity is in libroot (moved from libgnu); deliberately no libgnu.
+Application affinity_test :
+	affinity_test.cpp
+;
+
 Application eventfd_test :
 	eventfd_test.cpp
 	: libgnu.so
@@ -84,6 +89,6 @@ Application timerfd_test :
 ;
 
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : epoll_test eventfd_test inotify_test libc_ext_test memfd_test
+	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test inotify_test libc_ext_test memfd_test
 		mqueue_test shm_test signalfd_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test ;
 }

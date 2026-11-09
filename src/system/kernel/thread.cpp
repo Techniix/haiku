@@ -1022,6 +1022,20 @@ thread_create_thread(const ThreadCreationAttributes& attributes, bool kernel)
 
 	thread->sig_block_mask = attributes.signal_mask;
 
+	// A userland thread inherits the CPU affinity of the thread creating it,
+	// as on Linux: new threads of a team, the main thread of a fork()ed
+	// child, and that of a team started by load_image() (posix_spawn(),
+	// fork() + exec()) all start with the creator's mask. Kernel threads and
+	// threads created by kernel threads keep the empty mask (all CPUs).
+	if (!kernel) {
+		Thread* creator = thread_get_current_thread();
+		if (creator != NULL && creator != thread
+			&& creator->team != team_get_kernel_team()) {
+			ThreadLocker creatorLocker(creator);
+			thread->cpumask = creator->cpumask;
+		}
+	}
+
 	// init debug structure
 	init_thread_debug_info(&thread->debug_info);
 
@@ -4160,9 +4174,16 @@ _user_set_thread_affinity(thread_id id, const void* userMask, size_t size)
 	thread->cpumask = mask;
 	threadLocker.Unlock();
 
-	// check if running on masked CPU
-	if (!mask.IsEmpty() && !mask.GetBit(thread->cpu->cpu_num))
+	// If the calling thread runs on a CPU it may no longer use, move it now.
+	// Any other thread is not touched here: it may not be running at all
+	// (thread->cpu is NULL then; upstream dereferenced it and panicked when
+	// another, waiting thread's mask was set). The scheduler moves a thread
+	// running or queued on an excluded CPU at its next reschedule, i.e.
+	// within its current quantum.
+	if (thread == thread_get_current_thread() && !mask.IsEmpty()
+		&& !mask.GetBit(smp_get_current_cpu())) {
 		thread_yield();
+	}
 
 	return B_OK;
 }

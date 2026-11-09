@@ -31,6 +31,7 @@ extern int pthread_setname_np(pthread_t thread, const char* name);
 
 extern int pthread_timedjoin_np(pthread_t thread, void** _value, const struct timespec* abstime);
 
+/* libroot (in libgnu before Renga) */
 extern int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize, const cpuset_t* mask);
 extern int pthread_getaffinity_np(pthread_t thread, size_t cpusetsize, cpuset_t* mask);
 

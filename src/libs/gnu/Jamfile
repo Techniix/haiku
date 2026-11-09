@@ -25,7 +25,6 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			getrandom.cpp
 			inotify.cpp
 			memfd.cpp
-			sched_affinity.cpp
 			sched_getcpu.cpp
 			signalfd.cpp
 			timerfd.cpp

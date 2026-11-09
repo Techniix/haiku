@@ -2210,6 +2210,7 @@ void pthread_create() {}
 void pthread_detach() {}
 void pthread_equal() {}
 void pthread_exit() {}
+void pthread_getaffinity_np() {}
 void pthread_getattr_np() {}
 void pthread_getconcurrency() {}
 void pthread_getcpuclockid() {}
@@ -2256,6 +2257,7 @@ void pthread_rwlockattr_getpshared() {}
 void pthread_rwlockattr_init() {}
 void pthread_rwlockattr_setpshared() {}
 void pthread_self() {}
+void pthread_setaffinity_np() {}
 void pthread_setcancelstate() {}
 void pthread_setcanceltype() {}
 void pthread_setconcurrency() {}
@@ -2363,6 +2365,8 @@ void scandir() {}
 void scanf() {}
 void sched_get_priority_max() {}
 void sched_get_priority_min() {}
+void sched_getaffinity() {}
+void sched_setaffinity() {}
 void sched_yield() {}
 void seed48() {}
 void seed48_r() {}

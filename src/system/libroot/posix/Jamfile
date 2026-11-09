@@ -40,6 +40,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			mqueue.cpp
 			poll.cpp
 			$(PWD_BACKEND)
+			sched_affinity.cpp
 			scheduler.cpp
 			semaphore.cpp
 			spawn.cpp

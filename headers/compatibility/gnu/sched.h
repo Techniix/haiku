@@ -74,6 +74,8 @@ extern "C" {
 #endif
 
 extern int sched_getcpu(void);
+	/* libgnu */
+/* libroot (in libgnu before Renga; old binaries resolve them in libroot) */
 extern int sched_setaffinity(pid_t id, size_t cpusetsize, const cpuset_t* mask);
 extern int sched_getaffinity(pid_t id, size_t cpusetsize, cpuset_t* mask);
 

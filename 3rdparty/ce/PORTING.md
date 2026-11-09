@@ -35,6 +35,7 @@ updates this file in the same commit.
 | `TCP_INFO` (`struct tcp_info`), `TCPS_*` states | `<netinet/tcp.h>`, `<netinet/tcp_fsm.h>` | libnetwork (nothing extra) | Missing | Available |
 | Abortive close (`SO_LINGER` with zero timeout) sends a reset | (behaviour) | | Broken: no reset sent, peer never notified | Fixed |
 | `__cxa_thread_atexit_impl()` (C++ `thread_local` destructors) | (C++ runtime) | libroot (nothing extra) | Missing | Available |
+| `sched_getaffinity()`/`sched_setaffinity()`, `pthread_getaffinity_np()`/`pthread_setaffinity_np()` | `<sched.h>`, `<pthread.h>` (gnu headers) | libroot (nothing extra) | In libgnu, with bugs (see below) | Available in libroot |
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -266,6 +267,39 @@ Implementation: `src/system/libroot/posix/stdlib/thread_atexit.cpp`.
 
 Since: the commit that added that file. Tests:
 `3rdparty/ce/tests/posix_compat/thread_atexit_test.cpp` (9 checks).
+
+### CPU affinity
+
+`sched_getaffinity()`, `sched_setaffinity()`, `pthread_getaffinity_np()`
+and `pthread_setaffinity_np()` with glibc's interface (`cpu_set_t`, the
+`CPU_*()` macros), declared in the gnu headers' `<sched.h>` and
+`<pthread.h>` (compile with `_GNU_SOURCE` or `_DEFAULT_SOURCE` and the gnu
+header directory). They moved from libgnu to libroot, so no library has to
+be linked for them; drop linker tricks that pulled libgnu in for these.
+Binaries linked against libgnu before keep working, since the runtime
+loader resolves their references in libroot.
+
+- `sched_*()` take a thread ID (0: the calling thread; a process ID names
+  its main thread, Haiku's team ID being the main thread's ID) and return
+  -1 with `errno` set: `ESRCH`, `EINVAL` (empty mask, buffer smaller than
+  the kernel's mask), `EFAULT` (NULL), `EPERM` (another user's thread).
+  The `pthread_*()` versions return the error number.
+- The mask is inherited, as on Linux: by threads a thread creates, by the
+  child of `fork()`, and by programs it starts.
+- A thread whose new mask excludes the CPU it runs on moves at once when
+  it set the mask itself, otherwise at its next reschedule (within its
+  current time slice).
+- Fixed on the way (stock Haiku): `sched_*()` returned negative error
+  codes instead of -1/`errno`; setting the mask of another thread that was
+  not running panicked the kernel; `pthread_*()` with the main thread's
+  `pthread_t`, called from another thread, acted on the calling thread;
+  masks were never inherited.
+
+Implementation: `src/system/libroot/posix/sched_affinity.cpp`, inheritance
+in `thread_create_thread()` (`src/system/kernel/thread.cpp`).
+
+Since: the commit that moved that file to libroot. Tests:
+`3rdparty/ce/tests/posix_compat/affinity_test.cpp` (15 checks).
 
 ### eventfd
 
