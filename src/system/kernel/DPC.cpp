@@ -234,6 +234,9 @@ DPCQueue::Cancel(DPCCallback* callback)
 	// there are multiple threads trying to cancel the callback at the same
 	// time, the condition variable of the first thread will be used.
 	ConditionVariable condition;
+	condition.Init(this, "dpc callback done");
+		// ConditionVariable has no constructor: without Init() its spinlock
+		// is stack garbage, and Add() below panics (or corrupts memory).
 	if (fCallbackDoneCondition == NULL)
 		fCallbackDoneCondition = &condition;
 
