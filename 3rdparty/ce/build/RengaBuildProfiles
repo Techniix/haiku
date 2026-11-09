@@ -1,0 +1,51 @@
+# Renga build profiles.
+#
+# Included from Jamrules right before upstream's DefineDefaultBuildProfiles,
+# so fork settings never have to be written into upstream's files
+# (DefaultBuildProfiles, the package lists under build/jam/packages, or
+# data/launch). Everything Renga adds to an image is in 3rdparty/ce/Jamfile,
+# guarded by HAIKU_RENGA_IMAGE.
+#
+# Profiles:
+#
+#   renga-raw       plain disk image          generated.x86_64/renga.image
+#   renga-anyboot   ISO for CD, USB and UEFI  generated.x86_64/renga-anyboot.iso
+#   renga-vmware    VMware disk image         generated.x86_64/renga.vmdk
+#
+# A "renga-*" profile is a regular (full desktop) build: DefaultBuildProfiles
+# only singles out "bootstrap-*", "minimum-*" and "test-*", and everything
+# else builds the regular image. On top of that a Renga image gets:
+#
+#   - the volume label "Renga" (the boot volume's name on the Desktop and
+#     in Tracker) instead of "Haiku";
+#   - the Techniix package repository configured next to Haiku's and
+#     HaikuPorts' (see 3rdparty/ce/Jamfile);
+#   - the packages listed in HAIKU_RENGA_EXTRA_PACKAGES, which a
+#     UserBuildConfig can extend. It is empty for now: Lumina joins once its
+#     acceptance checklist has passed on real hardware.
+#
+# The harness keeps using the minimum-* profiles: they boot in a fraction
+# of the time and the tests do not need a desktop.
+
+rule DefineRengaBuildProfiles
+{
+	DefineBuildProfile renga-raw : image : "renga.image" ;
+	DefineBuildProfile renga-anyboot : anyboot-image : "renga-anyboot.iso" ;
+	DefineBuildProfile renga-vmware : vmware-image : "renga.vmdk" ;
+
+	switch $(HAIKU_BUILD_PROFILE) {
+		case "renga-*" : {
+			HAIKU_RENGA_IMAGE = 1 ;
+
+			# 3rdparty/ce is only read when this is set (3rdparty/Jamfile).
+			HAIKU_INCLUDE_3RDPARTY = 1 ;
+
+			HAIKU_IMAGE_LABEL ?= Renga ;
+			HAIKU_ANYBOOT_LABEL ?= Renga ;
+			HAIKU_CD_LABEL ?= Renga ;
+			HAIKU_MMC_LABEL ?= Renga ;
+
+			HAIKU_RENGA_EXTRA_PACKAGES ?= ;
+		}
+	}
+}

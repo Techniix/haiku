@@ -1,0 +1,7 @@
+name Techniix
+vendor "Dalton Singleton"
+summary "Haiku ports by Techniix (github.com/Techniix)"
+priority 1
+baseurl https://techniix.github.io/haiku-packages/x86_64/current
+identifier tag:techniix.github.io,2026:haiku-packages/x86_64
+architecture x86_64

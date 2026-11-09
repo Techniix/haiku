@@ -133,6 +133,15 @@ if ! $(HAIKU_IGNORE_USER_BUILD_CONFIG) {
 	}
 }
 
+# Renga: the fork's own build profiles (renga-raw, renga-anyboot, ...),
+# kept in 3rdparty/ce so that no upstream build file has to change.
+local rengaBuildProfiles = [ GLOB [ FDirName $(HAIKU_TOP) 3rdparty ce build ]
+	: RengaBuildProfiles ] ;
+if $(rengaBuildProfiles) {
+	include $(rengaBuildProfiles) ;
+	DefineRengaBuildProfiles ;
+}
+
 DefineDefaultBuildProfiles ;
 
 PrepareConfigVariables ;

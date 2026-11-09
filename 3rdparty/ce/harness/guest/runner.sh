@@ -19,6 +19,16 @@ listdev 2>&1
 echo "CE-INFO /dev before tests:"
 ls -R /dev/audio 2>&1
 
+# What the image is: the boot volume's name and the package repositories it
+# comes configured with (ce-test.py checks both for the renga-* profiles).
+echo "CE-INFO boot volume:"
+df /boot 2>&1
+echo "CE-INFO package repositories: $(ls /boot/system/settings/package-repositories 2>&1 | tr '\n' ' ')"
+if [ -x /bin/pkgman ]; then
+	echo "CE-INFO pkgman list-repos:"
+	pkgman list-repos 2>&1
+fi
+
 # Give device drivers a moment to finish publishing.
 sleep 2
 

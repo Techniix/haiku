@@ -7,3 +7,11 @@ job x-vnd.Haiku-CE-harness {
 	on initial_volumes_mounted
 	no_safemode
 }
+
+# The tests need the sound card to themselves: on images with a desktop
+# (the renga-* profiles), media_server and its add-on server would otherwise
+# open the virtio_sound device first and vsnd_test would find it busy. The
+# minimum images do not start a media_server anyway.
+service x-vnd.Haiku-media_server {
+	disabled
+}

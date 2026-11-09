@@ -682,6 +682,32 @@ def goertzel_power(samples, rate, hertz):
 	return s1 * s1 + s2 * s2 - coefficient * s1 * s2
 
 
+def check_image_identity(args, results_dir, report):
+	"""For Renga images (renga-* profiles): the boot volume is named Renga and
+	the Techniix package repository is configured, as runner.sh reports."""
+	if not args.profile.startswith("renga-"):
+		return
+	try:
+		with open(os.path.join(results_dir, "serial.log"), errors="replace") \
+				as serial:
+			text = serial.read()
+	except OSError:
+		text = ""
+	checks = report.setdefault("host_checks", [])
+	volume = re.search(r'Volume Name: "([^"]*)"', text)
+	checks.append({"name": "image.volume_name",
+		"pass": volume is not None and volume.group(1) == "Renga",
+		"detail": "boot volume %s (want \"Renga\")" % (
+			'"%s"' % volume.group(1) if volume else "not reported")})
+	repositories = re.search(r"CE-INFO package repositories: ([^\r\n]*)",
+		text)
+	names = repositories.group(1).split() if repositories else []
+	checks.append({"name": "image.repositories",
+		"pass": "Techniix" in names and "HaikuPorts" in names,
+		"detail": "configured: %s (want Techniix next to HaikuPorts)" % (
+			" ".join(names) if names else "not reported")})
+
+
 def check_scratch_disks(results_dir, report):
 	"""Host-side half of vblk_test: the trimmed space must be free again."""
 	checks = report.setdefault("host_checks", [])
@@ -977,6 +1003,7 @@ def main():
 		parse_serial(results_dir, report)
 		parse_qemu_log(results_dir, report)
 		check_scratch_disks(results_dir, report)
+		check_image_identity(args, results_dir, report)
 		analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 
 	summary, passed = write_report(results_dir, report)

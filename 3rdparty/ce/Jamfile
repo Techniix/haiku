@@ -26,3 +26,26 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage home config settings system debug_server
 		: $(debugSettings) ;
 }
+
+
+if $(HAIKU_RENGA_IMAGE) {
+	# Renga images (the renga-* profiles in 3rdparty/ce/build/RengaBuildProfiles).
+
+	# The Techniix package repository, next to Haiku's and HaikuPorts'. Only
+	# the configuration goes into the image; the package index is fetched by
+	# HaikuDepot or "pkgman refresh" like for any repository added later, so
+	# the image never carries a stale copy. repo.info is a copy of
+	# x86_64/current/repo.info from github.com/Techniix/haiku-packages and
+	# has to be updated if the repository's base URL or identifier changes.
+	local repoInfo = <renga-repository-info>Techniix.repo.info ;
+	SEARCH on $(repoInfo) = [ FDirName $(HAIKU_TOP) 3rdparty ce repositories ] ;
+	local repoConfig = <renga-repository-config>Techniix ;
+	MakeLocate $(repoConfig) : $(HAIKU_PACKAGE_REPOSITORIES_DIR_$(HAIKU_PACKAGING_ARCH)) ;
+	RepositoryConfig $(repoConfig) : $(repoInfo) ;
+	AddFilesToHaikuImage system settings package-repositories
+		: $(repoConfig) : Techniix ;
+
+	if $(HAIKU_RENGA_EXTRA_PACKAGES) {
+		AddHaikuImageSystemPackages $(HAIKU_RENGA_EXTRA_PACKAGES) ;
+	}
+}
