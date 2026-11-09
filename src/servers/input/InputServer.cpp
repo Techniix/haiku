@@ -1720,8 +1720,19 @@ InputServer::_SanitizeEvents(EventList& events)
 					// convert them to absolute screen position
 					// (the message is supposed to contain the original
 					// absolute coordinates as "be:tablet_x/y").
-					where.x = absX * fFrame.Width();
-					where.y = absY * fFrame.Height();
+					// 0..1 spans the whole width of the screen, the last
+					// pixel included: a screen W pixels wide is W cells of
+					// 1/W each. That is how virtual machines send the host
+					// pointer's position to their USB and virtio tablets
+					// (QEMU sends pixel px as px * 32767 / W, rounded down,
+					// so the value times W is at most W / 32767 less than
+					// px), and the roundf() below lands exactly on px.
+					// Scaling to Width() (W - 1) put the pointer one pixel
+					// left of the host pointer on the right half of the
+					// screen, and one above it on the lower half. 1.0 is W;
+					// ConstrainTo() below makes it the last pixel.
+					where.x = fFrame.left + absX * (fFrame.Width() + 1);
+					where.y = fFrame.top + absY * (fFrame.Height() + 1);
 
 					event->RemoveName("x");
 					event->RemoveName("y");
