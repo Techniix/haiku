@@ -533,7 +533,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 2 (audit Tier 1) |
 | Risk | Low |
 | Testing status | None |
-| Next milestone | Agreed work order item 8 |
+| Next milestone | Agreed work order item 10 |
 | Recommended next action | A conditional launch_daemon job; harness check that skews the guest clock and expects correction (QEMU user networking provides an NTP-reachable path only if configured; verify first) |
 | Links | Audit Tier 1 |
 
@@ -882,9 +882,20 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 5 (Tier 3); user name/network/packages page 4 |
 | Risk | Medium; High for destructive paths |
 | Testing status | None |
-| Next milestone | Wizard shell on the existing copy engine, using the shared disk engine |
+| Next milestone | Early part: in-place replacement of an existing installation (work order item 8); then the wizard shell |
 | Recommended next action | Start after the shared disk engine's resize work; do not skip ahead (maintainer, 2026-11-09) |
 | Links | Audit section 7 |
+
+**Early part, brought forward by the maintainer (2026-11-09): replace an existing Haiku or Renga installation in place.** Needed so the maintainer can put Renga on his main machine after the boot loader work. Done in today's Installer (not the new wizard), and shaped so the wizard reuses it. Today, installing onto a non-empty volume deletes everything in `/system` except `settings` (all installed packages go) and copies the source's `home` over the existing one. The early part:
+
+- [ ] Detect the existing installation on each partition (Haiku `hrev` or Renga version, from the `haiku` package in `system/packages`) and show it in the destination menu.
+- [ ] When the destination has one, ask how to proceed (selectable, safe option first):
+  - **Upgrade to Renga, keep my files and applications.** Home is left untouched (only missing default files are added); `system/settings` is kept; packages the user installed are kept, except where Renga ships its own version; Renga's system packages replace Haiku's. The old system's packages are kept as a **package state**, so "Select system state" in the boot menu can boot the old installation if anything goes wrong (same mechanism as `F-44` backup and restore).
+  - **Replace the system, keep my files.** Today's behaviour, improved: system and installed packages removed, `home` and `system/settings` kept, the source's `home` not copied over existing files.
+  - **Erase and install.** Everything on the volume removed, after a second confirmation naming the volume.
+- [ ] The boot loader on the disk (BIOS and EFI) updated to Renga's, keeping the existing EFI backup behaviour; other operating systems' loaders untouched (`F-22`).
+- [ ] Harness checks: an image with a Haiku installation, user files, a user-installed package and settings is upgraded by an automated run of the same code (a command-line mode of the Installer), then booted; files, settings and the package survive, the old state is listed and boots.
+- [ ] Before the real-hardware install: the maintainer backs up his home folder (upgrade keeps it, but this is the first real run).
 
 Required capabilities (maintainer, 2026-11-09), with design notes:
 
@@ -1084,7 +1095,7 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Risk | Low to medium (backup and restore: medium, user data) |
 | Testing status | None. Each item gets a harness check where it can run headless (archive round trips, share mounts against QEMU's built-in SMB server, backup/restore round trips, package-state restore) plus screenshots for the GUIs |
 | Next milestone | Batch 1 (see section 5.1) |
-| Recommended next action | Start batch 1 after periodic NTP sync (work order item 9) |
+| Recommended next action | Start batch 1 after periodic NTP sync (work order item 11) |
 | Links | Gap review in the 2026-11-09 conversation; decisions log |
 
 Skipped for now by the maintainer: disk encryption, calendar and CalDAV/CardDAV, night light; later consideration: Mail, DeskCalc, ShowImage and remote desktop updates, a camera app.
@@ -1350,13 +1361,14 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too.
 5. **`virtio_sound` capture** (`F-02`). Done first, as step 0 of the Media Kit (its loopback and recording tests need it).
 6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
-7. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
-8. **Periodic NTP sync** (`F-30`).
-9. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
-10. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
-11. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
-12. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
-13. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
+8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Then the maintainer's real-hardware install.
+9. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+10. **Periodic NTP sync** (`F-30`).
+11. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
+12. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
+13. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
+14. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
 
@@ -1442,7 +1454,7 @@ Milestone count: 6 of 6 (100%).
 
 | # | Item | Done |
 | --- | --- | --- |
-| 1 | Periodic NTP sync | No (work order item 8) |
+| 1 | Periodic NTP sync | No (work order item 10) |
 | 2 | Finish and ship `virtio_sound` | Yes (playback) `658d1756`, `fbbb290a` |
 | 3 | `virtio_block` DISCARD/WRITE_ZEROES | Yes `5b068a5e` |
 | 4 | NVMe multi-namespace + teardown TODOs | Yes `0758b116` (one TODO remains) |
@@ -1829,6 +1841,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Bundled applications (`F-44`): add network shares, backup and restore integrated with package states, a document viewer built on existing open-source code, a programmer's editor, archive creation in Expander with Tracker actions, an on-screen keyboard, a search launcher tied to Tracker and Lumina, screen recording in Screenshot, a task manager in ActivityMonitor; low priority: notification history, clipboard history, a passwords app. Skipped for now: disk encryption, calendar, night light | `F-44` |
 | 2026-11-09 | Separate ports for Renga: `Techniix/RengaPorts` (recipes and package repository, packages require `renga`), apart from the Techniix ports for stock Haiku (`haiku-packages`) | `F-45`, `F-13` |
 | 2026-11-09 | Media Kit right after `F-43` phase A (with `virtio_sound` capture as its first step), then LinuxKPI; NTP sync and bundled applications batch 1 move after them | Section 5.1 |
+| 2026-11-09 | After the Media Kit: boot loader first part, then the Installer's in-place replacement of an existing Haiku/Renga installation (modes: upgrade keeping files and applications, with the old system kept as a bootable package state; replace system keeping files; erase), then the maintainer installs Renga on his real hardware; LinuxKPI and the rest follow | `F-22`, `F-23`, section 5.1 |
 
 ---
 
