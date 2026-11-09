@@ -24,6 +24,8 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py                  # build image, boot, report
 3rdparty/ce/harness/ce-test.py --no-build       # boot the last image again
 3rdparty/ce/harness/ce-test.py --verbose        # drivers built with TRACE() on
+3rdparty/ce/harness/ce-test.py --screenshots 2,4,8   # save the screen then
+3rdparty/ce/harness/ce-test.py --stall 45       # quicker hang detection
 3rdparty/ce/harness/selftest.py                 # check the harness itself
 ```
 
@@ -70,8 +72,20 @@ without a kernel crash, and every check passed.
   the trace macro then). The next normal run rebuilds them without it.
 - **`serial.timed.log`** shows when each line arrived, for timing problems,
   without any change to the guest.
-- **Kernel debugger.** When the guest drops into KDL, the harness sends `bt`
-  and `threads` and stores the output in the report.
+- **Kernel debugger.** When the guest drops into KDL (a panic), the harness
+  runs a debugger session: `bt`, `threads`, `mutex <address>` for every
+  mutex a thread waits on (it names the holder), `bt` for every waiting,
+  running or ready thread and every mutex holder, and `running`. The whole
+  session is saved as `kdl.log`; `summary.md` shows its start.
+- **Hangs.** With no serial output for `--stall` seconds (default 90), the
+  harness presses Alt+SysRq+D through the QEMU monitor socket, Haiku's
+  emergency key for the kernel debugger, and runs the same session, so a
+  deadlock comes with every backtrace and lock holder. The run is reported
+  as `stall-kernel-debugger` (or `stall` if KDL does not answer, which means
+  interrupts are off).
+- **Screenshots.** `--screenshots` saves `screen-<t>s.png` at the given
+  seconds after QEMU starts, through the monitor's `screendump`: the boot
+  splash, or any UI a test brings up.
 
 ## Writing a test suite
 

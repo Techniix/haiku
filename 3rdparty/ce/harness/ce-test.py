@@ -341,6 +341,25 @@ def monitor_command(path, command):
 		return False
 
 
+def convert_screenshots(paths):
+	"""QEMU writes PPM; convert to PNG when Pillow is there."""
+	names = []
+	for path in paths:
+		time.sleep(0.2)
+		if not os.path.exists(path):
+			continue
+		try:
+			from PIL import Image
+			png = path[:-4] + ".png"
+			Image.open(path).save(png)
+			os.unlink(path)
+			path = png
+		except Exception:
+			pass
+		names.append(os.path.basename(path))
+	return names
+
+
 def boot(args, results_dir, report):
 	image = image_path(args)
 	if not os.path.exists(image):
@@ -391,9 +410,16 @@ def boot(args, results_dir, report):
 
 	status = "exited"
 	stalled_at = None
+	pending_shots = sorted(args.screenshots)
+	shots = []
 	while process.poll() is None:
-		time.sleep(1)
+		time.sleep(0.25 if pending_shots else 1)
 		elapsed = time.time() - started
+		while pending_shots and elapsed >= pending_shots[0]:
+			at = pending_shots.pop(0)
+			path = os.path.join(results_dir, "screen-%05.1fs.ppm" % at)
+			if monitor_command(monitor_path, "screendump " + path):
+				shots.append(path)
 		if reader.kdl.is_set():
 			reader.debug_done.wait(timeout=KDL_MAX_BACKTRACES * 0.5 + 30)
 			time.sleep(2)
@@ -435,6 +461,7 @@ def boot(args, results_dir, report):
 	reader.done.wait(timeout=10)
 
 	qemu_stderr.close()
+	report["boot"]["screenshots"] = convert_screenshots(shots)
 	if reader.kdl.is_set():
 		# The whole debugger session (every backtrace); summary.md only
 		# shows the start of it.
@@ -719,6 +746,8 @@ def write_report(results_dir, report):
 		if "stall_after_seconds" in boot:
 			lines.append("- serial output stopped at %ss; the harness pressed "
 				"Alt+SysRq+D" % boot["stall_after_seconds"])
+		if boot.get("screenshots"):
+			lines.append("- screenshots: " + ", ".join(boot["screenshots"]))
 		if boot.get("kdl_log"):
 			lines.append("- full kernel debugger session: %s"
 				% boot["kdl_log"])
@@ -786,6 +815,10 @@ def main():
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
+	parser.add_argument("--screenshots", default="",
+		type=lambda text: [float(t) for t in text.split(",") if t.strip()],
+		help="comma-separated seconds after QEMU starts at which to save "
+			"screen-<t>s.png (e.g. 2,4,8 for the boot splash)")
 	parser.add_argument("--stall", type=int, default=90,
 		help="seconds without serial output before the harness enters the "
 			"kernel debugger to record backtraces")
