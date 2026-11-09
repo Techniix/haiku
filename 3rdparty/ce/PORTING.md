@@ -67,6 +67,12 @@ belong in the Renga package repository
 not in a repository meant for stock Haiku. If one source tree has to serve
 both, keep the fallback path and choose at build time.
 
+On Renga images the Techniix repository has a better priority than
+HaikuPorts, so a package published there under the same name as a
+HaikuPorts package replaces the HaikuPorts one on install and update, even
+if HaikuPorts has a newer version. Bump the Techniix package when HaikuPorts
+updates, or drop it from the repository once upstream has what it needed.
+
 ## Feature details
 
 ### eventfd

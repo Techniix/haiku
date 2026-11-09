@@ -808,8 +808,16 @@ BPackageManager::_AddRemoteRepository(BPackageRoster& roster, const char* name,
 		throw std::bad_alloc();
 	}
 
-	BRepositoryBuilder(*repository, cache, config.Name())
-		.AddToSolver(fSolver, false);
+	BRepositoryBuilder builder(*repository, cache, config.Name());
+
+	// The cache brings the priority from the repository's own repo.info.
+	// The priority in the local configuration (shown by "pkgman list-repos",
+	// set when the repository is added or by the image build) is the user's
+	// or the distribution's choice and wins, unless it is unset.
+	if (config.Priority() != BRepositoryConfig::kUnsetPriority)
+		repository->SetPriority(config.Priority());
+
+	builder.AddToSolver(fSolver, false);
 }
 
 

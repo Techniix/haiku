@@ -68,7 +68,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"libnetwork.so", "libc_ext_test", "virtio_sound",
 	"vsnd_test", "eventfd_test", "memfd_test", "mqueue_test", "shm_test", "timerfd_test",
 	"ucontext_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
-	"virtio_block", "vblk_test", "nvme_disk", "nvme_test"]
+	"virtio_block", "vblk_test", "nvme_disk", "nvme_test",
+	"package_priority_test", "libpackage.so"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -1018,6 +1019,43 @@ def check_image_identity(args, results_dir, report):
 		"pass": "Techniix" in names and "HaikuPorts" in names,
 		"detail": "configured: %s (want Techniix next to HaikuPorts)" % (
 			" ".join(names) if names else "not reported")})
+
+	# The user's own repository wins over HaikuPorts for a package both
+	# offer: the package solver prefers the lower configured priority.
+	priorities = repository_priorities(text)
+	techniix = priorities.get("Techniix")
+	haikuports = priorities.get("HaikuPorts")
+	checks.append({"name": "image.repository_priority",
+		"pass": techniix is not None and haikuports is not None
+			and techniix < haikuports,
+		"detail": "priorities: %s (want Techniix lower, i.e. better, than "
+			"HaikuPorts)" % (", ".join("%s %d" % item
+				for item in sorted(priorities.items()))
+			if priorities else "not reported")})
+
+
+def repository_priorities(text):
+	"""Repository name -> configured priority, from the "pkgman list-repos"
+	output runner.sh prints. Other console output (package_daemon, the
+	kernel) may be interleaved; only the repository name lines (" " or
+	" [User]", six columns, the name) and their "priority:" lines count."""
+	start = text.find("CE-INFO pkgman list-repos:")
+	if start < 0:
+		return {}
+	priorities = {}
+	current = None
+	for line in text[start:].splitlines()[1:]:
+		if line.startswith("CE-"):
+			break
+		name = re.match(r"^ (?:\[User\]| {6}) (\S+)\s*$", line)
+		if name:
+			current = name.group(1)
+			continue
+		priority = re.match(r"^\t\tpriority:\s+(\d+)\s*$", line)
+		if priority and current is not None:
+			priorities[current] = int(priority.group(1))
+			current = None
+	return priorities
 
 
 def iso_volume_id(path):

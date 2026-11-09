@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP 3rdparty ce tests package_priority ;
+
+# Repository priorities in the package solver (pkgman, HaikuDepot): the
+# configured priority decides between two repositories that offer the same
+# package. Uses only the system's own command line tools.
+Application package_priority_test :
+	package_priority_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: package_priority_test ;
+}

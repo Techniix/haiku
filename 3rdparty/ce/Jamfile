@@ -7,6 +7,16 @@ SubDir HAIKU_TOP 3rdparty ce ;
 
 SubInclude HAIKU_TOP 3rdparty ce tests ;
 
+
+# A copy of a repository info file with another "priority" line, for
+# 3rdparty/ce's own repository configs (see the Renga images below). The
+# copy fails the build if the source has no priority line to replace.
+actions RengaRepositoryInfoWithPriority
+{
+	grep -q '^priority ' $(2) || { echo "$(2): no priority line" >&2; exit 1; }
+	sed 's/^priority .*/priority $(HAIKU_RENGA_PRIORITY)/' $(2) > $(1)
+}
+
 if $(CE_HARNESS) {
 	# The guest-side runner and the launch_daemon job that starts it once the
 	# boot volumes are mounted. The runner runs the test programs, writes their
@@ -45,7 +55,40 @@ if $(HAIKU_RENGA_IMAGE) {
 	AddFilesToHaikuImage system settings package-repositories
 		: $(repoConfig) : Techniix ;
 
+	# Techniix wins over HaikuPorts when both offer a package of the same
+	# name. The package solver prefers the repository with the lower
+	# configured priority (libsolv gets -1 - priority, and a higher libsolv
+	# priority beats a higher version). Haiku and HaikuPorts both come with
+	# priority 1, and 0 means "unset" (BRepositoryConfig::kUnsetPriority),
+	# so Techniix cannot go lower: HaikuPorts gets 2 instead. Haiku stays at
+	# 1, next to Techniix; nothing should override the system packages.
+	#
+	# Only the configuration changes, not upstream's build rules: this is a
+	# copy of HaikuPorts' generated repository info with the new priority,
+	# turned into a config by the same rule, and the image definition is
+	# pointed at it through the variable it reads the config from. The
+	# HaikuPorts cache (the package index) stays upstream's. The minimum
+	# images built from the same build directory keep upstream's config,
+	# because the Renga config is a separate file.
+	HAIKU_RENGA_HAIKUPORTS_PRIORITY ?= 2 ;
+	local portsRepository = <repository>HaikuPorts ;
+	local portsInfo = <repository-info>HaikuPorts-info ;
+	local rengaPortsInfo = <renga-repository-info>HaikuPorts-info ;
+	local rengaPortsConfig = <renga-repository-config>HaikuPorts ;
+	local rengaRepositoriesDir = [ FDirName
+		$(HAIKU_PACKAGE_REPOSITORIES_DIR_$(HAIKU_PACKAGING_ARCH)) renga ] ;
+	MakeLocate $(rengaPortsInfo) $(rengaPortsConfig) : $(rengaRepositoriesDir) ;
+	Depends $(rengaPortsInfo) : $(portsInfo) ;
+	HAIKU_RENGA_PRIORITY on $(rengaPortsInfo)
+		= $(HAIKU_RENGA_HAIKUPORTS_PRIORITY) ;
+	RengaRepositoryInfoWithPriority $(rengaPortsInfo) : $(portsInfo) ;
+	RepositoryConfig $(rengaPortsConfig) : $(rengaPortsInfo)
+		: [ on $(portsRepository)
+			return $(HAIKU_REPOSITORY_PACKAGES_CHECKSUM_FILE) ] ;
+	HAIKU_REPOSITORY_CONFIG_FILE on $(portsRepository) = $(rengaPortsConfig) ;
+
 	if $(HAIKU_RENGA_EXTRA_PACKAGES) {
 		AddHaikuImageSystemPackages $(HAIKU_RENGA_EXTRA_PACKAGES) ;
 	}
 }
+

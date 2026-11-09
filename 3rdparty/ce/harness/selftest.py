@@ -332,5 +332,46 @@ expect("branding: haiku nightly-style ID with a renga prefix fails",
 	not branding("Welcome to the Renga boot loader!",
 		"renga-haiku-nightly")["branding.iso_volume_id"])
 
+class IdentityArgs:
+	profile = "renga-raw"
+
+def repository_priority(priorities, noise=True):
+	"""Runs check_image_identity on a serial log whose "pkgman list-repos"
+	output gives the repositories these priorities (name -> number), with
+	package_daemon lines in between as in real runs. Returns the verdict of
+	image.repository_priority."""
+	directory = tempfile.mkdtemp()
+	lines = ['  Volume Name: "Renga"',
+		"CE-INFO package repositories: " + " ".join(priorities),
+		"CE-INFO pkgman list-repos:"]
+	for name, priority in priorities.items():
+		lines.append("        " + name)
+		lines.append("\t\tbase-url:  https://example.invalid/" + name)
+		if noise:
+			lines.append("package_daemon: [1:  59] Doing first boot "
+				"processing #7 for package which-2.21-6-x86_64.hpkg.")
+		lines.append("\t\tidentifier: tag:example.invalid," + name)
+		lines.append("\t\tpriority:  %d" % priority)
+	lines.append("CE-INFO running nvme_test")
+	with open(os.path.join(directory, "serial.log"), "w") as serial:
+		serial.write("\r\n".join(lines) + "\r\n")
+	report = {}
+	ce_test.check_image_identity(IdentityArgs, directory, report)
+	return {c["name"]: c["pass"] for c in report["host_checks"]}[
+		"image.repository_priority"]
+
+expect("identity: Techniix 1 over HaikuPorts 2 passes", repository_priority(
+	{"Haiku": 1, "HaikuPorts": 2, "Techniix": 1}))
+expect("identity: Techniix and HaikuPorts both 1 fails",
+	not repository_priority({"Haiku": 1, "HaikuPorts": 1, "Techniix": 1}))
+expect("identity: HaikuPorts better than Techniix fails",
+	not repository_priority({"HaikuPorts": 1, "Techniix": 3}))
+expect("identity: no Techniix fails",
+	not repository_priority({"Haiku": 1, "HaikuPorts": 2}))
+expect("identity: priority after the list (another CE- line) is ignored",
+	not repository_priority({"HaikuPorts": 2}, noise=False)
+	and ce_test.repository_priorities("CE-INFO pkgman list-repos:\r\n"
+		"        Techniix\r\nCE-INFO x\r\n\t\tpriority:  1\r\n") == {})
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)
