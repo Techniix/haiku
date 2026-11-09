@@ -6,7 +6,8 @@
  *
  * Everything in here is little-endian on the wire. Only the parts of the
  * protocol that this driver uses are declared; jack remapping, channel maps
- * and control elements (VIRTIO_SND_F_CTLS) are left out on purpose.
+ * and control elements (VIRTIO_SND_F_CTLS) are left out on purpose. Jack
+ * information is only queried for the log.
  *
  * The layouts must match the specification byte for byte, because the device
  * validates request sizes (QEMU, for example, answers VIRTIO_SND_S_BAD_MSG
@@ -60,6 +61,13 @@ enum {
 	VIRTIO_SND_R_PCM_STOP			= 0x0105,
 
 	VIRTIO_SND_R_CHMAP_INFO			= 0x0200,
+
+	// Event codes (event queue)
+	VIRTIO_SND_EVT_JACK_CONNECTED		= 0x1000,
+	VIRTIO_SND_EVT_JACK_DISCONNECTED	= 0x1001,
+	VIRTIO_SND_EVT_PCM_PERIOD_ELAPSED	= 0x1100,
+	VIRTIO_SND_EVT_PCM_XRUN				= 0x1101,
+	VIRTIO_SND_EVT_CTL_NOTIFY			= 0x1200,
 
 	VIRTIO_SND_S_OK					= 0x8000,
 	VIRTIO_SND_S_BAD_MSG			= 0x8001,
@@ -180,6 +188,25 @@ struct virtio_snd_pcm_status {
 } _PACKED;
 
 
+// One item of the event queue, written by the device. "data" is the jack,
+// stream or control id the event is about.
+struct virtio_snd_event {
+	struct virtio_snd_hdr	hdr;
+	uint32					data;
+} _PACKED;
+
+
+// One reply item of VIRTIO_SND_R_JACK_INFO
+struct virtio_snd_jack_info {
+	struct virtio_snd_info	hdr;
+	uint32					features;
+	uint32					hda_reg_defconf;
+	uint32					hda_reg_caps;
+	uint8					connected;
+	uint8					padding[7];
+} _PACKED;
+
+
 static_assert(sizeof(virtio_snd_config) == 12, "bad virtio_snd_config");
 static_assert(sizeof(virtio_snd_hdr) == 4, "bad virtio_snd_hdr");
 static_assert(sizeof(virtio_snd_query_info) == 16,
@@ -191,6 +218,9 @@ static_assert(sizeof(virtio_snd_pcm_set_params) == 24,
 static_assert(sizeof(virtio_snd_pcm_xfer) == 4, "bad virtio_snd_pcm_xfer");
 static_assert(sizeof(virtio_snd_pcm_status) == 8,
 	"bad virtio_snd_pcm_status");
+static_assert(sizeof(virtio_snd_event) == 8, "bad virtio_snd_event");
+static_assert(sizeof(virtio_snd_jack_info) == 24,
+	"bad virtio_snd_jack_info");
 
 
 #endif	// VIRTIO_SOUND_H

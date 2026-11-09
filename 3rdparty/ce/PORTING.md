@@ -20,7 +20,7 @@ updates this file in the same commit.
 | `timerfd_create()` / `_settime()` / `_gettime()` | `<sys/timerfd.h>` | `-lgnu` | Missing | Available |
 | `memfd_create()`, file sealing (`F_ADD_SEALS`, `F_GET_SEALS`) | `<sys/mman.h>`, `<fcntl.h>` | `-lgnu` | Missing | Available |
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
-| `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback) |
+| `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback and capture) |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
 | `signalfd()` | `<sys/signalfd.h>` | `-lgnu` | Missing | Available |
@@ -710,10 +710,28 @@ Since: commit `5b068a5e`. Tests: `vblk_test.cpp`.
 
 ### virtio-sound
 
-Audio output in virtual machines (QEMU `-device virtio-sound-pci`) through
-the standard Media Kit path. Playback only for now; capture is planned.
+Audio output and input in virtual machines (QEMU `-device
+virtio-sound-pci`) through the standard Media Kit path: the card is an
+hmulti device (`/dev/audio/hmulti/virtio_sound/<n>`), so the multi_audio
+media add-on offers it as an output and as a physical input, and recording
+apps (SoundRecorder, a port's Media Kit capture code) record from it like
+from an HDA card. Stereo, 44.1 or 48 kHz, 16-bit (32-bit or float only if
+the host device lacks 16-bit). The input always runs at the output's rate;
+a client that asks for another input rate gets the output rate, as
+`B_MULTI_GET_GLOBAL_FORMAT` reports. QEMU only feeds the input from audio
+backends that have one (PulseAudio, PipeWire, ALSA, SDL, ...); with the
+`wav` or `none` backends the input stays silent and playback is not
+affected.
 
-Since: commits `658d1756`, `fbbb290a`.
+For porters writing their own hmulti client (rare; use the Media Kit):
+capture rides on `B_MULTI_BUFFER_EXCHANGE`, which stays paced by playback.
+`record_buffer_cycle` is the record buffer just filled, or -1 if none
+finished since the last exchange; read it before the next exchange, which
+gives it back to the device. A client must keep playing (silence is fine)
+to record.
+
+Since: commits `658d1756`, `fbbb290a` (playback); capture in the commit that
+changed this paragraph. Tests: `vsnd_test.cpp`.
 
 ### Ctrl is the shortcut key
 

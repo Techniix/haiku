@@ -117,7 +117,8 @@ Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 | `serial.timed.log` | The same, each line prefixed with host seconds since boot |
 | `qemu.log`, `qemu.stderr.log` | QEMU diagnostics, including guest errors its device models detect |
 | `build.log` | Full build output |
-| `audio.wav` | What the guest played on the virtio sound card |
+| `audio.wav` | What the guest played on the first virtio sound card |
+| `sdl-out.raw` | What it played on the second one (raw s16le, stereo, 48 kHz) |
 
 The exit status is 0 only for a full run in which the build succeeded, the guest ran to the end
 without a kernel crash, and every check passed.
@@ -128,7 +129,11 @@ without a kernel crash, and every check passed.
    image (`@minimum-raw` by default) with `CE_HARNESS=1`. That variable makes
    `3rdparty/ce` add the test programs and the runner to the image.
 2. QEMU boots the image headless with a snapshot disk, the serial console on
-   a pipe, and a virtio sound card that records into `audio.wav`.
+   a pipe, and two virtio sound cards: one records into `audio.wav` (QEMU's
+   `wav` backend, which has no input), the other runs on QEMU's SDL
+   backend with SDL's `disk` driver, which writes its output to
+   `sdl-out.raw` and reads its capture input from a file the harness keeps
+   filled with a test tone (see "Audio capture" below).
 3. Once the boot volumes are mounted, a system launch_daemon job starts the
    runner (no desktop session needed). It
    writes all output to `/dev/dprintf`, which goes to the serial console, and
@@ -331,6 +336,23 @@ images; the UEFI framebuffer has one mode) the corners are checked again.
 per device with the pointer at 12.5 %, 87.5 % of the screen. Without a
 desktop the suite prints an INFO line and reports nothing.
 
+## Audio capture
+
+The second sound card's capture input is a file the harness writes,
+`capture-in.raw` (removed after the run). SDL's disk driver only takes a
+regular file, reads it in real time (it sleeps one 10 ms period per read),
+starts again at its beginning each time QEMU opens the input voice (on
+every `PCM_PREPARE`), and goes silent for good at its end. So the harness
+(`AudioFeeder`) keeps the whole file filled with the current tone, a stereo
+sine at whole-Hz frequencies, which repeats seamlessly every second, and
+keeps it 30 s longer than QEMU has read (its position comes from
+`/proc/<qemu>/fdinfo`). A test chooses the tone with
+`CE-HOST audio_in <left Hz> <right Hz> <amplitude>`; the harness rewrites
+the file from QEMU's read position on, so the new tone arrives after QEMU's
+and SDL's buffering, well under half a second. The default is 700/1300 Hz
+at amplitude 12000. `results.json` lists every tone written and how far QEMU
+read (`boot.capture_feed`).
+
 ## Current suites
 
 - **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
@@ -361,11 +383,20 @@ desktop the suite prints an INFO line and reports nothing.
   saw it (the checker logs "Media changed from <disk>").
 - **virtio_sound**: drives `/dev/audio/hmulti/virtio_sound/*` with the same
   ioctl sequence and buffer-cycle rules as the multi_audio media add-on. It
-  plays three tone phases (initial start, restart after force-stop, and after
-  a 44.1 kHz format change) and checks the description, formats, buffer
-  layout, buffer cycles, frame counters and real-time pacing. The harness
-  then checks that every phase is present in the recording, on the right
-  channels, without gaps or corruption.
+  first tells the two cards apart by recording half a second from each
+  (only the SDL card's input carries the fed tone). On the other card it
+  plays four tone phases (initial start, restart after force-stop, after a
+  44.1 kHz format change, after reopening) and checks the description,
+  formats, buffer layout, buffer cycles, frame counters and real-time
+  pacing; the harness then checks that every phase is present in
+  `audio.wav`, on the right channels, without gaps or corruption. On the SDL
+  card it records five phases (48 kHz, after a tone change, after a
+  force-stop, at 44.1 kHz, after reopening with longer periods): record
+  cycles and frame counters advance one period at a time, capture runs in
+  real time, and each channel carries the tone the harness fed, at the
+  right level, with no gap (Goertzel purity per 100 ms window). It also
+  checks that capture on the card without input does not disturb playback,
+  and that playback works without record buffers.
 
 ## Revision tags
 

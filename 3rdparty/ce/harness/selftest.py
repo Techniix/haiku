@@ -426,10 +426,67 @@ for words, allowed in [
 		(["screenshot", "a;quit"], False),
 		(["quit"], False),
 		(["block_resize", "vblk0", "128M"], True),
-		(["block_resize", "hda", "128M"], False)]:
+		(["block_resize", "hda", "128M"], False),
+		(["audio_in", "700", "1300", "12000"], True),
+		(["audio_in", "0", "20000", "32767"], True),
+		(["audio_in", "20001", "100", "1000"], False),
+		(["audio_in", "100", "100", "32768"], False),
+		(["audio_in", "-5", "100", "1000"], False),
+		(["audio_in", "100", "100"], False),
+		(["audio_in", "100", "100", "1000;quit"], False)]:
 	expect("host request %s %s" % (" ".join(words),
 			"allowed" if allowed else "refused"),
 		ce_test.host_request_allowed(words) == allowed)
+
+
+# The capture feed: the file must hold the requested tone everywhere (SDL
+# rereads it from the start on every PCM_PREPARE), seamlessly from one second
+# to the next and across rewrites, and a new tone must replace the old one
+# from the reader's position on.
+def feed_tones(path):
+	"""Dominant (left, right) Hz and purity of 100 ms windows of a feed."""
+	with open(path, "rb") as feed:
+		data = feed.read()
+	values = struct.unpack("<%dh" % (len(data) // 2), data)
+	window = RATE // 10
+	results = []
+	for start in range(0, len(values) // 2 - window, RATE * 5):
+		result = []
+		for channel in range(2):
+			chunk = values[2 * start + channel:2 * (start + window):2]
+			energy = sum(x * x for x in chunk)
+			best = max((440, 700, 880, 1300),
+				key=lambda hz: ce_test.goertzel_power(chunk, RATE, hz))
+			result.append((best, 2 * ce_test.goertzel_power(chunk, RATE, best)
+				/ (window * energy) if energy else 0))
+		results.append(result)
+	return results
+
+directory = tempfile.mkdtemp()
+feeder = ce_test.AudioFeeder(os.path.join(directory, "feed.raw"))
+windows = feed_tones(feeder.path)
+expect("capture feed holds the default tone",
+	len(windows) >= 5 and all(w[0][0] == 700 and w[1][0] == 1300
+		and w[0][1] > 0.99 and w[1][1] > 0.99 for w in windows),
+	str(windows[:2]))
+feeder.set_tone(440, 880, 8000)
+feeder._write_tone(12345 * 4 + 2)
+windows = feed_tones(feeder.path)
+expect("capture feed is rewritten with the new tone everywhere",
+	all(w[0][0] == 440 and w[1][0] == 880 and w[0][1] > 0.99
+		and w[1][1] > 0.99 for w in windows), str(windows[:2]))
+expect("capture feed stays ahead of the reader",
+	os.path.getsize(feeder.path) >= (12345 + ce_test.CAPTURE_LEAD_SECONDS
+		* RATE) * 4)
+# Known bad: a feed written in blocks whose phase restarts at every block
+# (what an offset-independent writer would produce) must show as impure.
+with open(feeder.path, "r+b") as feed:
+	block = feeder._one_second((440, 880, 8000))
+	feed.seek(RATE * 4 * 5 + 1000 * 4)
+	feed.write(block[:RATE * 2])
+windows = feed_tones(feeder.path)
+expect("capture feed check notices a phase jump",
+	min(w[0][1] for w in windows) < 0.9, str([w[0] for w in windows]))
 
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

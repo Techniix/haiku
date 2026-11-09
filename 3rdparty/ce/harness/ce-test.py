@@ -25,7 +25,8 @@ Every run writes to <output>/ce-test-results/<timestamp>/ (and refreshes the
     qemu.log        QEMU's own diagnostics, including guest errors reported
                     by device models (e.g. malformed virtio requests)
     build.log       build output (if a build ran)
-    audio.wav       what the guest played on the virtio sound card
+    audio.wav       what the guest played on the first virtio sound card
+    sdl-out.raw     what it played on the second one (s16le, 2 ch, 48 kHz)
 
 The exit status is 0 only if the build succeeded, the guest finished its
 run without crashing, and every check passed.
@@ -58,6 +59,18 @@ VIRTIO_SOUND_PHASES = [
 	("phase3", 1000, 1000, 1.5),
 	("phase4", 500, 250, 1.0),
 ]
+
+# The second virtio sound card runs on QEMU's SDL audio backend with SDL's
+# "disk" driver: its capture input reads from a FIFO the harness writes
+# (AudioFeeder, capture-in.raw), its output goes to sdl-out.raw. Both at 48 kHz, 16-bit
+# stereo, in 10 ms periods (SDL's disk driver sleeps one period per read or
+# write, in whole milliseconds, so 480 frames keep real time exactly).
+CAPTURE_RATE = 48000
+CAPTURE_PERIOD_FRAMES = 480
+# The tone fed until the guest asks for another one (CE-HOST audio_in), and
+# how far the feed file is kept ahead of the reader.
+CAPTURE_DEFAULT_TONE = (700, 1300, 12000)
+CAPTURE_LEAD_SECONDS = 30
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
@@ -550,6 +563,120 @@ def check_two_installs(args, results_dir, report):
 # #pragma mark - boot
 
 
+class AudioFeeder(threading.Thread):
+	"""Feeds the second sound card's capture input: a stereo sine in the
+	regular file SDL's disk driver reads (SDL_DISKAUDIOFILEIN). SDL refuses
+	FIFOs and reads the file from the start every time QEMU opens the input
+	voice (on every PCM_PREPARE), and stops for good at its end. So the
+	whole file always holds the current tone: frequencies are whole Hz, so
+	one second of it repeats seamlessly. A new tone is written from where
+	QEMU's SDL reads now (its file position, from /proc/<pid>/fdinfo) to the
+	end first, then before it; the file is kept CAPTURE_LEAD_SECONDS ahead of
+	the reader."""
+
+	def __init__(self, path):
+		threading.Thread.__init__(self, daemon=True)
+		self.path = path
+		self.pid = None			# QEMU's, set once it runs
+		self.lock = threading.Lock()
+		self.wake = threading.Event()
+		self.tone = CAPTURE_DEFAULT_TONE
+		self.written_tone = None
+		self.changes = []		# (host seconds, tone, seconds to write it)
+		self.most_read = 0		# furthest read position seen, in bytes
+		self.stopped = threading.Event()
+		self.started_at = time.time()
+		self.error = None
+		self.size = 0
+		self._block = None
+		self._write_tone(0)
+
+	def set_tone(self, left, right, amplitude):
+		with self.lock:
+			self.tone = (left, right, amplitude)
+		self.wake.set()
+
+	def _one_second(self, tone):
+		left, right, amplitude = tone
+		samples = []
+		for frame in range(CAPTURE_RATE):
+			samples.append(int(amplitude * math.sin(
+				2 * math.pi * left * frame / CAPTURE_RATE)))
+			samples.append(int(amplitude * math.sin(
+				2 * math.pi * right * frame / CAPTURE_RATE)))
+		return struct.pack("<%dh" % len(samples), *samples)
+
+	def _read_position(self):
+		"""Where QEMU's SDL reads the file now, or None."""
+		if self.pid is None:
+			return None
+		try:
+			for fd in os.listdir("/proc/%d/fd" % self.pid):
+				try:
+					if os.readlink("/proc/%d/fd/%s" % (self.pid, fd)) \
+							!= self.path:
+						continue
+					with open("/proc/%d/fdinfo/%s" % (self.pid, fd)) as info:
+						for line in info:
+							if line.startswith("pos:"):
+								return int(line.split()[1])
+				except OSError:
+					continue
+		except OSError:
+			pass
+		return None
+
+	def _write_tone(self, position):
+		"""Writes the current tone over the whole file (from \a position on
+		first) and makes it CAPTURE_LEAD_SECONDS longer than \a position."""
+		with self.lock:
+			tone = self.tone
+		started = time.time()
+		block = self._one_second(tone)
+		second = len(block)
+		position -= position % 4
+		end = max(self.size, position + CAPTURE_LEAD_SECONDS * second)
+		with open(self.path, "r+b" if os.path.exists(self.path)
+				else "w+b") as feed:
+			for start, stop in ((position, end), (0, position)):
+				offset = start
+				while offset < stop:
+					# Keep the phase of the tone tied to the file offset, so
+					# that every block joins the next one seamlessly.
+					phase = offset % second
+					chunk = block[phase:] + block[:phase]
+					chunk = chunk[:stop - offset]
+					feed.seek(offset)
+					feed.write(chunk)
+					offset += len(chunk)
+		self.size = end
+		self.written_tone = tone
+		self.changes.append((round(started - self.started_at, 2), tone,
+			round(time.time() - started, 2)))
+
+	def run(self):
+		try:
+			while not self.stopped.is_set():
+				self.wake.wait(0.25)
+				self.wake.clear()
+				position = self._read_position()
+				if position is not None:
+					self.most_read = max(self.most_read, position)
+				with self.lock:
+					changed = self.tone != self.written_tone
+				lead = self.size - (position or 0)
+				if changed or lead < CAPTURE_LEAD_SECONDS // 2 \
+						* CAPTURE_RATE * 4:
+					self._write_tone(position or 0)
+		except OSError as error:
+			self.error = str(error)
+
+	def stop(self):
+		self.stopped.set()
+		self.wake.set()
+		self.join(timeout=10)
+
+
 class SerialReader(threading.Thread):
 	"""Copies the guest's serial output to a file and watches it.
 
@@ -557,8 +684,10 @@ class SerialReader(threading.Thread):
 	syslog tail, then lets the main thread stop the VM.
 	"""
 
-	def __init__(self, process, log_path, monitor_path=None, qmp_path=None):
+	def __init__(self, process, log_path, monitor_path=None, qmp_path=None,
+			feeder=None):
 		threading.Thread.__init__(self, daemon=True)
+		self.feeder = feeder
 		self.process = process
 		self.log_path = log_path
 		self.monitor_path = monitor_path
@@ -638,6 +767,9 @@ class SerialReader(threading.Thread):
 		  CE-HOST screenshot <name>
 		      save the screen as screen-<name>.png in the results (name:
 		      up to 40 lower-case letters, digits and underscores)
+		  CE-HOST audio_in <left Hz> <right Hz> <amplitude>
+		      feed this stereo sine into the second sound card's capture
+		      input from now on (0-20000 Hz, amplitude 0-32767)
 
 		Pointer and screenshot requests are carried out before the next
 		line is read, so they happen in order and before anything the test
@@ -653,7 +785,12 @@ class SerialReader(threading.Thread):
 			words = line.split()[1:]
 			accepted = host_request_allowed(words)
 			request = {"request": " ".join(words), "accepted": accepted}
-			if accepted and words[0] in ("pointer", "pointer_rel"):
+			if accepted and words[0] == "audio_in":
+				if self.feeder is not None:
+					self.feeder.set_tone(*[int(w) for w in words[1:]])
+				else:
+					request["error"] = "no capture feed"
+			elif accepted and words[0] in ("pointer", "pointer_rel"):
 				if self.qmp_path is not None:
 					request["error"] = qmp_pointer(self.qmp_path, words)
 			elif accepted and words[0] == "screenshot":
@@ -740,6 +877,10 @@ def host_request_allowed(words):
 		return words[1] in POINTER_DEVICES \
 			and all(re.fullmatch(r"\d{1,5}", w) is not None
 				and int(w) <= POINTER_ABS_MAX for w in words[2:])
+	if len(words) == 4 and words[0] == "audio_in":
+		return all(re.fullmatch(r"\d{1,5}", w) is not None for w in words[1:]) \
+			and int(words[1]) <= 20000 and int(words[2]) <= 20000 \
+			and int(words[3]) <= 32767
 	if len(words) == 2 and words[0] == "screenshot":
 		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None
 	if len(words) == 3 and words[0] == "pointer_rel":
@@ -902,6 +1043,15 @@ def boot(args, results_dir, report):
 		"-audiodev", "wav,id=snd0,path=%s,out.frequency=48000,"
 			"out.channels=2,out.format=s16" % audio,
 		"-device", "virtio-sound-pci,audiodev=snd0",
+		# The second card: capture from the harness, output to a raw file
+		# (see CAPTURE_RATE).
+		"-audiodev", "sdl,id=snd1,in.frequency=%d,in.channels=2,"
+			"in.format=s16,in.buffer-length=%d,out.frequency=%d,"
+			"out.channels=2,out.format=s16,out.buffer-length=%d"
+			% (CAPTURE_RATE, CAPTURE_PERIOD_FRAMES * 1000000 // CAPTURE_RATE,
+				CAPTURE_RATE,
+				CAPTURE_PERIOD_FRAMES * 1000000 // CAPTURE_RATE),
+		"-device", "virtio-sound-pci,audiodev=snd1",
 		"-nic", "none",
 		# Device models report malformed guest requests as guest errors.
 		"-d", "guest_errors,unimp",
@@ -957,11 +1107,20 @@ def boot(args, results_dir, report):
 		report["boot"]["volume_name"] = bfs_volume_name(image)
 	log("booting: " + " ".join(qemu))
 
+	feed = os.path.join(results_dir, "capture-in.raw")
+	feeder = AudioFeeder(feed)
+	environment = dict(os.environ, SDL_AUDIODRIVER="disk",
+		SDL_DISKAUDIOFILEIN=feed,
+		SDL_DISKAUDIOFILE=os.path.join(results_dir, "sdl-out.raw"))
+
 	started = time.time()
 	qemu_stderr = open(os.path.join(results_dir, "qemu.stderr.log"), "wb")
 	process = subprocess.Popen(qemu, stdin=subprocess.PIPE,
-		stdout=subprocess.PIPE, stderr=qemu_stderr)
-	reader = SerialReader(process, serial_log, monitor_path, qmp_path)
+		stdout=subprocess.PIPE, stderr=qemu_stderr, env=environment)
+	feeder.pid = process.pid
+	feeder.start()
+	reader = SerialReader(process, serial_log, monitor_path, qmp_path,
+		feeder)
 	reader.start()
 
 	status = "exited"
@@ -1017,6 +1176,11 @@ def boot(args, results_dir, report):
 	reader.done.wait(timeout=10)
 
 	qemu_stderr.close()
+	feeder.stop()
+	os.remove(feed)
+	report["boot"]["capture_feed"] = {
+		"most_read_seconds": round(feeder.most_read / (CAPTURE_RATE * 4), 1),
+		"tones_written": feeder.changes, "error": feeder.error}
 	for copy in (decoy, patched):
 		# Full copies of the image, only needed while the guest runs.
 		if copy is not None:
