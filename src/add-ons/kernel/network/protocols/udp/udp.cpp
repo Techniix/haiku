@@ -1429,12 +1429,30 @@ udp_error_reply(net_protocol *protocol, net_buffer *cause, net_error error,
 }
 
 
+/*!	sendmsg() control messages are the IP layer's (IP_TOS, IPV6_TCLASS, ...);
+	UDP has none of its own. Without this hook every sendmsg() with control
+	data failed with EOPNOTSUPP in the socket layer.
+*/
+status_t
+udp_add_ancillary_data(net_protocol *protocol,
+	ancillary_data_container *container, const cmsghdr *header)
+{
+	net_protocol* next = protocol->next;
+	if (next->module->add_ancillary_data == NULL)
+		return B_BAD_VALUE;
+	return next->module->add_ancillary_data(next, container, header);
+}
+
+
 ssize_t
 udp_process_ancillary_data_no_container(net_protocol *protocol,
 	net_buffer* buffer, void *data, size_t dataSize)
 {
-	return protocol->next->module->process_ancillary_data_no_container(
-		protocol, buffer, data, dataSize);
+	// The IP layer's own protocol object holds its receive options; passing
+	// UDP's (as before) made it read them from the wrong structure.
+	net_protocol* next = protocol->next;
+	return next->module->process_ancillary_data_no_container(next, buffer,
+		data, dataSize);
 }
 
 
@@ -1569,7 +1587,7 @@ net_protocol_module_info sUDPModule = {
 	udp_deliver_data,
 	udp_error_received,
 	udp_error_reply,
-	NULL,		// add_ancillary_data()
+	udp_add_ancillary_data,
 	NULL,		// process_ancillary_data()
 	udp_process_ancillary_data_no_container,
 	NULL,		// send_data_no_buffer()

@@ -199,6 +199,8 @@ struct ipv6_protocol : net_protocol {
 	uint8		multicast_time_to_live;
 	uint8		receive_hoplimit;
 	uint8		receive_pktinfo;
+	uint8		receive_tclass;		// IPV6_RECVTCLASS
+	uint8		dont_fragment;		// IPV6_DONTFRAG, IPV6_MTU_DISCOVER
 	struct sockaddr* multicast_address; // for IPV6_MULTICAST_IF
 
 	IPv6MulticastFilter multicast_filter;
@@ -252,8 +254,25 @@ IPv6Header::GetHeaderOffset(net_buffer* buffer, uint32 headerCode) const
 		if (status != B_OK)
 			break;
 
+		// Header lengths (RFC 8200, RFC 4302): the fragment header is always
+		// 8 bytes (its length byte is reserved, 0), AH counts 4-byte units
+		// minus 2, the others 8-byte units not counting the first 8. Upstream
+		// added the raw length byte, so with a fragment header (or any 0
+		// length) the offset did not move and the loop could spin forever on
+		// the loopback or network receive thread.
+		uint32 length;
+		if (next == IPPROTO_FRAGMENT)
+			length = sizeof(struct ip6_frag);
+		else if (next == IPPROTO_AH)
+			length = ((uint32)extensionHeader.ip6e_len + 2) * 4;
+		else
+			length = ((uint32)extensionHeader.ip6e_len + 1) * 8;
+		if (next == IPPROTO_ESP || offset + length > 0xffff)
+			break;
+				// ESP encrypts what follows; nothing more to find
+
 		next = extensionHeader.ip6e_nxt;
-		offset += extensionHeader.ip6e_len;
+		offset += length;
 	}
 
 	// were we looking for a specific header?
@@ -971,6 +990,8 @@ ipv6_init_protocol(net_socket* socket)
 	protocol->multicast_time_to_live = kDefaultMulticastTTL;
 	protocol->receive_hoplimit = 0;
 	protocol->receive_pktinfo = 0;
+	protocol->receive_tclass = 0;
+	protocol->dont_fragment = 0;
 	protocol->multicast_address = NULL;
 	return protocol;
 }
@@ -1102,6 +1123,16 @@ ipv6_getsockopt(net_protocol* _protocol, int level, int option, void* value,
 			return get_int_option(value, *_length, protocol->receive_pktinfo);
 		if (option == IPV6_RECVHOPLIMIT)
 			return get_int_option(value, *_length, protocol->receive_hoplimit);
+		if (option == IPV6_RECVTCLASS)
+			return get_int_option(value, *_length, protocol->receive_tclass);
+		if (option == IPV6_TCLASS)
+			return get_int_option(value, *_length, protocol->service_type);
+		if (option == IPV6_DONTFRAG)
+			return get_int_option(value, *_length, protocol->dont_fragment);
+		if (option == IPV6_MTU_DISCOVER) {
+			return get_int_option(value, *_length, protocol->dont_fragment
+				? IPV6_PMTUDISC_DO : IPV6_PMTUDISC_DONT);
+		}
 		if (option == IPV6_JOIN_GROUP
 			|| option == IPV6_LEAVE_GROUP)
 			return EOPNOTSUPP;
@@ -1179,6 +1210,44 @@ ipv6_setsockopt(net_protocol* _protocol, int level, int option,
 			return set_int_option(protocol->receive_pktinfo, value, length);
 		if (option == IPV6_RECVHOPLIMIT)
 			return set_int_option(protocol->receive_hoplimit, value, length);
+		if (option == IPV6_RECVTCLASS) {
+			int enable;
+			status_t status = set_int_option(enable, value, length);
+			if (status == B_OK)
+				protocol->receive_tclass = enable != 0;
+			return status;
+		}
+		if (option == IPV6_TCLASS) {
+			// RFC 3542: -1 selects the default (0); 0..255 otherwise.
+			int trafficClass;
+			status_t status = set_int_option(trafficClass, value, length);
+			if (status != B_OK)
+				return status;
+			if (trafficClass < -1 || trafficClass > 255)
+				return B_BAD_VALUE;
+			protocol->service_type = trafficClass < 0 ? 0 : trafficClass;
+			return B_OK;
+		}
+		if (option == IPV6_DONTFRAG) {
+			int enable;
+			status_t status = set_int_option(enable, value, length);
+			if (status == B_OK)
+				protocol->dont_fragment = enable != 0;
+			return status;
+		}
+		if (option == IPV6_MTU_DISCOVER) {
+			// Linux's spelling; as for IPv4, only DO/PROBE ("don't
+			// fragment") and DONT/WANT are told apart.
+			int mode;
+			status_t status = set_int_option(mode, value, length);
+			if (status != B_OK)
+				return status;
+			if (mode < IPV6_PMTUDISC_DONT || mode > IPV6_PMTUDISC_PROBE)
+				return B_BAD_VALUE;
+			protocol->dont_fragment = mode == IPV6_PMTUDISC_DO
+				|| mode == IPV6_PMTUDISC_PROBE;
+			return B_OK;
+		}
 		if (option == IPV6_JOIN_GROUP || option == IPV6_LEAVE_GROUP) {
 			ipv6_mreq mreq;
 			if (length != sizeof(ipv6_mreq))
@@ -1265,6 +1334,31 @@ ip6_select_hoplimit(net_protocol* _protocol, net_buffer* buffer)
 }
 
 
+/*!	Reads the IPV6_TCLASS and IPV6_HOPLIMIT values a sendmsg() call attached
+	to \a buffer (-1 for none).
+*/
+static void
+get_send_ancillary_data(net_buffer* buffer, int& trafficClass, int& hopLimit)
+{
+	ancillary_data_container* container
+		= gBufferModule->get_ancillary_data(buffer);
+	if (container == NULL)
+		return;
+
+	ancillary_data_header header;
+	void* data = NULL;
+	while ((data = gStackModule->next_ancillary_data(container, data,
+			&header)) != NULL) {
+		if (header.level != IPPROTO_IPV6)
+			continue;
+		if (header.type == IPV6_TCLASS)
+			trafficClass = *(int*)data;
+		else if (header.type == IPV6_HOPLIMIT)
+			hopLimit = *(int*)data;
+	}
+}
+
+
 status_t
 ipv6_send_routed_data(net_protocol* _protocol, struct net_route* route,
 	net_buffer* buffer)
@@ -1305,19 +1399,29 @@ ipv6_send_routed_data(net_protocol* _protocol, struct net_route* route,
 	if (buffer->size > 0xffff)
 		return EMSGSIZE;
 
+	// Per-packet IPV6_TCLASS and IPV6_HOPLIMIT from sendmsg() control
+	// messages (ipv6_add_ancillary_data()) override the socket's options.
+	int packetTrafficClass = -1;
+	int packetHopLimit = -1;
+	if (protocol != NULL)
+		get_send_ancillary_data(buffer, packetTrafficClass, packetHopLimit);
+
 	uint32 flowinfo = 0;
 		// TODO: fill in the flow id from somewhere
-	if (protocol) {
-		// fill in traffic class
-		flowinfo |= htonl(protocol->service_type << 20);
-	}
+	if (packetTrafficClass >= 0)
+		flowinfo |= (uint32)packetTrafficClass << 20;
+	else if (protocol)
+		flowinfo |= (uint32)protocol->service_type << 20;
+			// host order here; it was converted twice before (htonl() here
+			// and below), which put the traffic class into the wrong bits
 	// set lower 28 bits
 	header->ip6_flow = htonl(flowinfo) & IPV6_FLOWINFO_MASK;
 	// set upper 4 bits
 	header->ip6_vfc |= IPV6_VERSION;
 	header->ip6_plen = htons(dataLength);
 	header->ip6_nxt = protocolNumber;
-	header->ip6_hlim = ip6_select_hoplimit(protocol, buffer);
+	header->ip6_hlim = packetHopLimit >= 0 ? packetHopLimit
+		: ip6_select_hoplimit(protocol, buffer);
 	memcpy(&header->ip6_src, &source.sin6_addr, sizeof(in6_addr));
 	memcpy(&header->ip6_dst, &destination.sin6_addr, sizeof(in6_addr));
 
@@ -1347,6 +1451,9 @@ ipv6_send_routed_data(net_protocol* _protocol, struct net_route* route,
 
 	uint32 mtu = route->mtu ? route->mtu : interface->device->mtu;
 	if (buffer->size > mtu) {
+		if (protocol != NULL && protocol->dont_fragment)
+			return EMSGSIZE;
+
 		// we need to fragment the packet
 		return send_fragments(protocol, route, buffer, mtu);
 	}
@@ -1507,6 +1614,11 @@ ipv6_receive_data(net_buffer* buffer)
 	fill_sockaddr_in6((struct sockaddr_in6*)buffer->source, header.Src());
 	memcpy(buffer->destination, &destination, sizeof(sockaddr_in6));
 
+	// For IPV6_RECVTCLASS and IPV6_RECVHOPLIMIT: kept with the buffer and its
+	// clones, unlike the stored header.
+	buffer->traffic_class = (ntohl(header.header.ip6_flow) >> 20) & 0xff;
+	buffer->hop_limit = header.header.ip6_hlim;
+
 	// get the transport protocol and transport header offset
 	uint16 transportHeaderOffset = header.GetHeaderOffset(buffer);
 	uint8 protocol = buffer->protocol;
@@ -1643,6 +1755,61 @@ ipv6_error_reply(net_protocol* protocol, net_buffer* cause, net_error error,
 }
 
 
+/*!	sendmsg() control messages for datagram sockets (RFC 3542): IPV6_TCLASS
+	and IPV6_HOPLIMIT (an int; -1 selects the default), applied to that
+	datagram only. Anything else is refused with EINVAL, as on Linux.
+*/
+status_t
+ipv6_add_ancillary_data(net_protocol* protocol,
+	ancillary_data_container* container, const cmsghdr* header)
+{
+	if (header->cmsg_level != IPPROTO_IPV6
+		|| (header->cmsg_type != IPV6_TCLASS
+			&& header->cmsg_type != IPV6_HOPLIMIT)
+		|| header->cmsg_len != CMSG_LEN(sizeof(int))) {
+		return B_BAD_VALUE;
+	}
+
+	int value;
+	memcpy(&value, CMSG_DATA(header), sizeof(int));
+	if (value < -1 || value > 255)
+		return B_BAD_VALUE;
+	if (value == -1)
+		return B_OK;
+			// the socket's setting applies
+
+	ancillary_data_header ancillaryHeader;
+	ancillaryHeader.level = header->cmsg_level;
+	ancillaryHeader.type = header->cmsg_type;
+	ancillaryHeader.len = sizeof(int);
+	return gStackModule->add_ancillary_data(container, &ancillaryHeader,
+		&value, NULL, NULL, NULL);
+}
+
+
+/*!	Appends one control message, or marks the buffer's control data as
+	truncated (MSG_CTRUNC, see net_socket.cpp) if it does not fit.
+*/
+static bool
+put_control_message(net_buffer* buffer, void* msgControl,
+	size_t msgControlLen, ssize_t& bytesWritten, int type, const void* data,
+	size_t dataLength)
+{
+	if (msgControlLen - bytesWritten < CMSG_SPACE(dataLength)) {
+		buffer->buffer_flags |= NET_BUFFER_CONTROL_TRUNCATED;
+		return false;
+	}
+
+	cmsghdr* messageHeader = (cmsghdr*)((char*)msgControl + bytesWritten);
+	messageHeader->cmsg_len = CMSG_LEN(dataLength);
+	messageHeader->cmsg_level = IPPROTO_IPV6;
+	messageHeader->cmsg_type = type;
+	memcpy(CMSG_DATA(messageHeader), data, dataLength);
+	bytesWritten += CMSG_SPACE(dataLength);
+	return true;
+}
+
+
 ssize_t
 ipv6_process_ancillary_data_no_container(net_protocol* _protocol,
 	net_buffer* buffer, void* msgControl, size_t msgControlLen)
@@ -1650,47 +1817,32 @@ ipv6_process_ancillary_data_no_container(net_protocol* _protocol,
 	ipv6_protocol* protocol = (ipv6_protocol*)_protocol;
 	ssize_t bytesWritten = 0;
 
+	// Traffic class and hop limit come from the buffer's metadata, which
+	// ipv6_receive_data() sets. Upstream read the hop limit from the stored
+	// header, which datagram sockets' clones do not have, and took it only
+	// from headers that were not version 6, so it always reported 64.
+
 	if (protocol->receive_hoplimit != 0) {
 		TRACE("receive_hoplimit");
 
-		if (msgControlLen < CMSG_SPACE(sizeof(int)))
-			return B_NO_MEMORY;
-
-		// use some default value (64 at the moment) when the real one fails
-		int hopLimit = IPV6_DEFHLIM;
-
-		if (gBufferModule->stored_header_length(buffer)
-				>= (int)sizeof(ip6_hdr)) {
-			IPv6Header header;
-			if (gBufferModule->restore_header(buffer, 0,
-					&header, sizeof(ip6_hdr)) == B_OK
-				&& header.ProtocolVersion() != IPV6_VERSION) {
-				// header is OK, take hoplimit from it
-				hopLimit = header.header.ip6_hlim;
-			}
+		int hopLimit = buffer->hop_limit;
+		if (!put_control_message(buffer, msgControl, msgControlLen,
+				bytesWritten, IPV6_HOPLIMIT, &hopLimit, sizeof(int))) {
+			return bytesWritten;
 		}
+	}
 
-		cmsghdr* messageHeader = (cmsghdr*)((char*)msgControl + bytesWritten);
-		messageHeader->cmsg_len = CMSG_LEN(sizeof(int));
-		messageHeader->cmsg_level = IPPROTO_IPV6;
-		messageHeader->cmsg_type = IPV6_HOPLIMIT;
-
-		memcpy(CMSG_DATA(messageHeader), &hopLimit, sizeof(int));
-
-		bytesWritten += CMSG_SPACE(sizeof(int));
-		msgControlLen -= CMSG_SPACE(sizeof(int));
+	if (protocol->receive_tclass != 0) {
+		// The traffic class (DSCP and ECN), as an int (RFC 3542).
+		int trafficClass = buffer->traffic_class;
+		if (!put_control_message(buffer, msgControl, msgControlLen,
+				bytesWritten, IPV6_TCLASS, &trafficClass, sizeof(int))) {
+			return bytesWritten;
+		}
 	}
 
 	if (protocol->receive_pktinfo != 0) {
 		TRACE("receive_pktinfo");
-
-		if (msgControlLen < CMSG_SPACE(sizeof(struct in6_pktinfo)))
-			return B_NO_MEMORY;
-
-		cmsghdr* messageHeader = (cmsghdr*)((char*)msgControl + bytesWritten);
-		messageHeader->cmsg_len = CMSG_LEN(sizeof(struct in6_pktinfo));
-		messageHeader->cmsg_level = IPPROTO_IPV6;
-		messageHeader->cmsg_type = IPV6_PKTINFO;
 
 		struct in6_pktinfo pi;
 		memcpy(&pi.ipi6_addr,
@@ -1701,10 +1853,10 @@ ipv6_process_ancillary_data_no_container(net_protocol* _protocol,
 			pi.ipi6_ifindex = buffer->interface_address->interface->index;
 		else
 			pi.ipi6_ifindex = 0;
-		memcpy(CMSG_DATA(messageHeader), &pi, sizeof(struct in6_pktinfo));
-
-		bytesWritten += CMSG_SPACE(sizeof(struct in6_pktinfo));
-		msgControlLen -= CMSG_SPACE(sizeof(struct in6_pktinfo));
+		if (!put_control_message(buffer, msgControl, msgControlLen,
+				bytesWritten, IPV6_PKTINFO, &pi, sizeof(pi))) {
+			return bytesWritten;
+		}
 	}
 
 	return bytesWritten;
@@ -1844,7 +1996,7 @@ net_protocol_module_info gIPv6Module = {
 	ipv6_deliver_data,
 	ipv6_error_received,
 	ipv6_error_reply,
-	NULL,		// add_ancillary_data()
+	ipv6_add_ancillary_data,
 	NULL,		// process_ancillary_data()
 	ipv6_process_ancillary_data_no_container,
 	NULL,		// send_data_no_buffer()

@@ -19,6 +19,8 @@
 enum net_buffer_flags {
 	NET_BUFFER_L3_CHECKSUM_VALID = (1 << 0),
 	NET_BUFFER_L4_CHECKSUM_VALID = (1 << 1),
+	NET_BUFFER_CONTROL_TRUNCATED = (1 << 2),
+		// Renga: recvmsg() control messages did not all fit (MSG_CTRUNC)
 };
 
 
@@ -42,6 +44,10 @@ typedef struct net_buffer {
 	uint32					size;
 	uint8					protocol;
 	uint16					buffer_flags;
+	uint8					traffic_class;
+		// Renga: TOS / IPv6 traffic class of a received IP packet
+	uint8					hop_limit;
+		// Renga: TTL / IPv6 hop limit of a received IP packet
 } net_buffer;
 
 struct ancillary_data_container;

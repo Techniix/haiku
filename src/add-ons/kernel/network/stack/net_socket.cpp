@@ -285,6 +285,13 @@ process_ancillary_data(net_socket* socket,
 	bytesWritten = socket->first_info->process_ancillary_data_no_container(
 		socket->first_protocol, buffer, dataBuffer,
 		messageHeader->msg_controllen);
+	if (bytesWritten == B_NO_MEMORY) {
+		// Older protocol hooks report a too small control buffer this way.
+		// It is no error for recvmsg(): the datagram is delivered, with
+		// MSG_CTRUNC (set in socket_receive()), as everywhere else.
+		buffer->buffer_flags |= NET_BUFFER_CONTROL_TRUNCATED;
+		bytesWritten = 0;
+	}
 	if (bytesWritten < 0)
 		return bytesWritten;
 	messageHeader->msg_controllen = bytesWritten;
@@ -1247,6 +1254,8 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 		return status;
 
 	// process ancillary data
+	if (buffer != NULL)
+		buffer->buffer_flags &= ~NET_BUFFER_CONTROL_TRUNCATED;
 	if (header != NULL) {
 		if (buffer != NULL && header->msg_control != NULL) {
 			ancillary_data_container* container
@@ -1272,6 +1281,10 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 		nameLen = header->msg_namelen;
 		header->msg_namelen = 0;
 		header->msg_flags = 0;
+		if (buffer != NULL
+			&& (buffer->buffer_flags & NET_BUFFER_CONTROL_TRUNCATED) != 0) {
+			header->msg_flags |= MSG_CTRUNC;
+		}
 	}
 
 	if (buffer == NULL)

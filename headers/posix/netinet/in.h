@@ -92,6 +92,13 @@ struct sockaddr_in {
 };
 
 
+/* IP_PKTINFO control message (Linux layout) */
+struct in_pktinfo {
+	unsigned int	ipi_ifindex;	/* interface the packet arrived on */
+	struct in_addr	ipi_spec_dst;	/* local address of that interface */
+	struct in_addr	ipi_addr;		/* destination address of the packet */
+};
+
 /* RFC 3678 - Socket Interface Extensions for Multicast Source Filters */
 
 struct ip_mreq {
@@ -165,6 +172,28 @@ struct group_source_req {
 #define IPV6_RTHDR					37  /* struct ip6_rthdr */
 
 #define IP_DONTFRAG					38  /* bool; don't fragment */
+
+/* Renga: the options QUIC stacks and other datagram code use (Linux, BSD) */
+#define IP_RECVTOS					39	/* bool; receive the TOS byte (ECN)
+										   as an IP_RECVTOS (BSD) message */
+#define IP_PKTINFO					40	/* bool; receive struct in_pktinfo
+										   (Linux) */
+#define IP_MTU_DISCOVER				41	/* int; IP_PMTUDISC_* (Linux) */
+#define IPV6_RECVTCLASS				42	/* bool; receive the traffic class
+										   as an IPV6_TCLASS message */
+#define IPV6_TCLASS					43	/* int; traffic class to send */
+#define IPV6_DONTFRAG				44	/* bool; don't fragment */
+#define IPV6_MTU_DISCOVER			45	/* int; IPV6_PMTUDISC_* (Linux) */
+
+/* values of IP_MTU_DISCOVER and IPV6_MTU_DISCOVER */
+#define IP_PMTUDISC_DONT			0	/* fragment as needed */
+#define IP_PMTUDISC_WANT			1	/* treated as DONT */
+#define IP_PMTUDISC_DO				2	/* never fragment (EMSGSIZE) */
+#define IP_PMTUDISC_PROBE			3	/* treated as DO */
+#define IPV6_PMTUDISC_DONT			IP_PMTUDISC_DONT
+#define IPV6_PMTUDISC_WANT			IP_PMTUDISC_WANT
+#define IPV6_PMTUDISC_DO			IP_PMTUDISC_DO
+#define IPV6_PMTUDISC_PROBE			IP_PMTUDISC_PROBE
 
 
 #define INADDR_ANY					((in_addr_t)0x00000000)

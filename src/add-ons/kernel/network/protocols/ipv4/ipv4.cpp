@@ -186,6 +186,8 @@ struct ipv4_protocol : net_protocol {
 #define IP_FLAG_HEADER_INCLUDED		0x01
 #define IP_FLAG_RECEIVE_DEST_ADDR	0x02
 #define IP_FLAG_DONT_FRAGMENT		0x04
+#define IP_FLAG_RECEIVE_TOS			0x08	// IP_RECVTOS
+#define IP_FLAG_RECEIVE_PKTINFO		0x10	// IP_PKTINFO
 
 
 static const int kDefaultTTL = 254;
@@ -1218,6 +1220,20 @@ ipv4_getsockopt(net_protocol* _protocol, int level, int option, void* value,
 			return get_int_option(value, *_length,
 				(protocol->flags & IP_FLAG_DONT_FRAGMENT) != 0);
 		}
+		if (option == IP_RECVTOS) {
+			return get_int_option(value, *_length,
+				(protocol->flags & IP_FLAG_RECEIVE_TOS) != 0);
+		}
+		if (option == IP_PKTINFO) {
+			return get_int_option(value, *_length,
+				(protocol->flags & IP_FLAG_RECEIVE_PKTINFO) != 0);
+		}
+		if (option == IP_MTU_DISCOVER) {
+			// Only "fragment" and "don't fragment" are distinguished.
+			return get_int_option(value, *_length,
+				(protocol->flags & IP_FLAG_DONT_FRAGMENT) != 0
+					? IP_PMTUDISC_DO : IP_PMTUDISC_DONT);
+		}
 		if (option == IP_TTL)
 			return get_int_option(value, *_length, protocol->time_to_live);
 		if (option == IP_TOS)
@@ -1330,6 +1346,42 @@ ipv4_setsockopt(net_protocol* _protocol, int level, int option,
 			else
 				protocol->flags &= ~IP_FLAG_DONT_FRAGMENT;
 
+			return B_OK;
+		}
+		if (option == IP_RECVTOS || option == IP_PKTINFO) {
+			// Delivered as control messages by recvmsg() (see
+			// ipv4_process_ancillary_data_no_container()).
+			int enable;
+			if (length != sizeof(int))
+				return B_BAD_VALUE;
+			if (user_memcpy(&enable, value, sizeof(int)) != B_OK)
+				return B_BAD_ADDRESS;
+
+			uint32 flag = option == IP_RECVTOS
+				? IP_FLAG_RECEIVE_TOS : IP_FLAG_RECEIVE_PKTINFO;
+			if (enable)
+				protocol->flags |= flag;
+			else
+				protocol->flags &= ~flag;
+			return B_OK;
+		}
+		if (option == IP_MTU_DISCOVER) {
+			// Linux's spelling of IP_DONTFRAG. Haiku does no path MTU
+			// discovery of its own: DO and PROBE set "don't fragment"
+			// (sends above the route MTU fail with EMSGSIZE, as with DO on
+			// Linux), DONT and WANT clear it.
+			int mode;
+			if (length != sizeof(int))
+				return B_BAD_VALUE;
+			if (user_memcpy(&mode, value, sizeof(int)) != B_OK)
+				return B_BAD_ADDRESS;
+			if (mode < IP_PMTUDISC_DONT || mode > IP_PMTUDISC_PROBE)
+				return B_BAD_VALUE;
+
+			if (mode == IP_PMTUDISC_DO || mode == IP_PMTUDISC_PROBE)
+				protocol->flags |= IP_FLAG_DONT_FRAGMENT;
+			else
+				protocol->flags &= ~IP_FLAG_DONT_FRAGMENT;
 			return B_OK;
 		}
 		if (option == IP_TTL)
@@ -1506,6 +1558,31 @@ ipv4_shutdown(net_protocol* protocol, int direction)
 }
 
 
+/*!	Reads the IP_TOS and IP_TTL values a sendmsg() call attached to
+	\a buffer (-1 for none).
+*/
+static void
+get_send_ancillary_data(net_buffer* buffer, int& tos, int& ttl)
+{
+	ancillary_data_container* container
+		= gBufferModule->get_ancillary_data(buffer);
+	if (container == NULL)
+		return;
+
+	ancillary_data_header header;
+	void* data = NULL;
+	while ((data = gStackModule->next_ancillary_data(container, data,
+			&header)) != NULL) {
+		if (header.level != IPPROTO_IP)
+			continue;
+		if (header.type == IP_TOS)
+			tos = *(int*)data;
+		else if (header.type == IP_TTL)
+			ttl = *(int*)data;
+	}
+}
+
+
 status_t
 ipv4_send_routed_data(net_protocol* _protocol, struct net_route* route,
 	net_buffer* buffer)
@@ -1547,6 +1624,13 @@ ipv4_send_routed_data(net_protocol* _protocol, struct net_route* route,
 	// Add IP header (if needed)
 
 	if (!headerIncluded) {
+		// Per-packet IP_TOS and IP_TTL from sendmsg() control messages
+		// (ipv4_add_ancillary_data()) override the socket's options.
+		int packetTOS = -1;
+		int packetTTL = -1;
+		if (protocol != NULL)
+			get_send_ancillary_data(buffer, packetTOS, packetTTL);
+
 		NetBufferPrepend<ipv4_header> header(buffer);
 		if (header.Status() != B_OK)
 			return header.Status();
@@ -1554,6 +1638,8 @@ ipv4_send_routed_data(net_protocol* _protocol, struct net_route* route,
 		header->version = IPV4_VERSION;
 		header->header_length = sizeof(ipv4_header) / 4;
 		header->service_type = protocol ? protocol->service_type : 0;
+		if (packetTOS >= 0)
+			header->service_type = packetTOS;
 		header->total_length = htons(buffer->size);
 		header->id = htons(atomic_add(&sPacketID, 1));
 		header->fragment_offset = 0;
@@ -1562,6 +1648,8 @@ ipv4_send_routed_data(net_protocol* _protocol, struct net_route* route,
 				header->fragment_offset |= htons(IP_DONT_FRAGMENT);
 			header->time_to_live = (buffer->msg_flags & MSG_MCAST) != 0
 				? protocol->multicast_time_to_live : protocol->time_to_live;
+			if (packetTTL >= 0)
+				header->time_to_live = packetTTL;
 		} else {
 			header->time_to_live = (buffer->msg_flags & MSG_MCAST) != 0
 				? kDefaultMulticastTTL : kDefaultTTL;
@@ -1784,6 +1872,11 @@ ipv4_receive_data(net_buffer* buffer)
 		|| headerLength < sizeof(ipv4_header))
 		return B_BAD_DATA;
 
+	// For IP_RECVTOS (ECN): kept with the buffer and its clones, unlike the
+	// stored header.
+	buffer->traffic_class = header.service_type;
+	buffer->hop_limit = header.time_to_live;
+
 	if ((buffer->buffer_flags & NET_BUFFER_L3_CHECKSUM_VALID) == 0) {
 		if (gBufferModule->checksum(buffer, 0, headerLength, true) != 0)
 			return B_BAD_DATA;
@@ -1994,26 +2087,109 @@ ipv4_error_reply(net_protocol* protocol, net_buffer* cause, net_error error,
 }
 
 
+/*!	sendmsg() control messages for datagram sockets: IP_TOS and IP_TTL
+	(an int, or for IP_TOS also a single byte, as Linux accepts), applied to
+	that datagram only. Anything else is refused with EINVAL, as on Linux.
+*/
+status_t
+ipv4_add_ancillary_data(net_protocol* protocol,
+	ancillary_data_container* container, const cmsghdr* header)
+{
+	if (header->cmsg_level != IPPROTO_IP
+		|| (header->cmsg_type != IP_TOS && header->cmsg_type != IP_TTL)) {
+		return B_BAD_VALUE;
+	}
+
+	size_t dataLength = header->cmsg_len - CMSG_LEN(0);
+	int value;
+	if (dataLength == sizeof(int))
+		memcpy(&value, CMSG_DATA(header), sizeof(int));
+	else if (dataLength == 1 && header->cmsg_type == IP_TOS)
+		value = *(const uint8*)CMSG_DATA(header);
+	else
+		return B_BAD_VALUE;
+
+	if (value < 0 || value > 255 || (header->cmsg_type == IP_TTL && value == 0))
+		return B_BAD_VALUE;
+
+	ancillary_data_header ancillaryHeader;
+	ancillaryHeader.level = header->cmsg_level;
+	ancillaryHeader.type = header->cmsg_type;
+	ancillaryHeader.len = sizeof(int);
+	return gStackModule->add_ancillary_data(container, &ancillaryHeader,
+		&value, NULL, NULL, NULL);
+}
+
+
+/*!	Appends one control message, or marks the buffer's control data as
+	truncated (MSG_CTRUNC, see net_socket.cpp) if it does not fit.
+*/
+static bool
+put_control_message(net_buffer* buffer, void* msgControl,
+	size_t msgControlLen, ssize_t& bytesWritten, int type, const void* data,
+	size_t dataLength)
+{
+	if (msgControlLen - bytesWritten < CMSG_SPACE(dataLength)) {
+		buffer->buffer_flags |= NET_BUFFER_CONTROL_TRUNCATED;
+		return false;
+	}
+
+	cmsghdr* messageHeader = (cmsghdr*)((char*)msgControl + bytesWritten);
+	messageHeader->cmsg_len = CMSG_LEN(dataLength);
+	messageHeader->cmsg_level = IPPROTO_IP;
+	messageHeader->cmsg_type = type;
+	memcpy(CMSG_DATA(messageHeader), data, dataLength);
+	bytesWritten += CMSG_SPACE(dataLength);
+	return true;
+}
+
+
 ssize_t
-ipv4_process_ancillary_data_no_container(net_protocol* protocol,
+ipv4_process_ancillary_data_no_container(net_protocol* _protocol,
 	net_buffer* buffer, void* msgControl, size_t msgControlLen)
 {
+	ipv4_protocol* protocol = (ipv4_protocol*)_protocol;
 	ssize_t bytesWritten = 0;
 
-	if ((((ipv4_protocol*)protocol)->flags & IP_FLAG_RECEIVE_DEST_ADDR) != 0) {
-		if (msgControlLen < CMSG_SPACE(sizeof(struct in_addr)))
-			return B_NO_MEMORY;
+	if ((protocol->flags & IP_FLAG_RECEIVE_DEST_ADDR) != 0) {
+		if (!put_control_message(buffer, msgControl, msgControlLen,
+				bytesWritten, IP_RECVDSTADDR,
+				&((struct sockaddr_in*)buffer->destination)->sin_addr,
+				sizeof(struct in_addr))) {
+			return bytesWritten;
+		}
+	}
 
-		cmsghdr* messageHeader = (cmsghdr*)msgControl;
-		messageHeader->cmsg_len = CMSG_LEN(sizeof(struct in_addr));
-		messageHeader->cmsg_level = IPPROTO_IP;
-		messageHeader->cmsg_type = IP_RECVDSTADDR;
+	if ((protocol->flags & IP_FLAG_RECEIVE_TOS) != 0) {
+		// The TOS byte (DSCP and ECN) of the datagram, as
+		// ipv4_receive_data() recorded it; the BSD and macOS message type.
+		uint8 tos = buffer->traffic_class;
+		if (!put_control_message(buffer, msgControl, msgControlLen,
+				bytesWritten, IP_RECVTOS, &tos, sizeof(tos))) {
+			return bytesWritten;
+		}
+	}
 
-		memcpy(CMSG_DATA(messageHeader),
-		 	&((struct sockaddr_in*)buffer->destination)->sin_addr,
-		 	sizeof(struct in_addr));
-
-		bytesWritten += CMSG_SPACE(sizeof(struct in_addr));
+	if ((protocol->flags & IP_FLAG_RECEIVE_PKTINFO) != 0) {
+		// Linux's struct in_pktinfo: arrival interface, its local address
+		// and the datagram's destination address.
+		struct in_pktinfo info = {};
+		info.ipi_addr = ((struct sockaddr_in*)buffer->destination)->sin_addr;
+		info.ipi_spec_dst = info.ipi_addr;
+		if (buffer->interface_address != NULL) {
+			if (buffer->interface_address->interface != NULL) {
+				info.ipi_ifindex
+					= buffer->interface_address->interface->index;
+			}
+			if (buffer->interface_address->local != NULL) {
+				info.ipi_spec_dst = ((struct sockaddr_in*)
+					buffer->interface_address->local)->sin_addr;
+			}
+		}
+		if (!put_control_message(buffer, msgControl, msgControlLen,
+				bytesWritten, IP_PKTINFO, &info, sizeof(info))) {
+			return bytesWritten;
+		}
 	}
 
 	return bytesWritten;
@@ -2159,7 +2335,7 @@ net_protocol_module_info gIPv4Module = {
 	ipv4_deliver_data,
 	ipv4_error_received,
 	ipv4_error_reply,
-	NULL,		// add_ancillary_data()
+	ipv4_add_ancillary_data,
 	NULL,		// process_ancillary_data()
 	ipv4_process_ancillary_data_no_container,
 	NULL,		// send_data_no_buffer()

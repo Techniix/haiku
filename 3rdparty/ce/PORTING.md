@@ -39,6 +39,7 @@ updates this file in the same commit.
 | `getdents64()`, `getdents()` (Linux record layouts) | `<dirent.h>` (gnu) | `-lgnu` | Missing | Available |
 | `getpeereid()` | `<unistd.h>` (bsd) | `-lbsd` | Missing | Available |
 | `POLLRDHUP` (`poll()`), `EPOLLRDHUP` on a peer's half-close | `<poll.h>`, `<sys/epoll.h>` | | Missing; a half-close was reported as `POLLHUP` | Available |
+| UDP options for QUIC: `IP_RECVTOS`, `IP_PKTINFO`, `IP_MTU_DISCOVER`, `IPV6_RECVTCLASS`, `IPV6_TCLASS`, `IPV6_DONTFRAG`, `IPV6_MTU_DISCOVER`; `sendmsg()` with `IP_TOS`/`IP_TTL`/`IPV6_TCLASS`/`IPV6_HOPLIMIT`; `MSG_CTRUNC` | `<netinet/in.h>` | libnetwork (nothing extra) | Missing; any `sendmsg()` control message failed with `EOPNOTSUPP` | Available |
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -367,6 +368,61 @@ UNIX shutdown notifications, and mapped by `poll()` and epoll.
 Since: the commit that added `B_SELECT_READ_DISCONNECTED`. Tests:
 `3rdparty/ce/tests/posix_compat/socket_ext_test.cpp` (35 checks, with
 `getpeereid()`).
+
+### UDP socket options for QUIC
+
+What QUIC stacks (Chromium's, quiche, ngtcp2, msquic) set up on their UDP
+sockets now works, so HTTP/3 needs no `--disable-quic`:
+
+- ECN: `IP_TOS` / `IPV6_TCLASS` (socket option, the codepoint for every
+  datagram), per-datagram `IP_TOS` (int or byte) / `IPV6_TCLASS` (int) and
+  `IP_TTL` / `IPV6_HOPLIMIT` control messages in `sendmsg()`, and
+  `IP_RECVTOS` / `IPV6_RECVTCLASS` to receive the codepoint in `recvmsg()`:
+  IPv4 as an `IP_RECVTOS` message with one byte (the BSD and macOS form;
+  Linux sends type `IP_TOS`), IPv6 as an `IPV6_TCLASS` message with an int
+  (RFC 3542, as everywhere).
+- Packet info: `IP_PKTINFO` (Linux's `struct in_pktinfo`: interface index,
+  local address, destination) and `IPV6_RECVPKTINFO` (`struct in6_pktinfo`).
+  `IP_RECVDSTADDR` works as before.
+- "Do not fragment": `IP_DONTFRAG` and the new `IPV6_DONTFRAG`, or Linux's
+  `IP_MTU_DISCOVER` / `IPV6_MTU_DISCOVER` with `IP_PMTUDISC_DO`/`_PROBE`
+  (on) or `_DONT`/`_WANT` (off). A datagram above the route MTU then fails
+  with `EMSGSIZE`.
+- `SO_RCVBUF`/`SO_SNDBUF` of a megabyte and more are kept.
+- `recvmsg()` with a control buffer too small for all messages delivers the
+  datagram with `MSG_CTRUNC` (and the messages that fit); before it failed
+  with `ENOMEM` for IPv6. An unknown control message in `sendmsg()` fails
+  with `EINVAL`, as on Linux.
+- **Differences from Linux:**
+  - Option numbers are Haiku's (use the names); code testing
+    `#ifdef __linux__` for these should test the option names instead.
+  - There is no path MTU discovery: `IP_PMTUDISC_WANT` behaves as `DONT`
+    and `PROBE` as `DO`; getsockopt reports only `DO` or `DONT`.
+    `IP_MTU`/`IPV6_MTU` (reading the path MTU) are not provided.
+  - `IP_PKTINFO` and `IPV6_PKTINFO` in `sendmsg()` (choosing the source
+    address per datagram) are refused with `EINVAL`.
+  - IPv6 datagrams larger than the MTU without "don't fragment" are sent
+    as fragments, but Haiku's IPv6 fragment reassembly does not deliver
+    them (inherited; see the roadmap's `F-43` notes). QUIC never sends such
+    datagrams.
+- Fixed on the way (stock Haiku): every `sendmsg()` with control data on a
+  UDP socket failed with `EOPNOTSUPP` (UDP had no hook for it); UDP passed
+  its own protocol object to the IP layer's receive-option code, which read
+  its flags from the wrong structure (spurious or missing control
+  messages); `IPV6_RECVHOPLIMIT` always reported 64; the IPv6 send path
+  put the traffic class into the wrong header bits (latent, as nothing
+  could set it before); and a
+  packet with an IPv6 fragment header could make the receive thread loop
+  forever (wrong extension header lengths), which stopped all loopback
+  traffic.
+
+Implementation: `src/add-ons/kernel/network/protocols/ipv4/ipv4.cpp`,
+`ipv6/ipv6.cpp`, `udp/udp.cpp`; the received TOS/traffic class and hop
+limit travel with the buffer (`net_buffer::traffic_class`, `hop_limit`),
+`MSG_CTRUNC` through `NET_BUFFER_CONTROL_TRUNCATED` (`net_socket.cpp`).
+
+Since: the commit that added `IP_RECVTOS` to `<netinet/in.h>`. Tests:
+`3rdparty/ce/tests/posix_compat/quic_udp_test.cpp` (32 checks).
 
 ### eventfd
 

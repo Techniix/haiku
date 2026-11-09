@@ -74,6 +74,12 @@ Application tcp_close_test :
 	: network
 ;
 
+# The UDP socket options and control messages QUIC uses.
+Application quic_udp_test :
+	quic_udp_test.cpp
+	: network
+;
+
 # TCP_INFO.
 Application tcp_info_test :
 	tcp_info_test.cpp
@@ -104,5 +110,5 @@ Application timerfd_test :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test
-		mqueue_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test ;
+		mqueue_test quic_udp_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test ;
 }
