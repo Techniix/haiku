@@ -60,23 +60,22 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 **What is Renga today?** Renga is a fork of Haiku (upstream base `4197d30f`, `hrev60381`, 2026-11-04) developed on the `ce/main` branch of Techniix/haiku. It is upstream Haiku plus 46 commits (2026-11-08 to 2026-11-09): about 17,200 added lines in upstream files and 9,600 in the fork's own `3rdparty/ce` directory. It boots in QEMU under BIOS and UEFI, from disk, CD and virtio-blk, and identifies itself as Renga in the boot loader, ISO volume ID, About window, Deskbar and Installer. The fork was named Renga on 2026-11-08 because Haiku, Inc.'s distribution guidelines do not allow "Haiku" in a distribution's name. `uname` still reports Haiku so ports keep detecting the platform.
 
 **What has been completed?** (all QEMU Tested; none Hardware Tested yet)
-- Fork foundation: branch model (`master` = upstream, work on `ce/main`), automatic `hrev` tag workflow, a headless QEMU test harness with hang capture, screenshots, key and pointer injection, and four boot paths. Current committed baseline: **452/452** checks (BIOS, also with 2 and 4 CPUs) since `inotify`; last UEFI result **318/318** and `renga-raw` **324/324**, both from before `epoll`.
-- `epoll` and `inotify` (`F-15`, two of its three APIs): Linux semantics including edge-triggered, one-shot, nesting and fork sharing (epoll, 84 checks); create/delete/rename with cookies, modify/attrib/close events, overflow (inotify, 47 checks).
+- Fork foundation: branch model (`master` = upstream, work on `ce/main`), automatic `hrev` tag workflow, a headless QEMU test harness with hang capture, screenshots, key and pointer injection, and four boot paths. Current committed baseline: **480/480** checks (BIOS, also with 2 and 4 CPUs) and **477/477** (UEFI) since `signalfd`; `renga-raw` **324/324**, from before `epoll`.
+- `epoll`, `inotify` and `signalfd` (`F-15`, all three): Linux semantics including edge-triggered, one-shot, nesting and fork sharing (epoll, 84 checks); create/delete/rename with cookies, modify/attrib/close events, overflow (inotify, 47 checks); per-thread pending signals, SIGCHLD, queued realtime signals (signalfd, 28 checks).
 - Porting API pack 1, **6 of 6 items (100%)**: `eventfd`, `timerfd`, `memfd_create`, POSIX message queues, System V shared memory, libc fill-ins (`getrandom`, `getauxval`, `backtrace*`, `copy_file_range`, `sendmmsg`/`recvmmsg`), user contexts (x86_64), TCP keepalive.
 - Tier 1 work: `TCP_INFO`, abortive-close reset, `virtio_sound` playback, `virtio_block` flush/trim/resize and shipping on x86_64, NVMe multi-namespace, EFI loader boot-disk preference, boot menu timeout with countdown.
 - Identity: live-animated Renga boot splash, Renga branding, `renga-raw`/`renga-anyboot`/`renga-vmware` build profiles, Techniix repository preferred over HaikuPorts, Ctrl as the default shortcut key with a switch back to Alt.
 - Upstream bugs found and fixed in the fork (10 written up for later reporting, plus 2 newer ones): see [Section 10.2](#102-upstream-haiku-bugs-found-and-fixed-in-renga).
 
-**What is being developed now?** `signalfd` (`F-15`). `epoll` (`71101ac5`) and `inotify` (`b421d52a`) were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
+**What is being developed now?** Periodic NTP sync (`F-30`) is next. `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
 
 **What is blocked?**
 - NVMe multi-namespace (`F-04`) cannot reach Hardware Tested until the maintainer runs it on his real NVMe PC (pending, by his choice).
 - Lumina as the core shell (`F-25`) waits on the S1-S8 acceptance checklist, which has never been run. It is to be automated in QEMU by the agent; the harness can now inject keys and pointer moves and take screenshots.
-- Electron, modern Node and Chromium patch removal no longer wait on `epoll` (available since `71101ac5`); they now wait on ports being rebuilt against it and against `inotify` (available since `b421d52a`). Renguin (`F-27`) waits on a per-team syscall ABI hook. Installer "install alongside" (`F-23`) waits on the partition resize backend (`F-24`).
+- Electron, modern Node and Chromium patch removal no longer wait on `epoll` (available since `71101ac5`); they now wait on ports being rebuilt against it and against `inotify` (available since `b421d52a`) and `signalfd` (`e1638a07`). Renguin (`F-27`) waits on a per-team syscall ABI hook. Installer "install alongside" (`F-23`) waits on the partition resize backend (`F-24`).
 - Public release waits on an undecided Renga version scheme.
 
 **What should we work on next?** In the agreed order (2026-11-09):
-2. `signalfd` (`F-15`; `epoll` and `inotify` done).
 3. Periodic NTP sync (`F-30`).
 4. `virtio_sound` capture (`F-02`).
 5. Media Kit work (`F-31`), then the audio settings redesign (`F-32`).
@@ -271,7 +270,7 @@ This section summarises the original audit of upstream Haiku at `4197d30f` (2026
 | Commits on top of upstream | 46 (author date 2026-11-08: 32, 2026-11-09: 14) |
 | Upstream files changed | 79 files outside `3rdparty`, +17,204 / -351 lines (of which about 8,200 lines are generated splash and logo image headers) |
 | Fork-only tree | `3rdparty/ce`: 38 files, +9,609 lines (harness, tests, artwork scripts, build profiles, repository config, docs) |
-| Harness baseline | 452/452 (BIOS, `minimum-raw`, after `inotify`); 318/318 (UEFI, `minimum-anyboot`) and 324/324 (`renga-raw`) from before `epoll` |
+| Harness baseline | 480/480 (BIOS, `minimum-raw`) and 477/477 (UEFI, `minimum-anyboot`) after `signalfd`; 324/324 (`renga-raw`) from before `epoll` |
 | Test suites | 6 committed in-guest suites (`virtio_sound`, `posix_compat` with 10 programs, `virtio_block`, `nvme`, `pkg_priority`, `shortcut_keys`), plus host-side checks; `pointer` in development |
 | Hardware-tested components | 0 |
 | Uncommitted work | VM mouse integration (9 files changed, +397/-21 lines, plus the new `3rdparty/ce/tests/pointer/` suite) |
@@ -294,7 +293,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-10 | System V shared memory | QEMU Tested | 18 checks |
 | F-11 | libc additions | QEMU Tested | 19 checks |
 | F-12 | ucontext | QEMU Tested | 8 checks |
-| F-15 | epoll / inotify / signalfd | QEMU Tested (epoll, inotify); signalfd Not Started | 84 epoll + 47 inotify checks |
+| F-15 | epoll / inotify / signalfd | QEMU Tested | 84 epoll + 47 inotify + 28 signalfd checks |
 | F-16 | Boot splash | QEMU Tested | Screenshots + frame log |
 | F-17 | Renga branding | QEMU Tested (partly) | 1-2 checks per run |
 | F-18 | Build profiles and images | QEMU Tested (`renga-raw` only) | 3 image checks |
@@ -687,18 +686,18 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | E |
-| Renga maturity | `epoll` and `inotify` complete (Linux semantics, documented deviations); `signalfd` none |
-| Status | **QEMU Tested** (`epoll`, `inotify`); `signalfd` **Not Started** |
-| Completed | `epoll_create`/`create1`/`ctl`/`wait`/`pwait`/`pwait2` (`71101ac5`): kernel object on the select hooks and `select_sync` that the `event_queue` uses, keyed on the open file description; level/edge-triggered, `EPOLLONESHOT`, nesting (pollable epoll fd, `ELOOP`), shared across `fork()`, registration removed at the last close; pipes notify on every write (needed for edge triggering); upstream `ppoll()`/`pselect()` signal-mask bug fixed on the way (`85fe86ef`). `inotify_init`/`init1`/`add_watch`/`rm_watch` (`b421d52a`): watches are kernel node-monitor listeners (create/delete/move with one cookie per rename, attributes), plus VFS hooks for access/modify/attrib/open/close; per-directory entry-name lists; Linux queue rules (merge, 16384 limit, `IN_Q_OVERFLOW`); pollable and epoll-able |
-| Remaining | `signalfd`; kqueue `EVFILT_TIMER`/`USER`/`VNODE` (Tier 3, 6) |
-| Known bugs/limitations | epoll: `EPOLLEXCLUSIVE` accepted as a no-op; `EPOLLRDHUP` only with a full disconnect; closing the epoll fd wakes waiters with `EBADF`; at most 1024 events per call; about 10-20 µs per reported event under TCG (each is re-probed). inotify: entry names from the watch's own list (an entry renamed through an outside hard link may keep its old name); `IN_DELETE_SELF` at the last unlink, not the last close; no `IN_UNMOUNT`; 8192 watches per instance. Ports must not work around `signalfd` yet |
+| Renga maturity | `epoll`, `inotify` and `signalfd` complete (Linux semantics, documented deviations) |
+| Status | **QEMU Tested** (all three) |
+| Completed | `epoll_create`/`create1`/`ctl`/`wait`/`pwait`/`pwait2` (`71101ac5`): kernel object on the select hooks and `select_sync` that the `event_queue` uses, keyed on the open file description; level/edge-triggered, `EPOLLONESHOT`, nesting (pollable epoll fd, `ELOOP`), shared across `fork()`, registration removed at the last close; pipes notify on every write (needed for edge triggering); upstream `ppoll()`/`pselect()` signal-mask bug fixed on the way (`85fe86ef`). `inotify_init`/`init1`/`add_watch`/`rm_watch` (`b421d52a`): watches are kernel node-monitor listeners (create/delete/move with one cookie per rename, attributes), plus VFS hooks for access/modify/attrib/open/close; per-directory entry-name lists; Linux queue rules (merge, 16384 limit, `IN_Q_OVERFLOW`); pollable and epoll-able. `signalfd` (`e1638a07`): per-thread pending signals read via the kernel's `sigwaitinfo()` code, mask changes on the same fd, per-thread readiness for poll/epoll, synchronous notification for signals sent by syscalls (DPC for kernel-sent ones) |
+| Remaining | kqueue `EVFILT_TIMER`/`USER`/`VNODE` (Tier 3, 6) |
+| Known bugs/limitations | epoll: `EPOLLEXCLUSIVE` accepted as a no-op; `EPOLLRDHUP` only with a full disconnect; closing the epoll fd wakes waiters with `EBADF`; at most 1024 events per call; about 10-20 µs per reported event under TCG (each is re-probed). inotify: entry names from the watch's own list (an entry renamed through an outside hard link may keep its old name); `IN_DELETE_SELF` at the last unlink, not the last close; no `IN_UNMOUNT`; 8192 watches per instance. signalfd: Haiku signal numbers; CPU-time and Linux-only siginfo fields 0; inherited Haiku behaviour that `SIGCHLD` interrupts blocking calls with `EINTR` even while blocked |
 | Dependencies | `F-06`, `F-07` |
 | Difficulty | `epoll` 7 (Tier 4), `inotify` 6 (Tier 3), `signalfd` not rated |
 | Risk | Medium |
-| Testing status | epoll: 84 checks in `epoll_test`; 405/405 BIOS with 1, 2 and 4 CPUs at `71101ac5`. inotify: 47 checks in `inotify_test`; 452/452 BIOS with 1, 2 and 4 CPUs at `b421d52a`. UEFI not yet run with either. signalfd: none |
-| Next milestone | `signalfd` |
-| Recommended next action | Implement `signalfd` (pollable, epoll-able); then rebuild a libuv-based port against `epoll`/`inotify` and drop its `poll()` and polling-watcher backends |
-| Links | PORTING.md "epoll", "inotify", "Planned" |
+| Testing status | epoll: 84 checks in `epoll_test`; 405/405 BIOS with 1, 2 and 4 CPUs at `71101ac5`. inotify: 47 checks in `inotify_test`; 452/452 BIOS with 1, 2 and 4 CPUs at `b421d52a`. signalfd: 28 checks in `signalfd_test`; 480/480 BIOS with 1, 2 and 4 CPUs (three `--smp 4` runs) and 477/477 UEFI at `e1638a07` |
+| Next milestone | Ports rebuilt against these APIs |
+| Recommended next action | Rebuild a libuv-based port (Node.js) against `epoll`/`inotify`/`signalfd` and drop its `poll()` and polling-watcher backends; then the Chromium-HaikuOS patches that emulate them |
+| Links | PORTING.md "epoll", "inotify", "signalfd" |
 
 #### F-27 Renguin (Linux binary compatibility)
 
@@ -1252,7 +1251,7 @@ These have no full entries. All are **Not Started** in Renga unless noted. Diff 
 
 The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 
-**E — not implemented:** suspend/hibernate (Trac #11227); multi-monitor (#18441, #10486); compositing; accessibility (#12804); firewall/NAT; IPv6 SLAAC/DHCPv6 (#8317); WPA3 (#18287); mDNS, SMB, FUSE 3; `signalfd`; **`epoll`, `inotify` (closed: F-15)**; **`eventfd`, `timerfd`, `memfd_create` (closed: F-06 to F-08)**; **POSIX mqueue (#5684) and SysV shm (#2657) (closed: F-09, F-10)**; package signing; hardware video and screen capture; Bluetooth RFCOMM/HID/A2DP/BLE; GPU 3D, HDR, VRR; USB-C/TB/USB4, PCIe hotplug, ASPM, AER, IOMMU; GPIO; SMART; **boot timeout/default (closed: F-20)**, chainloading, remember-last, EFI variables; GPT move, attributes and repair; kernel ASLR, KPTI, sandboxing; Linux syscall personality; Intel SOF.
+**E — not implemented:** suspend/hibernate (Trac #11227); multi-monitor (#18441, #10486); compositing; accessibility (#12804); firewall/NAT; IPv6 SLAAC/DHCPv6 (#8317); WPA3 (#18287); mDNS, SMB, FUSE 3; **`epoll`, `inotify`, `signalfd` (closed: F-15)**; **`eventfd`, `timerfd`, `memfd_create` (closed: F-06 to F-08)**; **POSIX mqueue (#5684) and SysV shm (#2657) (closed: F-09, F-10)**; package signing; hardware video and screen capture; Bluetooth RFCOMM/HID/A2DP/BLE; GPU 3D, HDR, VRR; USB-C/TB/USB4, PCIe hotplug, ASPM, AER, IOMMU; GPIO; SMART; **boot timeout/default (closed: F-20)**, chainloading, remember-last, EFI variables; GPT move, attributes and repair; kernel ASLR, KPTI, sandboxing; Linux syscall personality; Intel SOF.
 
 **D — experimental:** Media2/`BMediaClient`; I2C HID; Bluetooth stack; arm64/riscv64; UFS; graphical login; BFS resize; NVMM.
 
@@ -1271,7 +1270,7 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 ### 5.1 Agreed work order (2026-11-09)
 
 1. **VM mouse integration** (`F-19`): done 2026-11-09 (QEMU Tested).
-2. **`epoll`, `inotify`, `signalfd`** (`F-15`).
+2. **`epoll`, `inotify`, `signalfd`** (`F-15`): done 2026-11-09 (QEMU Tested).
 3. **Periodic NTP sync** (`F-30`).
 4. **`virtio_sound` capture** (`F-02`).
 5. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
@@ -1332,7 +1331,7 @@ The audit reordered the original draft. Boot/install moves ahead of Lumina, and 
 | 1 | Quick wins and polish | Tier 1 + userland Tier 2 | None (ongoing) | 8 of 14 audit Tier 1 rows done; image slimming removed from scope |
 | 2 | Boot and installation | Boot menu → chainloading → graphical; resize backend → DriveSetup queue → BFS resize → GPT move; installer wizard; EFI variables | Install alongside Windows and Linux in QEMU/OVMF, choose each from the menu, reboot into the last choice | Boot build-order steps: 1 of 8 complete, 1 partial |
 | 3 | Desktop modernization and Lumina | ShellListener, work-area API, pushed window events, tray protocol, settings center, themes, Lumina in image | Lumina default only after ShellListener + work-area API + Deskbar tray protocol (from the audit's critical-dependency table) | Not started (blocked on Stage 0 Lumina item) |
-| 4 | Porting APIs and ecosystem | mqueue, shm, eventfd/timerfd/memfd → kqueue filters, inotify → epoll; Renguin ABI hook; FUSE 3 → SMB; mDNS → printing; SLAAC → DHCPv6; signing | Unblocks Electron, Wine, Renguin | Pack 1 6 of 6 (100%); epoll and inotify done; signalfd next |
+| 4 | Porting APIs and ecosystem | mqueue, shm, eventfd/timerfd/memfd → kqueue filters, inotify → epoll; Renguin ABI hook; FUSE 3 → SMB; mDNS → printing; SLAAC → DHCPv6; signing | Unblocks Electron, Wine, Renguin | Pack 1 6 of 6 (100%); epoll, inotify, signalfd done |
 | 5 | Hardware and multimedia | UVC, screen capture, HDMI audio, mixer; GPIO/i2c_hid; sensors; SMART; BT; iflib; LinuxKPI Wi-Fi → WPA3; accelerant extension | Mostly needs hardware | Not started (Media Kit is next in the work order) |
 | 6 | Advanced modernization | Suspend, multi-monitor, global HiDPI, compositor, HarfBuzz/BiDi, hardware decode, accessibility, pf, A2DP/BLE, mitigations, IOMMU | Pick by value | Not started |
 
@@ -1399,7 +1398,7 @@ Milestone count: 8 of 14 (57%).
 ### 6.6 Next milestones (prioritized)
 
 1. `F-19` committed and QEMU Tested.
-2. `F-15` `signalfd` (`epoll` done, `71101ac5`; `inotify` done, `b421d52a`).
+2. `F-15` committed and QEMU Tested (`71101ac5`, `b421d52a`, `e1638a07`).
 3. `F-30` periodic NTP.
 4. `F-02` capture.
 5. `F-25` S1-S8 automated in QEMU (closes the Stage 0 gate).
@@ -1429,7 +1428,7 @@ graph LR
   TCP[F-05 TCP additions]:::done
   VSND[F-02 virtio_sound playback]:::done
   MOUSE[F-19 VM mouse integration]:::done
-  EPOLL[F-15 epoll, inotify done; signalfd next]:::dev
+  EPOLL[F-15 epoll / inotify / signalfd]:::done
   ABI[Per-team syscall ABI hook]:::todo
   REN[F-27 Renguin]:::todo
   ELEC[Electron / Node / Chromium patch removal]:::todo
@@ -1520,14 +1519,14 @@ Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratc
 
 | Path | Option | Image | Last recorded result |
 | --- | --- | --- | --- |
-| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 283/283 |
-| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 284/284 |
+| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 480/480 at `e1638a07` |
+| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 477/477 at `e1638a07` |
 | BIOS, CD-ROM (El Torito floppy) | `--media cdrom` | `minimum-anyboot` | 270/270 at `7b4a14df` |
 | UEFI, CD-ROM | `--firmware uefi --media cdrom` | `minimum-anyboot` | 273/273 at `22bf89ca` |
 | BIOS / UEFI, virtio-blk boot disk | `--disk-bus virtio` | either | BIOS 270/270 at `7b4a14df`; UEFI 271/271 at `2b728fa3` |
 | UEFI, two installs (decoy first) | `--two-installs` | `minimum-anyboot` | 272/272 at `2b728fa3` |
 | Boot menu countdown | `--boot-menu-timeout N` | either | 272/272 at `22bf89ca` (6 s) |
-| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 270/270 (`--smp 2`) at `0758b116`; 205/205 (`--smp 4`) at `9c6d9157` |
+| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 480/480 (`--smp 2` and `--smp 4`) at `e1638a07` |
 | Full desktop image | `--profile renga-raw` | `renga-raw` | 286/286 |
 
 Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; any real hardware.
@@ -1540,6 +1539,7 @@ Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; a
 | `audio` (host) | 4 | Recorded tone phases on the right channels, no gaps | F-02 |
 | `posix_compat` / `epoll` | 84 | Triggering modes, nesting, fork, close lifetime, signals, 1000 fds, threads, stress | F-15 |
 | `posix_compat` / `inotify` | 47 | Name events with cookies, VFS events, flags, overflow, fork, threads | F-15 |
+| `posix_compat` / `signalfd` | 28 | Per-thread readiness, SIGCHLD, fork, realtime queue, epoll | F-15 |
 | `posix_compat` / `eventfd` | 19 | | F-06 |
 | `posix_compat` / `timerfd` | 27 | | F-07 |
 | `posix_compat` / `memfd` | 22 | | F-08 |
@@ -1568,6 +1568,8 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 **epoll suite (`F-15`, committed `71101ac5`):** 84 checks; baseline 405/405 (BIOS) with 1, 2 and 4 CPUs. The table total above is the 283-check snapshot it was made from; with the pointer and epoll suites the BIOS total is 405.
 
 **inotify suite (`F-15`, committed `b421d52a`):** 47 checks; baseline 452/452 (BIOS) with 1, 2 and 4 CPUs.
+
+**signalfd suite (`F-15`, committed `e1638a07`):** 28 checks; baseline 480/480 (BIOS) with 1, 2 and 4 CPUs, 477/477 (UEFI).
 
 ### 8.4 QEMU-only versus hardware-tested
 
@@ -1691,6 +1693,7 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-09 | [`85fe86ef`](https://github.com/Techniix/haiku/commit/85fe86ef) | `ppoll()`/`pselect()` handlers return to the caller's signal mask (upstream bug 13) | `epoll.pwait_sigmask` failed before, passes after; `epoll.ppoll_sigmask_restored` added |
 | 2026-11-09 | [`71101ac5`](https://github.com/Techniix/haiku/commit/71101ac5) | `epoll` (kernel + libgnu); pipes notify every write | 84 checks; 405/405 BIOS with 1, 2 and 4 CPUs; first run's `_Scan()` panic fixed before commit |
 | 2026-11-09 | [`b421d52a`](https://github.com/Techniix/haiku/commit/b421d52a) | `inotify` (kernel + libgnu); VFS access/modify/attrib/open/close hooks | 47 checks; 452/452 BIOS with 1, 2 and 4 CPUs; first run's missing `IN_ISDIR` on rmdir fixed before commit |
+| 2026-11-09 | [`e1638a07`](https://github.com/Techniix/haiku/commit/e1638a07) | `signalfd` (kernel + libgnu); synchronous signalfd notification from `kill()`/`raise()`/`sigqueue()`; inotify `write()` fails with `EINVAL` | 28 checks; 480/480 BIOS with 1, 2 and 4 CPUs, 477/477 UEFI; a `--smp 4` failure (DPC delay) fixed before commit |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
