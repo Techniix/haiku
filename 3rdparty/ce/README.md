@@ -147,6 +147,10 @@ The harness then also checks the volume name and the repositories.
 - **virtio_block**: flush and trim on two scratch disks, one offering
   DISCARD and one only WRITE ZEROES; the harness then checks on the host
   that the trimmed space was freed in the image files.
+  It also grows the first scratch disk while the guest runs. The media
+  changed flag that follows is cleared by whoever reads it first, the test
+  or the kernel's once-a-second media checker; the check passes if either
+  saw it (the checker logs "Media changed from <disk>").
 - **virtio_sound**: drives `/dev/audio/hmulti/virtio_sound/*` with the same
   ioctl sequence and buffer-cycle rules as the multi_audio media add-on. It
   plays three tone phases (initial start, restart after force-stop, and after

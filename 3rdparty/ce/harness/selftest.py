@@ -187,5 +187,26 @@ checks = nvme_check(missing_tail)
 expect("nvme: missing write fails", not checks["host.nvme_ns2_content"]["pass"],
 	str(checks))
 
+def media_changed(kernel_line):
+	directory = tempfile.mkdtemp()
+	with open(os.path.join(directory, "serial.log"), "w") as serial:
+		serial.write("CE-INFO /dev/disk/virtual/virtio_block/0/raw: "
+			"scratch disk\r\n"
+			"CE-INFO /dev/disk/virtual/virtio_block/1/raw: scratch disk\r\n"
+			"CE-HOST block_resize vblk0 128M\r\n" + kernel_line +
+			"CE-TEST vblk.resize_media_changed FAIL B_GET_MEDIA_STATUS -> "
+			"No error (want media changed)\r\n")
+	report = {}
+	ce_test.parse_serial(directory, report)
+	return [t for t in report["tests"]
+		if t["name"] == "vblk.resize_media_changed"][0]["pass"]
+
+expect("vblk: media change seen by the kernel's checker passes",
+	media_changed("Media changed from "
+		"/dev/disk/virtual/virtio_block/0/raw\r\n"))
+expect("vblk: media change seen by nobody fails", not media_changed(""))
+expect("vblk: media change of another disk fails", not media_changed(
+	"Media changed from /dev/disk/virtual/virtio_block/1/raw\r\n"))
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

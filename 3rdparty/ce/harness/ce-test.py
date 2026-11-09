@@ -636,6 +636,8 @@ def parse_serial(results_dir, report):
 				or "Welcome to Kernel Debugging Land" in line:
 			problems.append(line)
 
+	settle_media_changed(text, tests)
+
 	# Keep the debugger output (backtrace) if there was a crash.
 	kdl_index = text.find("Welcome to Kernel Debugging Land")
 	if kdl_index >= 0:
@@ -656,6 +658,25 @@ def parse_serial(results_dir, report):
 	report["suites"] = suites
 	report["driver_log"] = driver_lines[-80:]
 	report["problems"] = problems[:40]
+
+
+def settle_media_changed(text, tests):
+	"""vblk_test's resize_media_changed check reads B_GET_MEDIA_STATUS once
+	after the resize, and that ioctl clears the flag. The kernel's media
+	checker thread polls every disk once a second and clears it too; when it
+	gets there first it rescans the disk and logs "Media changed from
+	<path>". Either reader seeing the change shows the driver reported it,
+	so a miss in the test counts as a pass if the kernel logged the change
+	for the disk the test resized (the first scratch disk it found)."""
+	resized = re.search(r"^CE-INFO (\S+): scratch disk", text, re.MULTILINE)
+	for test in tests:
+		if test["name"] != "vblk.resize_media_changed" or test["pass"] \
+				or resized is None:
+			continue
+		if "Media changed from %s" % resized.group(1) in text:
+			test["pass"] = True
+			test["detail"] += "; the kernel's media checker read it first " \
+				"and logged \"Media changed from %s\"" % resized.group(1)
 
 
 def parse_qemu_log(results_dir, report):
