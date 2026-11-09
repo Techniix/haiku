@@ -62,6 +62,7 @@ KernelMergeObject kernel_core.o :
 	epoll.cpp
 	event_queue.cpp
 	eventfd.cpp
+	inotify.cpp
 	timerfd.cpp
 
 	# locks

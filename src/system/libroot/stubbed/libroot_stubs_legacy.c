@@ -1102,6 +1102,9 @@ void _kern_getsockopt() {}
 void _kern_has_data() {}
 void _kern_image_relocated() {}
 void _kern_initialize_partition() {}
+void _kern_inotify_add_watch() {}
+void _kern_inotify_init() {}
+void _kern_inotify_rm_watch() {}
 void _kern_install_default_debugger() {}
 void _kern_install_team_debugger() {}
 void _kern_ioctl() {}

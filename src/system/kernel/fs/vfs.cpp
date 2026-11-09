@@ -43,6 +43,7 @@
 #include <fd.h>
 #include <file_cache.h>
 #include <fs/node_monitor.h>
+#include <inotify.h>
 #include <KPath.h>
 #include <lock.h>
 #include <low_resource_manager.h>
@@ -2933,6 +2934,15 @@ get_new_fd(struct fd_ops* ops, struct fs_mount* mount, struct vnode* vnode,
 
 	fd_set_close_on_exec(context, fd, (openMode & O_CLOEXEC) != 0);
 	fd_set_close_on_fork(context, fd, (openMode & O_CLOFORK) != 0);
+	contextLocker.Unlock();
+
+	// Renga: inotify IN_OPEN (and IN_MODIFY for a truncating open, as on
+	// Linux) for files and directories.
+	if (vnode != NULL && (ops == &sFileOps || ops == &sDirectoryOps)) {
+		inotify_node_event(vnode->device, vnode->id, S_ISDIR(vnode->Type()),
+			INOTIFY_OPEN | ((openMode & O_TRUNC) != 0
+				&& (openMode & O_RWMASK) != O_RDONLY ? INOTIFY_MODIFY : 0));
+	}
 	return fd;
 }
 
@@ -4340,6 +4350,84 @@ vfs_lookup_vnode(dev_t mountID, ino_t vnodeID, struct vnode** _vnode)
 		return B_ERROR;
 
 	*_vnode = vnode;
+	return B_OK;
+}
+
+
+/*!	Renga (inotify): whether the node is a directory, if its vnode is in
+	the cache. Never calls into the file system, so it is safe to use from
+	node monitoring listeners, which run with file system locks held.
+*/
+extern "C" bool
+vfs_cached_vnode_is_directory(dev_t mountID, ino_t vnodeID)
+{
+	ReadLocker locker(sVnodeLock);
+	struct vnode* vnode = lookup_vnode(mountID, vnodeID);
+	return vnode != NULL && S_ISDIR(vnode->Type());
+}
+
+
+/*!	Renga (inotify): calls \a hook for every entry of the directory,
+	through the file system's directory hooks (no file descriptor is
+	created, so nothing is reported to node monitoring or inotify). Stops
+	when \a hook returns false.
+*/
+extern "C" status_t
+vfs_read_dir_entries(dev_t mountID, ino_t directoryID,
+	bool (*hook)(void* data, const struct dirent* entry), void* data)
+{
+	struct vnode* vnode;
+	status_t status = get_vnode(mountID, directoryID, &vnode, true, false);
+	if (status != B_OK)
+		return status;
+	VnodePutter putter(vnode);
+
+	if (!S_ISDIR(vnode->Type()))
+		return B_NOT_A_DIRECTORY;
+	if (!HAS_FS_CALL(vnode, open_dir) || !HAS_FS_CALL(vnode, read_dir))
+		return B_UNSUPPORTED;
+
+	void* cookie;
+	status = FS_CALL(vnode, open_dir, &cookie);
+	if (status != B_OK)
+		return status;
+
+	union {
+		struct dirent	entry;
+		char			buffer[sizeof(struct dirent) + B_FILE_NAME_LENGTH];
+	} entryBuffer;
+
+	while (true) {
+		uint32 count = 1;
+		status = FS_CALL(vnode, read_dir, cookie, &entryBuffer.entry,
+			sizeof(entryBuffer), &count);
+		if (status != B_OK || count == 0)
+			break;
+		if (!hook(data, &entryBuffer.entry))
+			break;
+	}
+
+	if (HAS_FS_CALL(vnode, close_dir))
+		FS_CALL(vnode, close_dir, cookie);
+	if (HAS_FS_CALL(vnode, free_dir_cookie))
+		FS_CALL(vnode, free_dir_cookie, cookie);
+	return B_OK;
+}
+
+
+/*!	Renga (inotify): raises the kernel team's node monitor limit, which
+	all kernel node listeners (one per inotify watch) count against.
+*/
+extern "C" status_t
+vfs_reserve_kernel_node_monitors(int32 count)
+{
+	io_context* context = get_current_io_context(true);
+	WriteLocker locker(context->lock);
+	uint32 wanted = DEFAULT_NODE_MONITORS + count;
+	if (wanted > MAX_NODE_MONITORS)
+		wanted = MAX_NODE_MONITORS;
+	if (context->max_monitors < wanted)
+		context->max_monitors = wanted;
 	return B_OK;
 }
 
@@ -5762,6 +5850,11 @@ file_close(struct file_descriptor* descriptor)
 
 	FUNCTION(("file_close(descriptor = %p)\n", descriptor));
 
+	// Renga: inotify IN_CLOSE_WRITE/IN_CLOSE_NOWRITE.
+	inotify_node_event(vnode->device, vnode->id, false,
+		(descriptor->open_mode & O_RWMASK) != O_RDONLY
+			? INOTIFY_CLOSE_WRITE : INOTIFY_CLOSE_NOWRITE);
+
 	cache_node_closed(vnode, vnode->cache, vnode->device,
 		vnode->id);
 	if (HAS_FS_CALL(vnode, close)) {
@@ -5804,7 +5897,13 @@ file_read(struct file_descriptor* descriptor, off_t pos, void* buffer,
 	if (pos != -1 && descriptor->pos == -1)
 		return ESPIPE;
 
-	return FS_CALL(vnode, read, descriptor->cookie, pos, buffer, length);
+	status_t status = FS_CALL(vnode, read, descriptor->cookie, pos, buffer,
+		length);
+	if (status == B_OK && *length > 0) {
+		// Renga: inotify IN_ACCESS
+		inotify_node_event(vnode->device, vnode->id, false, INOTIFY_ACCESS);
+	}
+	return status;
 }
 
 
@@ -5824,7 +5923,13 @@ file_write(struct file_descriptor* descriptor, off_t pos, const void* buffer,
 	if (!HAS_FS_CALL(vnode, write))
 		return B_READ_ONLY_DEVICE;
 
-	return FS_CALL(vnode, write, descriptor->cookie, pos, buffer, length);
+	status_t status = FS_CALL(vnode, write, descriptor->cookie, pos, buffer,
+		length);
+	if (status == B_OK && *length > 0) {
+		// Renga: inotify IN_MODIFY, for every write as on Linux
+		inotify_node_event(vnode->device, vnode->id, false, INOTIFY_MODIFY);
+	}
+	return status;
 }
 
 
@@ -5861,8 +5966,12 @@ file_vector_io(struct file_descriptor* descriptor, off_t pos,
 
 	status_t status = (write ? vfs_write_pages : vfs_read_pages)(vnode,
 		descriptor->cookie, pos, iovecs, count, 0, &length);
-	if (length > 0)
+	if (length > 0) {
+		// Renga: inotify IN_MODIFY / IN_ACCESS
+		inotify_node_event(vnode->device, vnode->id, false,
+			write ? INOTIFY_MODIFY : INOTIFY_ACCESS);
 		return length;
+	}
 	return status;
 }
 
@@ -6170,6 +6279,9 @@ dir_close(struct file_descriptor* descriptor)
 	struct vnode* vnode = descriptor->u.vnode;
 
 	FUNCTION(("dir_close(descriptor = %p)\n", descriptor));
+
+	// Renga: inotify IN_CLOSE_NOWRITE for directories.
+	inotify_node_event(vnode->device, vnode->id, true, INOTIFY_CLOSE_NOWRITE);
 
 	cache_node_closed(vnode, vnode->cache, vnode->device,
 		vnode->id);
@@ -6809,6 +6921,24 @@ common_read_stat(struct file_descriptor* descriptor, struct stat* stat)
 }
 
 
+/*!	Renga: inotify reports a size change as IN_MODIFY and any other stat
+	change (mode, owner, times) as IN_ATTRIB, as Linux does.
+*/
+static void
+notify_inotify_write_stat(struct vnode* vnode, int statMask)
+{
+	uint32 events = 0;
+	if ((statMask & B_STAT_SIZE) != 0)
+		events |= INOTIFY_MODIFY;
+	if ((statMask & ~(B_STAT_SIZE | B_STAT_SIZE_INSECURE)) != 0)
+		events |= INOTIFY_ATTRIB;
+	if (events != 0) {
+		inotify_node_event(vnode->device, vnode->id, S_ISDIR(vnode->Type()),
+			events);
+	}
+}
+
+
 static status_t
 common_write_stat(struct file_descriptor* descriptor, const struct stat* stat,
 	int statMask)
@@ -6826,7 +6956,10 @@ common_write_stat(struct file_descriptor* descriptor, const struct stat* stat,
 	if (!HAS_FS_CALL(vnode, write_stat))
 		return B_READ_ONLY_DEVICE;
 
-	return FS_CALL(vnode, write_stat, stat, statMask);
+	status_t status = FS_CALL(vnode, write_stat, stat, statMask);
+	if (status == B_OK)
+		notify_inotify_write_stat(vnode, statMask);
+	return status;
 }
 
 
@@ -6867,6 +7000,8 @@ common_path_write_stat(int fd, char* path, bool traverseLeafLink,
 	else
 		status = B_READ_ONLY_DEVICE;
 
+	if (status == B_OK)
+		notify_inotify_write_stat(vnode.Get(), statMask);
 	return status;
 }
 

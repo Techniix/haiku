@@ -97,6 +97,14 @@ status_t	vfs_lookup_vnode(dev_t mountID, ino_t vnodeID,
 				struct vnode **_vnode);
 void		vfs_put_vnode(struct vnode *vnode);
 void		vfs_acquire_vnode(struct vnode *vnode);
+/* Renga (inotify) */
+struct dirent;
+bool		vfs_cached_vnode_is_directory(dev_t mountID, ino_t vnodeID);
+status_t	vfs_read_dir_entries(dev_t mountID, ino_t directoryID,
+				bool (*hook)(void* data, const struct dirent* entry),
+				void* data);
+status_t	vfs_reserve_kernel_node_monitors(int32 count);
+
 status_t	vfs_get_cookie_from_fd(int fd, void **_cookie);
 bool		vfs_can_page(struct vnode *vnode, void *cookie);
 status_t	vfs_read_pages(struct vnode *vnode, void *cookie, off_t pos,

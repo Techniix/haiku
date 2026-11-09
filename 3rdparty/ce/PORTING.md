@@ -22,7 +22,7 @@ updates this file in the same commit.
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
 | `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback) |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
-| `inotify` | `<sys/inotify.h>` | | Missing | Planned |
+| `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
 | `signalfd` | `<sys/signalfd.h>` | | Missing | Planned |
 | System V shared memory (`shmget`, ...) | `<sys/shm.h>` | libroot (nothing extra) | Missing | Available |
 | `getrandom()` | `<sys/random.h>` | `-lgnu` | Missing (`getentropy()` only) | Available |
@@ -138,6 +138,56 @@ handler (an upstream bug, fixed with this work).
 
 Since: the commit that added `src/system/kernel/events/epoll.cpp`.
 Tests: `3rdparty/ce/tests/posix_compat/epoll_test.cpp` (84 checks).
+
+### inotify
+
+`inotify_init()`, `inotify_init1()` (`IN_NONBLOCK`, `IN_CLOEXEC`),
+`inotify_add_watch()` and `inotify_rm_watch()`; events are `read()` as
+`struct inotify_event` records with Linux's layout (names NUL-padded to a
+multiple of 16 bytes, whole records only, `EINVAL` if the buffer cannot hold
+the first one, `FIONREAD` for the queued byte count). The descriptor works
+with `poll()`, `select()` and `epoll`, is shared across `fork()` and can be
+used from several threads. This is what Chromium/Electron's
+`FilePathWatcher`, Node's `fs.watch()` (libuv), GIO, Qt's
+`QFileSystemWatcher` and file-watching build tools use on Linux.
+
+- Events: `IN_ACCESS`, `IN_MODIFY` (every write, and truncation),
+  `IN_ATTRIB` (mode, owner, times, extended attributes), `IN_CLOSE_WRITE`,
+  `IN_CLOSE_NOWRITE`, `IN_OPEN`, `IN_CREATE`, `IN_DELETE`, `IN_MOVED_FROM`
+  and `IN_MOVED_TO` (one cookie per rename, also across two watched
+  directories), `IN_DELETE_SELF`, `IN_MOVE_SELF`, `IN_IGNORED`,
+  `IN_Q_OVERFLOW`, `IN_ISDIR`.
+- Flags: `IN_ONLYDIR`, `IN_DONT_FOLLOW`, `IN_MASK_ADD`, `IN_MASK_CREATE`,
+  `IN_ONESHOT`. Adding a watch for an already watched node returns its
+  watch descriptor and replaces (or with `IN_MASK_ADD` extends) its mask.
+- Queue: identical consecutive events are merged and at most 16384 events
+  are queued, the last place going to one `IN_Q_OVERFLOW` (wd -1), as with
+  Linux's defaults. At most 8192 watches per instance (`ENOSPC`).
+- Errors as on Linux: `EBADF`, `EINVAL` (not an inotify fd, no events in the
+  mask, `IN_MASK_ADD` with `IN_MASK_CREATE`, unknown wd), `ENOENT`,
+  `ENOTDIR`, `EEXIST`, `EACCES` (no read permission), `EFAULT`.
+- **Differences from Linux:**
+  - Names of a watched directory's entries come from a list the watch
+    keeps: read when the watch is added (up to 100,000 entries) and kept
+    current by create, delete and rename events. An entry renamed through
+    a hard link outside the watched directory may keep its old name.
+    `IN_ISDIR` on entries removed or moved out is known for entries created
+    while watched and for the first 10,000 entries present when the watch
+    was added.
+  - `IN_DELETE_SELF` comes when the node's last name is removed, even if
+    it is still open (Linux waits for the last close).
+  - `IN_UNMOUNT` is never reported; `IN_EXCL_UNLINK` has no effect.
+  - Memory-mapped writes produce no `IN_MODIFY` (Linux neither).
+
+Implementation: `src/system/kernel/events/inotify.cpp` (design comment at
+the top). Name events come from Haiku's node monitoring; reads, writes,
+truncation, other stat changes, opens and closes from new hooks in the VFS,
+because node monitoring has no such events and file systems rate-limit
+their stat notifications. The hooks cost one atomic read while nothing is
+watched.
+
+Since: the commit that added `src/system/kernel/events/inotify.cpp`.
+Tests: `3rdparty/ce/tests/posix_compat/inotify_test.cpp` (47 checks).
 
 ### eventfd
 
@@ -400,7 +450,6 @@ If a port needs one of these, note it rather than writing a Haiku-specific
 workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
-- `inotify` (on top of node monitoring).
 - `signalfd`.
 - File sealing for `memfd_create()`; `TFD_TIMER_CANCEL_ON_SET`.
 - Linux driver support through LinuxKPI, and Linux binary compatibility

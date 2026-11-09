@@ -23,6 +23,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			execinfo.cpp
 			getauxval.cpp
 			getrandom.cpp
+			inotify.cpp
 			memfd.cpp
 			sched_affinity.cpp
 			sched_getcpu.cpp

@@ -94,6 +94,12 @@ extern ssize_t		_kern_epoll_wait(int epfd, struct epoll_event* events,
 						int maxEvents, bigtime_t timeout,
 						const sigset_t* sigMask);
 
+/* inotify (Renga; user API in libgnu) */
+extern int			_kern_inotify_init(int openFlags);
+extern int			_kern_inotify_add_watch(int fd, const char* path,
+						uint32 mask);
+extern status_t		_kern_inotify_rm_watch(int fd, int wd);
+
 /* eventfd (Renga; user API in libgnu) */
 extern int			_kern_eventfd(uint32 initialValue, int openFlags,
 						bool semaphore);
