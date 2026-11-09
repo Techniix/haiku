@@ -113,6 +113,7 @@ These come from the audit's architecture report and apply to every change:
 - **Add-only ABI.** New syscalls and symbols are additive. Never change public class sizes or vtable order (x86_gcc2 compatibility). Packages that need Renga-only symbols go to the Techniix repository, not to repositories for stock Haiku.
 - **Platform identity stays Haiku.** `uname -s`, `__HAIKU__`, `B_HAIKU_*`, MIME signatures, package names and paths are unchanged. Only user-visible display names change (the `DISTRO_NAME` macro).
 - **Every change gets an automated check, plus a known-bad case for the check itself.** New harness checks get a case in `selftest.py` so a broken check cannot pass silently. Wherever possible, a new test is shown to fail on the old code.
+- **Every user-facing feature ships with its GUI** (maintainer, 2026-11-09). A feature people use or configure is not Implemented until it can be reached and controlled from the desktop: a settings page (today's preferences, later the Control Panel, `F-28`), a menu, a Deskbar or panel item, or a window, as fits. The GUI is part of the same work item and is checked with screenshots in the harness. Pure programming interfaces (`epoll`, `memfd`, ...) and automatic behaviour without options are exempt; settings that exist only as files or command-line switches are not.
 - **No KPTI or other always-on costs by default.** The compositor, if built, is optional and off by default.
 - **AI-written work stays in the fork.** Upstream's `AGENTS.md` (at `4197d30f`) forbids AI-generated or AI-assisted contributions. The maintainer files upstream reports himself, in his own words. That is not a priority now; candidates are collected in the [upstream bug reports doc](https://claude.ai/artifact/FVtf9E5sE982Ty1zWf9Sm9).
 
@@ -397,7 +398,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Renga maturity | Configured priority honoured; Renga images prefer Techniix |
 | Status | **QEMU Tested** |
 | Completed | `BPackageManager::_AddRemoteRepository()` applies the configured priority (pkgman and HaikuDepot). Renga images configure HaikuPorts with priority 2 (`HAIKU_RENGA_HAIKUPORTS_PRIORITY`), Haiku and Techniix 1, generated from `3rdparty/ce/Jamfile` without touching upstream rules (`85bff35a`). |
-| Remaining | Package and repository signing (audit Tier 3, difficulty 6). Third-party HaikuDepot metadata for the Techniix repository. |
+| Remaining | Show and change repository priorities in the Repositories settings (GUI rule, section 1.2; today only `pkgman` and the image configuration set them). Package and repository signing (audit Tier 3, difficulty 6). Third-party HaikuDepot metadata for the Techniix repository. |
 | Known bugs/limitations | The Techniix `repo.info` still says priority 1, so adding the repository by hand with `pkgman add-repo` ties with HaikuPorts (higher version wins) |
 | Dependencies | Techniix/haiku-packages repository |
 | Difficulty | Not rated (signing: 6) |
@@ -435,7 +436,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Renga maturity | Playback complete through hmulti; capture missing |
 | Status | **QEMU Tested** (playback); capture **Not Started** |
 | Completed | PCM playback (virtio 1.2 §5.14) as `/dev/audio/hmulti/virtio_sound/<n>`, 44.1/48 kHz, period ring paced by device completions, all user pointers checked (`658d1756`). Hardening: exclusive open, no spinning on error paths, `B_CANCELED` after force-stop, stale-completion filtering by stream generation, broken-device latch, correct per-buffer timestamps, `CE_TRACE` points (`fbbb290a`). Prerequisite kernel fix: device_manager now publishes driver directories after boot (`ce8fa869`). |
-| Remaining | Capture (RX queue), jack and control events, hardware mixer controls (`VIRTIO_SND_F_CTLS`) |
+| Remaining | Capture (RX queue), jack and control events, hardware mixer controls (`VIRTIO_SND_F_CTLS`), each visible in the Media preferences and the audio settings (`F-32`) |
 | Known bugs/limitations | One client at a time (as HDA). Volume through the Media Kit software mixer only. |
 | Dependencies | `F-01` (audio analysis) |
 | Difficulty | 3 (audit Tier 1) |
@@ -527,7 +528,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Renga maturity | Unchanged |
 | Status | **Not Started** |
 | Completed | None |
-| Remaining | Periodic sync as a launch_daemon job |
+| Remaining | Periodic sync as a launch_daemon job, with its on/off switch, interval and last-sync status in the Time preferences |
 | Known bugs/limitations | Not applicable |
 | Dependencies | None |
 | Difficulty | 2 (audit Tier 1) |
@@ -1851,6 +1852,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Media Kit right after `F-43` phase A (with `virtio_sound` capture as its first step), then LinuxKPI; NTP sync and bundled applications batch 1 move after them | Section 5.1 |
 | 2026-11-09 | After the Media Kit: boot loader first part, then the Installer's in-place replacement of an existing Haiku/Renga installation (modes: upgrade keeping files and applications, with the old system kept as a bootable package state; replace system keeping files; erase), then the maintainer installs Renga on his real hardware; LinuxKPI and the rest follow | `F-22`, `F-23`, section 5.1 |
 | 2026-11-09 | LinuxKPI: optional, user-approved online fetch of driver packages and firmware for detected hardware at install time (and later from the Control Panel); to be done when `F-26` starts | `F-26`, `F-23`, `F-45` |
+| 2026-11-09 | Every user-facing feature ships with its GUI in the same work item; a feature is not Implemented until it can be reached from the desktop (principle added to section 1.2). Review of finished features: only repository priorities (`F-13`) lack a GUI | Section 1.2, `F-13` |
 
 ---
 
