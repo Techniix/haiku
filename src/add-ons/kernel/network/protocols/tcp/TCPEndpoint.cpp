@@ -559,11 +559,33 @@ TCPEndpoint::Close()
 		return B_OK;
 	}
 
-	// handle linger with zero timeout
+	// Linger with a zero timeout is an abortive close (RFC 9293 3.10.4,
+	// ABORT): the peer gets a reset, queued data is discarded, and the
+	// connection is gone at once, without TIME_WAIT.
+	//
+	// This used to set CLOSED and call _SendQueued(true), which returns
+	// right away for any state below ESTABLISHED - CLOSED included - so no
+	// reset was ever sent: the peer kept an open connection and a reader
+	// blocked on it never woke up.
 	if ((socket->options & SO_LINGER) != 0 && socket->linger == 0) {
+		// A reset only makes sense where the peer has a connection to
+		// tear down; in CLOSING, LAST-ACK and TIME-WAIT both sides are
+		// already closing and the RFC just deletes the connection.
+		bool sendReset = fState == SYNCHRONIZE_RECEIVED
+			|| fState == ESTABLISHED || fState == FINISH_RECEIVED
+			|| fState == FINISH_SENT || fState == FINISH_ACKNOWLEDGED;
+
+		_CancelConnectionTimers();
 		fState = CLOSED;
 		T(State(this));
-		return _SendQueued(true);
+
+		// Other threads may still be blocked on this socket.
+		fSendCondition.NotifyAll();
+		_NotifyReader();
+
+		// With fState CLOSED, _PrepareSendSegment() yields RST|ACK at
+		// SND.NXT, which is what the RFC asks for.
+		return sendReset ? _SendReset(true) : B_OK;
 	}
 
 	status_t status = _Disconnect(true);

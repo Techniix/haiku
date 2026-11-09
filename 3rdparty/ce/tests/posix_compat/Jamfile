@@ -37,6 +37,12 @@ Application ucontext_test :
 	ucontext_test.cpp
 ;
 
+# How TCP connections end (orderly and abortive close).
+Application tcp_close_test :
+	tcp_close_test.cpp
+	: network
+;
+
 # TCP keepalive is kernel-side; only the socket calls are needed.
 Application tcp_keepalive_test :
 	tcp_keepalive_test.cpp
@@ -50,5 +56,5 @@ Application timerfd_test :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : eventfd_test libc_ext_test memfd_test
-		mqueue_test shm_test tcp_keepalive_test timerfd_test ucontext_test ;
+		mqueue_test shm_test tcp_close_test tcp_keepalive_test timerfd_test ucontext_test ;
 }
