@@ -32,6 +32,10 @@ void boot_splash_init(uint8 * boot_splash);
 void boot_splash_uninit(void);
 void boot_splash_set_stage(int stage);
 
+/* Stops the splash animation for good and waits until it no longer touches
+   the frame buffer. Called before anyone else takes the frame buffer. */
+void boot_splash_stop_animation(void);
+
 #ifdef __cplusplus
 }
 #endif

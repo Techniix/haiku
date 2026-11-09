@@ -378,7 +378,7 @@ def boot(args, results_dir, report):
 	qemu = [
 		"qemu-system-x86_64",
 		"-m", str(args.memory),
-		"-smp", "1",
+		"-smp", str(args.smp),
 		"-display", "none",
 		"-vga", "std",
 		"-serial", "stdio",
@@ -817,6 +817,8 @@ def main():
 	parser.add_argument("--timeout", type=int, default=1800,
 		help="seconds before the guest is considered hung")
 	parser.add_argument("--memory", type=int, default=1024)
+	parser.add_argument("--smp", type=int, default=1,
+		help="number of virtual CPUs (2 or more to exercise SMP code)")
 	parser.add_argument("--screenshots", default="",
 		type=lambda text: [float(t) for t in text.split(",") if t.strip()],
 		help="comma-separated seconds after QEMU starts at which to save "

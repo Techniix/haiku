@@ -16,6 +16,7 @@
 #include <kernel.h>
 #include <lock.h>
 #include <boot_item.h>
+#include <boot_splash.h>
 #include <vm/vm.h>
 #include <fs/devfs.h>
 #include <boot/kernel_args.h>
@@ -430,6 +431,10 @@ frame_buffer_update(addr_t baseAddress, int32 width, int32 height, int32 depth,
 		depth, bytesPerRow));
 
 #ifndef _BOOT_MODE
+	// Someone else takes over the frame buffer: the boot splash animation
+	// must not draw into it any more.
+	boot_splash_stop_animation();
+
 	if (baseAddress == 0 && sBootInfo.frame_buffer != 0) {
 		// Try to restore the boot framebuffer, if we can.
 		return frame_buffer_update(sBootInfo.frame_buffer, sBootInfo.width,

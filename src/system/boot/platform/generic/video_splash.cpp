@@ -186,41 +186,15 @@ video_display_splash(addr_t frameBuffer)
 				+ (kSplashIconsWidth * iconsHalfHeight);
 		break;
 		default:	// 24bits is assumed here
-		{
 			uncompressedSize *= 3;
-			size_t animationSize = 0;
-#ifdef SPLASH_ANIMATION
-			// The animation frames follow the icons in the same buffer, in
-			// order (the kernel computes the same offsets from the frame
-			// table). Each is the rectangle that changed since the previous
-			// frame, 24-bit like the icons.
-			for (int32 i = 0; i < kSplashAnimationFrameCount; i++) {
-				animationSize += (size_t)kSplashAnimationFrames[i].width
-					* kSplashAnimationFrames[i].height * 3;
-			}
-#endif
 			// pointer into the lower half of the icons image data
-			gKernelArgs.boot_splash = (uint8*)kernel_args_malloc(
-				uncompressedSize + animationSize);
+			gKernelArgs.boot_splash
+				= (uint8*)kernel_args_malloc(uncompressedSize);
 			if (gKernelArgs.boot_splash == NULL)
 				return B_NO_MEMORY;
 			uncompress(kSplashIcons24BitCompressedImage,
 				sizeof(kSplashIcons24BitCompressedImage),
 				gKernelArgs.boot_splash, uncompressedSize);
-#ifdef SPLASH_ANIMATION
-			uint8* frame = gKernelArgs.boot_splash + uncompressedSize;
-			for (int32 i = 0; i < kSplashAnimationFrameCount; i++) {
-				unsigned int frameSize = (unsigned int)
-					kSplashAnimationFrames[i].width
-					* kSplashAnimationFrames[i].height * 3;
-				if (frameSize == 0)
-					continue;
-				uncompress(kSplashAnimationData[i],
-					kSplashAnimationDataSize[i], frame, frameSize);
-				frame += frameSize;
-			}
-#endif
-		}
 			lowerHalfIconImage = (uint8 *)gKernelArgs.boot_splash
 				+ (kSplashIconsWidth * iconsHalfHeight) * 3;
 		break;
