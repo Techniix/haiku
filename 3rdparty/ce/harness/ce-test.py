@@ -65,7 +65,8 @@ WATCHED_DRIVERS = ("virtio_sound",)
 # Compile-only targets: fast feedback before the image build.
 COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"libnetwork.so", "libc_ext_test", "virtio_sound",
-	"vsnd_test", "eventfd_test", "memfd_test", "mqueue_test", "shm_test", "timerfd_test"]
+	"vsnd_test", "eventfd_test", "memfd_test", "mqueue_test", "shm_test", "timerfd_test",
+	"ucontext_test"]
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
 TRACE_SOURCES = [

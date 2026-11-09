@@ -30,7 +30,7 @@ updates this file in the same commit.
 | `backtrace()`, `backtrace_symbols()`, `backtrace_symbols_fd()` | `<execinfo.h>` | `-lgnu` | Missing | Available |
 | `copy_file_range()` | `<unistd.h>` | `-lgnu` | Missing | Available |
 | `sendmmsg()`, `recvmmsg()` | `<sys/socket.h>` | libnetwork (nothing extra) | Missing | Available |
-| `makecontext()`/`swapcontext()` | `<ucontext.h>` | | Missing | Planned |
+| `getcontext()`/`setcontext()`/`makecontext()`/`swapcontext()` | `<ucontext.h>` | libroot (nothing extra) | Missing | Available (x86_64) |
 | `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT` | `<netinet/tcp.h>` | | Missing (no TCP keepalive at all) | Planned |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -187,6 +187,27 @@ Since: commit `c6cbef2e`. Tests:
 Since: commit `9fef005a`. Tests:
 `libc_ext_test.cpp`.
 
+### User contexts (`<ucontext.h>`)
+
+`getcontext()`, `setcontext()`, `makecontext()` and `swapcontext()`, the
+basis of coroutine code (QEMU's coroutine backend, libtask, older
+green-thread runtimes). In libroot; x86_64 for now (other architectures
+need their own small assembly file).
+
+- A context holds the callee-saved registers, stack and instruction
+  pointers, the x87 control word and MXCSR (so rounding modes are per
+  context), and the signal mask. Switching costs one `sigprocmask()`
+  syscall, as with glibc.
+- `makecontext()` passes any number of arguments the ABI way (six in
+  registers, the rest on the stack) and reads them as 64-bit values, so
+  pointer arguments work as with glibc. Stacks are 16-byte aligned.
+- Returning from a `makecontext()` function resumes `uc_link`; with a
+  NULL `uc_link` the process exits with status 0 (glibc's behaviour).
+- `<sys/ucontext.h>` exists for code that includes it.
+
+Since: see the user contexts commit on `ce/main`. Tests:
+`ucontext_test.cpp`.
+
 ### virtio-sound
 
 Audio output in virtual machines (QEMU `-device virtio-sound-pci`) through
@@ -202,7 +223,6 @@ removed again.
 
 - `epoll` (on top of the kernel's event queue), then `inotify`.
 - `signalfd`.
-- `makecontext()`/`swapcontext()` (`<ucontext.h>`).
 - TCP keepalive (`SO_KEEPALIVE` probes and `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/
   `TCP_KEEPCNT`): Haiku's TCP does not send keepalive probes at all yet.
 - File sealing for `memfd_create()`; `TFD_TIMER_CANCEL_ON_SET`.

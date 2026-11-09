@@ -14,8 +14,10 @@ for architectureObject in [ MultiArchSubDirSetup x86_64 ] {
 
 		MergeObject <$(architecture)>posix_arch_$(TARGET_ARCH).o :
 			fenv.c
+			makecontext.c
 			sigsetjmp.S
 			siglongjmp.S
+			ucontext.S
 
 			$(genericSources)
 			;

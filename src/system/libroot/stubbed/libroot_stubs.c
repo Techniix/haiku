@@ -743,6 +743,7 @@ void __libio_translit() {}
 void __load_image_at_path() {}
 void __longjmp_return() {}
 void __look_up_in_path() {}
+void __makecontext_trampoline() {}
 void __mblen() {}
 void __mbrlen() {}
 void __mbrtowc() {}
@@ -1783,6 +1784,7 @@ void getc() {}
 void getc_unlocked() {}
 void getchar() {}
 void getchar_unlocked() {}
+void getcontext() {}
 void getcwd() {}
 void getdelim() {}
 void getdtablesize() {}
@@ -2008,6 +2010,7 @@ void lroundl() {}
 void lsearch() {}
 void lseek() {}
 void madvise() {}
+void makecontext() {}
 void malloc() {}
 void malloc_usable_size() {}
 void mblen() {}
@@ -2385,6 +2388,7 @@ void set_signal_stack() {}
 void set_thread_priority() {}
 void setbuf() {}
 void setbuffer() {}
+void setcontext() {}
 void setegid() {}
 void setenv() {}
 void seteuid() {}
@@ -2516,6 +2520,7 @@ void strxfrm_l() {}
 void suggest_thread_priority() {}
 void suspend_thread() {}
 void swab() {}
+void swapcontext() {}
 void switch_sem() {}
 void switch_sem_etc() {}
 void swprintf() {}
