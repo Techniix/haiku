@@ -324,6 +324,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-41 | Deskbar modernisation | Investigating (requirements set) | None |
 | F-42 | Gamepad support and configurator | Investigating (requirements set) | None |
 | F-43 | Chromium platform readiness | Designed (phases A-H) | None |
+| F-44 | Bundled applications | Designed (three batches) | None |
 
 ---
 
@@ -421,7 +422,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 3 (audit Tier 1) |
 | Risk | Low |
 | Testing status | 33 `virtio_sound.*` checks + 4 `audio.*` recording checks + `qemu.virtio_sound`, every run; real-time pacing within 0.3% |
-| Next milestone | Capture (agreed work order item 6) |
+| Next milestone | Capture (agreed work order item 7) |
 | Recommended next action | Implement the RX queue with a loopback-style harness check (QEMU input from a WAV file) |
 | Links | PORTING.md "virtio-sound" |
 
@@ -1047,6 +1048,46 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Recommended next action | None until Stage 1 resumes |
 | Links | Trac #18441, #10486, #13087, #15864 |
 
+### Bundled applications
+
+#### F-44 Bundled applications (gap review, 2026-11-09)
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Haiku bundles the basics (Tracker, Terminal, StyledEdit, WebPositive, Mail, People, MediaPlayer, ShowImage, Screenshot, SoundRecorder, CodyCam, DeskCalc, Expander, DiskProbe, DiskUsage, DriveSetup, HaikuDepot, SoftwareUpdater, Installer, ActivityMonitor, ProcessController, Debugger, Icon-O-Matic, Magnify, CharacterMap) |
+| Renga maturity | Unchanged |
+| Status | **Designed** (maintainer's selection, 2026-11-09) |
+| Completed | None |
+| Remaining | Checklist below, in three batches |
+| Known bugs/limitations | Missing compared with current Windows, macOS and Linux desktops: network shares, user-data backup, document viewer, programmer's editor, archive creation, on-screen keyboard, global search, notification history, clipboard history, a passwords UI, screen recording, a full task manager |
+| Dependencies | Batch 1: userlandfs fixes for network shares. Batch 2: `F-28` Control Panel (restore and backup pages), `F-25` Lumina launcher. Screen recording: `F-31` phases 3-4. Batch 3: `F-25`/`F-41` panel and Deskbar |
+| Difficulty | 2-5 per item (audit scale) |
+| Risk | Low to medium (backup and restore: medium, user data) |
+| Testing status | None. Each item gets a harness check where it can run headless (archive round trips, share mounts against QEMU's built-in SMB server, backup/restore round trips, package-state restore) plus screenshots for the GUIs |
+| Next milestone | Batch 1 (see section 5.1) |
+| Recommended next action | Start batch 1 after periodic NTP sync |
+| Links | Gap review in the 2026-11-09 conversation; decisions log |
+
+Skipped for now by the maintainer: disk encryption, calendar and CalDAV/CardDAV, night light; later consideration: Mail, DeskCalc, ShowImage and remote desktop updates, a camera app.
+
+Checklist:
+
+- [ ] **Batch 1, quick wins with existing code:**
+  - [ ] **Network shares.** SMB2/3 through `fuse_libsmb2` (memecode, builds against Haiku's userlandfs FUSE API) on libsmb2; SFTP through `sshfs`; NFS through `fuse-nfs` on libnfs (HaikuPorts). Fix the userlandfs problems HaikuPorts works around (its fuse-nfs recipe is disabled pending userlandfs fixes). Bundle them; a Tracker "Connect to server" window (`smb://`, `sftp://`, `nfs://`), passwords kept in the key store, shares remembered and remounted at login, and share discovery (mDNS/DNS-SD; WS-Discovery for Windows hosts) in a Network location in Tracker.
+  - [ ] **Programmer's editor.** Bundle Koder (Haiku-native, Scintilla-based, in HaikuPorts) as the default for source files; StyledEdit stays the plain-text editor.
+  - [ ] **Archives.** Expander moves from calling command-line tools to libarchive (BSD licence): creating archives as well as extracting (zip, 7z, tar.gz/.xz/.zst), password-protected zip and 7z, a contents preview, progress and cancel, BFS attributes kept in zip. Tracker gets "Compress…" and "Extract here" in the context menu.
+  - [ ] **Document viewer.** Build on BePDF (Haiku-native, GPL, xpdf 4.0 core; already searches, prints, opens encrypted files and adds annotations): update the xpdf core, add form filling, thumbnails, continuous scrolling, HiDPI and dark mode. Later, optionally, PDFium (BSD, the engine Chromium builds anyway for `F-43`) as a second back end for forms and JavaScript-heavy files.
+- [ ] **Batch 2, larger features:**
+  - [ ] **Backup and restore, built on package states.** Haiku already keeps a package state for every change to the installed packages and can boot an older state from the boot menu. Renga turns this into one feature in the Control Panel (System, Backup and restore): restore points listed by date and label, with the packages that changed; SoftwareUpdater and HaikuDepot label and pin the state they create before an update; "restore this point" activates an older state from the running system (next boot, through package_daemon) instead of only through the boot menu; old states pruned by policy, pinned ones kept. User data: scheduled incremental, versioned backups of home (and chosen folders) to a disk or network share (batch 1), with hard-link snapshots made through the Storage Kit so BFS attributes and MIME types survive; each backup records the package state current at the time, so "restore everything to Tuesday" restores both the files and the matching system state. The installer's rollback (`F-23`) uses the same engine.
+  - [ ] **On-screen keyboard.** An input_server add-on with a floating keyboard window, drawn from the Keymap preference's existing keyboard view (`KeyboardLayoutView`), following the active keymap and dead keys, sending real key events; opened from Deskbar or the Lumina panel and from Accessibility in the Control Panel. Works in Chromium and other Wayland programs once the Wayland layer bridges text input (`F-43` phase C). Screen reader and AT-SPI stay in `F-43` phase H.
+  - [ ] **Global search launcher.** A Spotlight-style window on a shortcut, built on QuickLaunch (Haiku-native, in HaikuPorts) and Tracker's live queries over BFS indices: applications, files by name and attribute, Control Panel settings (`F-28` publishes its search index), simple calculations. Opens from the Lumina launcher applet and Deskbar; results open in Tracker; Lumina's settings choose the shortcut.
+  - [ ] **Screen recording in Screenshot.** A record button (screen, window or region, with optional system audio and microphone) on the `F-31` phase-3 capture session and phase-4 encoder; delivered with that phase.
+  - [ ] **Task manager in ActivityMonitor.** A per-application table (CPU, memory, disk and network use), ProcessController's actions (quit, kill, priority), and a startup-programs list (launch_daemon user jobs and the boot launch folder). Per-team disk and network accounting is added to the kernel where it is missing.
+- [ ] **Batch 3, low priority:**
+  - [ ] Notification history and Do Not Disturb (notification_server; a notification centre in the Lumina panel and Deskbar).
+  - [ ] Clipboard history (building on Clipdinger, HaikuPorts) and an emoji picker on a shortcut (CharacterMap data).
+  - [ ] Passwords app for the key store (BKeyStore), also the store behind Chromium's saved passwords (`F-43` phase D).
+
 ### Multimedia
 
 #### F-31 Media Kit
@@ -1289,12 +1330,14 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 3. **Harness quick mode and timing**: done 2026-11-09 (`c36db227`): `--only` partial runs (never a pass), per-program timing, `harness.tests_ran`.
 4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too.
 5. **Periodic NTP sync** (`F-30`).
-6. **`virtio_sound` capture** (`F-02`).
-7. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
-8. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
-9. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
-10. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
-11. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+6. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
+7. **`virtio_sound` capture** (`F-02`).
+8. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
+9. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+10. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
+11. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
+12. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
+13. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
 
@@ -1408,7 +1451,7 @@ Milestone count: 8 of 14 (57%).
 | 5 | Partition resize backend + DriveSetup queue | Open |
 | 6 | Visual identity pack | Partial: splash and logos only |
 | 7 | Porting API pack 1 | Done |
-| 8 | Media pack 1 (encoders, per-app volume) | Open (work order item 7) |
+| 8 | Media pack 1 (encoders, per-app volume) | Open (work order item 8) |
 | 9 | Lumina in-tree engine | Open |
 | 10 | Installer wizard | Open |
 
@@ -1763,6 +1806,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | `F-43` phase A goes right after the harness speed-up, before NTP sync | `F-43`, section 5.1 |
 | 2026-11-09 | Lumina is developed as part of Renga, not as an add-on that must fit around stock Haiku: where it serves the goals better, Lumina's features go into app_server, input_server, Deskbar and the Interface Kit directly, built in-tree with the image, instead of working around them (revision-pinned decorator add-on, private-header builds, effect workarounds). The fallback to the stock look (Lumina S5/S6) stays | `F-25`, `F-41` |
 | 2026-11-09 | Lumina's settings and customization live in the Control Panel, as part of the Appearance tool (modes and personalities, window engine, panel, effects), built with the Interface Kit. No separate Lumina Settings Center (Qt/QML) and no separate "Lumina Mode" preferences app in the end state; the `lumina` command stays for scripting and tests | `F-25`, `F-28` |
+| 2026-11-09 | Bundled applications (`F-44`): add network shares, backup and restore integrated with package states, a document viewer built on existing open-source code, a programmer's editor, archive creation in Expander with Tracker actions, an on-screen keyboard, a search launcher tied to Tracker and Lumina, screen recording in Screenshot, a task manager in ActivityMonitor; low priority: notification history, clipboard history, a passwords app. Skipped for now: disk encryption, calendar, night light | `F-44` |
 
 ---
 
