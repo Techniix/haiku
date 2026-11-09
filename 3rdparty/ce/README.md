@@ -67,6 +67,11 @@ check wants the configured start, one line per second and the timeout, after
 about the configured time. Every other run checks that no boot menu appears.
 Works with either firmware.
 
+Every run also checks the branding: `branding.boot_loader` wants "Welcome to
+the Renga boot loader!" on the serial console, and for anyboot images
+`branding.iso_volume_id` reads the ISO 9660 volume ID with `xorriso
+-pvd_info` on the host and wants `renga-<version>-<arch>`.
+
 Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 `ce-test-results/latest` always points to the newest run:
 
@@ -144,14 +149,42 @@ silently.
 `jam -q @renga-raw` (or `@renga-anyboot`, `@renga-vmware`) builds a full
 Renga desktop image: the regular image plus the volume label "Renga", the
 Techniix package repository and `HAIKU_RENGA_EXTRA_PACKAGES`. The profiles
-are defined in `build/RengaBuildProfiles`; Jamrules includes that file, the
-only upstream build file the fork touches. To test one:
+are defined in `build/RengaBuildProfiles`; Jamrules includes that file. To
+test one:
 
 ```sh
 3rdparty/ce/harness/ce-test.py --profile renga-raw
 ```
 
 The harness then also checks the volume name and the repositories.
+
+## Branding
+
+Haiku, Inc.'s distribution guidelines reserve the name "Haiku" and the HAIKU
+logo for the official distribution, so every build that is not
+`HAIKU_DISTRO_COMPATIBILITY=official` shows itself as Renga, whatever the
+profile (the harness's minimum images included):
+
+- The display name is one macro, `DISTRO_NAME` in
+  `headers/private/shared/distro_name.h` ("Renga", or "Haiku" in official
+  builds). The boot loader (welcome line, menu title, help texts),
+  AboutSystem (window title, "Renga hrev...", a note in the credits that
+  Renga is based on Haiku), the Deskbar menu's "About Renga" and the
+  Installer's texts use it.
+- AboutSystem and the Installer show the Renga wordmark instead of the HAIKU
+  logo: `artwork/renga_logo_*.png`, made from the boot splash logo by
+  `artwork/make_app_logos_renga.py`.
+- CD and anyboot images get the ISO volume ID
+  `$(HAIKU_CD_VOLUME_ID_PREFIX)-<version>-<arch>`, `renga-...` by default
+  (`build/jam/BuildSetup`).
+
+Everything software uses to recognise the platform stays Haiku: `uname -s`,
+`__HAIKU__`, `B_HAIKU_*`, package and repository names, MIME signatures,
+paths, and the revision ("Haiku revision: hrev...", the Haiku sources the
+system is built from). A string that names the system is a new catalog key
+in Renga builds and shows in English until it is translated; FirstBootPrompt
+keeps upstream's translated, name-free texts for that reason, since it is
+where the user picks a language.
 
 ## Current suites
 

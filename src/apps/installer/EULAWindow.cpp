@@ -16,6 +16,8 @@
 #include <ScrollView.h>
 #include <SpaceLayoutItem.h>
 
+#include <distro_name.h>
+
 #include "tracker_private.h"
 
 static const uint32 kMsgAgree = 'agre';
@@ -32,16 +34,17 @@ EULAWindow::EULAWindow()
 {
 	BString infoText;
 	infoText << B_TRANSLATE(
-		"Welcome to the Haiku Installer!\n\n");
+		"Welcome to the " DISTRO_NAME " Installer!\n\n");
 	infoText << B_TRANSLATE(
-		"IMPORTANT INFORMATION BEFORE INSTALLING HAIKU\n\n");
+		"IMPORTANT INFORMATION BEFORE INSTALLING " DISTRO_NAME_UPPERCASE
+		"\n\n");
 	infoText << B_TRANSLATE(
 		"This is beta-quality software! It means there is a risk of "
 		"losing important data. Make frequent backups! You have been "
 		"warned.\n\n\n");
 	infoText << B_TRANSLATE(
-		"1)   If you are installing Haiku onto real hardware (not inside an "
-		"emulator), you may want to prepare a hard disk partition from "
+		"1)   If you are installing " DISTRO_NAME " onto real hardware (not "
+		"inside an emulator), you may want to prepare a hard disk partition from "
 		"another OS (you could, for example, use a GParted Live-CD, which "
 		"can also resize existing partitions to make room).\n"
 		"You can also set up partitions by launching DriveSetup from "
@@ -50,6 +53,7 @@ EULAWindow::EULAWindow()
 		"years, it's recommended to have up-to-date backups of the other "
 		"partitions on your system. Just in case" B_UTF8_ELLIPSIS);
 	infoText << "\n\n\n";
+#ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
 	infoText << B_TRANSLATE(
 		"2)   The Installer will make the Haiku partition itself bootable, "
 		"but takes no steps to integrate Haiku into an existing boot menu. "
@@ -59,12 +63,28 @@ EULAWindow::EULAWindow()
 		"Or you can set up a boot menu from Installer's \"Tools\" menu, see "
 		"the Haiku User Guide's topic on the application \"BootManager\"."
 		"\n\n\n");
+#else
+	// Renga: the booting guide is on Haiku's website, not "ours"; it
+	// applies to Renga as well.
 	infoText << B_TRANSLATE(
-		"3)   When you successfully boot into Haiku for the first time, make "
-		"sure to read our \"User Guide\" and take the \"Quick Tour\". There "
-		"are links on the Desktop and in WebPositive's bookmarks.\n\n");
+		"2)   The Installer will make the " DISTRO_NAME " partition itself "
+		"bootable, but takes no steps to integrate " DISTRO_NAME " into an "
+		"existing boot menu. If you have GRUB already installed, you can add "
+		DISTRO_NAME " to it.\n"
+		"For details, please consult the guide on booting Haiku, which "
+		DISTRO_NAME " is based on, at https://www.haiku-os.org/guides/booting."
+		"\n"
+		"Or you can set up a boot menu from Installer's \"Tools\" menu, see "
+		"the Haiku User Guide's topic on the application \"BootManager\"."
+		"\n\n\n");
+#endif
 	infoText << B_TRANSLATE(
-		"Have fun and thanks for trying out Haiku!");
+		"3)   When you successfully boot into " DISTRO_NAME " for the first "
+		"time, make sure to read our \"User Guide\" and take the "
+		"\"Quick Tour\". There are links on the Desktop and in "
+		"WebPositive's bookmarks.\n\n");
+	infoText << B_TRANSLATE(
+		"Have fun and thanks for trying out " DISTRO_NAME "!");
 
 	BTextView* textView = new BTextView("eula", be_plain_font, NULL, B_WILL_DRAW);
 	textView->SetInsets(10, 10, 10, 10);

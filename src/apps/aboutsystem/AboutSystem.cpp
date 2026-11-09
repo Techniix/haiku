@@ -63,6 +63,7 @@
 #include <AutoDeleter.h>
 #include <AutoDeleterPosix.h>
 #include <cpu_type.h>
+#include <distro_name.h>
 #include <parsedate.h>
 #include <system_revision.h>
 
@@ -393,7 +394,12 @@ AboutApp::MessageReceived(BMessage* message)
 AboutWindow::AboutWindow()
 	:
 	BWindow(BRect(0, 0, kWindowWidth, kWindowHeight),
-		B_TRANSLATE("About this system"), B_TITLED_WINDOW,
+#ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
+		B_TRANSLATE("About this system"),
+#else
+		B_TRANSLATE("About " DISTRO_NAME),
+#endif
+		B_TITLED_WINDOW,
 		B_AUTO_UPDATE_SIZE_LIMITS | B_NOT_ZOOMABLE)
 {
 	SetLayout(new BGroupLayout(B_VERTICAL, 0));
@@ -433,15 +439,13 @@ LogoView::LogoView()
 {
 	SetDrawingMode(B_OP_OVER);
 
-#ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
+	// Official builds have the HAIKU logo here, Renga builds the Renga
+	// wordmark (see the rdef); both in a light and a dark variant.
 	rgb_color bgColor = ui_color(B_DOCUMENT_BACKGROUND_COLOR);
 	if (bgColor.IsLight())
 		fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "logo.png");
 	else
 		fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "logo_dark.png");
-#else
-	fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "walter_logo.png");
-#endif
 
 	// Set view color to panel background color when fLogo is NULL
 	// to prevent a white pixel from being drawn.
@@ -985,11 +989,20 @@ SysInfoView::_GetOSVersion()
 	BString revision;
 	// add system revision to os version
 	const char* hrev = __get_haiku_revision();
+#ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
 	if (hrev != NULL)
 		revision.SetToFormat(B_TRANSLATE_COMMENT("Version: %s",
 			"Version: R1 or hrev99999"), hrev);
 	else
 		revision = B_TRANSLATE("Version:");
+#else
+	// Renga: the system's name, then the revision of the Haiku sources it
+	// is built from (there is no Renga version scheme yet).
+	if (hrev != NULL)
+		revision.SetToFormat(DISTRO_NAME " %s", hrev);
+	else
+		revision = DISTRO_NAME;
+#endif
 
 	return revision;
 }
@@ -1546,10 +1559,23 @@ AboutView::_CreateCreditsView()
 		fCreditsView, B_WILL_DRAW | B_FRAME_EVENTS, false, true,
 		B_PLAIN_BORDER);
 
-	// Haiku copyright
 	BFont font(be_bold_font);
 	font.SetSize(font.Size() + 4);
 
+#ifndef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
+	// Renga: say what this system is, ahead of the Haiku credits (kept as
+	// they are: Renga is built from Haiku's code), so nobody takes it for
+	// the official distribution. The Haiku website link follows below.
+	fCreditsView->SetFontAndColor(&font, B_FONT_ALL, &fHaikuGreenColor);
+	fCreditsView->Insert(DISTRO_NAME "\n");
+	fCreditsView->SetFontAndColor(be_plain_font, B_FONT_ALL, &fTextColor);
+	fCreditsView->Insert(B_TRANSLATE(DISTRO_NAME " is an operating system "
+		"based on Haiku" B_UTF8_REGISTERED ", an open source operating system. "
+		"It is not the official Haiku distribution, which is available "
+		"from the Haiku website.\n\n"));
+#endif
+
+	// Haiku copyright
 	fCreditsView->SetFontAndColor(&font, B_FONT_ALL, &fHaikuGreenColor);
 	fCreditsView->Insert("Haiku\n");
 

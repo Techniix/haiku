@@ -16,6 +16,7 @@ import importlib.util
 import math
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 
@@ -286,6 +287,50 @@ expect("boot menu: countdown too fast fails", not boot_menu(2,
 	[(1.0, countdown[0][1]), (1.1, "boot menu: 1 s"),
 		(1.2, countdown[2][1]), (1.3, "load kernel kernel_x86_64...")]))
 expect("boot menu: no countdown at all fails", not boot_menu(2, []))
+
+class BrandingArgs:
+	profile = "minimum-raw"
+	output = None
+
+def branding(welcome, volume_id=None):
+	"""Runs check_branding on a serial log with the given welcome line and,
+	if volume_id is given, on an ISO made with that volume ID. Returns the
+	verdict of every check, by name."""
+	directory = tempfile.mkdtemp()
+	with open(os.path.join(directory, "serial.log"), "w") as serial:
+		serial.write("[   0.100] %s\r\nload kernel kernel_x86_64...\r\n"
+			% welcome)
+	BrandingArgs.output = directory
+	BrandingArgs.profile = "minimum-raw"
+	if volume_id is not None:
+		BrandingArgs.profile = "minimum-anyboot"
+		content = os.path.join(directory, "content")
+		os.mkdir(content)
+		with open(os.path.join(content, "file"), "w") as contentFile:
+			contentFile.write("x")
+		subprocess.run(["xorriso", "-as", "mkisofs", "-V", volume_id, "-o",
+			ce_test.image_path(BrandingArgs), content],
+			stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+	report = {}
+	ce_test.check_branding(BrandingArgs, directory, report)
+	return {c["name"]: c["pass"] for c in report["host_checks"]}
+
+verdicts = branding("Welcome to the Renga boot loader!")
+expect("branding: Renga boot loader passes, raw image has no ISO check",
+	verdicts == {"branding.boot_loader": True}, str(verdicts))
+expect("branding: Haiku boot loader fails", branding(
+	"Welcome to the Haiku boot loader!") == {"branding.boot_loader": False})
+expect("branding: no welcome line fails",
+	branding("load kernel") == {"branding.boot_loader": False})
+expect("branding: renga ISO volume ID passes", branding(
+	"Welcome to the Renga boot loader!", "renga-r1~beta6-x86_64")
+	== {"branding.boot_loader": True, "branding.iso_volume_id": True})
+expect("branding: haiku ISO volume ID fails", not branding(
+	"Welcome to the Renga boot loader!", "haiku-r1~beta6-x86_64")
+	["branding.iso_volume_id"])
+expect("branding: haiku nightly-style ID with a renga prefix fails",
+	not branding("Welcome to the Renga boot loader!",
+		"renga-haiku-nightly")["branding.iso_volume_id"])
 
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

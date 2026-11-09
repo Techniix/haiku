@@ -45,6 +45,8 @@ All rights reserved.
 #include <MenuItem.h>
 #include <Roster.h>
 
+#include <distro_name.h>
+
 #include "BarApp.h"
 #include "BarView.h"
 #include "DeskbarUtils.h"
@@ -250,7 +252,9 @@ B_TRANSLATE_MARK_VOID("About this system")
 #ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
 	B_TRANSLATE_NOCOLLECT("About Haiku")
 #else
-	B_TRANSLATE_NOCOLLECT("About this system")
+	// Renga: the system's own name, as on the boot loader and in
+	// AboutSystem, rather than the generic "About this system".
+	B_TRANSLATE("About " DISTRO_NAME)
 #endif
 		, new BMessage(kShowSplash));
 	item->SetEnabled(!dragging);

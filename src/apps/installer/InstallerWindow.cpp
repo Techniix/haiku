@@ -39,6 +39,8 @@
 #include <TranslationUtils.h>
 #include <TranslatorFormats.h>
 
+#include <distro_name.h>
+
 #include "tracker_private.h"
 
 #include "DialogPane.h"
@@ -144,16 +146,14 @@ LogoView::_Init()
 {
 	SetDrawingMode(B_OP_OVER);
 
-#ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
+	// Official builds have the HAIKU logo here, Renga builds the Renga
+	// wordmark (see the rdef); both in a light and a dark variant.
 	rgb_color bgColor = ui_color(B_DOCUMENT_BACKGROUND_COLOR);
 
 	if (bgColor.IsLight())
 		fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "logo.png");
 	else
 		fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "logo_dark.png");
-#else
-	fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "walter_logo.png");
-#endif
 }
 
 
@@ -723,7 +723,7 @@ InstallerWindow::_LaunchBootManager()
 			BAlert* alert = new BAlert(
 				B_TRANSLATE("Failed to launch BootManager"),
 				B_TRANSLATE("BootManager, the application to configure the "
-					"Haiku boot menu, could not be launched."),
+					DISTRO_NAME " boot menu, could not be launched."),
 				B_TRANSLATE("OK"), NULL, NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT);
 			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 			alert->Go();

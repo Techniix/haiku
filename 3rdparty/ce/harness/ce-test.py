@@ -1020,6 +1020,50 @@ def check_image_identity(args, results_dir, report):
 			" ".join(names) if names else "not reported")})
 
 
+def iso_volume_id(path):
+	"""The ISO 9660 volume ID of an anyboot or CD image, as xorriso reads it
+	from the primary volume descriptor, or None."""
+	try:
+		result = subprocess.run(["xorriso", "-indev", path, "-pvd_info"],
+			stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+	except (OSError, subprocess.TimeoutExpired):
+		return None
+	match = re.search(r"^Volume Id\s*:\s*(.*?)\s*$",
+		result.stdout.decode("utf-8", "replace"), re.MULTILINE)
+	return match.group(1) if match else None
+
+
+def check_branding(args, results_dir, report):
+	"""Renga, not Haiku, as the OS name users see (Haiku, Inc.'s distribution
+	guidelines reserve the name for the official distribution). Every run:
+	the boot loader's welcome line on the serial console. Anyboot/CD images
+	also: the ISO volume ID, which is what file managers and firmware boot
+	menus show for the medium."""
+	try:
+		with open(os.path.join(results_dir, "serial.log"), errors="replace") \
+				as serial:
+			text = serial.read()
+	except OSError:
+		text = ""
+	checks = report.setdefault("host_checks", [])
+	welcome = re.search(r"Welcome to the (.*) boot loader!", text)
+	checks.append({"name": "branding.boot_loader",
+		"pass": welcome is not None and welcome.group(1) == "Renga",
+		"detail": "boot loader says \"%s\" (want \"Welcome to the Renga boot "
+			"loader!\")" % (welcome.group(0) if welcome
+				else "no welcome line")})
+
+	image = image_path(args)
+	if not image.endswith(".iso"):
+		return
+	volume_id = iso_volume_id(image)
+	checks.append({"name": "branding.iso_volume_id",
+		"pass": volume_id is not None and volume_id.startswith("renga-")
+			and "haiku" not in volume_id.lower(),
+		"detail": "volume ID %s (want renga-<version>-<arch>)" % (
+			'"%s"' % volume_id if volume_id is not None else "not readable")})
+
+
 def check_scratch_disks(results_dir, report):
 	"""Host-side half of vblk_test: the trimmed space must be free again."""
 	checks = report.setdefault("host_checks", [])
@@ -1426,6 +1470,7 @@ def main():
 		check_scratch_disks(results_dir, report)
 		check_nvme_namespaces(results_dir, report)
 		check_image_identity(args, results_dir, report)
+		check_branding(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
 		check_boot_menu(args, results_dir, report)
 		analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)

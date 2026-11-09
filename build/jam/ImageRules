@@ -1608,9 +1608,11 @@ rule BuildCDBootImageEFI image : bootfloppy : bootefi : extrafiles
 	BOOTIMG on $(image) = $(bootfloppy) ;
 
 	if $(HAIKU_NIGHTLY_BUILD) = 1 {
-		VOLID on $(image) = haiku-nightly-$(TARGET_ARCH) ;
+		VOLID on $(image)
+			= $(HAIKU_CD_VOLUME_ID_PREFIX)-nightly-$(TARGET_ARCH) ;
 	} else {
-		VOLID on $(image) = haiku-$(HAIKU_VERSION)-$(TARGET_ARCH) ;
+		VOLID on $(image)
+			= $(HAIKU_CD_VOLUME_ID_PREFIX)-$(HAIKU_VERSION)-$(TARGET_ARCH) ;
 	}
 
 	BOOTEFI on $(image) = $(bootefi) ;
@@ -1638,9 +1640,11 @@ rule BuildCDBootPPCImage image : hfsmaps : elfloader : coffloader : chrpscript
 	MAPS on $(image) = $(hfsmaps) ;
 
 	if $(HAIKU_NIGHTLY_BUILD) = 1 {
-		VOLID on $(image) = haiku-nightly-$(TARGET_ARCH) ;
+		VOLID on $(image)
+			= $(HAIKU_CD_VOLUME_ID_PREFIX)-nightly-$(TARGET_ARCH) ;
 	} else {
-		VOLID on $(image) = haiku-$(HAIKU_VERSION)-$(TARGET_ARCH) ;
+		VOLID on $(image)
+			= $(HAIKU_CD_VOLUME_ID_PREFIX)-$(HAIKU_VERSION)-$(TARGET_ARCH) ;
 	}
 
 	BuildCDBootPPCImage1 $(image) : $(elfloader) $(coffloader) $(chrpscript)

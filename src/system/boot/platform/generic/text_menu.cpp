@@ -12,6 +12,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <distro_name.h>
 #include <system_revision.h>
 
 
@@ -237,7 +238,7 @@ draw_menu(Menu *menu)
 	console_clear_screen();
 
 	print_centered(1, "Welcome to the");
-	print_centered(2, "Haiku Boot Loader");
+	print_centered(2, DISTRO_NAME " Boot Loader");
 
 	console_set_color(kCopyrightColor, kBackgroundColor);
 	print_right(console_height() - 1, get_haiku_revision());

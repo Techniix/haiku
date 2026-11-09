@@ -26,7 +26,11 @@ resource(1, "logo.png") #'PNG ' import "../../../data/artwork/HAIKU logo - black
 resource(2, "logo_dark.png") #'PNG ' import "../../../data/artwork/HAIKU logo - white on transparent - installer - development.png";
 #endif
 #else
-resource(1, "walter_logo.png") #'PNG ' import "../../../data/artwork/Walter logo.png";
+// Renga: the HAIKU logo is reserved for the official distribution (Haiku,
+// Inc.'s distribution guidelines), so other builds show the Renga wordmark,
+// made by 3rdparty/ce/artwork/make_app_logos_renga.py.
+resource(1, "logo.png") #'PNG ' import "../../../3rdparty/ce/artwork/renga_logo_installer.png";
+resource(2, "logo_dark.png") #'PNG ' import "../../../3rdparty/ce/artwork/renga_logo_installer-dark.png";
 #endif
 
 resource vector_icon {

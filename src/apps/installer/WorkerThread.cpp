@@ -30,6 +30,8 @@
 #include <String.h>
 #include <VolumeRoster.h>
 
+#include <distro_name.h>
+
 #include "AutoLocker.h"
 #include "CopyEngine.h"
 #include "InstallerDefs.h"
@@ -588,8 +590,8 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 
 	if (entries != 0) {
 		BAlert* alert = new BAlert("", B_TRANSLATE("The target volume is not "
-			"empty. If it already contains a Haiku installation, it will be "
-			"overwritten. This will remove all installed software.\n\n"
+			"empty. If it already contains a " DISTRO_NAME " installation, it "
+			"will be overwritten. This will remove all installed software.\n\n"
 			"If you want to upgrade your system without removing installed "
 			"software, see the Haiku User Guide's topic on the application "
 			"\"SoftwareUpdater\" for update instructions.\n\n"

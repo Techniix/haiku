@@ -143,6 +143,18 @@ switch $(HAIKU_DISTRO_COMPATIBILITY) {
 			$(HAIKU_DISTRO_COMPATIBILITY) ;
 }
 
+# Prefix of the ISO 9660 volume ID of CD and anyboot images (the name file
+# managers and firmware boot menus show for the medium), followed by
+# "-$(HAIKU_VERSION)-<arch>" or "-nightly-<arch>". The name "Haiku" is
+# reserved for the official distribution (Haiku, Inc.'s distribution
+# guidelines); every other build is Renga. Must stay within the 32
+# characters ISO 9660 allows (currently "renga-r1~beta6-x86_64", 21).
+if $(HAIKU_DISTRO_COMPATIBILITY) = official {
+	HAIKU_CD_VOLUME_ID_PREFIX ?= haiku ;
+} else {
+	HAIKU_CD_VOLUME_ID_PREFIX ?= renga ;
+}
+
 # network libraries
 HAIKU_NETWORK_LIBS = network ;
 HAIKU_NETAPI_LIB = bnetapi ;

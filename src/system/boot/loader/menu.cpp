@@ -27,6 +27,7 @@
 #include <boot/platform.h>
 #include <boot/platform/generic/text_console.h>
 #include <boot/stdio.h>
+#include <distro_name.h>
 #include <safemode.h>
 #include <util/ring_buffer.h>
 #include <util/SinglyLinkedList.h>
@@ -1318,8 +1319,8 @@ add_boot_volume_menu()
 	menu->AddSeparatorItem();
 
 	menu->AddItem(item = new(nothrow) MenuItem("Rescan volumes"));
-	item->SetHelpText("Please insert a Haiku CD-ROM or attach a USB disk - "
-		"depending on your system, you can then boot from there.");
+	item->SetHelpText("Please insert a " DISTRO_NAME " CD-ROM or attach a USB "
+		"disk - depending on your system, you can then boot from there.");
 	item->SetType(MENU_ITEM_NO_CHOICE);
 	if (count == 0)
 		item->Select(true);
@@ -1525,8 +1526,8 @@ add_debug_menu()
 		item->SetType(MENU_ITEM_MARKABLE);
 		item->SetMarked(gKernelArgs.previous_debug_size);
 		item->SetTarget(&debug_menu_toggle_previous_debug_syslog);
-		item->SetHelpText("Saves the syslog from the previous Haiku session to "
-			"/var/log/previous_syslog when booting.");
+		item->SetHelpText("Saves the syslog from the previous " DISTRO_NAME
+			" session to /var/log/previous_syslog when booting.");
 	}
 
 	bool currentLogItemVisible = platform_debug_get_log_buffer(NULL) != NULL;
@@ -1549,12 +1550,12 @@ add_debug_menu()
 		item->SetTarget(&debug_menu_display_previous_syslog);
 		item->SetType(MENU_ITEM_NO_CHOICE);
 		item->SetHelpText(
-			"Displays the syslog from the previous Haiku session.");
+			"Displays the syslog from the previous " DISTRO_NAME " session.");
 
 		menu->AddItem(item = new(nothrow) MenuItem(
 			"Save syslog from previous session", add_save_debug_syslog_menu()));
-		item->SetHelpText("Saves the syslog from the previous Haiku session to "
-			"disk. Currently only FAT32 volumes are supported.");
+		item->SetHelpText("Saves the syslog from the previous " DISTRO_NAME
+			" session to disk. Currently only FAT32 volumes are supported.");
 	}
 
 	menu->AddSeparatorItem();

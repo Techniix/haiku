@@ -14,6 +14,7 @@
 #include <boot/heap.h>
 #include <boot/PathBlocklist.h>
 #include <boot/stdio.h>
+#include <distro_name.h>
 #include <system_revision.h>
 
 #include "file_systems/packagefs/packagefs.h"
@@ -57,7 +58,9 @@ main(stage2_args *args)
 	if (vfs_init(args) < B_OK)
 		panic("Could not initialize VFS!\n");
 
-	dprintf("Welcome to the Haiku boot loader!\n");
+	dprintf("Welcome to the " DISTRO_NAME " boot loader!\n");
+		// The revision is that of the Haiku sources the system is built
+		// from (the nearest upstream hrev tag), so it keeps its name.
 	dprintf("Haiku revision: %s\n", get_haiku_revision());
 
 	bool mountedAllVolumes = false;
