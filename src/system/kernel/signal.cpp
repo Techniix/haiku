@@ -1258,6 +1258,19 @@ handle_signals(Thread* thread)
 			? ~thread->sigsuspend_original_unblocked_mask
 			: thread->sig_block_mask;
 
+		// Renga: ppoll(), pselect() and epoll_pwait() run with a temporary
+		// mask and leave the caller's one in old_sig_block_mask, to be put
+		// back on the way out of the kernel. The handler frame has to
+		// return to the caller's mask, not to the temporary one: otherwise
+		// update_thread_sigmask_on_exit() restores the caller's mask before
+		// the handler runs, and the handler's sigreturn then installs the
+		// temporary mask for good (POSIX: the original mask is restored
+		// after the call returns).
+		if ((thread->flags & THREAD_FLAGS_OLD_SIGMASK) != 0) {
+			oldBlockMask = thread->old_sig_block_mask;
+			atomic_and(&thread->flags, ~THREAD_FLAGS_OLD_SIGMASK);
+		}
+
 		// Update the block mask while the signal handler is running -- it
 		// will be automatically restored when the signal frame is left.
 		thread->sig_block_mask |= handler.sa_mask & BLOCKABLE_SIGNALS;
