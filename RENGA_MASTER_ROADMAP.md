@@ -420,14 +420,14 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Remaining | 1. ABI check in the harness: exported dynamic symbols of the system libraries (libroot, libbe, libmedia, libnetwork, libbnetapi, libtracker, libtranslation, libdevice, libgame, libpackage, libtextencoding, libmail, libmidi, libmidi2, libscreensaver, libdebug, libglut, libgnu, libbsd) compared with the same libraries built from the upstream base (`master` at the base revision, rebuilt at each upstream sync): no symbol removed, no data-object or vtable (`_ZTV*`) size changed, no symbol version changed. 2. Runtime check: a set of programs built against the upstream base (and unmodified HaikuPorts packages) started on Renga in the harness, with their results checked. 3. BeOS programs: see the open question below |
 | Known bugs/limitations | Renga builds x86_64 images only, like most Haiku installs; BeOS R5 programs therefore do not run on Renga today, exactly as on x86_64 Haiku |
 | Dependencies | None (the upstream base build is needed for check 1) |
-| Difficulty | 3 (ABI check); 7-8 if a 32-bit x86_gcc2 hybrid build is added |
+| Difficulty | 3 (ABI check); 9 for 32-bit and BeOS programs on x86_64 |
 | Risk | Low for the checks; the guarantee itself constrains every change (section 1.2) |
 | Testing status | None |
 | Next milestone | ABI check in the harness |
-| Recommended next action | Build the upstream base libraries once and add the symbol comparison as a host check; decide the BeOS question |
+| Recommended next action | Build the upstream base libraries once and add the symbol comparison as a host check |
 | Links | Section 1.2 (add-only ABI, platform identity); section 9 risk register |
 
-**Open question (maintainer):** BeOS programs need a 32-bit x86_gcc2 hybrid build. Options: (a) keep Renga x86_64-only and guarantee Haiku x86_64 compatibility (BeOS programs then work as on x86_64 Haiku, that is not at all); (b) add a 32-bit x86_gcc2-hybrid Renga image as a second architecture, which doubles builds and harness runs and leaves out x86_64-only work such as LinuxKPI and the NVIDIA driver; (c) later, 32-bit program support on x86_64 (upstream has explored it; large).
+**Decided (maintainer, 2026-11-09): option (c), long term.** Renga stays x86_64; 32-bit Haiku and BeOS (x86_gcc2) programs are to run on 64-bit Renga later (a 32-bit compatibility layer: 32-bit user teams, syscall and signal translation, 32-bit runtime_loader and libraries, a gcc2 libroot/libbe ABI layer). Long-term item, not scheduled. Options considered: (a) keep Renga x86_64-only and guarantee Haiku x86_64 compatibility (BeOS programs then work as on x86_64 Haiku, that is not at all); (b) add a 32-bit x86_gcc2-hybrid Renga image as a second architecture, which doubles builds and harness runs and leaves out x86_64-only work such as LinuxKPI and the NVIDIA driver; (c) later, 32-bit program support on x86_64 (upstream has explored it; large).
 
 #### F-45 RengaPorts: separate ports and package repository for Renga
 
@@ -1875,6 +1875,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | LinuxKPI: optional, user-approved online fetch of driver packages and firmware for detected hardware at install time (and later from the Control Panel); to be done when `F-26` starts | `F-26`, `F-23`, `F-45` |
 | 2026-11-09 | Every user-facing feature ships with its GUI in the same work item; a feature is not Implemented until it can be reached from the desktop (principle added to section 1.2). Review of finished features: only repository priorities (`F-13`) lack a GUI | Section 1.2, `F-13` |
 | 2026-11-09 | Backwards compatibility is a guarantee: Renga always runs the Haiku programs, and the BeOS programs Haiku ran, as Haiku did before Renga; enforced by an ABI check against the upstream base and runtime checks (`F-46`) | `F-46`, section 1.2 |
+| 2026-11-09 | BeOS programs: Renga stays 64-bit; running 32-bit Haiku and BeOS programs on 64-bit Renga is a long-term goal (not scheduled) | `F-46` |
 
 ---
 
