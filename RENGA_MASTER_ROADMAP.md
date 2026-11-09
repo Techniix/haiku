@@ -325,6 +325,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-42 | Gamepad support and configurator | Investigating (requirements set) | None |
 | F-43 | Chromium platform readiness | Designed (phases A-H) | None |
 | F-44 | Bundled applications | Designed (three batches) | None |
+| F-45 | RengaPorts (separate ports and package repository) | In Development (repository prepared, not yet published) | None |
 
 ---
 
@@ -405,6 +406,24 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Next milestone | Signed repository |
 | Recommended next action | Consider setting priority in the Techniix `repo.info` to remove the hand-added tie case |
 | Links | README "Repository priorities"; PORTING.md packaging caveat |
+
+#### F-45 RengaPorts: separate ports and package repository for Renga
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Not applicable (HaikuPorts serves Haiku) |
+| Renga maturity | Repository content prepared locally: README, HaikuPorts-style recipe layout, `repo.info` (repository "Renga", served from GitHub Pages), `tools/update-repo.sh` publishing to a separate `packages` branch |
+| Status | **In Development** |
+| Completed | Design (maintainer's request, 2026-11-09): Techniix ports for stock Haiku stay in their project repositories and `Techniix/haiku-packages`; ports built for Renga (using Renga-only APIs, or Renga builds of programs that also exist for Haiku) go to `Techniix/RengaPorts`, so the two never mix. Every RengaPorts package `REQUIRES` `renga`, so stock Haiku refuses to install it |
+| Remaining | The maintainer creates the empty GitHub repository (this session cannot create repositories); push the prepared content and enable Pages on the `packages` branch. In the Renga tree: the `haiku` system package of Renga images `PROVIDES` `renga = <version>`; Renga images configure the Renga repository (priority 1) next to Haiku and HaikuPorts (priority 2), replacing the Techniix Haiku repository in `3rdparty/ce/repositories`; harness checks (`image.repository_priority` updated, a package requiring `renga` installs on Renga and is refused on a stock image). First ports: Renga builds that use `epoll`/`inotify`/`signalfd`/`memfd` (e.g. the Chromium port after `F-43` phase B) |
+| Known bugs/limitations | None yet |
+| Dependencies | `F-13` (priority handling) |
+| Difficulty | 2 |
+| Risk | Low |
+| Testing status | None |
+| Next milestone | Repository published and configured in Renga images |
+| Recommended next action | Maintainer: create an empty public repository `Techniix/RengaPorts` |
+| Links | `F-13`; section 7.3 |
 
 ### Drivers and storage
 
@@ -1556,7 +1575,8 @@ graph LR
 
 | Dependency | Used by | Note |
 | --- | --- | --- |
-| Techniix/haiku-packages (`techniix.github.io/haiku-packages`) | F-13, F-18 | Renga-built packages go here (PORTING.md packaging caveat) |
+| Techniix/haiku-packages (`techniix.github.io/haiku-packages`) | F-13, F-18 | Techniix ports built for stock Haiku |
+| Techniix/RengaPorts (`techniix.github.io/RengaPorts`), to be created | F-13, F-45 | Recipes and package repository for software built for Renga; packages require `renga` |
 | Techniix/Lumina_HaikuOS | F-25 | Separate CMake build and host tests; the engine is to move in-tree later |
 | LinuxKPI_HaikuOS | F-26, F-34, F-28 | Out of tree; uses private headers |
 | Techniix/Renguin | F-27 | Out of tree |
@@ -1807,6 +1827,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Lumina is developed as part of Renga, not as an add-on that must fit around stock Haiku: where it serves the goals better, Lumina's features go into app_server, input_server, Deskbar and the Interface Kit directly, built in-tree with the image, instead of working around them (revision-pinned decorator add-on, private-header builds, effect workarounds). The fallback to the stock look (Lumina S5/S6) stays | `F-25`, `F-41` |
 | 2026-11-09 | Lumina's settings and customization live in the Control Panel, as part of the Appearance tool (modes and personalities, window engine, panel, effects), built with the Interface Kit. No separate Lumina Settings Center (Qt/QML) and no separate "Lumina Mode" preferences app in the end state; the `lumina` command stays for scripting and tests | `F-25`, `F-28` |
 | 2026-11-09 | Bundled applications (`F-44`): add network shares, backup and restore integrated with package states, a document viewer built on existing open-source code, a programmer's editor, archive creation in Expander with Tracker actions, an on-screen keyboard, a search launcher tied to Tracker and Lumina, screen recording in Screenshot, a task manager in ActivityMonitor; low priority: notification history, clipboard history, a passwords app. Skipped for now: disk encryption, calendar, night light | `F-44` |
+| 2026-11-09 | Separate ports for Renga: `Techniix/RengaPorts` (recipes and package repository, packages require `renga`), apart from the Techniix ports for stock Haiku (`haiku-packages`) | `F-45`, `F-13` |
 
 ---
 
