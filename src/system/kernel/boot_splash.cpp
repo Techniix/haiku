@@ -20,6 +20,7 @@
 #include <boot/platform/generic/video_splash.h>
 
 #include <boot_item.h>
+#include <lock.h>
 #include <debug.h>
 #include <frame_buffer_console.h>
 
@@ -65,6 +66,11 @@ static frame_buffer_boot_info sPlayerInfo;
 static thread_id sPlayerThread = -1;
 static int32 sPlayerStop = 0;
 static int32 sPlayerFinish = 0;
+// Pausing: boot_splash_pause_animation() raises sPlayerPaused and then takes
+// sPlayerFrameLock once, which waits for a frame being drawn to finish; the
+// player draws each frame under that lock and skips it while paused.
+static int32 sPlayerPaused = 0;
+static mutex sPlayerFrameLock = MUTEX_INITIALIZER("boot splash frame");
 
 static const bigtime_t kFrameInterval = 40000;	// 25 fps
 
@@ -117,9 +123,15 @@ player_thread(void*)
 		splash_render(band, SPLASH_BAND_WIDTH * 3, timeMs, settle);
 		if (atomic_get(&sPlayerStop) != 0)
 			break;
-		player_blit(band, bandX, bandY, sourceLeft, width);
-		frames++;
-		if (settle)
+
+		mutex_lock(&sPlayerFrameLock);
+		bool paused = atomic_get(&sPlayerPaused) > 0;
+		if (!paused) {
+			player_blit(band, bandX, bandY, sourceLeft, width);
+			frames++;
+		}
+		mutex_unlock(&sPlayerFrameLock);
+		if (settle && !paused)
 			break;
 
 		next += kFrameInterval;
@@ -206,6 +218,28 @@ boot_splash_stop_animation(void)
 		wait_for_thread(thread, &result);
 	}
 	sPlayerThread = -1;
+#endif
+}
+
+
+void
+boot_splash_pause_animation(bool pause)
+{
+#ifdef SPLASH_PLAYER
+	if (!pause) {
+		atomic_add(&sPlayerPaused, -1);
+		return;
+	}
+
+	atomic_add(&sPlayerPaused, 1);
+	// No waiting inside the kernel debugger (the PCI "pcirefresh" command
+	// gets here): the player is not running then anyway.
+	if (sPlayerThread >= 0 && !debug_debugger_running()
+		&& sPlayerThread != thread_get_current_thread_id()) {
+		// Wait for a frame that is being drawn right now.
+		mutex_lock(&sPlayerFrameLock);
+		mutex_unlock(&sPlayerFrameLock);
+	}
 #endif
 }
 

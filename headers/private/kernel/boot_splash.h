@@ -36,6 +36,13 @@ void boot_splash_set_stage(int stage);
    the frame buffer. Called before anyone else takes the frame buffer. */
 void boot_splash_stop_animation(void);
 
+/* Holds the animation (pause = true) while the frame buffer may not be
+   reachable, e.g. while the PCI bus manager has memory decoding of the
+   display device switched off to size its BARs; returns once no frame is
+   being drawn. Calls nest; each pause needs a matching resume. Does
+   nothing when there is no animation. */
+void boot_splash_pause_animation(bool pause);
+
 #ifdef __cplusplus
 }
 #endif

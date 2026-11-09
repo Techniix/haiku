@@ -188,6 +188,7 @@ private:
 								long wantIndex, pci_info *outInfo);
 			void			_ReadBasicInfo(PCIDev *dev);
 			void			_ReadHeaderInfo(PCIDev *dev);
+			void			_ReadHeaderInfoUnpaused(PCIDev *dev);
 
 			void			_ConfigureBridges(PCIBus *bus);
 			void			_ReserveBARs(PCIBus *bus);

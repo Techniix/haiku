@@ -9,6 +9,7 @@
 #include <debug.h>
 #include <string.h>
 #include <KernelExport.h>
+#include <boot_splash.h>
 #include <util/kernel_cpp.h>
 #include <util/AutoLock.h>
 
@@ -603,6 +604,14 @@ PCI::PCI()
 void
 PCI::InitBus(PCIBus *bus)
 {
+	// Renga: enumerating and sizing BARs turns off memory decoding of every
+	// device in turn, the display device included, and _AssignBARs() may
+	// move BARs. The animated boot splash draws into the frame buffer from
+	// its own thread meanwhile; its writes then hit nothing (QEMU logged
+	// thousands of rejected writes in about 2 % of boots). Hold the
+	// animation for the duration; this takes a few milliseconds.
+	boot_splash_pause_animation(true);
+
 	if (fBusEnumeration) {
 		_EnumerateBus(bus->domain, 0);
 	}
@@ -618,6 +627,8 @@ PCI::InitBus(PCIBus *bus)
 	_ReserveBARs(bus);
 	_AssignBARs(bus);
 	_RefreshDeviceInfo(bus);
+
+	boot_splash_pause_animation(false);
 }
 
 
@@ -1585,6 +1596,18 @@ PCI::_ReadBasicInfo(PCIDev *dev)
 
 void
 PCI::_ReadHeaderInfo(PCIDev *dev)
+{
+	// Memory decoding is switched off below while the BARs are sized; hold
+	// the boot splash animation meanwhile (see InitBus()). This is called
+	// again after InitBus(), from _RefreshDeviceInfo().
+	boot_splash_pause_animation(true);
+	_ReadHeaderInfoUnpaused(dev);
+	boot_splash_pause_animation(false);
+}
+
+
+void
+PCI::_ReadHeaderInfoUnpaused(PCIDev *dev)
 {
 	switch (dev->info.header_type & PCI_header_type_mask) {
 		case PCI_header_type_generic:
