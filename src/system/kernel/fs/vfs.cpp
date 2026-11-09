@@ -42,6 +42,7 @@
 #include <disk_device_manager/KDiskSystem.h>
 #include <fd.h>
 #include <file_cache.h>
+#include <file_seals_defs.h>
 #include <fs/node_monitor.h>
 #include <inotify.h>
 #include <KPath.h>
@@ -983,6 +984,270 @@ create_new_vnode_and_lock(dev_t mountID, ino_t vnodeID, struct vnode*& _vnode,
 }
 
 
+//	#pragma mark - Renga: file seals (memfd)
+
+
+/*!	File sealing (F_ADD_SEALS, F_GET_SEALS), as Linux offers it for memfd
+	files. A vnode becomes sealable through the private F_RENGA_SET_SEALABLE
+	command, which libgnu's memfd_create() issues on the unlinked ramfs file
+	it creates; any other file reports EINVAL for both commands, as files on
+	Linux file systems without sealing do.
+
+	Sealable vnodes carry vnode::kFlagsSealable, so the checks in the I/O
+	paths cost one flag test for every other file. Their seals are kept in
+	sSealTable, keyed by the vnode, under sSealLock; free_vnode() removes the
+	entry. Checks:
+	 - write(), writev(): EPERM with F_SEAL_WRITE or F_SEAL_FUTURE_WRITE, and
+	   with F_SEAL_GROW for a write ending beyond the current size;
+	 - ftruncate()/truncate(): EPERM with F_SEAL_SHRINK (smaller) or
+	   F_SEAL_GROW (larger); chmod() changing the execute bits with
+	   F_SEAL_EXEC; posix_fallocate() beyond the end with F_SEAL_GROW;
+	 - mmap(MAP_SHARED, PROT_WRITE): EPERM with F_SEAL_WRITE or
+	   F_SEAL_FUTURE_WRITE, and read-only shared mappings get a maximum
+	   protection without write, so mprotect() cannot make them writable
+	   (vm.cpp, _vm_map_file());
+	 - adding F_SEAL_WRITE fails with EBUSY while a writable shared mapping
+	   exists (checked under the vnode cache's lock, which _vm_map_file()
+	   holds too); F_SEAL_FUTURE_WRITE does not care, as on Linux. Once
+	   added, the existing read-only shared mappings cannot be made writable
+	   either (their maximum protection loses B_WRITE_AREA).
+	The size checks read the size and then write without holding a lock
+	across both; Linux holds the inode lock. A concurrent ftruncate() and
+	write() on a sealed file may therefore see the size before the other
+	completes; the seals themselves cannot be bypassed.
+*/
+struct SealEntry {
+	struct vnode*	vnode;
+	uint32			seals;
+	SealEntry*		hash_next;
+};
+
+struct SealHash {
+	typedef struct vnode*	KeyType;
+	typedef SealEntry		ValueType;
+
+	size_t HashKey(KeyType key) const
+	{
+		return (size_t)(addr_t)key >> 4;
+	}
+
+	size_t Hash(ValueType* value) const
+	{
+		return HashKey(value->vnode);
+	}
+
+	bool Compare(KeyType key, ValueType* value) const
+	{
+		return value->vnode == key;
+	}
+
+	ValueType*& GetLink(ValueType* value) const
+	{
+		return value->hash_next;
+	}
+};
+
+typedef BOpenHashTable<SealHash> SealTable;
+
+static mutex sSealLock = MUTEX_INITIALIZER("vfs file seals");
+static SealTable* sSealTable;
+
+
+static uint32
+vnode_seals(struct vnode* vnode)
+{
+	if (!vnode->IsSealable())
+		return 0;
+
+	MutexLocker _(sSealLock);
+	SealEntry* entry = sSealTable != NULL ? sSealTable->Lookup(vnode) : NULL;
+	return entry != NULL ? entry->seals : 0;
+}
+
+
+static void
+seals_vnode_freed(struct vnode* vnode)
+{
+	MutexLocker _(sSealLock);
+	SealEntry* entry = sSealTable != NULL ? sSealTable->Lookup(vnode) : NULL;
+	if (entry != NULL) {
+		sSealTable->RemoveUnchecked(entry);
+		delete entry;
+	}
+}
+
+
+static status_t
+seals_set_sealable(struct file_descriptor* descriptor, struct vnode* vnode,
+	uint32 initialSeals)
+{
+	if (vnode == NULL || !S_ISREG(vnode->Type()))
+		return B_BAD_VALUE;
+	if ((descriptor->open_mode & O_RWMASK) != O_RDWR)
+		return B_NOT_ALLOWED;
+	if ((initialSeals & ~(uint32)F_SEAL_ALL_KNOWN) != 0)
+		return B_BAD_VALUE;
+
+	struct stat stat;
+	status_t status = vfs_stat_vnode(vnode, &stat);
+	if (status != B_OK)
+		return status;
+	if (stat.st_nlink != 0)
+		return B_NOT_ALLOWED;
+			// only for a file nobody can open by name any more
+
+	MutexLocker _(sSealLock);
+	if (vnode->IsSealable())
+		return B_BUSY;
+
+	if (sSealTable == NULL) {
+		SealTable* table = new(std::nothrow) SealTable;
+		if (table == NULL || table->Init(64) != B_OK) {
+			delete table;
+			return B_NO_MEMORY;
+		}
+		sSealTable = table;
+	}
+
+	SealEntry* entry = new(std::nothrow) SealEntry;
+	if (entry == NULL)
+		return B_NO_MEMORY;
+	entry->vnode = vnode;
+	entry->seals = initialSeals;
+	status = sSealTable->Insert(entry);
+	if (status != B_OK) {
+		delete entry;
+		return status;
+	}
+	vnode->SetSealable();
+	return B_OK;
+}
+
+
+static status_t
+seals_add(struct file_descriptor* descriptor, struct vnode* vnode,
+	uint32 seals)
+{
+	if (vnode == NULL || !vnode->IsSealable())
+		return B_BAD_VALUE;
+	if ((seals & ~(uint32)F_SEAL_ALL_KNOWN) != 0)
+		return B_BAD_VALUE;
+	if ((descriptor->open_mode & O_RWMASK) == O_RDONLY)
+		return B_NOT_ALLOWED;
+
+	// Adding F_SEAL_WRITE needs the vnode cache locked, so no writable
+	// shared mapping can be created meanwhile (_vm_map_file() checks the
+	// seals with the cache locked). Lock order: cache, then sSealLock.
+	VMCache* cache = NULL;
+	if ((seals & F_SEAL_WRITE) != 0
+		&& vfs_get_vnode_cache(vnode, &cache, true) == B_OK) {
+		cache->Lock();
+	}
+
+	status_t status = B_OK;
+	{
+		MutexLocker locker(sSealLock);
+		SealEntry* entry = sSealTable->Lookup(vnode);
+		if (entry == NULL)
+			status = B_BAD_VALUE;
+		else if ((entry->seals & F_SEAL_SEAL) != 0)
+			status = B_NOT_ALLOWED;
+		else if ((seals & F_SEAL_WRITE) != 0
+			&& (entry->seals & F_SEAL_WRITE) == 0 && cache != NULL
+			&& vm_cache_has_writable_mappings(cache)) {
+			status = B_BUSY;
+		} else {
+			if ((seals & F_SEAL_WRITE) != 0 && cache != NULL)
+				vm_cache_deny_writable_mappings(cache);
+			entry->seals |= seals;
+		}
+	}
+
+	if (cache != NULL)
+		cache->ReleaseRefAndUnlock();
+	return status;
+}
+
+
+static status_t
+seals_check_size(struct vnode* vnode, uint32 seals, off_t newSize)
+{
+	if ((seals & (F_SEAL_SHRINK | F_SEAL_GROW)) == 0)
+		return B_OK;
+
+	struct stat stat;
+	status_t status = vfs_stat_vnode(vnode, &stat);
+	if (status != B_OK)
+		return status;
+	if (newSize < stat.st_size && (seals & F_SEAL_SHRINK) != 0)
+		return B_NOT_ALLOWED;
+	if (newSize > stat.st_size && (seals & F_SEAL_GROW) != 0)
+		return B_NOT_ALLOWED;
+	return B_OK;
+}
+
+
+/*!	Checks a write of \a length bytes at \a pos (-1: the descriptor's
+	position) against the seals.
+*/
+static status_t
+seals_check_write(struct file_descriptor* descriptor, struct vnode* vnode,
+	off_t pos, size_t length)
+{
+	uint32 seals = vnode_seals(vnode);
+	if (seals == 0 || length == 0)
+		return B_OK;
+	if ((seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0)
+		return B_NOT_ALLOWED;
+	if ((seals & F_SEAL_GROW) == 0)
+		return B_OK;
+
+	struct stat stat;
+	status_t status = vfs_stat_vnode(vnode, &stat);
+	if (status != B_OK)
+		return status;
+	if ((descriptor->open_mode & O_APPEND) != 0)
+		pos = stat.st_size;
+	else if (pos == -1)
+		pos = descriptor->pos;
+	if (pos + (off_t)length > stat.st_size)
+		return B_NOT_ALLOWED;
+	return B_OK;
+}
+
+
+static status_t
+seals_check_write_stat(struct vnode* vnode, const struct stat* stat,
+	int statMask)
+{
+	uint32 seals = vnode_seals(vnode);
+	if (seals == 0)
+		return B_OK;
+
+	if ((statMask & B_STAT_SIZE) != 0) {
+		status_t status = seals_check_size(vnode, seals, stat->st_size);
+		if (status != B_OK)
+			return status;
+	}
+	if ((statMask & B_STAT_MODE) != 0 && (seals & F_SEAL_EXEC) != 0) {
+		struct stat current;
+		status_t status = vfs_stat_vnode(vnode, &current);
+		if (status != B_OK)
+			return status;
+		if ((current.st_mode & 0111) != (stat->st_mode & 0111))
+			return B_NOT_ALLOWED;
+	}
+	return B_OK;
+}
+
+
+bool
+vfs_vnode_is_write_sealed(struct vnode* vnode)
+{
+	return (vnode_seals(vnode) & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0;
+}
+
+
 /*!	Frees the vnode and all resources it has acquired, and removes
 	it from the vnode hash as well as from its mount structure.
 	Will also make sure that any cache modifications are written back.
@@ -1013,6 +1278,9 @@ free_vnode(struct vnode* vnode, bool reenter)
 	// other consumers will acquire this vnode in the meantime, we make the
 	// vnode's ref count negative.
 	vnode->ref_count = -1;
+
+	if (vnode->IsSealable())
+		seals_vnode_freed(vnode);
 
 	if (!vnode->IsUnpublished()) {
 		if (vnode->IsRemoved())
@@ -5923,6 +6191,12 @@ file_write(struct file_descriptor* descriptor, off_t pos, const void* buffer,
 	if (!HAS_FS_CALL(vnode, write))
 		return B_READ_ONLY_DEVICE;
 
+	if (vnode->IsSealable()) {
+		status_t status = seals_check_write(descriptor, vnode, pos, *length);
+		if (status != B_OK)
+			return status;
+	}
+
 	status_t status = FS_CALL(vnode, write, descriptor->cookie, pos, buffer,
 		length);
 	if (status == B_OK && *length > 0) {
@@ -5962,6 +6236,12 @@ file_vector_io(struct file_descriptor* descriptor, off_t pos,
 		iovecs[i].base = (generic_addr_t)vecs[i].iov_base;
 		iovecs[i].length = vecs[i].iov_len;
 		length += vecs[i].iov_len;
+	}
+
+	if (write && vnode->IsSealable()) {
+		status_t status = seals_check_write(descriptor, vnode, pos, length);
+		if (status != B_OK)
+			return status;
 	}
 
 	status_t status = (write ? vfs_write_pages : vfs_read_pages)(vnode,
@@ -6624,6 +6904,22 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 			}
 			break;
 
+		case F_ADD_SEALS:
+			status = seals_add(descriptor.Get(), vnode, (uint32)argument);
+			break;
+
+		case F_GET_SEALS:
+			if (vnode == NULL || !vnode->IsSealable())
+				status = B_BAD_VALUE;
+			else
+				status = vnode_seals(vnode);
+			break;
+
+		case F_RENGA_SET_SEALABLE:
+			status = seals_set_sealable(descriptor.Get(), vnode,
+				(uint32)argument);
+			break;
+
 		// ToDo: add support for more ops?
 
 		default:
@@ -6723,6 +7019,15 @@ common_preallocate(int fd, off_t offset, off_t length, bool kernel)
 	}
 
 	status_t status = B_OK;
+	if (vnode->IsSealable()) {
+		uint32 seals = vnode_seals(vnode);
+		struct stat stat;
+		if ((seals & F_SEAL_GROW) != 0 && vfs_stat_vnode(vnode, &stat) == B_OK
+			&& offset + length > stat.st_size) {
+			return B_NOT_ALLOWED;
+		}
+	}
+
 	if (HAS_FS_CALL(vnode, preallocate)) {
 		status = FS_CALL(vnode, preallocate, offset, length);
 	} else {
@@ -6956,6 +7261,12 @@ common_write_stat(struct file_descriptor* descriptor, const struct stat* stat,
 	if (!HAS_FS_CALL(vnode, write_stat))
 		return B_READ_ONLY_DEVICE;
 
+	if (vnode->IsSealable()) {
+		status_t status = seals_check_write_stat(vnode, stat, statMask);
+		if (status != B_OK)
+			return status;
+	}
+
 	status_t status = FS_CALL(vnode, write_stat, stat, statMask);
 	if (status == B_OK)
 		notify_inotify_write_stat(vnode, statMask);
@@ -6992,6 +7303,11 @@ common_path_write_stat(int fd, char* path, bool traverseLeafLink,
 	VnodePutter vnode;
 	status_t status = fd_and_path_to_vnode(fd, path, traverseLeafLink, vnode,
 		NULL, kernel);
+	if (status != B_OK)
+		return status;
+
+	if (vnode->IsSealable())
+		status = seals_check_write_stat(vnode.Get(), stat, statMask);
 	if (status != B_OK)
 		return status;
 

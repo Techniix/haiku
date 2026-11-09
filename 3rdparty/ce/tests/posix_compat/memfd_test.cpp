@@ -441,6 +441,250 @@ test_threads()
 }
 
 
+// #pragma mark - sealing
+
+
+static int
+sealable_memfd(size_t size)
+{
+	int fd = memfd_create("sealed", MFD_ALLOW_SEALING);
+	if (fd >= 0)
+		ftruncate(fd, size);
+	return fd;
+}
+
+
+static void
+test_sealing()
+{
+	// Without MFD_ALLOW_SEALING: F_SEAL_SEAL from the start.
+	int fd = memfd_create("unsealable", 0);
+	int seals = fcntl(fd, F_GET_SEALS);
+	errno = 0;
+	int result = fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE);
+	report("seal_without_allow", seals == F_SEAL_SEAL && result == -1
+			&& errno == EPERM,
+		"F_GET_SEALS %#x (want F_SEAL_SEAL), F_ADD_SEALS %d %s", seals,
+		result, strerror(errno));
+	close(fd);
+
+	// With it: no seals yet; seals accumulate.
+	fd = sealable_memfd(8192);
+	seals = fcntl(fd, F_GET_SEALS);
+	int added = fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK);
+	int added2 = fcntl(fd, F_ADD_SEALS, F_SEAL_GROW);
+	int after = fcntl(fd, F_GET_SEALS);
+	report("seals_accumulate", seals == 0 && added == 0 && added2 == 0
+			&& after == (F_SEAL_SHRINK | F_SEAL_GROW),
+		"initial %#x, add %d %d, now %#x", seals, added, added2, after);
+
+	// F_SEAL_SHRINK / F_SEAL_GROW.
+	errno = 0;
+	int shrink = ftruncate(fd, 4096);
+	int shrinkErrno = errno;
+	errno = 0;
+	int grow = ftruncate(fd, 16384);
+	int growErrno = errno;
+	int same = ftruncate(fd, 8192);
+	struct stat st;
+	fstat(fd, &st);
+	report("shrink_grow_sealed", shrink == -1 && shrinkErrno == EPERM
+			&& grow == -1 && growErrno == EPERM && same == 0
+			&& st.st_size == 8192,
+		"shrink %d %s, grow %d %s, same size %d, size %lld", shrink,
+		strerror(shrinkErrno), grow, strerror(growErrno), same,
+		(long long)st.st_size);
+
+	char data[4096];
+	memset(data, 'x', sizeof(data));
+	ssize_t inside = pwrite(fd, data, 4096, 4096);
+	errno = 0;
+	ssize_t beyond = pwrite(fd, data, 4096, 6144);
+	int beyondErrno = errno;
+	report("grow_sealed_write", inside == 4096 && beyond == -1
+			&& beyondErrno == EPERM,
+		"write inside %zd, write past the end %zd %s", inside, beyond,
+		strerror(beyondErrno));
+
+	errno = 0;
+	int fallocated = posix_fallocate(fd, 0, 65536);
+	report("grow_sealed_fallocate", fallocated == EPERM,
+		"posix_fallocate %d %s", fallocated, strerror(fallocated));
+
+	// Mapping the file privately is fine and doesn't change it.
+	void* map = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	report("map_shared_before_write_seal", map != MAP_FAILED, "%s",
+		map == MAP_FAILED ? strerror(errno) : "mapped");
+
+	// F_SEAL_WRITE fails with EBUSY while a writable shared mapping exists.
+	errno = 0;
+	result = fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE);
+	report("write_seal_ebusy", result == -1 && errno == EBUSY,
+		"result %d %s", result, strerror(errno));
+	munmap(map, 8192);
+
+	// A read-only shared mapping does not stop it.
+	void* readMap = mmap(NULL, 8192, PROT_READ, MAP_SHARED, fd, 0);
+	result = fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE);
+	report("write_seal_with_readonly_map", result == 0
+			&& (fcntl(fd, F_GET_SEALS) & F_SEAL_WRITE) != 0,
+		"result %d %s", result, result != 0 ? strerror(errno) : "-");
+
+	errno = 0;
+	ssize_t written = pwrite(fd, data, 16, 0);
+	int writeErrno = errno;
+	report("write_sealed_write", written == -1 && writeErrno == EPERM,
+		"pwrite %zd %s", written, strerror(writeErrno));
+
+	errno = 0;
+	void* writable = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+		0);
+	int mapErrno = errno;
+	report("write_sealed_map_shared", writable == MAP_FAILED
+			&& mapErrno == EPERM,
+		"mmap %s", writable == MAP_FAILED ? strerror(mapErrno) : "succeeded");
+	if (writable != MAP_FAILED)
+		munmap(writable, 8192);
+
+	errno = 0;
+	result = mprotect(readMap, 4096, PROT_READ | PROT_WRITE);
+	report("write_sealed_mprotect", result == -1,
+		"mprotect of a read-only shared mapping to writable: %d %s", result,
+		strerror(errno));
+	munmap(readMap, 8192);
+
+	// Private writable mappings are copies and still allowed (Linux too).
+	void* privateMap = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE,
+		fd, 0);
+	bool privateOK = privateMap != MAP_FAILED;
+	if (privateOK) {
+		((char*)privateMap)[0] = 'p';
+		char check = 0;
+		pread(fd, &check, 1, 0);
+		privateOK = check != 'p';
+		munmap(privateMap, 8192);
+	}
+	report("write_sealed_map_private", privateOK, "%s",
+		privateMap == MAP_FAILED ? strerror(errno) : "copy-on-write");
+
+	// The content is still readable.
+	char back[4];
+	ssize_t readBack = pread(fd, back, 4, 4096);
+	report("write_sealed_read", readBack == 4 && memcmp(back, "xxxx", 4) == 0,
+		"pread %zd", readBack);
+
+	// F_SEAL_SEAL ends it; seals are shared by all descriptors and
+	// processes.
+	fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL);
+	errno = 0;
+	result = fcntl(fd, F_ADD_SEALS, F_SEAL_EXEC);
+	int sealErrno = errno;
+	int dupped = dup(fd);
+	int dupSeals = fcntl(dupped, F_GET_SEALS);
+	close(dupped);
+	pid_t child = fork();
+	if (child == 0) {
+		int childSeals = fcntl(fd, F_GET_SEALS);
+		ssize_t childWrite = pwrite(fd, "c", 1, 0);
+		_exit(childSeals == (F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
+			| F_SEAL_SEAL) && childWrite == -1 ? 0 : 1);
+	}
+	int status = 0;
+	waitpid(child, &status, 0);
+	report("seal_seal_and_sharing", result == -1 && sealErrno == EPERM
+			&& dupSeals == (F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
+				| F_SEAL_SEAL)
+			&& WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		"add after F_SEAL_SEAL %d %s, dup seals %#x, fork child %d", result,
+		strerror(sealErrno), dupSeals,
+		WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+	close(fd);
+
+	// F_SEAL_FUTURE_WRITE: existing writable mappings keep working, no new
+	// ones and no write().
+	fd = sealable_memfd(4096);
+	char* shared = (char*)mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+		MAP_SHARED, fd, 0);
+	result = fcntl(fd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE);
+	shared[0] = 'f';
+	char check = 0;
+	pread(fd, &check, 1, 0);
+	errno = 0;
+	written = pwrite(fd, "w", 1, 1);
+	writeErrno = errno;
+	errno = 0;
+	writable = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	mapErrno = errno;
+	report("future_write", result == 0 && check == 'f' && written == -1
+			&& writeErrno == EPERM && writable == MAP_FAILED
+			&& mapErrno == EPERM,
+		"add %d, old mapping wrote '%c', write %zd %s, new mapping %s",
+		result, check ? check : '?', written, strerror(writeErrno),
+		writable == MAP_FAILED ? strerror(mapErrno) : "succeeded");
+	munmap(shared, 4096);
+	close(fd);
+
+	// F_SEAL_EXEC (MFD_NOEXEC_SEAL): the execute bits cannot be set.
+	fd = memfd_create("noexec", MFD_NOEXEC_SEAL);
+	seals = fcntl(fd, F_GET_SEALS);
+	errno = 0;
+	result = fchmod(fd, 0700);
+	int chmodErrno = errno;
+	int plain = fchmod(fd, 0640);
+	report("noexec_seal", (seals & F_SEAL_EXEC) != 0
+			&& (seals & F_SEAL_SEAL) == 0 && result == -1
+			&& chmodErrno == EPERM && plain == 0,
+		"seals %#x, chmod 0700 %d %s, chmod 0640 %d", seals, result,
+		strerror(chmodErrno), plain);
+	close(fd);
+
+	// Errors: unknown seals, a read-only descriptor, non-memfd files.
+	fd = sealable_memfd(4096);
+	errno = 0;
+	result = fcntl(fd, F_ADD_SEALS, 0x4000);
+	int unknownErrno = errno;
+	report("unknown_seal_einval", result == -1 && unknownErrno == EINVAL,
+		"%d %s", result, strerror(unknownErrno));
+	close(fd);
+
+	int file = open("/boot/system/lib/libroot.so", O_RDONLY);
+	errno = 0;
+	int fileGet = fcntl(file, F_GET_SEALS);
+	int fileGetErrno = errno;
+	errno = 0;
+	int fileAdd = fcntl(file, F_ADD_SEALS, F_SEAL_WRITE);
+	int fileAddErrno = errno;
+	close(file);
+	int pipes[2];
+	pipe(pipes);
+	errno = 0;
+	int pipeGet = fcntl(pipes[0], F_GET_SEALS);
+	int pipeErrno = errno;
+	close(pipes[0]);
+	close(pipes[1]);
+	report("non_memfd_einval", fileGet == -1 && fileGetErrno == EINVAL
+			&& fileAdd == -1 && (fileAddErrno == EINVAL
+				|| fileAddErrno == EPERM)
+			&& pipeGet == -1 && pipeErrno == EINVAL,
+		"file get %d %s, add %d %s; pipe get %d %s", fileGet,
+		strerror(fileGetErrno), fileAdd, strerror(fileAddErrno), pipeGet,
+		strerror(pipeErrno));
+
+	// The private marking command is refused for a named file.
+	char path[64];
+	snprintf(path, sizeof(path), "/tmp/ce-memfd-seal-%d", (int)getpid());
+	file = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+	errno = 0;
+	result = fcntl(file, 0x40000000, 0);
+	int markErrno = errno;
+	int namedGet = fcntl(file, F_GET_SEALS);
+	close(file);
+	unlink(path);
+	report("named_file_not_sealable", result == -1 && namedGet == -1,
+		"mark %d %s, F_GET_SEALS %d", result, strerror(markErrno), namedGet);
+}
+
+
 int
 main()
 {
@@ -451,6 +695,7 @@ main()
 	test_lifetime();
 	test_memory_returned();
 	test_threads();
+	test_sealing();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

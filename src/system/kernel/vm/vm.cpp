@@ -587,6 +587,55 @@ get_area_page_protection(VMArea* area, addr_t pageAddress)
 }
 
 
+/*!	Renga: whether any area mapping \a cache directly (a shared mapping of
+	the file the cache belongs to) can write to it, by its area protection
+	or, after a partial mprotect(), by any page's protection. Private
+	mappings are not counted: they map a copy-on-write cache on top.
+	The cache must be locked. Used by F_ADD_SEALS with F_SEAL_WRITE.
+*/
+bool
+vm_cache_has_writable_mappings(VMCache* cache)
+{
+	for (VMArea* area = cache->areas.First(); area != NULL;
+			area = cache->areas.GetNext(area)) {
+		if (area->page_protections == NULL) {
+			if ((area->protection & (B_WRITE_AREA | B_KERNEL_WRITE_AREA))
+					!= 0) {
+				return true;
+			}
+			continue;
+		}
+
+		for (addr_t address = area->Base();
+				address < area->Base() + area->Size();
+				address += B_PAGE_SIZE) {
+			if ((get_area_page_protection(area, address)
+					& (B_WRITE_AREA | B_KERNEL_WRITE_AREA)) != 0) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+
+/*!	Renga: F_SEAL_WRITE was added to the file \a cache belongs to. Its
+	shared mappings (all read-only by then) may no longer become writable:
+	B_WRITE_AREA is dropped from their maximum protection, as _vm_map_file()
+	does for mappings made after the seal. The cache must be locked.
+*/
+void
+vm_cache_deny_writable_mappings(VMCache* cache)
+{
+	for (VMArea* area = cache->areas.First(); area != NULL;
+			area = cache->areas.GetNext(area)) {
+		uint32 maximum = area->protection_max != 0
+			? area->protection_max : (uint32)B_USER_PROTECTION;
+		area->protection_max = maximum & ~(uint32)B_WRITE_AREA;
+	}
+}
+
+
 /*! Computes the committed size an area's cache ought to have,
 	based on the area's page_protections and any pages already present.
 */
@@ -2372,6 +2421,20 @@ _vm_map_file(team_id team, const char* name, void** _address,
 			|| PAGE_ALIGN(cache->virtual_end) < (off_t)(offset + size))) {
 		cache->ReleaseRefAndUnlock();
 		return B_BAD_VALUE;
+	}
+
+	// Renga: memfd seals. A file sealed with F_SEAL_WRITE or
+	// F_SEAL_FUTURE_WRITE cannot get a new writable shared mapping (EPERM, as
+	// on Linux), and its read-only shared mappings cannot be made writable
+	// later: the maximum protection drops B_WRITE_AREA, so mprotect() fails.
+	// Checked with the cache locked, which F_ADD_SEALS also holds while it
+	// looks for writable mappings, so the two cannot race.
+	if (mapping == REGION_NO_PRIVATE_MAP && vfs_vnode_is_write_sealed(vnode)) {
+		if ((protection & (B_WRITE_AREA | B_KERNEL_WRITE_AREA)) != 0) {
+			cache->ReleaseRefAndUnlock();
+			return B_NOT_ALLOWED;
+		}
+		protectionMax &= ~(uint32)(B_WRITE_AREA | B_KERNEL_WRITE_AREA);
 	}
 
 	VMArea* area;

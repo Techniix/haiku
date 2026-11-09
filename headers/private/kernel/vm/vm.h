@@ -104,6 +104,8 @@ area_id vm_map_file(team_id aid, const char *name, void **address,
 			bool unmapAddressRange, int fd, off_t offset);
 struct VMCache *vm_area_get_locked_cache(struct VMArea *area);
 void vm_area_put_locked_cache(struct VMCache *cache);
+bool vm_cache_has_writable_mappings(struct VMCache* cache);
+void vm_cache_deny_writable_mappings(struct VMCache* cache);
 area_id vm_create_null_area(team_id team, const char *name, void **address,
 			uint32 addressSpec, addr_t size, uint32 flags);
 area_id vm_copy_area(team_id team, const char *name, void **_address,

@@ -18,7 +18,7 @@ updates this file in the same commit.
 | --- | --- | --- | --- | --- |
 | `eventfd()` | `<sys/eventfd.h>` | `-lgnu` | Missing | Available |
 | `timerfd_create()` / `_settime()` / `_gettime()` | `<sys/timerfd.h>` | `-lgnu` | Missing | Available |
-| `memfd_create()` | `<sys/mman.h>` | `-lgnu` | Missing | Available |
+| `memfd_create()`, file sealing (`F_ADD_SEALS`, `F_GET_SEALS`) | `<sys/mman.h>`, `<fcntl.h>` | `-lgnu` | Missing | Available |
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
 | `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback) |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
@@ -407,14 +407,41 @@ An anonymous, memory-backed file: size it with `ftruncate()`, `mmap()` it
 mapping are gone. This is the shared-memory pattern of Wayland (`wl_shm`
 pools), Chromium/Electron IPC, Mesa and PipeWire.
 
-- Flags: `MFD_CLOEXEC`. `MFD_ALLOW_SEALING`, `MFD_NOEXEC_SEAL` and
-  `MFD_EXEC` are accepted and have no effect.
-- **Not supported:** file sealing. `F_ADD_SEALS`/`F_GET_SEALS` are
-  deliberately left undefined, so code guarded by `#ifdef F_ADD_SEALS`
-  builds without sealing. `MFD_HUGETLB` fails with `EINVAL`.
+- Flags: `MFD_CLOEXEC`, `MFD_ALLOW_SEALING`, `MFD_NOEXEC_SEAL` (sealable,
+  starts with `F_SEAL_EXEC`), `MFD_EXEC` (accepted; the file is never
+  executable). `MFD_HUGETLB` fails with `EINVAL`.
+- File sealing, as on Linux: `fcntl(fd, F_ADD_SEALS, seals)` and
+  `fcntl(fd, F_GET_SEALS)` (`<fcntl.h>`), shared by every descriptor and
+  process using the file:
+  - `F_SEAL_SHRINK`, `F_SEAL_GROW`: `ftruncate()` to a smaller/larger size,
+    `write()` past the end and `posix_fallocate()` past the end fail with
+    `EPERM`;
+  - `F_SEAL_WRITE`: `write()` and new writable `MAP_SHARED` mappings fail
+    with `EPERM`; adding it fails with `EBUSY` while a writable shared
+    mapping exists; existing read-only shared mappings cannot be made
+    writable with `mprotect()`; `MAP_PRIVATE` copies stay allowed;
+  - `F_SEAL_FUTURE_WRITE`: like `F_SEAL_WRITE`, but mappings that are
+    already writable keep working;
+  - `F_SEAL_EXEC`: `chmod()` cannot change the execute bits;
+  - `F_SEAL_SEAL`: no more seals (`EPERM`). Without `MFD_ALLOW_SEALING`
+    the file starts with it, as on Linux.
+  - Errors: `EINVAL` for unknown seals and for files that are not memfds
+    (as for Linux file systems without sealing), `EPERM` for a read-only
+    descriptor.
+- **Differences from Linux:** the seal values and `F_ADD_SEALS`/
+  `F_GET_SEALS` command numbers are Haiku's (`fcntl()` commands are bits
+  here); use the names. A `write()` racing an `ftruncate()` on a file with
+  size seals may see the size before the other call completes (Linux
+  holds the inode lock across both); the seals cannot be bypassed.
 - Names are for debugging only; up to 249 bytes, any characters.
 
-Since: commit `e671e003`. Tests: `memfd_test.cpp`.
+Implementation: `src/libs/gnu/memfd.cpp`; sealing in the kernel
+(`src/system/kernel/fs/vfs.cpp`, "file seals", and `_vm_map_file()` in
+`src/system/kernel/vm/vm.cpp`).
+
+Since: commit `e671e003`; sealing since the commit that added
+`F_ADD_SEALS` to `<fcntl.h>`. Tests: `memfd_test.cpp` (sealing: 19
+checks).
 
 ### POSIX message queues
 
@@ -629,7 +656,7 @@ If a port needs one of these, note it rather than writing a Haiku-specific
 workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
-- File sealing for `memfd_create()`; `TFD_TIMER_CANCEL_ON_SET`.
+- `TFD_TIMER_CANCEL_ON_SET`.
 - Linux driver support through LinuxKPI, and Linux binary compatibility
   through Renguin: both build on the APIs above.
 

@@ -11,6 +11,9 @@
  * a memfd, and its pages live in RAM like any other ramfs file. Nothing
  * needs to be added to the kernel for this.
  *
+ * File sealing is done by the kernel; memfd_create() only marks the file
+ * sealable (see below).
+ *
  * The unique name combines the team ID, a per-process counter and the
  * caller's name (truncated) so that a file left behind by a crash between
  * open() and unlink() can still be traced to its creator.
@@ -28,6 +31,7 @@
 #include <OS.h>
 
 #include <errno_private.h>
+#include <file_seals_defs.h>
 
 
 static const char* kMemFDDirectory = "/var/shared_memory";
@@ -96,6 +100,23 @@ memfd_create(const char* name, unsigned int flags)
 		}
 
 		unlink(path);
+
+		// Sealing (kernel, vfs.cpp): the unlinked file becomes sealable. As
+		// on Linux, without MFD_ALLOW_SEALING it starts sealed with
+		// F_SEAL_SEAL, so F_GET_SEALS reports that and F_ADD_SEALS fails
+		// with EPERM; MFD_NOEXEC_SEAL implies MFD_ALLOW_SEALING and adds
+		// F_SEAL_EXEC (the file is created without execute permission).
+		uint32 seals = 0;
+		if ((flags & (MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL)) == 0)
+			seals |= F_SEAL_SEAL;
+		if ((flags & MFD_NOEXEC_SEAL) != 0)
+			seals |= F_SEAL_EXEC;
+		if (fcntl(fd, F_RENGA_SET_SEALABLE, seals) < 0) {
+			int error = errno;
+			close(fd);
+			__set_errno(error);
+			return -1;
+		}
 		return fd;
 	}
 

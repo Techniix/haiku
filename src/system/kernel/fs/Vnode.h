@@ -60,6 +60,9 @@ public:
 	inline	bool				IsCovering() const;
 	inline	void				SetCovering(bool covering);
 
+	inline	bool				IsSealable() const;
+	inline	void				SetSealable();
+
 	inline	uint32				Type() const;
 	inline	void				SetType(uint32 type);
 
@@ -78,6 +81,8 @@ private:
 	static	const uint32		kFlagsHot			= 0x00000040;
 	static	const uint32		kFlagsCovered		= 0x00000080;
 	static	const uint32		kFlagsCovering		= 0x00000100;
+	static	const uint32		kFlagsSealable		= 0x00000200;
+		// Renga: memfd file; its seals are in vfs.cpp's seal table
 	static	const uint32		kFlagsType			= 0xfffff000;
 
 	static	const uint32		kBucketCount		= 32;
@@ -107,6 +112,20 @@ private:
 
 	static	Bucket				sBuckets[kBucketCount];
 };
+
+
+bool
+vnode::IsSealable() const
+{
+	return (fFlags & kFlagsSealable) != 0;
+}
+
+
+void
+vnode::SetSealable()
+{
+	atomic_or(&fFlags, kFlagsSealable);
+}
 
 
 bool

@@ -22,6 +22,17 @@
 #define F_SETLKW        0x0100		/* as above, but waits if blocked */
 #define F_DUPFD_CLOEXEC 0x0200		/* duplicate fd with close on exec set */
 #define F_DUPFD_CLOFORK 0x0400		/* duplicate fd with close on fork set */
+#define F_ADD_SEALS		0x0800		/* add seals (memfd_create() files) */
+#define F_GET_SEALS		0x1000		/* get seals */
+
+/* seals for F_ADD_SEALS/F_GET_SEALS (Linux and FreeBSD values) */
+#define F_SEAL_SEAL			0x0001	/* no more seals can be added */
+#define F_SEAL_SHRINK		0x0002	/* the size cannot be reduced */
+#define F_SEAL_GROW			0x0004	/* the size cannot be increased */
+#define F_SEAL_WRITE		0x0008	/* the contents cannot be modified */
+#define F_SEAL_FUTURE_WRITE	0x0010	/* no new writable mappings or writes;
+									   existing writable mappings stay */
+#define F_SEAL_EXEC			0x0020	/* the execute bits cannot change */
 
 /* advisory locking types */
 #define F_RDLCK         0x0040		/* read or shared lock */

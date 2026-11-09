@@ -122,6 +122,8 @@ status_t	vfs_synchronous_io(io_request* request,
 status_t	vfs_get_vnode_cache(struct vnode *vnode, struct VMCache **_cache,
 				bool allocate);
 status_t	vfs_set_vnode_cache(struct vnode *vnode, struct VMCache *_cache);
+bool		vfs_vnode_is_write_sealed(struct vnode *vnode);
+				// Renga: memfd F_SEAL_WRITE or F_SEAL_FUTURE_WRITE
 status_t	vfs_get_file_map(struct vnode *vnode, off_t offset, size_t size,
 				struct file_io_vec *vecs, size_t *_count);
 status_t	vfs_get_fs_node_from_path(fs_volume *volume, const char *path,
