@@ -427,7 +427,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Recommended next action | Build the upstream base libraries once and add the symbol comparison as a host check |
 | Links | Section 1.2 (add-only ABI, platform identity); section 9 risk register |
 
-**Decided (maintainer, 2026-11-09): option (c), long term.** Renga stays x86_64; 32-bit Haiku and BeOS (x86_gcc2) programs are to run on 64-bit Renga later (a 32-bit compatibility layer: 32-bit user teams, syscall and signal translation, 32-bit runtime_loader and libraries, a gcc2 libroot/libbe ABI layer). Long-term item, not scheduled. Options considered: (a) keep Renga x86_64-only and guarantee Haiku x86_64 compatibility (BeOS programs then work as on x86_64 Haiku, that is not at all); (b) add a 32-bit x86_gcc2-hybrid Renga image as a second architecture, which doubles builds and harness runs and leaves out x86_64-only work such as LinuxKPI and the NVIDIA driver; (c) later, 32-bit program support on x86_64 (upstream has explored it; large).
+**Decided (maintainer, 2026-11-09): option (c), long term.** Renga stays x86_64; 32-bit Haiku and BeOS (x86_gcc2) programs are to run on 64-bit Renga later (a 32-bit compatibility layer: 32-bit user teams, syscall and signal translation, 32-bit runtime_loader and libraries, a gcc2 libroot/libbe ABI layer). Lowest priority of everything on this roadmap (maintainer, 2026-11-09): it comes last, after all other work. Options considered: (a) keep Renga x86_64-only and guarantee Haiku x86_64 compatibility (BeOS programs then work as on x86_64 Haiku, that is not at all); (b) add a 32-bit x86_gcc2-hybrid Renga image as a second architecture, which doubles builds and harness runs and leaves out x86_64-only work such as LinuxKPI and the NVIDIA driver; (c) later, 32-bit program support on x86_64 (upstream has explored it; large).
 
 #### F-45 RengaPorts: separate ports and package repository for Renga
 
@@ -1875,7 +1875,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | LinuxKPI: optional, user-approved online fetch of driver packages and firmware for detected hardware at install time (and later from the Control Panel); to be done when `F-26` starts | `F-26`, `F-23`, `F-45` |
 | 2026-11-09 | Every user-facing feature ships with its GUI in the same work item; a feature is not Implemented until it can be reached from the desktop (principle added to section 1.2). Review of finished features: only repository priorities (`F-13`) lack a GUI | Section 1.2, `F-13` |
 | 2026-11-09 | Backwards compatibility is a guarantee: Renga always runs the Haiku programs, and the BeOS programs Haiku ran, as Haiku did before Renga; enforced by an ABI check against the upstream base and runtime checks (`F-46`) | `F-46`, section 1.2 |
-| 2026-11-09 | BeOS programs: Renga stays 64-bit; running 32-bit Haiku and BeOS programs on 64-bit Renga is a long-term goal (not scheduled) | `F-46` |
+| 2026-11-09 | BeOS programs: Renga stays 64-bit; running 32-bit Haiku and BeOS programs on 64-bit Renga comes last of everything, the lowest priority on the roadmap | `F-46` |
 
 ---
 
