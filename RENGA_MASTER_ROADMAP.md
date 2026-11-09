@@ -1745,6 +1745,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | After gamepads: first part of the boot loader work, booting Windows from the boot menu | `F-22`; section 5.1 |
 | 2026-11-09 | Chromium: run natively and fully featured; take the fastest route and reuse existing work (FreeBSD patch set + converter, OpenBSD sandbox model, freedesktop portal/D-Bus interfaces, VA-API, Mesa/ANGLE, HaikuPorts QtWebEngine media code) | `F-43` |
 | 2026-11-09 | `F-43` phase A goes right after the harness speed-up, before NTP sync | `F-43`, section 5.1 |
+| 2026-11-09 | Lumina is developed as part of Renga, not as an add-on that must fit around stock Haiku: where it serves the goals better, Lumina's features go into app_server, input_server, Deskbar and the Interface Kit directly, built in-tree with the image, instead of working around them (revision-pinned decorator add-on, private-header builds, effect workarounds). The fallback to the stock look (Lumina S5/S6) stays | `F-25`, `F-41` |
 
 ---
 
