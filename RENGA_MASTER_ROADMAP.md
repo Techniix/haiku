@@ -110,7 +110,7 @@ These come from the audit's architecture report and apply to every change:
 - **Keep upstream hunks small and behind a setting** when an upstream file must change. Example: the build profile hook is a 9-line include in `Jamrules`.
 - **Never edit upstream config in place.** Use launch_daemon overrides, the Renga build profile and extra package lists. For example, `3rdparty/ce/Jamfile` generates the HaikuPorts priority config instead of editing upstream's.
 - **On-demand runtime components.** Use conditional launch_daemon jobs, optional packages and default-off settings. Example: `boot_menu_timeout` is absent by default, so nothing changes.
-- **Add-only ABI.** New syscalls and symbols are additive. Never change public class sizes or vtable order (x86_gcc2 compatibility). Packages that need Renga-only symbols go to the Techniix repository, not to repositories for stock Haiku.
+- **Add-only ABI; Haiku and BeOS programs keep running** (maintainer's guarantee, 2026-11-09; checks in `F-46`). New syscalls and symbols are additive. Never change public class sizes or vtable order (x86_gcc2 compatibility). Packages that need Renga-only symbols go to the Techniix repository, not to repositories for stock Haiku.
 - **Platform identity stays Haiku.** `uname -s`, `__HAIKU__`, `B_HAIKU_*`, MIME signatures, package names and paths are unchanged. Only user-visible display names change (the `DISTRO_NAME` macro).
 - **Every change gets an automated check, plus a known-bad case for the check itself.** New harness checks get a case in `selftest.py` so a broken check cannot pass silently. Wherever possible, a new test is shown to fail on the old code.
 - **Every user-facing feature ships with its GUI** (maintainer, 2026-11-09). A feature people use or configure is not Implemented until it can be reached and controlled from the desktop: a settings page (today's preferences, later the Control Panel, `F-28`), a menu, a Deskbar or panel item, or a window, as fits. The GUI is part of the same work item and is checked with screenshots in the harness. Pure programming interfaces (`epoll`, `memfd`, ...) and automatic behaviour without options are exempt; settings that exist only as files or command-line switches are not.
@@ -326,6 +326,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-42 | Gamepad support and configurator | Investigating (requirements set) | None |
 | F-43 | Chromium platform readiness | Designed (phases A-H) | None |
 | F-44 | Bundled applications | Designed (three batches) | None |
+| F-46 | Haiku and BeOS program compatibility | Designed (guarantee and checks) | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -407,6 +408,26 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Next milestone | Signed repository |
 | Recommended next action | Consider setting priority in the Techniix `repo.info` to remove the hand-added tie case |
 | Links | README "Repository priorities"; PORTING.md packaging caveat |
+
+#### F-46 Haiku and BeOS program compatibility
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Haiku runs Haiku programs of its architecture; BeOS R5 programs run only on 32-bit x86_gcc2 hybrid builds of Haiku, never on x86_64 Haiku |
+| Renga maturity | Add-only ABI rule followed so far (section 1.2; section 9: no public class layout changed). The HaikuPorts packages in Renga images are built for stock Haiku and run unchanged. No automated ABI check yet |
+| Status | **Designed** |
+| Completed | Guarantee set by the maintainer (2026-11-09): Renga must always run the Haiku programs, and the BeOS programs that Haiku ran, as Haiku did before Renga |
+| Remaining | 1. ABI check in the harness: exported dynamic symbols of the system libraries (libroot, libbe, libmedia, libnetwork, libbnetapi, libtracker, libtranslation, libdevice, libgame, libpackage, libtextencoding, libmail, libmidi, libmidi2, libscreensaver, libdebug, libglut, libgnu, libbsd) compared with the same libraries built from the upstream base (`master` at the base revision, rebuilt at each upstream sync): no symbol removed, no data-object or vtable (`_ZTV*`) size changed, no symbol version changed. 2. Runtime check: a set of programs built against the upstream base (and unmodified HaikuPorts packages) started on Renga in the harness, with their results checked. 3. BeOS programs: see the open question below |
+| Known bugs/limitations | Renga builds x86_64 images only, like most Haiku installs; BeOS R5 programs therefore do not run on Renga today, exactly as on x86_64 Haiku |
+| Dependencies | None (the upstream base build is needed for check 1) |
+| Difficulty | 3 (ABI check); 7-8 if a 32-bit x86_gcc2 hybrid build is added |
+| Risk | Low for the checks; the guarantee itself constrains every change (section 1.2) |
+| Testing status | None |
+| Next milestone | ABI check in the harness |
+| Recommended next action | Build the upstream base libraries once and add the symbol comparison as a host check; decide the BeOS question |
+| Links | Section 1.2 (add-only ABI, platform identity); section 9 risk register |
+
+**Open question (maintainer):** BeOS programs need a 32-bit x86_gcc2 hybrid build. Options: (a) keep Renga x86_64-only and guarantee Haiku x86_64 compatibility (BeOS programs then work as on x86_64 Haiku, that is not at all); (b) add a 32-bit x86_gcc2-hybrid Renga image as a second architecture, which doubles builds and harness runs and leaves out x86_64-only work such as LinuxKPI and the NVIDIA driver; (c) later, 32-bit program support on x86_64 (upstream has explored it; large).
 
 #### F-45 RengaPorts: separate ports and package repository for Renga
 
@@ -1853,6 +1874,7 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | After the Media Kit: boot loader first part, then the Installer's in-place replacement of an existing Haiku/Renga installation (modes: upgrade keeping files and applications, with the old system kept as a bootable package state; replace system keeping files; erase), then the maintainer installs Renga on his real hardware; LinuxKPI and the rest follow | `F-22`, `F-23`, section 5.1 |
 | 2026-11-09 | LinuxKPI: optional, user-approved online fetch of driver packages and firmware for detected hardware at install time (and later from the Control Panel); to be done when `F-26` starts | `F-26`, `F-23`, `F-45` |
 | 2026-11-09 | Every user-facing feature ships with its GUI in the same work item; a feature is not Implemented until it can be reached from the desktop (principle added to section 1.2). Review of finished features: only repository priorities (`F-13`) lack a GUI | Section 1.2, `F-13` |
+| 2026-11-09 | Backwards compatibility is a guarantee: Renga always runs the Haiku programs, and the BeOS programs Haiku ran, as Haiku did before Renga; enforced by an ABI check against the upstream base and runtime checks (`F-46`) | `F-46`, section 1.2 |
 
 ---
 
