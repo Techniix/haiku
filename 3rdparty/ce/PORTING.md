@@ -31,7 +31,7 @@ updates this file in the same commit.
 | `copy_file_range()` | `<unistd.h>` | `-lgnu` | Missing | Available |
 | `sendmmsg()`, `recvmmsg()` | `<sys/socket.h>` | libnetwork (nothing extra) | Missing | Available |
 | `getcontext()`/`setcontext()`/`makecontext()`/`swapcontext()` | `<ucontext.h>` | libroot (nothing extra) | Missing | Available (x86_64) |
-| `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT` | `<netinet/tcp.h>` | | Missing (no TCP keepalive at all) | Planned |
+| TCP keepalive: `SO_KEEPALIVE` probes, `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT` | `<netinet/tcp.h>` | libnetwork (nothing extra) | Missing (option accepted, no probes sent) | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
 `poll()` and `wait_for_objects()`, are inherited by `fork()`, and honour
@@ -208,6 +208,37 @@ need their own small assembly file).
 Since: commit `e3e8cb3b`. Tests:
 `ucontext_test.cpp`.
 
+### TCP keepalive
+
+`SO_KEEPALIVE` now does what it does elsewhere: an idle connection is
+probed, and one whose peer has gone away fails with `ETIMEDOUT` instead
+of staying open forever. The per-socket tunables are there too.
+
+- `TCP_KEEPIDLE` (seconds idle before the first probe, default 7200),
+  `TCP_KEEPINTVL` (seconds between probes, default 75) and `TCP_KEEPCNT`
+  (unanswered probes before giving up, default 9), set with
+  `setsockopt(fd, IPPROTO_TCP, ...)`. Ranges as on Linux: 1..32767 s and
+  1..127 probes, `EINVAL` otherwise.
+- The numeric values are FreeBSD's (0x100, 0x200, 0x400), not Linux's
+  (4, 5, 6; Linux's 4 is Haiku's `TCP_NOPUSH`). Code that uses the names,
+  as libcurl, libuv, OpenSSH and most others do, needs nothing. Code
+  guarded by `#ifdef __linux__` around these options should test for
+  `#ifdef TCP_KEEPIDLE` instead; that is also the upstream-friendly fix.
+  macOS's `TCP_KEEPALIVE` (idle time) is not provided; use
+  `TCP_KEEPIDLE`.
+- Accepted sockets inherit `SO_KEEPALIVE` and the three values from the
+  listening socket.
+- When the peer stops answering, blocked `recv()`/`read()` calls return
+  `ETIMEDOUT`, `SO_ERROR` reports it, and later writes fail.
+- Changing idle or interval on a connected socket takes effect at once.
+
+Stock Haiku accepts `SO_KEEPALIVE` but never sends a probe and has no
+`TCP_KEEP*` options, so ports often disabled keepalive or patched it
+out; those patches can be dropped.
+
+Since: commit `9c6d9157`. Tests:
+`tcp_keepalive_test.cpp`.
+
 ### virtio-sound
 
 Audio output in virtual machines (QEMU `-device virtio-sound-pci`) through
@@ -223,16 +254,13 @@ removed again.
 
 - `epoll` (on top of the kernel's event queue), then `inotify`.
 - `signalfd`.
-- TCP keepalive (`SO_KEEPALIVE` probes and `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/
-  `TCP_KEEPCNT`): Haiku's TCP does not send keepalive probes at all yet.
 - File sealing for `memfd_create()`; `TFD_TIMER_CANCEL_ON_SET`.
 - Linux driver support through LinuxKPI, and Linux binary compatibility
   through Renguin: both build on the APIs above.
 
 ## For assistants working on ports
 
-When helping port software to Haiku and the target is Haiku Community
-Edition:
+When helping port software to Haiku and the target is Renga:
 
 1. Read this file from `ce/main` first; it is the source of truth for what
    exists.
