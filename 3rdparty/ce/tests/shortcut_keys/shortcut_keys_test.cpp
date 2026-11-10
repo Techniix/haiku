@@ -447,12 +447,39 @@ main()
 	BPrivate::shortcut_key_style style;
 	test_keymap(style);
 
-	// The typing checks need the desktop; the runner may start before it
-	// is up.
-	for (int i = 0; i < 90; i++) {
-		if (be_roster->IsRunning("application/x-vnd.Be-TRAK"))
+	// The typing checks need app_server and input_server (windows and
+	// keyboard input), which may come up after the runner starts. They do
+	// not need Tracker: this used to wait for Tracker, but a Renga image
+	// boots into FirstBootPrompt (data/launch/user, target first_boot) and
+	// Tracker never runs there, so every renga-raw run waited the full 90 s
+	// here in silence. That is exactly the harness's stall timeout, so some
+	// runs (slower boots, typically the first after a rebuild) were taken
+	// for a hang and stopped in the kernel debugger. Wait for input_server,
+	// as the pointer and media_ui suites do, and say so while waiting.
+	for (int i = 0; i < 300; i++) {
+		if (be_roster->IsRunning("application/x-vnd.Be-input_server"))
 			break;
+		if (i > 0 && i % 30 == 0) {
+			printf("CE-INFO shortcut_keys: waiting for input_server (%d s)\n",
+				i);
+			fflush(stdout);
+		}
 		snooze(1000000);
+	}
+	// Where the desktop does start (images without FirstBootPrompt), let
+	// Tracker and Deskbar come up first, so that they do not take the
+	// keyboard focus from the test window in the middle of a check.
+	if (access("/boot/system/bin/FirstBootPrompt", F_OK) != 0) {
+		for (int i = 0; i < 180; i++) {
+			if (be_roster->IsRunning("application/x-vnd.Be-TRAK"))
+				break;
+			if (i > 0 && i % 30 == 0) {
+				printf("CE-INFO shortcut_keys: waiting for Tracker (%d s)\n",
+					i);
+				fflush(stdout);
+			}
+			snooze(1000000);
+		}
 	}
 	status_t status = B_ERROR;
 	TestApplication* app = new TestApplication(&status);
