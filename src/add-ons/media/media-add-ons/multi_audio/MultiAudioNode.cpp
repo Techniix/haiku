@@ -52,6 +52,22 @@ static const float kMaxInputGain = 20.0f;
 // added latency.
 static const int32 kMaxQueuedBuffers = 4;
 
+// An output whose time source is another node's (a "Mixer sink": the system
+// mixer plays streams routed to this card in the default output's time) gets
+// its buffers at the pace of that other card's clock, with no phase relation
+// to this card's buffer exchanges. With the queue run near empty, as for an
+// output in its own time, a buffer that arrives a little after the exchange
+// it was meant for leaves a period of silence, and the next exchange finds
+// two (measured in the harness: one 1024-frame gap of zeros on the second
+// virtio card some 170 ms after a stream moved there, in 3 of 14 runs). Such
+// an output therefore waits until this many buffers are queued before it
+// plays the first one, and again after it ran dry, so that it runs about two
+// buffers deep and absorbs a buffer of jitter or drift either way. The
+// latency it adds (two buffers) is within what the mixer already produces
+// ahead for the sink. Outputs in their own time keep upstream's behaviour.
+static const int32 kForeignClockPrefill = 2;
+static const int32 kMaxQueueCapacity = kMaxQueuedBuffers + kForeignClockPrefill;
+
 
 // This represents a hardware output.
 class node_input {
@@ -67,9 +83,13 @@ public:
 	volatile uint32		fBufferCycle;
 	int32				fOldBufferCycle;
 	// Received, not yet played, oldest first; fQueueLock.
-	BBuffer*			fQueue[kMaxQueuedBuffers];
+	BBuffer*			fQueue[kMaxQueueCapacity];
 	int32				fQueued;
 	int32				fDropped;
+	// Buffers to collect before playing (see kForeignClockPrefill); set by
+	// the output thread. fPriming: collecting them now.
+	int32				fPrefill;
+	bool				fPriming;
 	Resampler			*fResampler;
 
 	void				Enqueue(BBuffer* buffer);
@@ -87,7 +107,7 @@ void
 node_input::Enqueue(BBuffer* buffer)
 {
 	BAutolock locker(sQueueLock);
-	if (fQueued == kMaxQueuedBuffers) {
+	if (fQueued >= kMaxQueuedBuffers + fPrefill) {
 		fQueue[0]->Recycle();
 		memmove(fQueue, fQueue + 1, (fQueued - 1) * sizeof(BBuffer*));
 		fQueued--;
@@ -101,8 +121,14 @@ BBuffer*
 node_input::Dequeue()
 {
 	BAutolock locker(sQueueLock);
-	if (fQueued == 0)
+	if (fQueued == 0) {
+		// Ran dry: collect the prefill again before playing on.
+		fPriming = fPrefill > 0;
 		return NULL;
+	}
+	if (fPriming && fQueued < fPrefill)
+		return NULL;
+	fPriming = false;
 	BBuffer* buffer = fQueue[0];
 	memmove(fQueue, fQueue + 1, (fQueued - 1) * sizeof(BBuffer*));
 	fQueued--;
@@ -117,6 +143,7 @@ node_input::Flush()
 	for (int32 i = 0; i < fQueued; i++)
 		fQueue[i]->Recycle();
 	fQueued = 0;
+	fPriming = fPrefill > 0;
 }
 
 
@@ -201,6 +228,8 @@ node_input::node_input(media_input& input, media_format preferredFormat)
 	fOldBufferCycle = -1;
 	fQueued = 0;
 	fDropped = 0;
+	fPrefill = 0;
+	fPriming = false;
 	fResampler = NULL;
 }
 
@@ -248,6 +277,7 @@ MultiAudioNode::MultiAudioNode(BMediaAddOn* addon, const char* name,
 	fActiveOutputs(0),
 	fQuitThread(0),
 	fThread(-1),
+	fForeignClock(0),
 	fDevice(device),
 	fWeb(NULL),
 	fConfig(),
@@ -625,6 +655,11 @@ void
 MultiAudioNode::SetTimeSource(BTimeSource* timeSource)
 {
 	CALLED();
+	// Renga: the output thread runs a deeper queue for outputs fed in
+	// another node's time (kForeignClockPrefill). BMediaNode calls this
+	// after it switched the time source, from the control thread.
+	atomic_set(&fForeignClock,
+		timeSource != NULL && timeSource->ID() != ID() ? 1 : 0);
 }
 
 
@@ -1898,8 +1933,18 @@ MultiAudioNode::_OutputThread()
 		//PRINT(("MultiAudioNode::RunThread: played_frames_count: %lld\n", bufferInfo.played_frames_count));
 		//PRINT(("MultiAudioNode::RunThread: buffer_cycle: %li\n", bufferInfo.playback_buffer_cycle));
 
+		// Outputs fed in another node's time need a deeper queue (see
+		// kForeignClockPrefill). The time source can change while running.
+		int32 prefill = atomic_get(&fForeignClock) != 0
+			? kForeignClockPrefill : 0;
+
 		for (int32 i = 0; i < fInputs.CountItems(); i++) {
 			node_input* input = (node_input*)fInputs.ItemAt(i);
+			if (input->fPrefill != prefill) {
+				BAutolock queueLocker(node_input::sQueueLock);
+				input->fPrefill = prefill;
+				input->fPriming = prefill > 0;
+			}
 
 			if (bufferInfo.playback_buffer_cycle >= 0
 				&& bufferInfo.playback_buffer_cycle

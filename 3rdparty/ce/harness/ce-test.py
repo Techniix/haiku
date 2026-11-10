@@ -2049,14 +2049,26 @@ def analyze_media_audio(results_dir, report):
 		* window)
 	region = samples[1][start:end]
 	peak = max((abs(x) for x in region), default=0)
-	step = max((abs(region[i] - region[i - 1])
-		for i in range(1, len(region))), default=0)
+	step, where = max(((abs(region[i] - region[i - 1]), i)
+		for i in range(1, len(region))), default=(0, 0))
 	bound = 2 * math.pi * 2750 / rate * peak * 1.15 + 60
+	detail = "largest step %d around the moves (%.1f s), a 2750 Hz tone " \
+		"at peak %d makes at most %d" % (step, len(region) / rate, peak, bound)
+	if step > bound:
+		# Say where and what it is: a run of zeros (the card had no buffer
+		# for a period) or a jump in the tone (a buffer dropped or repeated).
+		zeros = 0
+		for x in region[where:where + rate]:
+			if x != 0:
+				break
+			zeros += 1
+		detail += "; at %.3f s in sdl-out.raw (%.3f s after the first " \
+			"move), %s" % ((start + where) / rate,
+			(start + where) / rate - first["start"] / 10.0,
+			"followed by %d zero samples" % zeros if zeros > 8
+				else "a jump in the tone")
 	checks.append({"name": "media_audio.route_click_free",
-		"pass": len(region) > 0 and step <= bound,
-		"detail": "largest step %d around the moves (%.1f s), a 2750 Hz tone "
-			"at peak %d makes at most %d" % (step, len(region) / rate, peak,
-			bound)})
+		"pass": len(region) > 0 and step <= bound, "detail": detail})
 
 
 def analyze_usb_audio(results_dir, report):

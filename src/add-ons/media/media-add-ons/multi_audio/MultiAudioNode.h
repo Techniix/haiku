@@ -258,6 +258,8 @@ private:
 
 			int32				fQuitThread;
 			thread_id			fThread;
+			int32				fForeignClock;
+				// Renga: 1 while the time source is another node's
 			MultiAudioDevice*	fDevice;
 			BParameterWeb*		fWeb;
 			BMessage			fConfig;
