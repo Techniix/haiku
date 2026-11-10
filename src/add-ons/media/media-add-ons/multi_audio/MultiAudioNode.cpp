@@ -9,6 +9,7 @@
 
 #include "MultiAudioNode.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -33,6 +34,22 @@
 
 #define PARAMETER_ID_INPUT_FREQUENCY	1
 #define PARAMETER_ID_OUTPUT_FREQUENCY	2
+// Renga: a software gain for recording, for inputs whose hardware has no
+// gain control of its own (virtio_sound, many USB microphones). Far from
+// the small ids drivers use for their mix controls.
+#define PARAMETER_ID_INPUT_GAIN			0x52474e01
+static const float kMinInputGain = -40.0f;
+static const float kMaxInputGain = 20.0f;
+
+
+// How many received buffers an output may hold until the card takes them.
+// Upstream kept one and dropped a second one that arrived before the card
+// had taken the first; producers do not hand buffers over at an even pace
+// (the media event thread runs late, then catches up), so every bunch cost
+// a dropped buffer and, one period later, a period of silence. A few
+// buffers absorb that; beyond them the oldest is dropped, which bounds the
+// added latency.
+static const int32 kMaxQueuedBuffers = 4;
 
 
 // This represents a hardware output.
@@ -48,9 +65,58 @@ public:
 
 	volatile uint32		fBufferCycle;
 	int32				fOldBufferCycle;
-	BBuffer*			fBuffer;
+	// Received, not yet played, oldest first; fQueueLock.
+	BBuffer*			fQueue[kMaxQueuedBuffers];
+	int32				fQueued;
+	int32				fDropped;
 	Resampler			*fResampler;
+
+	void				Enqueue(BBuffer* buffer);
+	BBuffer*			Dequeue();
+	void				Flush();
+
+	static BLocker		sQueueLock;
 };
+
+
+BLocker node_input::sQueueLock("multi audio queues");
+
+
+void
+node_input::Enqueue(BBuffer* buffer)
+{
+	BAutolock locker(sQueueLock);
+	if (fQueued == kMaxQueuedBuffers) {
+		fQueue[0]->Recycle();
+		memmove(fQueue, fQueue + 1, (fQueued - 1) * sizeof(BBuffer*));
+		fQueued--;
+		fDropped++;
+	}
+	fQueue[fQueued++] = buffer;
+}
+
+
+BBuffer*
+node_input::Dequeue()
+{
+	BAutolock locker(sQueueLock);
+	if (fQueued == 0)
+		return NULL;
+	BBuffer* buffer = fQueue[0];
+	memmove(fQueue, fQueue + 1, (fQueued - 1) * sizeof(BBuffer*));
+	fQueued--;
+	return buffer;
+}
+
+
+void
+node_input::Flush()
+{
+	BAutolock locker(sQueueLock);
+	for (int32 i = 0; i < fQueued; i++)
+		fQueue[i]->Recycle();
+	fQueued = 0;
+}
 
 
 // This represents a hardware input.
@@ -132,7 +198,8 @@ node_input::node_input(media_input& input, media_format preferredFormat)
 	fPreferredFormat = preferredFormat;
 	fBufferCycle = 1;
 	fOldBufferCycle = -1;
-	fBuffer = NULL;
+	fQueued = 0;
+	fDropped = 0;
 	fResampler = NULL;
 }
 
@@ -182,7 +249,10 @@ MultiAudioNode::MultiAudioNode(BMediaAddOn* addon, const char* name,
 	fThread(-1),
 	fDevice(device),
 	fWeb(NULL),
-	fConfig()
+	fConfig(),
+	fInputGainDB(0.0f),
+	fInputGain(1.0f),
+	fInputGainChanged(0)
 {
 	CALLED();
 	fInitStatus = B_NO_INIT;
@@ -731,6 +801,7 @@ MultiAudioNode::Disconnected(const media_source& producer,
 	channel->fInput.format = channel->fPreferredFormat;
 
 	BAutolock locker(fBufferLock);
+	channel->Flush();
 	_FillWithZeros(*channel);
 	//GetFormat(&channel->fInput.format);
 }
@@ -1181,23 +1252,9 @@ MultiAudioNode::_HandleBuffer(const media_timed_event* event,
 		fprintf(stderr,"	<- LATE BUFFER: %" B_PRIdBIGTIME "\n", lateness);
 		buffer->Recycle();
 	} else {
-		//WriteBuffer(buffer, *channel);
-		// TODO: This seems like a very fragile mechanism to wait until
-		// the previous buffer for this channel has been processed...
-		if (channel->fBuffer != NULL) {
-			PRINT(("MultiAudioNode::HandleBuffer snoozing recycling channelId: "
-				"%" B_PRIi32 ", lateness:%" B_PRIdBIGTIME "\n",
-				channel->fChannelId, lateness));
-			//channel->fBuffer->Recycle();
-			snooze(100);
-			if (channel->fBuffer != NULL)
-				buffer->Recycle();
-			else
-				channel->fBuffer = buffer;
-		} else {
-			//PRINT(("MultiAudioNode::HandleBuffer writing channelId: %li, how_early:%lld\n", channel->fChannelId, howEarly));
-			channel->fBuffer = buffer;
-		}
+		// The output thread plays the oldest queued buffer at each buffer
+		// exchange (see kMaxQueuedBuffers).
+		channel->Enqueue(buffer);
 	}
 	return B_OK;
 }
@@ -1331,6 +1388,14 @@ MultiAudioNode::GetParameterValue(int32 id, bigtime_t* lastChange, void* value,
 	CALLED();
 
 	PRINT(("id: %" B_PRIi32 "\n", id));
+	if (id == PARAMETER_ID_INPUT_GAIN) {
+		if (*size < sizeof(float))
+			return B_NO_MEMORY;
+		memcpy(value, &fInputGainDB, sizeof(float));
+		*size = sizeof(float);
+		*lastChange = fInputGainChanged;
+		return B_OK;
+	}
 	BParameter* parameter = NULL;
 	for (int32 i = 0; i < fWeb->CountParameters(); i++) {
 		parameter = fWeb->ParameterAt(i);
@@ -1430,6 +1495,20 @@ MultiAudioNode::SetParameterValue(int32 id, bigtime_t performanceTime,
 	CALLED();
 	PRINT(("id: %" B_PRIi32 ", performance_time: %" B_PRIdBIGTIME
 		", size: %" B_PRIuSIZE "\n", id, performanceTime, size));
+
+	if (id == PARAMETER_ID_INPUT_GAIN) {
+		if (size < sizeof(float))
+			return;
+		float gain;
+		memcpy(&gain, value, sizeof(float));
+		gain = max_c(kMinInputGain, min_c(kMaxInputGain, gain));
+		fInputGainDB = gain;
+		fInputGain = powf(10.0f, gain / 20.0f);
+		fInputGainChanged = TimeSource() != NULL ? TimeSource()->Now() : 0;
+		BroadcastNewParameterValue(performanceTime, id, &fInputGainDB,
+			sizeof(float));
+		return;
+	}
 
 	BParameter* parameter = NULL;
 	for (int32 i = 0; i < fWeb->CountParameters(); i++) {
@@ -1615,6 +1694,14 @@ MultiAudioNode::MakeParameterWeb()
 			PARAMETER_ID_INPUT_FREQUENCY, description.input_rates);
 		_CreateFrequencyParameterGroup(generalGroup, B_TRANSLATE("Output"),
 			PARAMETER_ID_OUTPUT_FREQUENCY, description.output_rates);
+	}
+
+	if (description.input_channel_count > 0) {
+		BParameterGroup* group = generalGroup->MakeGroup(
+			B_TRANSLATE("Recording"));
+		group->MakeContinuousParameter(PARAMETER_ID_INPUT_GAIN,
+			B_MEDIA_RAW_AUDIO, B_TRANSLATE("Recording gain"), B_GAIN,
+			B_TRANSLATE("dB"), kMinInputGain, kMaxInputGain, 0.5);
 	}
 
 	multi_mix_control* controls = fDevice->MixControlInfo().controls;
@@ -1813,10 +1900,10 @@ MultiAudioNode::_OutputThread()
 
 				input->fOldBufferCycle = bufferInfo.playback_buffer_cycle;
 
-				if (input->fBuffer != NULL) {
-					_FillNextBuffer(*input, input->fBuffer);
-					input->fBuffer->Recycle();
-					input->fBuffer = NULL;
+				BBuffer* buffer = input->Dequeue();
+				if (buffer != NULL) {
+					_FillNextBuffer(*input, buffer);
+					buffer->Recycle();
 				} else {
 					// put zeros in current buffer
 					if (input->fInput.source != media_source::null)
@@ -2057,10 +2144,7 @@ MultiAudioNode::_StopOutputThread()
 
 	for (int32 i = 0; i < fInputs.CountItems(); i++) {
 		node_input* input = (node_input*)fInputs.ItemAt(i);
-		if (input->fBuffer != NULL) {
-			input->fBuffer->Recycle();
-			input->fBuffer = NULL;
-		}
+		input->Flush();
 		if (fDevice->BufferList().playback_buffers[0][input->fChannelId].base != NULL)
 			_FillWithZeros(*input);
 	}
@@ -2154,6 +2238,8 @@ MultiAudioNode::_FillNextBuffer(multi_buffer_info& info, node_output& output)
 			output.fResampler->Resample(src, srcStride, dst, dstStride,
 				bufferSize);
 		}
+
+		_ApplyInputGain(buffer, output.fOutput.format.u.raw_audio);
 	}
 
 	// fill in the buffer header
@@ -2396,4 +2482,64 @@ MultiAudioNode::_UpdateInternalLatency(const media_format& format)
 	PRINT(("  internal latency = %" B_PRIdBIGTIME "\n", fInternalLatency));
 
 	SetEventLatency(fInternalLatency);
+}
+
+
+/*!	Applies the recording gain (PARAMETER_ID_INPUT_GAIN) to a recorded
+	buffer, clipping at full scale.
+*/
+void
+MultiAudioNode::_ApplyInputGain(BBuffer* buffer,
+	const media_raw_audio_format& format)
+{
+	float gain = fInputGain;
+	if (gain == 1.0f)
+		return;
+
+	size_t size = format.buffer_size;
+	switch (format.format) {
+		case media_raw_audio_format::B_AUDIO_FLOAT:
+		{
+			float* data = (float*)buffer->Data();
+			for (size_t i = 0; i < size / sizeof(float); i++)
+				data[i] = max_c(-1.0f, min_c(1.0f, data[i] * gain));
+			break;
+		}
+		case media_raw_audio_format::B_AUDIO_INT:
+		{
+			int32* data = (int32*)buffer->Data();
+			for (size_t i = 0; i < size / sizeof(int32); i++) {
+				double v = (double)data[i] * gain;
+				data[i] = (int32)max_c(-2147483648.0, min_c(2147483647.0, v));
+			}
+			break;
+		}
+		case media_raw_audio_format::B_AUDIO_SHORT:
+		{
+			int16* data = (int16*)buffer->Data();
+			for (size_t i = 0; i < size / sizeof(int16); i++) {
+				float v = data[i] * gain;
+				data[i] = (int16)max_c(-32768.0f, min_c(32767.0f, v));
+			}
+			break;
+		}
+		case media_raw_audio_format::B_AUDIO_UCHAR:
+		{
+			uint8* data = (uint8*)buffer->Data();
+			for (size_t i = 0; i < size; i++) {
+				float v = ((int)data[i] - 128) * gain;
+				data[i] = (uint8)(128 + max_c(-128.0f, min_c(127.0f, v)));
+			}
+			break;
+		}
+		case media_raw_audio_format::B_AUDIO_CHAR:
+		{
+			int8* data = (int8*)buffer->Data();
+			for (size_t i = 0; i < size; i++) {
+				float v = data[i] * gain;
+				data[i] = (int8)max_c(-128.0f, min_c(127.0f, v));
+			}
+			break;
+		}
+	}
 }

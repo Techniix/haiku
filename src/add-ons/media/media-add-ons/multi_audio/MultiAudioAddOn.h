@@ -38,6 +38,7 @@ private:
 private:
 	status_t 		fInitStatus;
 	BList			fDevices;
+	BList			fFlavorNames;	// of char*, see GetFlavorAt()
 
 	BMessage		fSettings;
 		// loaded from settings directory

@@ -7,6 +7,7 @@
 #include "MultiAudioAddOn.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -59,6 +60,8 @@ MultiAudioAddOn::~MultiAudioAddOn()
 	void *device = NULL;
 	for (int32 i = 0; (device = fDevices.ItemAt(i)); i++)
 		delete (MultiAudioDevice*)device;
+	for (int32 i = 0; i < fFlavorNames.CountItems(); i++)
+		free(fFlavorNames.ItemAt(i));
 
 	_SaveSettings();
 }
@@ -96,6 +99,35 @@ MultiAudioAddOn::GetFlavorAt(int32 index, const flavor_info** _info)
 	MultiAudioNode::GetFlavor(info, index);
 	info->name = device->Description().friendly_name;
 
+	// Renga: two cards of one kind (two virtio sound cards, two identical
+	// USB headsets) would otherwise be listed under one name, and nobody
+	// could tell them apart in the Media preferences or choose one as a
+	// stream's output. The first keeps the plain name, the others get
+	// " 2", " 3", ... in the order the add-on found them.
+	int32 same = 1;
+	for (int32 i = 0; i < index; i++) {
+		MultiAudioDevice* other = (MultiAudioDevice*)fDevices.ItemAt(i);
+		if (strcmp(other->Description().friendly_name,
+				device->Description().friendly_name) == 0) {
+			same++;
+		}
+	}
+	if (same > 1) {
+		char name[B_MEDIA_NAME_LENGTH];
+		snprintf(name, sizeof(name), "%s %" B_PRId32,
+			device->Description().friendly_name, same);
+		// The add-on keeps the names: flavor_info only points at them.
+		char* kept = NULL;
+		for (int32 i = 0; i < fFlavorNames.CountItems(); i++) {
+			if (strcmp((char*)fFlavorNames.ItemAt(i), name) == 0)
+				kept = (char*)fFlavorNames.ItemAt(i);
+		}
+		if (kept == NULL && (kept = strdup(name)) != NULL)
+			fFlavorNames.AddItem(kept);
+		if (kept != NULL)
+			info->name = kept;
+	}
+
 	*_info = info;
 	return B_OK;
 }
@@ -114,15 +146,18 @@ MultiAudioAddOn::InstantiateNodeFor(const flavor_info* info, BMessage* config,
 		return NULL;
 	}
 
+	// The node, and with it its saved settings, carry the flavor's name,
+	// which tells identical cards apart (see GetFlavorAt()).
+	const char* name = info->name != NULL ? info->name
+		: device->Description().friendly_name;
+
 #ifdef MULTI_SAVE
-	if (fSettings.FindMessage(device->Description().friendly_name, config)
-			== B_OK) {
-		fSettings.RemoveData(device->Description().friendly_name);
-	}
+	if (fSettings.FindMessage(name, config) == B_OK)
+		fSettings.RemoveData(name);
 #endif
 
 	MultiAudioNode* node = new (std::nothrow) MultiAudioNode(this,
-		device->Description().friendly_name, device, info->internal_id, config);
+		name, device, info->internal_id, config);
 	if (node == NULL)
 		*_error = B_NO_MEMORY;
 	else

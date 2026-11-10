@@ -265,10 +265,23 @@ BMediaRecorder::Start(bool force)
 	// start node here
 	status_t err = B_OK;
 
-	if ((fOutputNode.kind & B_TIME_SOURCE) != 0)
+	if ((fOutputNode.kind & B_TIME_SOURCE) != 0) {
 		err = BMediaRoster::CurrentRoster()->StartTimeSource(
 			fOutputNode, BTimeSource::RealTime());
-	else
+		// A sound card is its own time source and also the producer of
+		// what is recorded: starting its time source does not start it
+		// producing (Renga; upstream recorded nothing from a card that was
+		// not already started, e.g. one nothing played on).
+		if (err == B_OK && (fOutputNode.kind & B_BUFFER_PRODUCER) != 0) {
+			BTimeSource* timeSource = BMediaRoster::CurrentRoster()
+				->MakeTimeSourceFor(fOutputNode);
+			if (timeSource != NULL) {
+				err = BMediaRoster::CurrentRoster()->StartNode(fOutputNode,
+					timeSource->Now());
+				timeSource->Release();
+			}
+		}
+	} else
 		err = BMediaRoster::CurrentRoster()->StartNode(
 			fOutputNode, fNode->TimeSource()->Now());
 

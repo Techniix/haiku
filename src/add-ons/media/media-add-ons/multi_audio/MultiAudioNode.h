@@ -227,6 +227,8 @@ private:
 									const char* name, int32 parameterID,
 									uint32 rateMask);
 
+			void				_ApplyInputGain(BBuffer* buffer,
+									const media_raw_audio_format& format);
 			status_t			_SetNodeInputFrameRate(float frameRate);
 			status_t			_SetNodeOutputFrameRate(float frameRate);
 			void				_UpdateInternalLatency(
@@ -259,6 +261,11 @@ private:
 			MultiAudioDevice*	fDevice;
 			BParameterWeb*		fWeb;
 			BMessage			fConfig;
+
+			// Renga: software recording gain (see PARAMETER_ID_INPUT_GAIN).
+			float				fInputGainDB;
+			volatile float		fInputGain;
+			bigtime_t			fInputGainChanged;
 };
 
 
