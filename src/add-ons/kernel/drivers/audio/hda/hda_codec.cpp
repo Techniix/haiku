@@ -10,6 +10,7 @@
 
 
 #include "driver.h"
+#include "hda_eld.h"
 #include "hda_codec_defs.h"
 
 
@@ -1227,6 +1228,101 @@ hda_audio_group_switch_init(hda_audio_group* audioGroup)
 }
 
 
+/*!	Renga (F-31 phase 2): HDMI and DisplayPort pins. For every digital
+	display pin (pin capabilities HDMI or DP, connected), reads whether a
+	sink is there and its ELD (HDA 7.3.3.15 pin sense: presence bit 31, ELD
+	valid bit 30; 7.3.3.34: ELD buffer size through the DIP size verb with
+	index 0x08, then the bytes one by one, bit 31 of each answer saying it
+	is valid), parses it (hda_eld.h), and logs what the monitor takes, under
+	the name an output for it would get ("HDMI: <monitor>"). Called at
+	startup and on every unsolicited response (a monitor plugged in or out).
+
+	Playing on these pins is not implemented yet: the streams leave digital
+	converters out (hda_audio_group_get_widgets()), and HDMI also needs
+	the converter's digital enable, its channel count, the audio
+	InfoFrame and the pin's channel mapping (Linux's patch_hdmi.c). This
+	is the detection half, written from the specification without HDMI
+	hardware at hand (QEMU emulates no HDMI codec); the parser is tested
+	in the harness with ELD byte sequences (3rdparty/ce/tests/hda_eld).
+*/
+static void
+hda_audio_group_probe_display_pins(hda_audio_group* audioGroup)
+{
+	hda_codec* codec = audioGroup->codec;
+	for (uint32 i = 0; i < audioGroup->widget_count; i++) {
+		hda_widget& widget = audioGroup->widgets[i];
+		if (widget.type != WT_PIN_COMPLEX
+			|| !PIN_CAP_IS_OUTPUT(widget.d.pin.capabilities)
+			|| (widget.d.pin.capabilities & (PIN_CAP_HDMI | PIN_CAP_DP)) == 0
+			|| CONF_DEFAULT_CONNECTIVITY(widget.d.pin.config) == 1) {
+			// 1: no physical connection
+			continue;
+		}
+		const char* kind = (widget.d.pin.capabilities & PIN_CAP_DP) != 0
+			&& (widget.d.pin.capabilities & PIN_CAP_HDMI) == 0
+			? "DisplayPort" : "HDMI";
+
+		corb_t verb = MAKE_VERB(codec->addr, widget.node_id, VID_GET_PINSENSE,
+			0);
+		uint32 sense = 0;
+		if (hda_send_verbs(codec, &verb, &sense, 1) != B_OK)
+			continue;
+		bool present = (sense & PIN_SENSE_PRESENCE_DETECT) != 0;
+		bool eldValid = (sense & (1u << 30)) != 0;
+		if (!present || !eldValid) {
+			dprintf("hda: %s pin %" B_PRIu32 ": %s\n", kind, widget.node_id,
+				present ? "sink present, no ELD yet" : "no sink");
+			continue;
+		}
+
+		verb = MAKE_VERB(codec->addr, widget.node_id,
+			VID_GET_DATA_ISLAND_PACKET_SIZE, 0x08);
+		uint32 size = 0;
+		if (hda_send_verbs(codec, &verb, &size, 1) != B_OK)
+			continue;
+		size &= 0xff;
+		if (size < HDA_ELD_FIXED_SIZE) {
+			dprintf("hda: %s pin %" B_PRIu32 ": ELD of %" B_PRIu32
+				" bytes\n", kind, widget.node_id, size);
+			continue;
+		}
+
+		uint8 data[256];
+		bool complete = true;
+		for (uint32 index = 0; index < size; index++) {
+			verb = MAKE_VERB(codec->addr, widget.node_id,
+				VID_GET_EDID_LIKE_DATA, index);
+			uint32 value = 0;
+			if (hda_send_verbs(codec, &verb, &value, 1) != B_OK
+				|| (value & (1u << 31)) == 0) {
+				complete = false;
+				break;
+			}
+			data[index] = value & 0xff;
+		}
+		if (!complete) {
+			dprintf("hda: %s pin %" B_PRIu32 ": ELD not readable\n", kind,
+				widget.node_id);
+			continue;
+		}
+
+		hda_eld eld;
+		hda_eld_error error = hda_eld_parse(data, size, eld);
+		if (error != HDA_ELD_OK) {
+			dprintf("hda: %s pin %" B_PRIu32 ": invalid ELD (%d)\n", kind,
+				widget.node_id, error);
+			continue;
+		}
+		char name[64];
+		hda_eld_output_name(eld, name, sizeof(name));
+		dprintf("hda: %s pin %" B_PRIu32 ": \"%s\", LPCM up to %u "
+			"channels, rates %#x, sizes %#x, %u audio formats\n", kind,
+			widget.node_id, name, eld.lpcm_channels, eld.lpcm_rates,
+			eld.lpcm_bits, eld.sad_count);
+	}
+}
+
+
 static void
 hda_audio_group_check_sense(hda_audio_group* audioGroup, bool disable)
 {
@@ -1286,6 +1382,8 @@ hda_codec_switch_handler(hda_codec* codec)
 		bool disable = response & 1;
 		hda_audio_group* audioGroup = codec->audio_groups[0];
 		hda_audio_group_check_sense(audioGroup, disable);
+		// Renga: a monitor plugged in or out (or its ELD changed)
+		hda_audio_group_probe_display_pins(audioGroup);
 	}
 	return B_OK;
 }
@@ -1338,6 +1436,7 @@ hda_codec_new_audio_group(hda_codec* codec, uint32 audioGroupNodeID)
 	if (hda_audio_group_build_tree(audioGroup) != B_OK)
 		goto err;
 	hda_audio_group_switch_init(audioGroup);
+	hda_audio_group_probe_display_pins(audioGroup);
 
 	audioGroup->playback_stream = hda_stream_new(audioGroup, STREAM_PLAYBACK);
 	audioGroup->record_stream = hda_stream_new(audioGroup, STREAM_RECORD);

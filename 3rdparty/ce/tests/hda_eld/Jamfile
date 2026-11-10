@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP 3rdparty ce tests hda_eld ;
+
+# The hda driver's ELD parser (HDMI/DisplayPort sinks), with ELDs laid
+# out from the specification; QEMU emulates no HDMI codec.
+SubDirHdrs [ FDirName $(HAIKU_TOP) src add-ons kernel drivers audio hda ] ;
+
+Application hda_eld_test :
+	hda_eld_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : hda_eld_test ;
+}
