@@ -22,6 +22,10 @@ updates this file in the same commit.
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
 | `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback and capture) |
 | Per-application volume, mute and output device; loopback ("What you hear", one application) as a Media Kit source | (Media Kit nodes and parameters) | libmedia (nothing extra) | Missing | Available |
+| Sound cards plugged in and out while the media services run (USB audio): new outputs and inputs, default output fallback and return | (Media Kit, `B_MEDIA_FLAVORS_CHANGED`) | libmedia (nothing extra) | Seen only after a media services restart; no fallback | Available |
+| USB Audio Class 1 and 2 devices (headsets, DACs) | (driver `usb_audio`, hmulti) | | UAC1 only, broken at 44.1 kHz on xhci | Available (UAC2 not yet tried on hardware) |
+| UVC webcams (YUY2, MJPEG) as Media Kit video sources | (Media Kit, `usb_webcam` add-on) | libmedia (nothing extra) | Missing (UVC class not built) | Available (not yet tried on hardware) |
+| HDMI/DisplayPort audio | (driver `hda`) | | Missing | Monitors detected and named in the syslog; no playback yet |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
 | `signalfd()` | `<sys/signalfd.h>` | `-lgnu` | Missing | Available |
@@ -788,6 +792,50 @@ plain Media Kit calls:
 Since: the commits that added `MixerTap` to the mixer add-on. Tests:
 `media_test.cpp` (renga-* images).
 
+### Sound cards and cameras that come and go
+
+The media services follow devices plugged in and out (USB audio today);
+nothing to restart, and nothing changed in the public API:
+
+- **Device lists.** Watch `B_MEDIA_FLAVORS_CHANGED`
+  (`BMediaRoster::StartWatching(messenger, B_MEDIA_FLAVORS_CHANGED)`) and
+  query again with `GetDormantNodes()`/`GetLiveNodes()`. A new sound card
+  gets its flavor and node within about two seconds of being plugged in.
+  Flavor IDs of a device are stable while it is plugged in but not across
+  plug-ins or boots: remember devices by flavor name (identical devices are
+  numbered, "QEMU USB Audio 2"), as the Media preferences and the mixer's
+  routes do.
+- **Default output.** When the default output is unplugged, the default
+  falls back to another card and the system mixer follows; when the
+  user's device comes back it is the default again. A stream routed to a
+  device (see above) plays on the default output meanwhile and returns by
+  itself. Playing through the system mixer (`BSoundPlayer`, SDL, cubeb
+  later) needs no code for this.
+- **Direct users of a sound card node** (applications that connect to the
+  card instead of the mixer) see their connection end when it is
+  unplugged; reconnect on `B_MEDIA_FLAVORS_CHANGED` or
+  `B_MEDIA_NODE_DELETED`.
+- **USB audio** devices (Audio Class 1 and 2) are ordinary hmulti cards
+  (`/dev/audio/hmulti/usb/<n>`) with their volume and mute as mix
+  controls. Rates are what the device offers; 44.1 and 48 kHz, 16 and 24
+  bits are the usual ones.
+- **Cameras.** UVC webcams are video producers of the `usb_webcam` add-on
+  (`B_BUFFER_PRODUCER`, raw video output, `B_RGB32`). List cameras with
+  `GetDormantNodes()` for kind `B_BUFFER_PRODUCER` and a raw video output
+  format, as CodyCam's Camera menu does; `GetVideoInput()` gives the
+  default. YUY2 cameras are converted, MJPEG ones decoded. Every image
+  also has "Demo Video Producer" (`video_producer_demo`), a synthetic
+  source useful for testing a port without a camera.
+  `CodyCam --camera <name>` previews a given source.
+- **HDMI/DisplayPort audio** is not playable yet: connected monitors are
+  detected and named in the syslog (`hda: HDMI pin`), but no output plays
+  on them. Do not work around it.
+
+Since: the commits that added the device watcher to the multi_audio
+add-on (hot-plug), UAC2 to `usb_audio`, and `UVCPayload.cpp` to
+`usb_webcam`. Tests: `media_usb_test.cpp`, `media_video_test.cpp`
+(renga-* images), `usb_audio`, `uvc` (every image).
+
 ### Ctrl is the shortcut key
 
 Renga uses the Windows/Linux convention: Ctrl+C copies, Ctrl+V pastes,
@@ -822,6 +870,8 @@ workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
 - `TFD_TIMER_CANCEL_ON_SET`.
+- HDMI/DisplayPort audio output (roadmap `F-31` phase 2): play on another
+  output until then.
 - Releasing memory inside a memfd: `fallocate(fd, FALLOC_FL_PUNCH_HOLE |
   FALLOC_FL_KEEP_SIZE, ...)` and `madvise(MADV_REMOVE)` (roadmap `F-48`
   part a). Until then keep the `memset` fallback.
