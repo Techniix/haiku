@@ -65,7 +65,9 @@ CamDevice::CamDevice(CamDeviceAddon &_addon, BUSBDevice* _device)
 #ifdef DEBUG_READ_DUMP
 	fDumpFD = open("/boot/home/webcam.out", O_RDONLY, 0644);
 #endif
-	fBufferLen = 1*B_PAGE_SIZE;
+	// Renga: 16 isochronous packets of up to 1024 bytes and more (was one
+	// page, four packets)
+	fBufferLen = 16 * B_PAGE_SIZE;
 	fBuffer = (uint8 *)malloc(fBufferLen);
 }
 
@@ -566,10 +568,18 @@ CamDevice::DataPumpThread()
 	else if (SupportsIsochronous()) {
 		int numPacketDescriptors = 16;
 		usb_iso_packet_descriptor packetDescriptors[numPacketDescriptors];
-		
-		// Initialize packetDescriptor request lengths
-		for (int i = 0; i<numPacketDescriptors; i++)
-			packetDescriptors[i].request_length = 256;	
+
+		// Renga: every packet may be as large as the endpoint's packets
+		// (it was 256 bytes, too small for most cameras), within the
+		// buffer.
+		int packetSize = fIsoIn != NULL ? (fIsoIn->MaxPacketSize() & 0x7ff)
+			: 256;
+		if (packetSize <= 0)
+			packetSize = 256;
+		if (packetSize * numPacketDescriptors > (int)fBufferLen)
+			numPacketDescriptors = fBufferLen / packetSize;
+		for (int i = 0; i < numPacketDescriptors; i++)
+			packetDescriptors[i].request_length = packetSize;
 
 		while (fTransferEnabled) {
 			ssize_t len = -1;
@@ -579,7 +589,8 @@ CamDevice::DataPumpThread()
 			if (!fIsoIn)
 				break;
 #ifndef DEBUG_DISCARD_INPUT
-			len = fIsoIn->IsochronousTransfer(fBuffer, fBufferLen, packetDescriptors,
+			len = fIsoIn->IsochronousTransfer(fBuffer,
+				packetSize * numPacketDescriptors, packetDescriptors,
 				numPacketDescriptors);
 #endif
 
@@ -607,7 +618,10 @@ CamDevice::DataPumpThread()
 						fDataInput->Write(&fBuffer[fBufferIndex],
 							actual_length);
 					}
-					fBufferIndex += actual_length;
+					// Renga: each packet's data lies at its request
+					// offset (as the host controllers put it), not after
+					// the previous packet's actual data.
+					fBufferIndex += packetDescriptors[i].request_length;
 				}				
 			}
 #endif

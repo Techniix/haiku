@@ -15,7 +15,9 @@
 #include <CheckBox.h>
 #include <Locale.h>
 #include <Menu.h>
+#include <MediaAddOn.h>
 #include <MenuField.h>
+#include <String.h>
 #include <StringView.h>
 #include <TextControl.h>
 #include <Window.h>
@@ -48,7 +50,10 @@ enum {
 	msg_setup		= 'setp',
 	msg_video		= 'vdeo',
 
-	msg_control_win = 'ctlw'
+	msg_control_win = 'ctlw',
+
+	// Renga: the Camera menu
+	msg_camera		= 'camr'
 };
 
 
@@ -98,12 +103,14 @@ public:
 	virtual					~CodyCam();
 
 			void			ReadyToRun();
+	virtual	void			ArgvReceived(int32 argc, char** argv);
 	virtual	bool			QuitRequested();
 	virtual	void			MessageReceived(BMessage* message);
 
 private:
 			status_t		_SetUpNodes();
 			void			_TearDownNodes();
+			status_t		_FindProducer();
 
 			BMediaRoster*	fMediaRoster;
 			media_node		fTimeSourceNode;
@@ -114,6 +121,12 @@ private:
 			VideoWindow*	fWindow;
 			port_id			fPort;
 			ControlWindow*	fVideoControlWindow;
+
+			// Renga: the camera chosen in the Camera menu or with
+			// --camera <name>; none means the default video input.
+			dormant_node_info fCamera;
+			bool			fHaveCamera;
+			BString			fRequestedCamera;
 };
 
 
@@ -132,6 +145,9 @@ public:
 			BView*			VideoView();
 			BStringView*	StatusLine();
 			void			ToggleMenuOnOff();
+			void			SetMenusEnabled(bool enabled);
+			void			SetCamera(const char* name);
+			void			ClearError();
 
 			void			ErrorAlert(const char*, status_t);
 
@@ -172,6 +188,8 @@ private:
 			Settings*		fSettings;
 
 			BMenu* 			fMenu;
+			BMenu*			fCameraMenu;
+			BString			fCameraName;
 
 			StringValueSetting*		fServerSetting;
 			StringValueSetting*		fLoginSetting;

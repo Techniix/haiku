@@ -422,7 +422,7 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   `screen-media_preferences.png`, `screen-media_preferences_advanced.png`
   and `screen-soundrecorder_application.png`. `media_ui.screenshots` (host)
   checks that all four were saved and are not blank.
-- **media_usb** (renga-* images, last of the Media Kit tests): plugs QEMU's
+- **media_usb** (renga-* images, last of the audio Media Kit tests): plugs QEMU's
   `usb-audio` in with the media services running. The device must be
   listed and get a node within seconds (no restart). One application is
   routed to it by name, another plays on the default output; then the
@@ -434,12 +434,29 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   rate) and the Media preferences after the unplug. The harness finds the
   phases (`media_usb_audio.*`) in the last two `usb-<n>.wav` files and
   `audio.wav`, and checks the two screenshots (`media_usb.screenshots`).
+- **codycam** (`media_video_test`, renga-* images, after the audio
+  Media Kit tests): camera
+  selection and preview with the synthetic video source every image
+  carries (`video_producer_demo`, "Demo Video Producer"). The video
+  sources CodyCam's Camera menu lists (the dormant nodes producing raw
+  video), `CodyCam --camera "Demo Video Producer"` (window title, preview
+  node fed by that source), a camera switch through the menu's message
+  (the preview built again in the same window, the old node released),
+  quit. Screenshots `codycam_preview` and `codycam_switched`, checked by
+  the harness (`codycam.screenshots`).
 - **hda_eld**: the hda driver's ELD parser (HDMI/DisplayPort sinks:
   monitor name, connection type, LPCM channels, rates and sizes, other
   formats, speaker allocation, the output name and the multi_audio
   rates) with ELDs laid out after the HDA specification and CEA-861-D for
   an HDMI TV, a DisplayPort monitor and an AV receiver without a name,
   and five malformed ones it must refuse. QEMU emulates no HDMI codec.
+- **uvc**: the UVC payload code of the usb_webcam media add-on
+  (`addons/uvc/UVCPayload.cpp`) with replayed payloads: frames split into
+  1024-byte payloads with 12-byte headers, the FID toggling, EOF set or
+  not, header-only payloads, the ERR bit, a lost payload, invalid headers,
+  a stream joined mid-frame; the YUY2 to `B_RGB32` conversion (BT.601);
+  the default Huffman tables that MJPEG frames leave out. QEMU 8.2 emulates
+  no USB video device, so the driver's USB side needs a real camera.
 - **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
   blocks, 80 MiB with 4096-byte blocks, each with an MBR partition). Checks
   that both are published (`/dev/disk/nvme/<id>/raw` and

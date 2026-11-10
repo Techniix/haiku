@@ -151,6 +151,7 @@ MEDIA_USB_PHASES = [
 MEDIA_USB_FREQUENCIES = sorted({hz for phase in MEDIA_USB_PHASES
 	for hz in phase[2:4] if hz} | {1170, 1290, 3230})
 MEDIA_USB_SCREENSHOTS = ["media_usb_device", "media_usb_unplugged"]
+CODYCAM_SCREENSHOTS = ["codycam_preview", "codycam_switched"]
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
@@ -166,6 +167,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
 	"virtio_input", "<input>tablet", "<input>virtio",
 	"usb_audio", "usb", "<usb>xhci", "usb_audio_test", "hda", "hda_eld_test",
+	"usb_webcam.media_addon", "uvc_test", "CodyCam",
+	"video_producer_demo.media_addon", "media_video_test",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
 	"SoundRecorder", "media_addon_server"]
@@ -2485,6 +2488,9 @@ def main():
 			analyze_media_usb_audio(results_dir, report)
 			check_screenshots(results_dir, report, MEDIA_USB_SCREENSHOTS,
 				"media_usb.screenshots")
+		if "media_video_test" in (args.only or available):
+			check_screenshots(results_dir, report, CODYCAM_SCREENSHOTS,
+				"codycam.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

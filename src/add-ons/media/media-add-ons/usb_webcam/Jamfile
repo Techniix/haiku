@@ -28,7 +28,8 @@ addonSources =
 	QuickCamDevice.cpp
 	SonixCamDevice.cpp
 	NW80xCamDevice.cpp
-#	UVCCamDevice.cpp UVCDeframer.cpp
+	# Renga: the USB Video Class add-on, built again (F-31 phase 2)
+	UVCCamDevice.cpp UVCDeframer.cpp UVCPayload.cpp
 ;
 
 ## colorspace transforms sources
@@ -101,7 +102,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			CamRoster.cpp
 			CamSensor.cpp
 			CamStreamingDeframer.cpp
-			: be media $(usbKitLibraryName) [ TargetLibsupc++ ]
+			: be media translation $(usbKitLibraryName) [ TargetLibstdc++ ]
 		;
 	}
 }

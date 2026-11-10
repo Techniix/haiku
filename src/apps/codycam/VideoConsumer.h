@@ -44,6 +44,10 @@ public:
 									const uint32 internalId);
 								~VideoConsumer();
 
+			// Renga: leaves the window open when the node goes away
+			// (CodyCam switching cameras); the default closes it.
+			void				KeepWindow() { fCloseWindow = false; }
+
 /*	BMediaNode */
 public:
 	virtual	BMediaAddOn* 		AddOn(int32* cookie) const;
@@ -135,6 +139,7 @@ private:
 			bigtime_t			fMyLatency;
 
 			BWindow*			fWindow;
+			bool				fCloseWindow;
 			BView*				fView;
 			BBitmap*			fBitmap[3];
 			bool				fOurBuffers;

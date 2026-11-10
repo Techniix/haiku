@@ -1,0 +1,18 @@
+SubDir HAIKU_TOP 3rdparty ce tests uvc ;
+
+# The UVC webcam payload parser and colour conversion of the usb_webcam
+# media add-on, with replayed payloads; QEMU emulates no USB video device.
+local uvcDir = [ FDirName $(HAIKU_TOP) src add-ons media media-add-ons
+	usb_webcam addons uvc ] ;
+SubDirHdrs $(uvcDir) ;
+SEARCH_SOURCE += $(uvcDir) ;
+
+Application uvc_test :
+	uvc_test.cpp
+	UVCPayload.cpp
+	: [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : uvc_test ;
+}

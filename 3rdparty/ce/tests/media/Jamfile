@@ -21,7 +21,14 @@ Application media_usb_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# Camera selection and preview: CodyCam's Camera menu with the synthetic
+# video source (video_producer_demo).
+Application media_video_test :
+	media_video_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
-		: media_test media_ui_test media_usb_test ;
+		: media_test media_ui_test media_usb_test media_video_test ;
 }

@@ -8,6 +8,13 @@
 
 #include "UVCCamDevice.h"
 #include "UVCDeframer.h"
+#include "UVCPayload.h"
+
+#include <Bitmap.h>
+#include <DataIO.h>
+#include <TranslationUtils.h>
+
+#include <vector>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,7 +77,11 @@ UVCCamDevice::UVCCamDevice(CamDeviceAddon& _addon, BUSBDevice* _device)
 	fHeaderDescriptor(NULL),
 	fInterruptIn(NULL),
 	fUncompressedFormatIndex(1),
-	fUncompressedFrameIndex(1)
+	fUncompressedFrameIndex(1),
+	fMJPEGFormatIndex(0),
+	fMJPEGFrameIndex(0),
+	fUseMJPEG(false),
+	fUncompressedIsYUY2(false)
 {
 	fDeframer = new UVCDeframer(this);
 	SetDataInput(fDeframer);
@@ -191,6 +202,9 @@ UVCCamDevice::_ParseVideoStreaming(const usbvc_class_descriptor* _descriptor,
 			const usbvc_format_descriptor* descriptor
 				= (const usbvc_format_descriptor*)_descriptor;
 			fUncompressedFormatIndex = descriptor->formatIndex;
+			// Renga: only YUY2 is converted (NV12 and others are not yet)
+			fUncompressedIsYUY2 = memcmp(descriptor->uncompressed.format,
+				kYUY2Guid, sizeof(usbvc_guid)) == 0;
 			printf("VS_FORMAT_UNCOMPRESSED:\tbFormatIdx=%d,#frmdesc=%d,guid=",
 				descriptor->formatIndex, descriptor->numFrameDescriptors);
 			print_guid(descriptor->uncompressed.format);
@@ -566,47 +580,57 @@ UVCCamDevice::StopTransfer()
 status_t
 UVCCamDevice::SuggestVideoFrame(uint32& width, uint32& height)
 {
-	printf("UVCCamDevice::SuggestVideoFrame(%" B_PRIu32 ", %" B_PRIu32 ")\n", width, height);
-	// As in AcceptVideoFrame(), the suggestion should probably just be the
-	// first advertised uncompressed format, but current applications prefer
-	// 320x240, so this is tried first here as a suggestion.
+	// Applications prefer 320x240, so that is tried first; otherwise the
+	// first frame size the camera lists.
 	width = 320;
 	height = 240;
-	if (!AcceptVideoFrame(width, height)) {
+	if (AcceptVideoFrame(width, height) != B_OK) {
+		BList& frames = fUncompressedIsYUY2 && !fUncompressedFrames.IsEmpty()
+			? fUncompressedFrames : fMJPEGFrames;
 		const usb_video_frame_descriptor* descriptor
-			= (const usb_video_frame_descriptor*)fUncompressedFrames.FirstItem();
-		width  = (*descriptor).width;
-		height = (*descriptor).height;
+			= (const usb_video_frame_descriptor*)frames.FirstItem();
+		if (descriptor == NULL)
+			return B_ERROR;
+		width = descriptor->width;
+		height = descriptor->height;
 	}
 	return B_OK;
 }
 
 
+/*!	Renga: chooses YUY2 when the camera has the size uncompressed and MJPEG
+	otherwise (most cameras offer large sizes only as MJPEG, for the bus
+	bandwidth), and tells the deframer the frame size to expect. The frame
+	index sent in the probe is the descriptor's bFrameIndex (1-based); the
+	list position was sent before, which chose the wrong size or none.
+*/
 status_t
 UVCCamDevice::AcceptVideoFrame(uint32& width, uint32& height)
 {
-	printf("UVCCamDevice::AcceptVideoFrame(%" B_PRIu32 ", %" B_PRIu32 ")\n", width, height);
 	if (width <= 0 || height <= 0) {
-		// Uncomment below when applications support dimensions other than 320x240
-		// This code selects the first listed available uncompressed frame format
-		/*
-		const usbvc_frame_descriptor* descriptor
-			= (const usbvc_frame_descriptor*)fUncompressedFrames.FirstItem();
-		width = (*descriptor).width;
-		height = (*descriptor).height;
-		SetVideoFrame(BRect(0, 0, width - 1, height - 1));
-		return B_OK;
-		*/
-
-		width  = 320;
+		width = 320;
 		height = 240;
 	}
 
-	for (int i = 0; i<fUncompressedFrames.CountItems(); i++) {
+	for (int i = 0; fUncompressedIsYUY2
+			&& i < fUncompressedFrames.CountItems(); i++) {
 		const usb_video_frame_descriptor* descriptor
 			= (const usb_video_frame_descriptor*)fUncompressedFrames.ItemAt(i);
-		if ((*descriptor).width == width && (*descriptor).height == height) {
-			fUncompressedFrameIndex = i;
+		if (descriptor->width == width && descriptor->height == height) {
+			fUncompressedFrameIndex = descriptor->frame_index;
+			fUseMJPEG = false;
+			((UVCDeframer*)fDeframer)->SetFrameSize((size_t)width * height * 2);
+			SetVideoFrame(BRect(0, 0, width - 1, height - 1));
+			return B_OK;
+		}
+	}
+	for (int i = 0; i < fMJPEGFrames.CountItems(); i++) {
+		const usb_video_frame_descriptor* descriptor
+			= (const usb_video_frame_descriptor*)fMJPEGFrames.ItemAt(i);
+		if (descriptor->width == width && descriptor->height == height) {
+			fMJPEGFrameIndex = descriptor->frame_index;
+			fUseMJPEG = true;
+			((UVCDeframer*)fDeframer)->SetFrameSize(0);
 			SetVideoFrame(BRect(0, 0, width - 1, height - 1));
 			return B_OK;
 		}
@@ -637,8 +661,10 @@ UVCCamDevice::_ProbeCommitFormat()
 	memset(&request, 0, sizeof(request));
 	request._hint.frame_interval = 1;
 	request.frame_interval = 333333;
-	request.format_index = fUncompressedFormatIndex;
-	request.frame_index = fUncompressedFrameIndex;
+	request.format_index = fUseMJPEG ? fMJPEGFormatIndex
+		: fUncompressedFormatIndex;
+	request.frame_index = fUseMJPEG ? fMJPEGFrameIndex
+		: fUncompressedFrameIndex;
 	size_t length = fHeaderDescriptor->version > 0x100 ? 34 : 26;
 	size_t actualLength = fDevice->ControlTransfer(
 		USB_REQTYPE_CLASS | USB_REQTYPE_INTERFACE_OUT, USB_VIDEO_RC_SET_CUR,
@@ -1262,15 +1288,55 @@ UVCCamDevice::FillFrameBuffer(BBuffer* buffer, bigtime_t* stamp)
 	long int w = (long)(VideoFrame().right - VideoFrame().left + 1);
 	long int h = (long)(VideoFrame().bottom - VideoFrame().top + 1);
 
+	// Renga: the frames are YUY2 or MJPEG (the Bayer decoder that was
+	// here is for the Sonix cameras' raw sensor data, not UVC). The
+	// producer outputs B_RGB32.
 	if (buffer->SizeAvailable() >= (size_t)w * h * 4) {
-		// TODO: The Video Producer only outputs B_RGB32.  This is OK for most
-		// applications.  This could be leveraged if applications can
-		// consume B_YUV422.
-		_DecodeColor((unsigned char*)buffer->Data(),
-			(unsigned char*)f->Buffer(), w, h);
+		if (fUseMJPEG) {
+			err = _DecodeMJPEG((const uint8*)f->Buffer(), f->BufferLength(),
+				(uint8*)buffer->Data(), w, h);
+		} else if (f->BufferLength() == (size_t)w * h * 2) {
+			uvc_yuy2_to_rgb32((const uint8*)f->Buffer(),
+				(uint8*)buffer->Data(), w, h, w * 4);
+		} else
+			err = B_BAD_DATA;
 	}
 	delete f;
-	return B_OK;
+	return err;
+}
+
+
+//!	One MJPEG frame to B_RGB32, through the JPEG translator.
+status_t
+UVCCamDevice::_DecodeMJPEG(const uint8* frame, size_t size,
+	uint8* destination, uint32 width, uint32 height)
+{
+	std::vector<uint8> jpeg;
+	if (!uvc_mjpeg_add_huffman_tables(frame, size, jpeg))
+		return B_BAD_DATA;
+	BMemoryIO input(jpeg.data(), jpeg.size());
+	BBitmap* bitmap = BTranslationUtils::GetBitmap(&input);
+	if (bitmap == NULL)
+		return B_BAD_DATA;
+	status_t status = B_BAD_DATA;
+	BRect bounds = bitmap->Bounds();
+	if (bounds.IntegerWidth() + 1 == (int32)width
+		&& bounds.IntegerHeight() + 1 == (int32)height) {
+		BBitmap converted(bounds, B_RGB32);
+		if (bitmap->ColorSpace() == B_RGB32
+			|| converted.ImportBits(bitmap) == B_OK) {
+			BBitmap* source = bitmap->ColorSpace() == B_RGB32 ? bitmap
+				: &converted;
+			for (uint32 y = 0; y < height; y++) {
+				memcpy(destination + (size_t)y * width * 4,
+					(const uint8*)source->Bits() + y * source->BytesPerRow(),
+					width * 4);
+			}
+			status = B_OK;
+		}
+	}
+	delete bitmap;
+	return status;
 }
 
 

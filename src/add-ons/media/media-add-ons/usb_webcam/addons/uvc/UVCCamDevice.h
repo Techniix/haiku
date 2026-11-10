@@ -46,6 +46,9 @@ private:
 			status_t			_ProbeCommitFormat();
 			status_t			_SelectBestAlternate();
 			status_t			_SelectIdleAlternate();
+			status_t			_DecodeMJPEG(const uint8* frame, size_t size,
+									uint8* destination, uint32 width,
+									uint32 height);
 			void 				_DecodeColor(unsigned char *dst,
 									unsigned char *src, int32 width,
 									int32 height);
@@ -75,6 +78,10 @@ private:
 			uint32				fUncompressedFrameIndex;
 			uint32				fMJPEGFormatIndex;
 			uint32				fMJPEGFrameIndex;
+			// Renga: the format in use; MJPEG when the size is not
+			// offered uncompressed (YUY2), or the camera has no YUY2
+			bool				fUseMJPEG;
+			bool				fUncompressedIsYUY2;
 			uint32				fMaxVideoFrameSize;
 			uint32				fMaxPayloadTransferSize;
 

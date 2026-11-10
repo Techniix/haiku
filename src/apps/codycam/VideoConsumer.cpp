@@ -62,6 +62,7 @@ VideoConsumer::VideoConsumer(const char* name, BView* view,
 	fConnectionActive(false),
 	fMyLatency(20000),
 	fWindow(NULL),
+	fCloseWindow(true),
 	fView(view),
 	fOurBuffers(false),
 	fBuffers(NULL),
@@ -100,7 +101,7 @@ VideoConsumer::~VideoConsumer()
 
 	Quit();
 
-	if (fWindow) {
+	if (fWindow && fCloseWindow) {
 		puts(B_TRANSLATE("Locking the window"));
 		if (fWindow->Lock()) {
 			puts(B_TRANSLATE("Closing the window"));

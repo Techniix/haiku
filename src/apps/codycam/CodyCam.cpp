@@ -70,6 +70,55 @@ UploadClientAt(int32 i)
 }
 
 
+/*!	Renga: the Camera menu. Lists every dormant node that produces raw
+	video (the usb_webcam cameras, video_producer_demo, other video add-ons)
+	each time it opens, so a camera plugged in later shows up without a
+	restart; choosing one switches the preview to it.
+*/
+class CameraMenu : public BMenu {
+public:
+	CameraMenu(const char* label, const BString* current)
+		:
+		BMenu(label),
+		fCurrent(current)
+	{
+	}
+
+	virtual void AttachedToWindow()
+	{
+		RemoveItems(0, CountItems(), true);
+		media_format format;
+		format.type = B_MEDIA_RAW_VIDEO;
+		format.u.raw_video = media_raw_video_format::wildcard;
+		dormant_node_info infos[64];
+		int32 count = 64;
+		BMediaRoster* roster = BMediaRoster::Roster();
+		if (roster == NULL || roster->GetDormantNodes(infos, &count, NULL,
+				&format, NULL, B_BUFFER_PRODUCER) != B_OK) {
+			count = 0;
+		}
+		for (int32 i = 0; i < count; i++) {
+			BMessage* message = new BMessage(msg_camera);
+			message->AddData("camera", B_RAW_TYPE, &infos[i],
+				sizeof(dormant_node_info));
+			BMenuItem* item = new BMenuItem(infos[i].name, message);
+			item->SetTarget(be_app);
+			item->SetMarked(*fCurrent == infos[i].name);
+			AddItem(item);
+		}
+		if (count == 0) {
+			BMenuItem* item = new BMenuItem(B_TRANSLATE("No cameras"), NULL);
+			item->SetEnabled(false);
+			AddItem(item);
+		}
+		BMenu::AttachedToWindow();
+	}
+
+private:
+	const BString*	fCurrent;
+};
+
+
 }; // end anonymous namespace
 
 
@@ -84,7 +133,8 @@ CodyCam::CodyCam()
 	fVideoConsumer(NULL),
 	fWindow(NULL),
 	fPort(0),
-	fVideoControlWindow(NULL)
+	fVideoControlWindow(NULL),
+	fHaveCamera(false)
 {
 	int32 index = 0;
 	kCaptureRates[index++].name = B_TRANSLATE("Every 15 seconds");
@@ -137,10 +187,27 @@ CodyCam::ReadyToRun()
 		B_NOT_ZOOMABLE | B_NOT_V_RESIZABLE
 		| B_AUTO_UPDATE_SIZE_LIMITS, &fPort);
 
-	if (_SetUpNodes() != B_OK)
-		fWindow->ToggleMenuOnOff();
+	status_t status = _SetUpNodes();
+	fWindow->SetMenusEnabled(status == B_OK);
+	if (status == B_OK) {
+		// Renga: the (empty) error view took room below the preview
+		fWindow->ClearError();
+	}
 
 	((VideoWindow*)fWindow)->ApplyControls();
+}
+
+
+/*!	Renga: "CodyCam --camera <name>" previews the named video source (as
+	the Camera menu lists it) instead of the default video input.
+*/
+void
+CodyCam::ArgvReceived(int32 argc, char** argv)
+{
+	for (int32 i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--camera") == 0 && i + 1 < argc)
+			fRequestedCamera = argv[++i];
+	}
 }
 
 
@@ -202,6 +269,29 @@ CodyCam::MessageReceived(BMessage* message)
 			fVideoControlWindow = NULL;
 			break;
 
+		case msg_camera:
+		{
+			// Renga: switch the preview to another camera
+			const void* data;
+			ssize_t size;
+			if (message->FindData("camera", B_RAW_TYPE, &data, &size) != B_OK
+				|| size != sizeof(dormant_node_info)) {
+				break;
+			}
+			if (fVideoControlWindow != NULL) {
+				fVideoControlWindow->Lock();
+				fVideoControlWindow->Quit();
+				fVideoControlWindow = NULL;
+			}
+			_TearDownNodes();
+			fCamera = *(const dormant_node_info*)data;
+			fHaveCamera = true;
+			fWindow->ClearError();
+			fWindow->SetMenusEnabled(_SetUpNodes() == B_OK);
+			((VideoWindow*)fWindow)->ApplyControls();
+			break;
+		}
+
 		default:
 			BApplication::MessageReceived(message);
 			break;
@@ -231,7 +321,7 @@ CodyCam::_SetUpNodes()
 
 	/* find a video producer node */
 	INFO("CodyCam acquiring VideoInput node\n");
-	status = fMediaRoster->GetVideoInput(&fProducerNode);
+	status = _FindProducer();
 	if (status != B_OK) {
 		BString text(B_TRANSLATE("Cannot find a video source.\n"
 			"You need a webcam to use %appname%."));
@@ -376,6 +466,50 @@ CodyCam::_SetUpNodes()
 }
 
 
+/*!	Renga: the camera chosen in the Camera menu, the one named with
+	--camera, or the default video input; names the window after it.
+*/
+status_t
+CodyCam::_FindProducer()
+{
+	status_t status;
+	if (!fHaveCamera && fRequestedCamera.Length() > 0) {
+		media_format format;
+		format.type = B_MEDIA_RAW_VIDEO;
+		format.u.raw_video = media_raw_video_format::wildcard;
+		dormant_node_info infos[64];
+		int32 count = 64;
+		if (fMediaRoster->GetDormantNodes(infos, &count, NULL, &format, NULL,
+				B_BUFFER_PRODUCER) == B_OK) {
+			for (int32 i = 0; i < count; i++) {
+				if (fRequestedCamera == infos[i].name) {
+					fCamera = infos[i];
+					fHaveCamera = true;
+					break;
+				}
+			}
+		}
+		if (!fHaveCamera)
+			printf("CodyCam: no video source named \"%s\"\n",
+				fRequestedCamera.String());
+	}
+
+	if (fHaveCamera)
+		status = fMediaRoster->InstantiateDormantNode(fCamera, &fProducerNode);
+	else
+		status = fMediaRoster->GetVideoInput(&fProducerNode);
+	if (status != B_OK)
+		return status;
+
+	live_node_info info;
+	if (fMediaRoster->GetLiveNodeInfo(fProducerNode, &info) == B_OK)
+		fWindow->SetCamera(info.name);
+	else if (fHaveCamera)
+		fWindow->SetCamera(fCamera.name);
+	return B_OK;
+}
+
+
 void
 CodyCam::_TearDownNodes()
 {
@@ -398,6 +532,9 @@ CodyCam::_TearDownNodes()
 			fMediaRoster->ReleaseNode(fProducerNode);
 			fProducerNode = media_node::null;
 		}
+		// Renga: the window stays (switching cameras); it quits with the
+		// application
+		fVideoConsumer->KeepWindow();
 		fMediaRoster->ReleaseNode(fVideoConsumer->Node());
 		fVideoConsumer = NULL;
 	}
@@ -458,6 +595,10 @@ VideoWindow::VideoWindow(const char* title, window_type type,
 	fMenu->AddItem(menuItem);
 
 	menuBar->AddItem(fMenu);
+
+	// Renga: choose the camera
+	fCameraMenu = new CameraMenu(B_TRANSLATE("Camera"), &fCameraName);
+	menuBar->AddItem(fCameraMenu);
 
 	/* add some controls */
 	_BuildCaptureControls();
@@ -775,8 +916,12 @@ VideoWindow::ErrorAlert(const char* message, status_t err)
 	fErrorView->SetAlignment(B_ALIGN_CENTER);
 	fErrorView->SetExplicitMinSize(BSize(VIDEO_SIZE_X, VIDEO_SIZE_Y));
 	fErrorView->SetExplicitMaxSize(BSize(VIDEO_SIZE_X, VIDEO_SIZE_Y));
-	fErrorView->Show();
-	fVideoView->Hide();
+	// Renga: counted Show()/Hide(), so only once (a camera switch can fail
+	// again)
+	if (fErrorView->IsHidden())
+		fErrorView->Show();
+	if (!fVideoView->IsHidden())
+		fVideoView->Hide();
 	Unlock();
 
 	printf("%s\n%s [%" B_PRIx32 "]", message, strerror(err), err);
@@ -860,6 +1005,47 @@ VideoWindow::_QuitSettings()
 
 	fSettings->SaveSettings();
 	delete fSettings;
+}
+
+
+void
+VideoWindow::SetMenusEnabled(bool enabled)
+{
+	if (!Lock())
+		return;
+	fMenu->FindItem(msg_video)->SetEnabled(enabled);
+	fMenu->FindItem(msg_start)->SetEnabled(enabled);
+	fMenu->FindItem(msg_stop)->SetEnabled(enabled);
+	Unlock();
+}
+
+
+/*!	Renga: the window title names the camera ("CodyCam: <name>"), and the
+	Camera menu marks it.
+*/
+void
+VideoWindow::SetCamera(const char* name)
+{
+	if (!Lock())
+		return;
+	fCameraName = name;
+	BString title(B_TRANSLATE_SYSTEM_NAME("CodyCam"));
+	title << ": " << name;
+	SetTitle(title.String());
+	Unlock();
+}
+
+
+void
+VideoWindow::ClearError()
+{
+	if (!Lock())
+		return;
+	if (!fErrorView->IsHidden())
+		fErrorView->Hide();
+	if (fVideoView->IsHidden())
+		fVideoView->Show();
+	Unlock();
 }
 
 
