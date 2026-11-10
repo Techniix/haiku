@@ -6,6 +6,8 @@
  */
 
 #include "RecorderApp.h"
+
+#include <string.h>
 #include "RecorderWindow.h"
 
 
@@ -31,10 +33,21 @@ RecorderApp::InitCheck()
 
 
 int
-main()
+main(int argc, char** argv)
 {
 	RecorderApp app("application/x-vnd.Haiku-SoundRecorder");
-	if (app.InitCheck() == B_OK)
-		app.Run();
+	if (app.InitCheck() != B_OK)
+		return 0;
+
+	// Renga: "--input <label>" selects that input (e.g. "What you hear:
+	// MediaPlayer") at start, for automation and support instructions.
+	for (int i = 1; i + 1 < argc; i++) {
+		if (strcmp(argv[i], "--input") == 0) {
+			BMessage select(RecorderWindow::SELECT_INPUT);
+			select.AddString("label", argv[i + 1]);
+			app.Window()->PostMessage(&select);
+		}
+	}
+	app.Run();
 	return 0;
 }

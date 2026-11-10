@@ -68,7 +68,8 @@ public:
 			RECORD_PERIOD,
 			PLAY_PERIOD,
 			UPDATE_TRACKSLIDER,
-			POSITION_CHANGED
+			POSITION_CHANGED,
+			SELECT_INPUT
 		};
 
 		void AddSoundItem(const BEntry& entry, bool temp = false);
@@ -147,6 +148,7 @@ private:
 		void Save(BMessage * message);
 		void DoSave(BMessage * message);
 		void Input(BMessage * message);
+		void SelectInput(const char* label);
 		void Length(BMessage * message);
 		void Selected(BMessage * message);
 

@@ -119,7 +119,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
 	"virtio_input", "<input>tablet", "<input>virtio",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
-	"media_test"]
+	"media_test", "media_ui_test", "Media", "desklink", "SoundRecorder"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -1957,6 +1957,40 @@ def analyze_media_audio(results_dir, report):
 			bound)})
 
 
+# Screenshots media_ui_test asks for (CE-HOST screenshot): the
+# per-application audio controls (F-31/F-32).
+MEDIA_UI_SCREENSHOTS = ["volume_popup", "media_preferences",
+	"media_preferences_advanced", "soundrecorder_application"]
+
+
+def check_screenshots(results_dir, report, names, check):
+	"""Every screenshot was saved and shows something: not one flat
+	colour (a screen that never came up, or a failed screendump)."""
+	missing = []
+	flat = []
+	for name in names:
+		path = os.path.join(results_dir, "screen-%s.png" % name)
+		if not os.path.exists(path):
+			path = path[:-4] + ".ppm"
+		if not os.path.exists(path):
+			missing.append(name)
+			continue
+		try:
+			from PIL import Image
+			colours = Image.open(path).convert("RGB").getcolors(16)
+			if colours is not None and len(colours) < 4:
+				flat.append(name)
+		except ImportError:
+			pass
+		except OSError:
+			flat.append(name)
+	report.setdefault("host_checks", []).append({"name": check,
+		"pass": not missing and not flat,
+		"detail": "%d of %d saved%s%s" % (len(names) - len(missing),
+			len(names), "; missing: " + ", ".join(missing) if missing else "",
+			"; blank: " + ", ".join(flat) if flat else "")})
+
+
 # #pragma mark - report
 
 
@@ -2242,6 +2276,9 @@ def main():
 			analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 		if "media_test" in (args.only or available):
 			analyze_media_audio(results_dir, report)
+		if "media_ui_test" in (args.only or available):
+			check_screenshots(results_dir, report, MEDIA_UI_SCREENSHOTS,
+				"media_ui.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

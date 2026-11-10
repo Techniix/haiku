@@ -46,6 +46,11 @@
 #include "RecorderWindow.h"
 #include "FileUtils.h"
 
+#include <AudioStreamControl.h>
+
+
+
+
 #if ! NDEBUG
 #define FPRINTF(args) fprintf args
 #else
@@ -58,6 +63,77 @@
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "RecorderWindow"
+
+
+/*!	The input menu. Renga: each time it opens it lists, below the loopback
+	("What you hear"), every application that plays now, so that one of
+	them can be recorded alone (F-31).
+*/
+class InputMenu : public BPopUpMenu {
+public:
+	InputMenu(const char* name, BMessenger target)
+		:
+		BPopUpMenu(name),
+		fTarget(target)
+	{
+	}
+
+	virtual void AttachedToWindow()
+	{
+		UpdateApplications();
+		BPopUpMenu::AttachedToWindow();
+	}
+
+	void UpdateApplications()
+	{
+		// Take out the application items of last time, keep the marked one
+		// if its application is still there.
+		BString marked;
+		for (int32 i = CountItems() - 1; i >= 0; i--) {
+			BMenuItem* item = ItemAt(i);
+			if (item->Message() == NULL
+				|| !item->Message()->HasString("signature")) {
+				continue;
+			}
+			if (item->IsMarked())
+				marked = item->Message()->GetString("signature", "");
+			delete RemoveItem(i);
+		}
+
+		dormant_node_info loopback;
+		if (BPrivate::AudioStreamControl::FindLoopbackFlavor(&loopback)
+				!= B_OK) {
+			return;
+		}
+		BPrivate::AudioStreamControl control;
+		if (control.Update() != B_OK)
+			return;
+
+		BStringList signatures;
+		for (int32 i = 0; i < control.CountStreams(); i++) {
+			const BPrivate::AudioStream* stream = control.StreamAt(i);
+			if (stream->signature.Length() == 0
+				|| signatures.HasString(stream->signature)) {
+				continue;
+			}
+			signatures.Add(stream->signature);
+			BString label(B_TRANSLATE("What you hear: %application%"));
+			label.ReplaceFirst("%application%", stream->name);
+			BMessage* message = new BMessage(RecorderWindow::INPUT_SELECTED);
+			message->AddData("node", B_RAW_TYPE, &loopback,
+				sizeof(loopback));
+			message->AddString("signature", stream->signature);
+			BMenuItem* item = new BMenuItem(label.String(), message);
+			item->SetTarget(fTarget);
+			AddItem(item);
+			if (marked == stream->signature)
+				item->SetMarked(true);
+		}
+	}
+
+private:
+	BMessenger fTarget;
+};
 
 
 // default window positioning
@@ -456,7 +532,7 @@ RecorderWindow::InitWindow()
 
 		//	Input selection lists all available physical inputs that produce
 		//	buffers with B_MEDIA_RAW_AUDIO format data.
-		popup = new BPopUpMenu(B_TRANSLATE("Input"));
+		popup = new InputMenu(B_TRANSLATE("Input"), BMessenger(this));
 		const int maxInputCount = 64;
 		dormant_node_info dni[maxInputCount];
 
@@ -489,6 +565,8 @@ RecorderWindow::InitWindow()
 				}
 			}
 		}
+
+		((InputMenu*)popup)->UpdateApplications();
 
 		//	Create the actual widget
 		r = fFileInfoBox->Bounds();
@@ -549,6 +627,9 @@ RecorderWindow::MessageReceived(BMessage * message)
 	switch (message->what) {
 	case INPUT_SELECTED:
 		Input(message);
+		break;
+	case SELECT_INPUT:
+		SelectInput(message->GetString("label", ""));
 		break;
 	case SOUND_SELECTED:
 		Selected(message);
@@ -839,12 +920,51 @@ RecorderWindow::Input(BMessage * message)
 	if (message->FindData("node", B_RAW_TYPE, (const void **)&dni, &size))
 		return;		//	bad input selection message
 
+	// Renga: a loopback ("What you hear") records all applications or one;
+	// SoundRecorder gets an instance of its own, so that its choice does
+	// not change another recorder's.
+	dormant_node_info loopback;
+	if (BPrivate::AudioStreamControl::FindLoopbackFlavor(&loopback) == B_OK
+		&& loopback.addon == dni->addon
+		&& loopback.flavor_id == dni->flavor_id) {
+		media_node node;
+		if (BPrivate::AudioStreamControl::StartLoopback(
+				message->GetString("signature", NULL), &node) == B_OK) {
+			fAudioInputNode = node;
+		}
+		return;
+	}
+
 	media_node_id node_id;
 	status_t error = fRoster->GetInstancesFor(dni->addon, dni->flavor_id, &node_id);
 	if (error != B_OK)
 		fRoster->InstantiateDormantNode(*dni, &fAudioInputNode);
 	else
 		fRoster->GetNodeFor(node_id, &fAudioInputNode);
+}
+
+
+/*!	Renga: selects the input whose menu item is labeled \a label, as if the
+	user had chosen it, and shows the details ("SoundRecorder --input
+	<label>").
+*/
+void
+RecorderWindow::SelectInput(const char* label)
+{
+	if (fInputField == NULL)
+		return;
+	InputMenu* menu = dynamic_cast<InputMenu*>(fInputField->Menu());
+	if (menu != NULL)
+		menu->UpdateApplications();
+	BMenuItem* item = fInputField->Menu()->FindItem(label);
+	if (item == NULL)
+		return;
+	item->SetMarked(true);
+	Input(item->Message());
+	if (fUpDownButton->Value() != B_CONTROL_ON) {
+		fUpDownButton->SetValue(B_CONTROL_ON);
+		PostMessage(VIEW_LIST);
+	}
 }
 
 

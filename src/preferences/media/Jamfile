@@ -3,6 +3,7 @@ SubDir HAIKU_TOP src preferences media ;
 UsePrivateHeaders media midi shared ;
 
 Application Media :
+	ApplicationVolumesView.cpp
 	Media.cpp
 	MediaIcons.cpp
 	MediaListItem.cpp
@@ -15,7 +16,8 @@ Application Media :
 
 DoCatalogs Media
 	: x-vnd.Haiku-Media
-	: MediaViews.cpp
+	: ApplicationVolumesView.cpp
+	  MediaViews.cpp
 	  MediaWindow.cpp
 	  MidiSettingsView.cpp
 ;

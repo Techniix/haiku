@@ -991,8 +991,7 @@ main(int argc, char** argv)
 	if (sSecondDevice.Length() > 0)
 		test_streams(argv[0]);
 
-	status = shutdown_media_server(10000000);
-	info("media services stopped: %s", strerror(status));
+	// The media services keep running for the GUI test after this one.
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

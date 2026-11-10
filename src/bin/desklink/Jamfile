@@ -1,8 +1,12 @@
 SubDir HAIKU_TOP src bin desklink ;
 
-UsePrivateHeaders app interface locale shared ;
+UsePrivateHeaders app interface locale media shared ;
+
+# The per-application volume controls are shared with the Media preferences.
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src preferences media ] ;
 
 Application desklink :
+	ApplicationVolumesView.cpp
 	desklink.cpp
 	DeskButton.cpp
 	MediaReplicant.cpp
@@ -17,7 +21,9 @@ Application desklink :
 DoCatalogs desklink :
 	x-vnd.Haiku-desklink
 	:
+	ApplicationVolumesView.cpp
 	DeskButton.cpp
 	MediaReplicant.cpp
 	VolumeControl.cpp
+	VolumeWindow.cpp
 ;

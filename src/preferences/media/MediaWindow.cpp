@@ -528,8 +528,11 @@ MediaWindow::_InitMedia(bool first)
 			// this causes our listview to be updated as well
 	}
 
+	// Renga (F-32): open on the audio settings, with the everyday controls
+	// (default devices, each application's volume); the mixer's detailed
+	// page is one click away. Upstream opened on the mixer.
 	if (first)
-		fListView->Select(fListView->IndexOf(mixer));
+		fListView->Select(fListView->IndexOf(audio));
 	else if (isVideoSelected)
 		fListView->Select(fListView->IndexOf(video));
 	else

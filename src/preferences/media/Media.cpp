@@ -9,8 +9,10 @@
 
 
 #include "Media.h"
+#include "MediaViews.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include <Catalog.h>
 #include <Locale.h>
@@ -74,8 +76,15 @@ Media::InitCheck()
 
 
 int
-main(int, char**)
+main(int argc, char** argv)
 {
+	// Opens the audio settings with the advanced controls shown (for
+	// support instructions and the harness's screenshots).
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--advanced-audio") == 0)
+			gShowAdvancedAudio = true;
+	}
+
 	Media app;
 	if (app.InitCheck() == B_OK)
 		app.Run();

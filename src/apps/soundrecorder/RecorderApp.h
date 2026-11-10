@@ -16,7 +16,8 @@ class RecorderApp : public BApplication {
 	public:
 				RecorderApp(const char * signature);
 		virtual	~RecorderApp();
-				status_t InitCheck(); 
+				status_t InitCheck();
+		RecorderWindow* Window() const { return fRecorderWin; }
 	private:	
 		RecorderWindow* fRecorderWin;
 };

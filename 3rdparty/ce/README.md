@@ -386,6 +386,16 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   and mute (also that changing them does not click), routing, settings
   remembered by application and across a media service restart, and the
   default output switch.
+- **media_ui** (renga-* images): with two applications playing ("Music"
+  and "Browser", copies of media_test's player), one of them quieter and on
+  the second card, it opens the Deskbar volume popup (`desklink
+  --volume-control`), the Media preferences (`Media`, and `Media
+  --advanced-audio` with the output menus shown) and SoundRecorder recording
+  one application (`SoundRecorder --input "What you hear: Music"`), checks
+  each window is up and has the harness save `screen-volume_popup.png`,
+  `screen-media_preferences.png`, `screen-media_preferences_advanced.png`
+  and `screen-soundrecorder_application.png`. `media_ui.screenshots` (host)
+  checks that all four were saved and are not blank.
 - **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
   blocks, 80 MiB with 4096-byte blocks, each with an MBR partition). Checks
   that both are published (`/dev/disk/nvme/<id>/raw` and

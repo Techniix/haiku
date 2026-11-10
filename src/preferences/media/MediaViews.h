@@ -34,6 +34,15 @@ class MediaWindow;
 
 const uint32 ML_RESTART_MEDIA_SERVER = 'resr';
 const uint32 ML_DEFAULT_CHANNEL_CHANGED = 'chch';
+const uint32 ML_SHOW_AUDIO_ROUTING = 'shro';
+const uint32 ML_RECORDING_GAIN_CHANGED = 'rgch';
+
+// "Media --advanced-audio" opens the audio settings with the advanced
+// controls (where each application plays) shown.
+extern bool gShowAdvancedAudio;
+
+class ApplicationVolumesView;
+class BSlider;
 
 
 class NodeMenuItem : public BMenuItem
@@ -129,9 +138,13 @@ private:
 			void				_HideDeskbarVolumeControl();
 
 			ChannelMenuItem*	_ChannelMenuItemAt(int32 index);
+			void				_UpdateRecordingGain();
 
 			BMenu*				fChannelMenu;
 			BCheckBox* 			fVolumeCheckBox;
+			ApplicationVolumesView* fApplications;
+			BCheckBox*			fRoutingCheckBox;
+			BSlider*			fRecordingGain;
 };
 
 

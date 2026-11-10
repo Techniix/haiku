@@ -17,6 +17,8 @@
 #include "MixerControl.h"
 
 
+class ApplicationVolumesView;
+class BSeparatorView;
 class VolumeControl;
 
 class VolumeWindow : public BWindow {
@@ -28,9 +30,12 @@ public:
 
 protected:
 	virtual	void			MessageReceived(BMessage* message);
+	virtual	void			WindowActivated(bool active);
 
 private:
 			VolumeControl*	fVolumeSlider;
+			ApplicationVolumesView* fApplications;
+			BSeparatorView*	fSeparator;
 
 			int32			fUpdatedCount;
 };

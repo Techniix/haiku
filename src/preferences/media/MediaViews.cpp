@@ -22,7 +22,9 @@
 #include <MediaAddOn.h>
 #include <MediaRoster.h>
 #include <MenuField.h>
+#include <ParameterWeb.h>
 #include <PopUpMenu.h>
+#include <Slider.h>
 #include <String.h>
 #include <StringView.h>
 #include <TextView.h>
@@ -30,6 +32,7 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include "ApplicationVolumesView.h"
 #include "MediaWindow.h"
 
 
@@ -259,6 +262,37 @@ ChannelMenuItem::Invoke(BMessage* message)
 }
 
 
+bool gShowAdvancedAudio = false;
+
+// The multi_audio add-on's software recording gain (Renga, see PORTING.md).
+static const int32 kRecordingGainParameter = 0x52474e01;
+
+
+/*!	The recording gain parameter of the default audio input, or NULL. The
+	caller deletes \a _web.
+*/
+static BParameter*
+recording_gain_parameter(BParameterWeb** _web)
+{
+	*_web = NULL;
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_node input;
+	if (roster == NULL || roster->GetAudioInput(&input) != B_OK)
+		return NULL;
+	BParameterWeb* web = NULL;
+	status_t status = roster->GetParameterWebFor(input, &web);
+	roster->ReleaseNode(input);
+	if (status != B_OK)
+		return NULL;
+	*_web = web;
+	for (int32 i = 0; i < web->CountParameters(); i++) {
+		if (web->ParameterAt(i)->ID() == kRecordingGainParameter)
+			return web->ParameterAt(i);
+	}
+	return NULL;
+}
+
+
 AudioSettingsView::AudioSettingsView()
 {
 	BBox* defaultsBox = new BBox("defaults");
@@ -271,18 +305,51 @@ AudioSettingsView::AudioSettingsView()
 	BMenuField* outputMenuField = new BMenuField("outputMenuField",
 		B_TRANSLATE("Audio output:"), OutputMenu());
 
+	// Renga: the input's recording level, for cards without a gain control
+	// of their own (F-31; in real decibels).
+	fRecordingGain = new BSlider("recordingGain",
+		B_TRANSLATE("Recording gain:"),
+		new BMessage(ML_RECORDING_GAIN_CHANGED), -400, 200, B_HORIZONTAL);
+	fRecordingGain->SetLimitLabels(B_TRANSLATE("-40 dB"),
+		B_TRANSLATE("+20 dB"));
+	fRecordingGain->SetHashMarks(B_HASH_MARKS_BOTTOM);
+	fRecordingGain->SetHashMarkCount(7);
+	fRecordingGain->SetToolTip(B_TRANSLATE("How loud the audio input "
+		"records"));
+
 	BLayoutBuilder::Grid<>(defaultsGridView)
 		.SetInsets(B_USE_DEFAULT_SPACING, 0, B_USE_DEFAULT_SPACING,
 			B_USE_DEFAULT_SPACING)
 		.AddMenuField(inputMenuField, 0, 0, B_ALIGN_HORIZONTAL_UNSET, 1, 3, 1)
-		.AddMenuField(outputMenuField, 0, 1)
-		.AddMenuField(_MakeChannelMenu(), 2, 1);
+		.Add(fRecordingGain, 0, 1, 4, 1)
+		.AddMenuField(outputMenuField, 0, 2)
+		.AddMenuField(_MakeChannelMenu(), 2, 2);
 
 	defaultsBox->AddChild(defaultsGridView);
+
+	// Renga (F-31/F-32): every application that plays, with its volume and
+	// mute up front; where it plays only in the advanced view.
+	BBox* applicationsBox = new BBox("applications");
+	applicationsBox->SetLabel(B_TRANSLATE("Applications"));
+	fApplications = new ApplicationVolumesView("applicationVolumes",
+		gShowAdvancedAudio);
+	fRoutingCheckBox = new BCheckBox("routing",
+		B_TRANSLATE("Choose the output for each application (advanced)"),
+		new BMessage(ML_SHOW_AUDIO_ROUTING));
+	fRoutingCheckBox->SetValue(gShowAdvancedAudio ? B_CONTROL_ON
+		: B_CONTROL_OFF);
+	BGroupView* applicationsView = new BGroupView(B_VERTICAL);
+	BLayoutBuilder::Group<>(applicationsView)
+		.SetInsets(B_USE_DEFAULT_SPACING, 0, B_USE_DEFAULT_SPACING,
+			B_USE_DEFAULT_SPACING)
+		.Add(fApplications)
+		.Add(fRoutingCheckBox);
+	applicationsBox->AddChild(applicationsView);
 
 	BLayoutBuilder::Group<>(this)
 		.SetInsets(0, 0, 0, 0)
 		.Add(defaultsBox)
+		.Add(applicationsBox)
 		.AddGroup(B_HORIZONTAL)
 			.Add(_MakeVolumeCheckBox())
 			.AddGlue()
@@ -310,6 +377,25 @@ AudioSettingsView::AttachedToWindow()
 	BMessenger thisMessenger(this);
 	fChannelMenu->SetTargetForItems(thisMessenger);
 	fVolumeCheckBox->SetTarget(thisMessenger);
+	fRoutingCheckBox->SetTarget(thisMessenger);
+	fRecordingGain->SetTarget(thisMessenger);
+	_UpdateRecordingGain();
+}
+
+
+void
+AudioSettingsView::_UpdateRecordingGain()
+{
+	BParameterWeb* web;
+	BParameter* parameter = recording_gain_parameter(&web);
+	float gain = 0;
+	size_t size = sizeof(gain);
+	bigtime_t when;
+	bool available = parameter != NULL
+		&& parameter->GetValue(&gain, &size, &when) == B_OK;
+	delete web;
+	fRecordingGain->SetEnabled(available);
+	fRecordingGain->SetValue((int32)(gain * 10 + (gain < 0 ? -0.5 : 0.5)));
 }
 
 
@@ -340,6 +426,23 @@ AudioSettingsView::MessageReceived(BMessage* message)
 			break;
 		}
 
+		case ML_SHOW_AUDIO_ROUTING:
+			fApplications->SetShowOutputs(
+				fRoutingCheckBox->Value() == B_CONTROL_ON);
+			break;
+
+		case ML_RECORDING_GAIN_CHANGED:
+		{
+			BParameterWeb* web;
+			BParameter* parameter = recording_gain_parameter(&web);
+			if (parameter != NULL) {
+				float gain = fRecordingGain->Value() / 10.0f;
+				parameter->SetValue(&gain, sizeof(gain), system_time());
+			}
+			delete web;
+			break;
+		}
+
 		default:
 			SettingsView::MessageReceived(message);
 	}
@@ -352,6 +455,7 @@ AudioSettingsView::SetDefaultInput(const dormant_node_info* info)
 	SettingsView::SetDefaultInput(info);
 	_MediaWindow()->UpdateInputListItem(MediaListItem::AUDIO_TYPE, info);
 	BMediaRoster::Roster()->SetAudioInput(*info);
+	_UpdateRecordingGain();
 }
 
 

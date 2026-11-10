@@ -575,5 +575,30 @@ expect("media phases: missing phases fail",
 		and not missing["media_audio.route_second_card"]
 		and not missing["media_audio.route_click_free"], str(missing))
 
+
+# Screenshots of the audio controls: saved and not blank.
+try:
+	from PIL import Image
+	directory = tempfile.mkdtemp()
+	picture = Image.new("RGB", (64, 64), (40, 90, 150))
+	for x in range(8, 40):
+		for y in range(8, 30):
+			picture.putpixel((x, y), (200 + x % 3, 200, 200 - y % 5))
+	picture.save(os.path.join(directory, "screen-shown.png"))
+	Image.new("RGB", (64, 64), (0, 0, 0)).save(
+		os.path.join(directory, "screen-black.png"))
+
+	def screenshots(names):
+		report = {}
+		ce_test.check_screenshots(directory, report, names, "shots")
+		return report["host_checks"][0]["pass"]
+
+	expect("screenshots: a saved screen passes", screenshots(["shown"]))
+	expect("screenshots: a missing one fails", not screenshots(["shown",
+		"missing"]))
+	expect("screenshots: a blank one fails", not screenshots(["black"]))
+except ImportError:
+	print("skip screenshot checks (no Pillow)")
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)
