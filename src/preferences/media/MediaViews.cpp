@@ -263,6 +263,7 @@ ChannelMenuItem::Invoke(BMessage* message)
 
 
 bool gShowAdvancedAudio = false;
+const char* gInitialDevice = NULL;
 
 // The multi_audio add-on's software recording gain (Renga, see PORTING.md).
 static const int32 kRecordingGainParameter = 0x52474e01;

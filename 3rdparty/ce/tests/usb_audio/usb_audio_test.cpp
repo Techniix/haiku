@@ -151,14 +151,14 @@ struct Stream {
 
 
 static status_t
-get_buffers(Stream& stream)
+get_buffers(Stream& stream, uint32 frames = 0)
 {
 	for (int i = 0; i < MAX_TEST_BUFFERS; i++)
 		stream.buffers[i] = &stream.bufferList[i * MAX_TEST_CHANNELS];
 
 	memset(&stream.list, 0, sizeof(stream.list));
 	stream.list.info_size = sizeof(stream.list);
-	stream.list.request_playback_buffer_size = 0;
+	stream.list.request_playback_buffer_size = frames;	// 0: the default
 	stream.list.request_playback_buffers = MAX_TEST_BUFFERS;
 	stream.list.request_playback_channels = 2;
 	stream.list.playback_buffers = stream.buffers;
@@ -427,6 +427,14 @@ stopper_thread(void* data)
 static void
 concurrent_stop(Stream& stream)
 {
+	// Long buffers (170 ms), so that the main thread is almost certainly
+	// waiting in an exchange when the stop comes: between two exchanges
+	// the next one legitimately starts the stream again (as in vsnd_test).
+	status_t status = get_buffers(stream, 8192);
+	if (status != B_OK) {
+		report("concurrent_stop", false, "get_buffers: %s", strerror(status));
+		return;
+	}
 	StopperArgs args = { stream.fd, 300000, 0, B_ERROR };
 	thread_id thread = spawn_thread(stopper_thread, "usb audio stopper",
 		B_NORMAL_PRIORITY, &args);
@@ -628,6 +636,7 @@ main(int argc, char** argv)
 	Tone restart = { 750, 1050, 0, 0, 12000 };
 	report_play("restart", play(stream, restart, 1.5));
 	concurrent_stop(stream);
+	get_buffers(stream);
 
 	// Pull the device out while it plays: the waiting exchange has to fail
 	// promptly, not wait for its timeout or forever.

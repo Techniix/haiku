@@ -635,6 +635,40 @@ expect("usb audio: hot-plug requests are checked",
 		and not ce_test.host_request_allowed(["usb_audio"]))
 
 
+# media_usb_test's phases (MEDIA_USB_PHASES): usb-2.wav and usb-3.wav are
+# the last two usb-<n>.wav files, whatever ran before.
+def media_usb_recordings(fallback=True, second=True):
+	directory = tempfile.mkdtemp()
+	for n in (0, 1):
+		write_wav(os.path.join(directory, "usb-%d.wav" % n), silence(0.5))
+	write_wav(os.path.join(directory, "usb-2.wav"), silence(0.3)
+		+ usb_tone(1110, 0, 2.0, 0.9) + usb_tone(1230, 3170, 2.5, 0.9)
+		+ silence(0.2))
+	if second:
+		write_wav(os.path.join(directory, "usb-3.wav"), silence(0.3)
+			+ usb_tone(1410, 3350, 2.5, 0.9))
+	wav = silence(0.3) + usb_tone(0, 3110, 2.0, 0.9) + silence(1.0)
+	if fallback:
+		wav += usb_tone(1350, 3290, 2.5, 0.9)
+	write_wav(os.path.join(directory, "audio.wav"), wav + silence(0.3))
+	report = {}
+	ce_test.analyze_media_usb_audio(directory, report)
+	return {c["name"]: c for c in report["media_usb_audio"]["checks"]}
+
+
+checks = media_usb_recordings()
+expect("media usb: clean recordings pass",
+	all(c["pass"] for c in checks.values()),
+	str([c["detail"] for c in checks.values() if not c["pass"]]))
+checks = media_usb_recordings(fallback=False)
+expect("media usb: no fallback after the unplug fails",
+	not checks["media_usb_audio.unplugged_fallback"]["pass"],
+	checks["media_usb_audio.unplugged_fallback"]["detail"])
+checks = media_usb_recordings(second=False)
+expect("media usb: a missing second plug-in fails",
+	not all(c["pass"] for c in checks.values()), str(list(checks)))
+
+
 # Screenshots of the audio controls: saved and not blank.
 try:
 	from PIL import Image

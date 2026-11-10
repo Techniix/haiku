@@ -27,6 +27,7 @@
 
 
 class BCardLayout;
+class BMessageRunner;
 class BSeparatorView;
 class MidiSettingsView;
 
@@ -111,6 +112,7 @@ private:
 			status_t			fInitCheck;
 			thread_id			fRestartThread;
 			BAlert*				fRestartAlert;
+			BMessageRunner*		fDevicesRunner;
 };
 
 

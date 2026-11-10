@@ -34,6 +34,9 @@ public:
 
 			void			Removed();
 			bool			IsRemoved() { return fRemoved; };
+			// Unplugged while a client had it open: the client may still
+			// write to the buffers it mapped (see Stream::~Stream()).
+			bool			RemovedWhileOpen() { return fRemovedWhileOpen; }
 
 			status_t		CompareAndReattach(usb_device device);
 	virtual	status_t		SetupDevice(bool deviceReplugged);
@@ -68,6 +71,7 @@ private:
 			status_t		fStatus;
 			bool			fOpen;
 			volatile bool	fRemoved;
+			bool			fRemovedWhileOpen;
 			usb_device		fDevice;
 			uint16			fUSBVersion;
 			uint16			fVendorID;

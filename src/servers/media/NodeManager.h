@@ -145,6 +145,11 @@ public:
 
 			status_t			SetNodeTimeSource(media_node_id node,
 									media_node_id timesource);
+			// Renga: the nodes slaved to \a timeSource (after it is gone,
+			// the default manager moves them to the new one).
+			void				GetNodesWithTimeSource(
+									media_node_id timeSource,
+									std::vector<media_node_id>& nodes);
 
 			void				CleanupTeam(team_id team);
 

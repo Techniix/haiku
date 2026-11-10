@@ -65,6 +65,11 @@
 
 typedef std::vector<media_node> NodeVector;
 
+// Renga: a flavor rescan an add-on asked for, carried out on the
+// application thread (see ADD_ON_SERVER_RESCAN_ADD_ON_FLAVORS).
+static const uint32 kMsgRescanFlavors = 'Rscf';
+static const char* kWatchesDevicesSymbol = "renga_media_addon_watches_devices";
+
 
 struct AddOnInfo {
 			media_addon_id		id;
@@ -72,6 +77,13 @@ struct AddOnInfo {
 			int32				flavor_count;
 
 			NodeVector			active_flavors;
+			// Renga: the flavor (internal_id) each physical node of
+			// active_flavors was made from, and whether the add-on watches
+			// for devices (it exports renga_media_addon_watches_devices):
+			// such an add-on stays loaded, and its physical nodes follow
+			// its flavors (_UpdatePhysicalNodes()).
+			std::map<media_node_id, int32> flavor_of;
+			bool				watches_devices;
 
 			// if != NULL, need to call gDormantNodeManager->PutAddOn(id)
 			BMediaAddOn*		addon;
@@ -102,6 +114,8 @@ private:
 			void				_DestroyInstantiatedFlavors(AddOnInfo& info);
 
 			void				_ScanAddOnFlavors(BMediaAddOn* addOn);
+			void				_UpdatePhysicalNodes(AddOnInfo& info);
+			void				_DestroyNode(media_node& node);
 
 			port_id				_ControlPort() const { return fControlPort; }
 
@@ -362,6 +376,31 @@ MediaAddonServer::MessageReceived(BMessage* message)
 			return;
 		}
 
+		case kMsgRescanFlavors:
+		{
+			media_addon_id id;
+			if (message->FindInt32("add-on", &id) != B_OK)
+				break;
+			BMediaAddOn* addOn = gDormantNodeManager->GetAddOn(id);
+			if (addOn == NULL) {
+				ERROR("rescan flavors: Can't find a addon object for id %d\n",
+					(int)id);
+				break;
+			}
+			_ScanAddOnFlavors(addOn);
+			InfoMap::iterator found = fInfoMap.find(id);
+			if (found != fInfoMap.end() && found->second.watches_devices
+				&& !fStartup) {
+				// The defaults first: a default device whose flavor is gone
+				// is replaced at once, while its node is still released.
+				server_rescan_defaults_command cmd;
+				SendToServer(SERVER_RESCAN_DEFAULTS, &cmd, sizeof(cmd));
+				_UpdatePhysicalNodes(found->second);
+			}
+			gDormantNodeManager->PutAddOn(id);
+			return;
+		}
+
 		default:
 			BApplication::MessageReceived(message);
 			break;
@@ -391,17 +430,15 @@ MediaAddonServer::_HandleMessage(int32 code, const void* data, size_t size)
 
 		case ADD_ON_SERVER_RESCAN_ADD_ON_FLAVORS:
 		{
+			// Renga: on the application thread, which also owns fInfoMap
+			// (the add-on monitor runs there), and which may instantiate
+			// nodes: instantiating a dormant node sends a request to this
+			// very control thread, which would wait for itself.
 			const add_on_server_rescan_flavors_command* command = static_cast<
 				const add_on_server_rescan_flavors_command*>(data);
-			BMediaAddOn* addOn
-				= gDormantNodeManager->GetAddOn(command->add_on_id);
-			if (addOn == NULL) {
-				ERROR("rescan flavors: Can't find a addon object for id %d\n",
-					(int)command->add_on_id);
-				break;
-			}
-			_ScanAddOnFlavors(addOn);
-			gDormantNodeManager->PutAddOn(command->add_on_id);
+			BMessage message(kMsgRescanFlavors);
+			message.AddInt32("add-on", command->add_on_id);
+			PostMessage(&message);
 			break;
 		}
 
@@ -564,6 +601,9 @@ MediaAddonServer::_AddOnAdded(const char* path, ino_t fileNode)
 	info.wants_autostart = false;
 	info.flavor_count = 0;
 	info.addon = addon;
+	void* symbol;
+	info.watches_devices = get_image_symbol(addon->ImageID(),
+		kWatchesDevicesSymbol, B_SYMBOL_TYPE_DATA, &symbol) == B_OK;
 
 	// scan the flavors
 	_ScanAddOnFlavors(addon);
@@ -605,97 +645,195 @@ MediaAddonServer::_DestroyInstantiatedFlavors(AddOnInfo& info)
 		"\n", info.id);
 
 	NodeVector::iterator iterator = info.active_flavors.begin();
-	for (; iterator != info.active_flavors.end(); iterator++) {
-		media_node& node = *iterator;
-
-		printf("node %" B_PRId32 "\n", node.node);
-
-		if ((node.kind & B_TIME_SOURCE) != 0
-			&& (fMediaRoster->StopTimeSource(node, 0, true) != B_OK)) {
-			printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't stop "
-				"timesource\n");
-			continue;
-		}
-
-		if (fMediaRoster->StopNode(node, 0, true) != B_OK) {
-			printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't stop "
-				"node\n");
-			continue;
-		}
-
-		if ((node.kind & B_BUFFER_CONSUMER) != 0) {
-			media_input inputs[16];
-			int32 count = 0;
-			if (fMediaRoster->GetConnectedInputsFor(node, inputs, 16, &count)
-					!= B_OK) {
-				printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't "
-					"get connected inputs\n");
-				continue;
-			}
-
-			for (int32 i = 0; i < count; i++) {
-				media_node_id sourceNode;
-				if ((sourceNode = fMediaRoster->NodeIDFor(
-						inputs[i].source.port)) < 0) {
-					printf("MediaAddonServer::_DestroyInstantiatedFlavors "
-						"couldn't get source node id\n");
-					continue;
-				}
-
-				if (fMediaRoster->Disconnect(sourceNode, inputs[i].source,
-						node.node, inputs[i].destination) != B_OK) {
-					printf("MediaAddonServer::_DestroyInstantiatedFlavors "
-						"couldn't disconnect input\n");
-					continue;
-				}
-			}
-		}
-
-		if ((node.kind & B_BUFFER_PRODUCER) != 0) {
-			media_output outputs[16];
-			int32 count = 0;
-			if (fMediaRoster->GetConnectedOutputsFor(node, outputs, 16,
-					&count) != B_OK) {
-				printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't "
-					"get connected outputs\n");
-				continue;
-			}
-
-			for (int32 i = 0; i < count; i++) {
-				media_node_id destNode;
-				if ((destNode = fMediaRoster->NodeIDFor(
-						outputs[i].destination.port)) < 0) {
-					printf("MediaAddonServer::_DestroyInstantiatedFlavors "
-						"couldn't get destination node id\n");
-					continue;
-				}
-
-				if (fMediaRoster->Disconnect(node.node, outputs[i].source,
-						destNode, outputs[i].destination) != B_OK) {
-					printf("MediaAddonServer::_DestroyInstantiatedFlavors "
-						"couldn't disconnect output\n");
-					continue;
-				}
-			}
-		}
-
-		if (MediaRosterEx(fMediaRoster)->ReleaseNodeAll(node) != B_OK) {
-			printf("MediaAddonServer::_DestroyInstantiatedFlavors "
-						"couldn't release node\n");
-		}
-
-		// wait a bit to let the node clean up
-		snooze(50000);
-	}
+	for (; iterator != info.active_flavors.end(); iterator++)
+		_DestroyNode(*iterator);
 
 	info.active_flavors.clear();
+	info.flavor_of.clear();
+}
+
+
+/*!	Stops \a node, disconnects it from everything, and releases it (the
+	steps _DestroyInstantiatedFlavors() takes for every node).
+*/
+void
+MediaAddonServer::_DestroyNode(media_node& node)
+{
+	printf("node %" B_PRId32 "\n", node.node);
+
+	if ((node.kind & B_TIME_SOURCE) != 0
+		&& (fMediaRoster->StopTimeSource(node, 0, true) != B_OK)) {
+		printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't stop "
+			"timesource\n");
+		return;
+	}
+
+	if (fMediaRoster->StopNode(node, 0, true) != B_OK) {
+		printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't stop "
+			"node\n");
+		return;
+	}
+
+	if ((node.kind & B_BUFFER_CONSUMER) != 0) {
+		media_input inputs[16];
+		int32 count = 0;
+		if (fMediaRoster->GetConnectedInputsFor(node, inputs, 16, &count)
+				!= B_OK) {
+			printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't "
+				"get connected inputs\n");
+			return;
+		}
+
+		for (int32 i = 0; i < count; i++) {
+			media_node_id sourceNode;
+			if ((sourceNode = fMediaRoster->NodeIDFor(
+					inputs[i].source.port)) < 0) {
+				printf("MediaAddonServer::_DestroyInstantiatedFlavors "
+					"couldn't get source node id\n");
+				continue;
+			}
+
+			if (fMediaRoster->Disconnect(sourceNode, inputs[i].source,
+					node.node, inputs[i].destination) != B_OK) {
+				printf("MediaAddonServer::_DestroyInstantiatedFlavors "
+					"couldn't disconnect input\n");
+				continue;
+			}
+		}
+	}
+
+	if ((node.kind & B_BUFFER_PRODUCER) != 0) {
+		media_output outputs[16];
+		int32 count = 0;
+		if (fMediaRoster->GetConnectedOutputsFor(node, outputs, 16,
+				&count) != B_OK) {
+			printf("MediaAddonServer::_DestroyInstantiatedFlavors couldn't "
+				"get connected outputs\n");
+			return;
+		}
+
+		for (int32 i = 0; i < count; i++) {
+			media_node_id destNode;
+			if ((destNode = fMediaRoster->NodeIDFor(
+					outputs[i].destination.port)) < 0) {
+				printf("MediaAddonServer::_DestroyInstantiatedFlavors "
+					"couldn't get destination node id\n");
+				continue;
+			}
+
+			if (fMediaRoster->Disconnect(node.node, outputs[i].source,
+					destNode, outputs[i].destination) != B_OK) {
+				printf("MediaAddonServer::_DestroyInstantiatedFlavors "
+					"couldn't disconnect output\n");
+				continue;
+			}
+		}
+	}
+
+	if (MediaRosterEx(fMediaRoster)->ReleaseNodeAll(node) != B_OK) {
+		printf("MediaAddonServer::_DestroyInstantiatedFlavors "
+					"couldn't release node\n");
+	}
+
+	// wait a bit to let the node clean up
+	snooze(50000);
+}
+
+
+/*!	Renga: makes the physical nodes of a device-watching add-on match its
+	flavors after it reported a change: a node whose flavor is gone (the
+	device was unplugged) is stopped, disconnected and released; a physical
+	flavor without a node (a device plugged in) gets one, as at startup.
+	Then the media_server looks at the defaults again (the default output
+	may be gone, or back).
+*/
+void
+MediaAddonServer::_UpdatePhysicalNodes(AddOnInfo& info)
+{
+	if (info.addon == NULL)
+		return;
+
+	std::map<int32, const flavor_info*> physical;
+	int32 count = info.addon->CountFlavors();
+	for (int32 i = 0; i < count; i++) {
+		const flavor_info* flavorInfo;
+		if (info.addon->GetFlavorAt(i, &flavorInfo) == B_OK
+			&& (flavorInfo->kinds & (B_PHYSICAL_INPUT | B_PHYSICAL_OUTPUT))
+				!= 0) {
+			physical[flavorInfo->internal_id] = flavorInfo;
+		}
+	}
+
+	bool changed = false;
+	for (size_t i = 0; i < info.active_flavors.size();) {
+		media_node node = info.active_flavors[i];
+		std::map<media_node_id, int32>::iterator flavor
+			= info.flavor_of.find(node.node);
+		if (flavor == info.flavor_of.end()
+			|| physical.find(flavor->second) != physical.end()) {
+			i++;
+			continue;
+		}
+		printf("media_addon_server: flavor %" B_PRId32 " of add-on %" B_PRId32
+			" is gone, releasing node %" B_PRId32 "\n", flavor->second,
+			info.id, node.node);
+		info.flavor_of.erase(flavor);
+		info.active_flavors.erase(info.active_flavors.begin() + i);
+		_DestroyNode(node);
+		// The node unregisters itself from the media_server when it is
+		// deleted, which happens after the last release is processed;
+		// the defaults must not be looked at before (they would still
+		// see the node). At most two seconds.
+		for (int wait = 0; wait < 40; wait++) {
+			media_node clone;
+			if (fMediaRoster->GetNodeFor(node.node, &clone) != B_OK)
+				break;
+			fMediaRoster->ReleaseNode(clone);
+			snooze(50000);
+		}
+		changed = true;
+	}
+
+	for (std::map<int32, const flavor_info*>::iterator iterator
+			= physical.begin(); iterator != physical.end(); iterator++) {
+		bool have = false;
+		for (std::map<media_node_id, int32>::iterator flavor
+				= info.flavor_of.begin(); flavor != info.flavor_of.end();
+				flavor++) {
+			have |= flavor->second == iterator->first;
+		}
+		if (have)
+			continue;
+
+		dormant_node_info dormantNodeInfo;
+		dormantNodeInfo.addon = info.id;
+		dormantNodeInfo.flavor_id = iterator->first;
+		strlcpy(dormantNodeInfo.name, iterator->second->name,
+			sizeof(dormantNodeInfo.name));
+		media_node node;
+		status_t status = fMediaRoster->InstantiateDormantNode(
+			dormantNodeInfo, &node);
+		printf("media_addon_server: new flavor %" B_PRId32 " \"%s\" of add-on "
+			"%" B_PRId32 ": %s\n", iterator->first, dormantNodeInfo.name,
+			info.id, strerror(status));
+		if (status == B_OK) {
+			info.active_flavors.push_back(node);
+			info.flavor_of[node.node] = iterator->first;
+			changed = true;
+		}
+	}
+
+	if (changed) {
+		server_rescan_defaults_command cmd;
+		SendToServer(SERVER_RESCAN_DEFAULTS, &cmd, sizeof(cmd));
+	}
 }
 
 
 void
 MediaAddonServer::_PutAddonIfPossible(AddOnInfo& info)
 {
-	if (info.addon && info.active_flavors.empty()) {
+	if (info.addon && info.active_flavors.empty() && !info.watches_devices) {
 		gDormantNodeManager->PutAddOn(info.id);
 		info.addon = NULL;
 	}
@@ -734,6 +872,7 @@ MediaAddonServer::_InstantiatePhysicalInputsAndOutputs(AddOnInfo& info)
 			} else {
 				TRACE("Node created!\n");
 				info.active_flavors.push_back(node);
+				info.flavor_of[node.node] = flavorinfo->internal_id;
 			}
 		}
 	}

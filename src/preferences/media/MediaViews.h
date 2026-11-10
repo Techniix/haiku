@@ -40,6 +40,9 @@ const uint32 ML_RECORDING_GAIN_CHANGED = 'rgch';
 // "Media --advanced-audio" opens the audio settings with the advanced
 // controls (where each application plays) shown.
 extern bool gShowAdvancedAudio;
+// "Media --device <name>" opens on that device's page (its controls and
+// its format and rate), if there is such a device.
+extern const char* gInitialDevice;
 
 class ApplicationVolumesView;
 class BSlider;

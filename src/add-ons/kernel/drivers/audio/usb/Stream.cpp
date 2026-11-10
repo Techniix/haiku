@@ -81,7 +81,12 @@ Stream::Stream(Device* device, size_t interface, usb_interface_list* List)
 Stream::~Stream()
 {
 	_FreeTransfers();
-	if (fArea >= 0)
+	// The ring lives in the client's team. A device unplugged while open is
+	// deleted when devfs disconnects its file descriptors, which happens at
+	// once, while the client (the multi_audio node) may still write to the
+	// buffers until it notices: deleting the area then crashed it. Leave it
+	// to the client; it goes when the client's team does.
+	if (fArea >= 0 && !fDevice->RemovedWhileOpen())
 		delete_area(fArea);
 	if (fKernelArea >= 0)
 		delete_area(fKernelArea);

@@ -21,6 +21,8 @@
 #include "media_server.h"
 #include "NodeManager.h"
 
+#include <vector>
+
 
 /* no locking used in this file, we assume that the caller (NodeManager) does it.
  */
@@ -60,7 +62,9 @@ DefaultManager::DefaultManager()
 	fRescanThread(-1),
 	fRescanRequested(0),
 	fRescanLock("rescan default manager"),
-	fRoster(NULL)
+	fRoster(NULL),
+	fAudioOutFallback(false),
+	fLostTimeSource(-1)
 {
 	strcpy(fPhysicalAudioOutInputName, "default");
 	fBeginHeader[0] = 0xab00150b;
@@ -179,6 +183,14 @@ DefaultManager::SaveState(NodeManager *node_manager)
 			continue;
 		}
 
+		if (default_types[i] == kMsgTypeAudioOut && fAudioOutFallback
+			&& _SavedDefault(kMsgTypeAudioOut) != NULL) {
+			// Renga: the device in use stands in for the user's choice,
+			// which is not plugged in; that one stays the saved default.
+			list.AddItem(new BMessage(*_SavedDefault(kMsgTypeAudioOut)));
+			continue;
+		}
+
 		BMessage *settings = new BMessage();
 		settings->AddInt32(kDefaultManagerType, default_types[i]);
 		BPath path(&ref);
@@ -213,8 +225,13 @@ DefaultManager::SaveState(NodeManager *node_manager)
 			return B_ERROR;
 		if (settings->Flatten(&file) < B_OK)
 			return B_ERROR;
-		delete settings;
 	}
+	// Renga: what is saved is what the defaults go back to (it was only
+	// read at startup, so a default chosen later was forgotten).
+	for (int32 i = 0; i < fMsgList.CountItems(); i++)
+		delete (BMessage*)fMsgList.ItemAt(i);
+	fMsgList.MakeEmpty();
+	fMsgList.AddList(&list);
 	if (file.Write(fEndHeader, sizeof(uint32)*3) < (int32)sizeof(uint32)*3)
 		return B_ERROR;
 
@@ -249,6 +266,8 @@ DefaultManager::Set(media_node_id node_id, const char *input_name,
 			fPhysicalAudioOutInputID = input_id;
 			strcpy(fPhysicalAudioOutInputName,
 				input_name ? input_name : "<null>");
+			// the user's choice now (SaveState() remembers it)
+			fAudioOutFallback = false;
 
 			fMixerConnected = false;
 			Rescan();
@@ -378,6 +397,10 @@ DefaultManager::_RescanThread()
 		// it should already exist
 		ASSERT(fSystemTimeSource != -1);
 
+		// Renga: a default that was unplugged is replaced, one that is back
+		// is taken again.
+		_CheckDevices();
+
 		if (fPhysicalVideoOut == -1) {
 			_FindPhysical(&fPhysicalVideoOut, kMsgTypeVideoOut, false,
 				B_MEDIA_RAW_VIDEO);
@@ -410,6 +433,10 @@ DefaultManager::_RescanThread()
 			if (!fMixerConnected)
 				TRACE("DefaultManager: failed to connect mixer and "
 					"soundcard\n");
+			if (fMixerConnected && fLostTimeSource != -1 && fTimeSource != -1) {
+				_MoveSlaves(fLostTimeSource, fTimeSource);
+				fLostTimeSource = -1;
+			}
 		} else {
 			TRACE("DefaultManager: Did not try to connect mixer and "
 				"soundcard\n");
@@ -468,6 +495,10 @@ DefaultManager::_FindPhysical(volatile media_node_id *id, uint32 default_type,
 		}
 	}
 
+	// Renga: the loop above leaves msg at the last entry when none is of
+	// this type; it then stood for a default of another type.
+	msg = _SavedDefault(default_type);
+
 	format.type = type;
 	count = MAX_NODE_INFOS;
 	rv = fRoster->GetLiveNodes(&info[0], &count,
@@ -482,56 +513,235 @@ DefaultManager::_FindPhysical(volatile media_node_id *id, uint32 default_type,
 	for (int i = 0; i < count; i++)
 		TRACE("info[%d].name %s\n", i, info[i].name);
 
-	for (int i = 0; i < count; i++) {
-		if (isAudio) {
-			if (isInput) {
-				if (0 == strcmp(info[i].name, "None In")) {
-					// we keep the Null audio driver if none else matchs
-					*id = info[i].node.node;
-					continue;
+	// Renga: two passes. First the saved default, matched by its flavor
+	// name and add-on (flavor IDs of devices plugged in while the system
+	// runs differ from boot to boot; names are distinct per add-on). If it
+	// is not there (a USB device that is not plugged in), any other device
+	// is better than none, which upstream left the user with: the first
+	// one, remembered as a fallback so that the saved one is taken again
+	// when it appears (_CheckDevices()).
+	for (int pass = msg != NULL ? 0 : 1; pass < 2; pass++) {
+		for (int i = 0; i < count; i++) {
+			if (isAudio) {
+				if (isInput) {
+					if (0 == strcmp(info[i].name, "None In")) {
+						// we keep the Null audio driver if none else matchs
+						*id = info[i].node.node;
+						continue;
+					}
+					// skip the Firewire audio driver
+					if (0 == strcmp(info[i].name, "DV Input"))
+						continue;
+				} else {
+					if (0 == strcmp(info[i].name, "None Out")) {
+						// we keep the Null audio driver if none else matchs
+						*id = info[i].node.node;
+						if (msg)
+							fPhysicalAudioOutInputID = input_id;
+						continue;
+					}
+					// skip the Firewire audio driver
+					if (0 == strcmp(info[i].name, "DV Output"))
+						continue;
 				}
-				// skip the Firewire audio driver
-				if (0 == strcmp(info[i].name, "DV Input"))
-					continue;
-			} else {
-				if (0 == strcmp(info[i].name, "None Out")) {
-					// we keep the Null audio driver if none else matchs
-					*id = info[i].node.node;
-					if (msg)
-						fPhysicalAudioOutInputID = input_id;
-					continue;
+			}
+			if (pass == 0 && !_MatchesSaved(info[i], msg))
+				continue;
+			// a node whose device was unplugged, still being released
+			if (!_FlavorListed(info[i].node.node))
+				continue;
+			TRACE("Default physical %s %s \"%s\" created!\n",
+				isAudio ? "audio" : "video", isInput ? "input" : "output",
+				info[i].name);
+			*id = info[i].node.node;
+			if (isAudio && !isInput) {
+				if (pass == 0)
+					fPhysicalAudioOutInputID = input_id;
+				fAudioOutFallback = pass == 1 && msg != NULL;
+				if (fAudioOutFallback) {
+					printf("DefaultManager: the default output is not "
+						"there; using \"%s\" meanwhile\n", info[i].name);
 				}
-				// skip the Firewire audio driver
-				if (0 == strcmp(info[i].name, "DV Output"))
-					continue;
 			}
+			return;
 		}
-		if (msg) {	// we have a default info msg
-			dormant_node_info dninfo;
-			if (fRoster->GetDormantNodeFor(info[i].node,
-					&dninfo) != B_OK) {
-				ERROR("Couldn't GetDormantNodeFor\n");
-				continue;
-			}
-			if (dninfo.flavor_id != msgDninfo.flavor_id
-				|| strcmp(dninfo.name, msgDninfo.name) != 0) {
-				ERROR("Doesn't match flavor or name\n");
-				continue;
-			}
-			BPath path;
-			if (gDormantNodeManager->FindAddOnPath(&path, dninfo.addon) != B_OK
-				|| path != msgPath) {
-				ERROR("Doesn't match : path\n");
-				continue;
-			}
+	}
+}
+
+
+/*!	Whether live node \a info is the device the saved default \a saved
+	names: the same flavor name and add-on.
+*/
+bool
+DefaultManager::_MatchesSaved(const live_node_info& info, BMessage* saved)
+{
+	if (saved == NULL)
+		return false;
+	const char* name = NULL;
+	const char* path = NULL;
+	saved->FindString(kDefaultManagerFlavorName, &name);
+	saved->FindString(kDefaultManagerPath, &path);
+	dormant_node_info dninfo;
+	if (name == NULL || fRoster->GetDormantNodeFor(info.node, &dninfo) != B_OK
+		|| strcmp(dninfo.name, name) != 0) {
+		return false;
+	}
+	BPath addOnPath;
+	return path == NULL
+		|| (gDormantNodeManager->FindAddOnPath(&addOnPath, dninfo.addon)
+				== B_OK && addOnPath == BPath(path));
+}
+
+
+BMessage*
+DefaultManager::_SavedDefault(uint32 defaultType)
+{
+	for (int32 i = 0; i < fMsgList.CountItems(); i++) {
+		BMessage* msg = (BMessage*)fMsgList.ItemAt(i);
+		int32 type;
+		if (msg->FindInt32(kDefaultManagerType, &type) == B_OK
+			&& (uint32)type == defaultType) {
+			return msg;
 		}
-		TRACE("Default physical %s %s \"%s\" created!\n",
-			isAudio ? "audio" : "video", isInput ? "input" : "output",
-			info[i].name);
-		*id = info[i].node.node;
-		if (msg && isAudio && !isInput)
-			fPhysicalAudioOutInputID = input_id;
-		return;
+	}
+	return NULL;
+}
+
+
+bool
+DefaultManager::_NodeExists(media_node_id id)
+{
+	media_node node;
+	if (fRoster->GetNodeFor(id, &node) != B_OK)
+		return false;
+	fRoster->ReleaseNode(node);
+	return true;
+}
+
+
+/*!	Whether the flavor \a node was made from is still offered. Nodes not
+	made by an add-on (or whose flavor cannot be told) count as offered.
+*/
+bool
+DefaultManager::_FlavorListed(media_node_id id)
+{
+	media_node node;
+	if (fRoster->GetNodeFor(id, &node) != B_OK)
+		return false;
+	dormant_node_info info;
+	status_t status = fRoster->GetDormantNodeFor(node, &info);
+	fRoster->ReleaseNode(node);
+	if (status != B_OK || info.addon <= 0)
+		return true;
+	dormant_node_info infos[64];
+	int32 count = 64;
+	if (fRoster->GetDormantNodes(infos, &count, NULL, NULL, NULL, 0, 0)
+			!= B_OK) {
+		return true;
+	}
+	for (int32 i = 0; i < count; i++) {
+		if (infos[i].addon == info.addon
+			&& infos[i].flavor_id == info.flavor_id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+
+//!	The saved default output, if it is live now; -1 otherwise.
+media_node_id
+DefaultManager::_FindSavedAudioOut()
+{
+	BMessage* saved = _SavedDefault(kMsgTypeAudioOut);
+	if (saved == NULL)
+		return -1;
+	live_node_info info[MAX_NODE_INFOS];
+	media_format format;
+	format.type = B_MEDIA_RAW_AUDIO;
+	int32 count = MAX_NODE_INFOS;
+	if (fRoster->GetLiveNodes(&info[0], &count, &format, NULL, NULL,
+			B_BUFFER_CONSUMER | B_PHYSICAL_OUTPUT) != B_OK) {
+		return -1;
+	}
+	for (int32 i = 0; i < count; i++) {
+		if (_MatchesSaved(info[i], saved))
+			return info[i].node.node;
+	}
+	return -1;
+}
+
+
+/*!	Renga: hot-plugged devices. A default input or output whose node is
+	gone (media_addon_server releases the nodes of unplugged devices) is
+	forgotten, so that the rescan picks another one, and the mixer is
+	connected to it; if the default time source went with it, its slaves
+	are moved to the new one once it is known. A default output used as a
+	fallback gives way to the saved one as soon as that is back.
+*/
+void
+DefaultManager::_CheckDevices()
+{
+	// Gone means: its node is gone, or its flavor is (the add-on dropped
+	// the unplugged device; releasing the node can take a while, and the
+	// default should not wait for it).
+	if (fPhysicalAudioOut != -1 && (!_NodeExists(fPhysicalAudioOut)
+			|| !_FlavorListed(fPhysicalAudioOut))) {
+		printf("DefaultManager: the default output (node %" B_PRId32 ") is "
+			"gone\n", fPhysicalAudioOut);
+		if (_NodeExists(fPhysicalAudioOut)
+			&& fPhysicalAudioOutFromMixer.node != media_node::null) {
+			// as when the default output is switched
+			fRoster->Disconnect(fMixerToPhysicalAudioOut,
+				fPhysicalAudioOutFromMixer);
+		}
+		if (fTimeSource == fPhysicalAudioOut
+			|| (fTimeSource != -1 && !_NodeExists(fTimeSource))) {
+			fLostTimeSource = fTimeSource;
+			fTimeSource = -1;
+		}
+		fPhysicalAudioOut = -1;
+		fMixerConnected = false;
+		fMixerToPhysicalAudioOut = media_output();
+		fPhysicalAudioOutFromMixer = media_input();
+		// the saved one stays the one to go back to
+		if (_SavedDefault(kMsgTypeAudioOut) != NULL)
+			fAudioOutFallback = true;
+	}
+	if (fPhysicalAudioIn != -1 && (!_NodeExists(fPhysicalAudioIn)
+			|| !_FlavorListed(fPhysicalAudioIn))) {
+		fPhysicalAudioIn = -1;
+	}
+
+	if (fAudioOutFallback && fPhysicalAudioOut != -1) {
+		media_node_id saved = _FindSavedAudioOut();
+		if (saved >= 0 && saved != fPhysicalAudioOut) {
+			printf("DefaultManager: the default output is back (node %"
+				B_PRId32 ")\n", saved);
+			BMessage* msg = _SavedDefault(kMsgTypeAudioOut);
+			int32 inputID = 0;
+			if (msg != NULL)
+				msg->FindInt32(kDefaultManagerInput, &inputID);
+			fPhysicalAudioOut = saved;
+			fPhysicalAudioOutInputID = inputID;
+			fMixerConnected = false;
+			fAudioOutFallback = false;
+		}
+	}
+}
+
+
+//!	Moves the nodes slaved to the time source \a from to \a to.
+void
+DefaultManager::_MoveSlaves(media_node_id from, media_node_id to)
+{
+	std::vector<media_node_id> nodes;
+	gNodeManager->GetNodesWithTimeSource(from, nodes);
+	for (size_t i = 0; i < nodes.size(); i++) {
+		status_t status = fRoster->SetTimeSourceFor(nodes[i], to);
+		printf("DefaultManager: node %" B_PRId32 " moves from the time source "
+			"%" B_PRId32 " to %" B_PRId32 ": %s\n", nodes[i], from, to,
+			strerror(status));
 	}
 }
 

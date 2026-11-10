@@ -23,6 +23,7 @@
 #include <LayoutBuilder.h>
 #include <Locale.h>
 #include <MediaRoster.h>
+#include <MessageRunner.h>
 #include <MediaTheme.h>
 #include <Resources.h>
 #include <Roster.h>
@@ -44,6 +45,9 @@
 
 const uint32 ML_SELECTED_NODE = 'MlSN';
 const uint32 ML_RESTART_THREAD_FINISHED = 'MlRF';
+// Renga: devices were plugged in or out; the lists follow a moment later
+const uint32 ML_DEVICES_CHANGED = 'MlDC';
+static const bigtime_t kDevicesChangedDelay = 1000000;
 
 
 class NodeListItemUpdater : public MediaListItem::Visitor {
@@ -188,7 +192,8 @@ MediaWindow::MediaWindow(BRect frame)
 	fVideoOutputs(5),
 	fInitCheck(B_OK),
 	fRestartThread(-1),
-	fRestartAlert(NULL)
+	fRestartAlert(NULL),
+	fDevicesRunner(NULL)
 {
 	_InitWindow();
 
@@ -197,6 +202,10 @@ MediaWindow::MediaWindow(BRect frame)
 		B_MEDIA_SERVER_STARTED);
 	roster->StartWatching(BMessenger(this, this),
 		B_MEDIA_SERVER_QUIT);
+	// Renga: hot-plugged devices (a USB headset) become flavors of their
+	// add-on while the window is open; list them, and drop unplugged ones.
+	roster->StartWatching(BMessenger(this, this),
+		B_MEDIA_FLAVORS_CHANGED);
 }
 
 
@@ -222,8 +231,12 @@ MediaWindow::~MediaWindow()
 	BMediaRoster* roster = BMediaRoster::CurrentRoster();
 	roster->StopWatching(BMessenger(this, this),
 		B_MEDIA_SERVER_STARTED);
-	roster->StartWatching(BMessenger(this, this),
+	// Renga: was StartWatching(), so the window never stopped watching
+	roster->StopWatching(BMessenger(this, this),
 		B_MEDIA_SERVER_QUIT);
+	roster->StopWatching(BMessenger(this, this),
+		B_MEDIA_FLAVORS_CHANGED);
+	delete fDevicesRunner;
 }
 
 
@@ -370,6 +383,40 @@ MediaWindow::MessageReceived(BMessage* message)
 		{
 			PRINT_OBJECT(*message);
 			_InitMedia(false);
+			break;
+		}
+
+		case B_MEDIA_FLAVORS_CHANGED:
+		{
+			// The add-on reports its devices before media_addon_server
+			// made their nodes and the defaults followed; and one plug-in
+			// may come as several notifications. Look once it settled.
+			delete fDevicesRunner;
+			BMessage changed(ML_DEVICES_CHANGED);
+			fDevicesRunner = new(std::nothrow) BMessageRunner(
+				BMessenger(this), &changed, kDevicesChangedDelay, 1);
+			break;
+		}
+
+		case ML_DEVICES_CHANGED:
+		{
+			delete fDevicesRunner;
+			fDevicesRunner = NULL;
+			// Stay on the page the user is on, if it is still there.
+			BString selected;
+			MediaListItem* item = static_cast<MediaListItem*>(
+				fListView->ItemAt(fListView->CurrentSelection()));
+			if (item != NULL)
+				selected = item->Label();
+			_InitMedia(false);
+			for (int32 i = 0; i < fListView->CountItems(); i++) {
+				MediaListItem* candidate
+					= static_cast<MediaListItem*>(fListView->ItemAt(i));
+				if (selected.Length() > 0 && selected == candidate->Label()) {
+					fListView->Select(i);
+					break;
+				}
+			}
 			break;
 		}
 
@@ -531,7 +578,17 @@ MediaWindow::_InitMedia(bool first)
 	// Renga (F-32): open on the audio settings, with the everyday controls
 	// (default devices, each application's volume); the mixer's detailed
 	// page is one click away. Upstream opened on the mixer.
-	if (first)
+	int32 initial = -1;
+	for (int32 i = 0; first && gInitialDevice != NULL
+			&& i < fListView->CountItems(); i++) {
+		MediaListItem* item = static_cast<MediaListItem*>(
+			fListView->ItemAt(i));
+		if (strcmp(item->Label(), gInitialDevice) == 0)
+			initial = i;
+	}
+	if (initial >= 0)
+		fListView->Select(initial);
+	else if (first)
 		fListView->Select(fListView->IndexOf(audio));
 	else if (isVideoSelected)
 		fListView->Select(fListView->IndexOf(video));

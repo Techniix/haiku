@@ -21,6 +21,7 @@ Device::Device(usb_device device)
 	fStatus(B_ERROR),
 	fOpen(false),
 	fRemoved(false),
+	fRemovedWhileOpen(false),
 	fDevice(device),
 	fNonBlocking(false),
 	fHighSpeed(false),
@@ -479,6 +480,7 @@ Device::Control(uint32 op, void* buffer, size_t length)
 void
 Device::Removed()
 {
+	fRemovedWhileOpen = fOpen;
 	fRemoved = true;
 
 	for (int i = 0; i < fStreams.Count(); i++)

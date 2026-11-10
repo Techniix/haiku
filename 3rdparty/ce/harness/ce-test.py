@@ -132,6 +132,25 @@ USB_AUDIO_PHASES = [
 USB_AUDIO_FREQUENCIES = sorted({hz for phase in USB_AUDIO_PHASES
 	for hz in phase[2:4]})
 
+# Phases of 3rdparty/ce/tests/media/media_usb_test.cpp: the usb-audio device
+# plugged in with the media services running. It runs last and plugs the
+# device in twice, so its recordings are the last two usb-<n>.wav files
+# ("first plug-in", "second plug-in"; usb-2.wav and usb-3.wav after
+# usb_audio_test's two). A plays on the left channel only, B on the right.
+# Entries: (check, recording, left Hz, right Hz, minimum seconds); None:
+# silent.
+MEDIA_USB_FIRST = "first plug-in"
+MEDIA_USB_SECOND = "second plug-in"
+MEDIA_USB_PHASES = [
+	("media_usb_audio.routed_to_usb", MEDIA_USB_FIRST, 1110, None, 1.5),
+	("media_usb_audio.routed_default_side", "audio.wav", None, 3110, 1.5),
+	("media_usb_audio.default_on_usb", MEDIA_USB_FIRST, 1230, 3170, 2.0),
+	("media_usb_audio.unplugged_fallback", "audio.wav", 1350, 3290, 2.0),
+	("media_usb_audio.back_on_usb", MEDIA_USB_SECOND, 1410, 3350, 2.0),
+]
+MEDIA_USB_FREQUENCIES = sorted({hz for phase in MEDIA_USB_PHASES
+	for hz in phase[2:4] if hz} | {1170, 1290, 3230})
+MEDIA_USB_SCREENSHOTS = ["media_usb_device", "media_usb_unplugged"]
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
@@ -146,9 +165,10 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
 	"virtio_input", "<input>tablet", "<input>virtio",
-	"usb_audio", "usb", "<usb>xhci", "usb_audio_test",
+	"usb_audio", "usb", "<usb>xhci", "usb_audio_test", "hda", "hda_eld_test",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
-	"media_test", "media_ui_test", "Media", "desklink", "SoundRecorder"]
+	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
+	"SoundRecorder", "media_addon_server"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -2094,6 +2114,47 @@ def analyze_usb_audio(results_dir, report):
 		checks.append({"name": name, "pass": passed, "detail": detail})
 
 
+def analyze_media_usb_audio(results_dir, report):
+	"""The media_usb_test phases (MEDIA_USB_PHASES) in what the cards
+	played: a stream routed to the hot-plugged device, the device as the
+	default output, both streams falling back to the first virtio card when
+	it is pulled out, and returning when it is plugged in again."""
+	checks = []
+	report.setdefault("media_usb_audio", {})["checks"] = checks
+	plugged = sorted(glob.glob(os.path.join(results_dir, "usb-*.wav")),
+		key=lambda path: int(re.search(r"usb-(\d+)\.wav$", path).group(1)))
+	files = {"audio.wav": os.path.join(results_dir, "audio.wav")}
+	if len(plugged) >= 2:
+		files[MEDIA_USB_FIRST] = plugged[-2]
+		files[MEDIA_USB_SECOND] = plugged[-1]
+	report["media_usb_audio"]["files"] = {name: os.path.basename(path)
+		for name, path in files.items()}
+	recordings = {}
+	for name in sorted({phase[1] for phase in MEDIA_USB_PHASES}):
+		if name not in files:
+			checks.append({"name": "media_usb_audio.recording", "pass": False,
+				"detail": "%d usb-<n>.wav file(s), the test plugs in twice"
+					% len(plugged)})
+			return
+		try:
+			recordings[name] = media_segments(files[name], read_wav,
+				MEDIA_USB_FREQUENCIES)
+		except (OSError, ValueError, struct.error) as error:
+			checks.append({"name": "media_usb_audio.recording", "pass": False,
+				"detail": "%s: %s" % (name, error)})
+			return
+	for name, recording, left, right, seconds in MEDIA_USB_PHASES:
+		matching = [s for s in recordings[recording][2]
+			if s["key"] == (left, right)]
+		segment = max(matching, key=lambda s: s["seconds"], default=None)
+		checks.append({"name": name,
+			"pass": segment is not None and segment["seconds"] >= seconds,
+			"detail": "%s L %s / R %s Hz: %s (want %.1fs)" % (
+				os.path.basename(files[recording]),
+				left or "-", right or "-", "%.1fs" % segment["seconds"]
+					if segment else "not found", seconds)})
+
+
 # Screenshots media_ui_test asks for (CE-HOST screenshot): the
 # per-application audio controls (F-31/F-32).
 MEDIA_UI_SCREENSHOTS = ["volume_popup", "media_preferences",
@@ -2136,6 +2197,7 @@ def write_report(results_dir, report):
 	checks += report.get("audio", {}).get("checks", [])
 	checks += report.get("media_audio", {}).get("checks", [])
 	checks += report.get("usb_audio_out", {}).get("checks", [])
+	checks += report.get("media_usb_audio", {}).get("checks", [])
 	checks += report.get("host_checks", [])
 	failed = [c for c in checks if not c["pass"]]
 
@@ -2419,6 +2481,10 @@ def main():
 		if "media_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, MEDIA_UI_SCREENSHOTS,
 				"media_ui.screenshots")
+		if "media_usb_test" in (args.only or available):
+			analyze_media_usb_audio(results_dir, report)
+			check_screenshots(results_dir, report, MEDIA_USB_SCREENSHOTS,
+				"media_usb.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

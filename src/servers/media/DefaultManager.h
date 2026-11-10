@@ -58,6 +58,16 @@ private:
 
 			int32				_ReleaseMixerSinks(const media_node& soundcard);
 			status_t			_ConnectMixerToOutput();
+			// Renga: devices that come and go
+			bool				_NodeExists(media_node_id node);
+			bool				_FlavorListed(media_node_id node);
+			BMessage*			_SavedDefault(uint32 defaultType);
+			bool				_MatchesSaved(const live_node_info& info,
+									BMessage* saved);
+			media_node_id		_FindSavedAudioOut();
+			void				_CheckDevices();
+			void				_MoveSlaves(media_node_id from,
+									media_node_id to);
 
 private:
 			volatile bool 		fMixerConnected;
@@ -82,6 +92,12 @@ private:
 			int32 				fRescanRequested;
 			BLocker				fRescanLock;
 			BMediaRoster*		fRoster;
+			// The default output is not the one the user chose (it is not
+			// plugged in); go back to it when it is there again.
+			bool				fAudioOutFallback;
+			// A time source that disappeared, whose slaves are to move to
+			// the new default time source.
+			media_node_id		fLostTimeSource;
 };
 
 #endif // _DEFAULT_MANAGER_H

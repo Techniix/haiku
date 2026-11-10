@@ -422,6 +422,24 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   `screen-media_preferences.png`, `screen-media_preferences_advanced.png`
   and `screen-soundrecorder_application.png`. `media_ui.screenshots` (host)
   checks that all four were saved and are not blank.
+- **media_usb** (renga-* images, last of the Media Kit tests): plugs QEMU's
+  `usb-audio` in with the media services running. The device must be
+  listed and get a node within seconds (no restart). One application is
+  routed to it by name, another plays on the default output; then the
+  device becomes the default output, is pulled out (both streams fall
+  back to the first virtio card, the default output with them, the
+  mixer connected again), and plugged in again (the saved default and the
+  route return by themselves). Screenshots: `Media --device "QEMU USB
+  Audio"` (the device's page with its feature unit controls, format and
+  rate) and the Media preferences after the unplug. The harness finds the
+  phases (`media_usb_audio.*`) in the last two `usb-<n>.wav` files and
+  `audio.wav`, and checks the two screenshots (`media_usb.screenshots`).
+- **hda_eld**: the hda driver's ELD parser (HDMI/DisplayPort sinks:
+  monitor name, connection type, LPCM channels, rates and sizes, other
+  formats, speaker allocation, the output name and the multi_audio
+  rates) with ELDs laid out after the HDA specification and CEA-861-D for
+  an HDMI TV, a DisplayPort monitor and an AV receiver without a name,
+  and five malformed ones it must refuse. QEMU emulates no HDMI codec.
 - **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
   blocks, 80 MiB with 4096-byte blocks, each with an MBR partition). Checks
   that both are published (`/dev/disk/nvme/<id>/raw` and

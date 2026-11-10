@@ -8,6 +8,7 @@
 
 
 #include "MultiAudioNode.h"
+#include "MultiAudioAddOn.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -333,6 +334,9 @@ MultiAudioNode::~MultiAudioNode()
 
 	_StopOutputThread();
 	BMediaEventLooper::Quit();
+
+	// Renga: the add-on closes the device now if it was unplugged.
+	static_cast<MultiAudioAddOn*>(fAddOn)->NodeDeleted(fDevice);
 }
 
 
@@ -1864,12 +1868,30 @@ MultiAudioNode::_OutputThread()
 			system_time());
 	}
 
+	bool failing = false;
 	while (atomic_get(&fQuitThread) == 0) {
 		BAutolock locker(fBufferLock);
 			// make sure the buffers don't change while we're playing with them
 
 		// send buffer
-		fDevice->BufferExchange(&bufferInfo);
+		status_t exchangeStatus = fDevice->BufferExchange(&bufferInfo);
+		if (exchangeStatus != B_OK) {
+			// Renga: an exchange that fails (the device was unplugged, or
+			// stopped answering) used to be ignored, and the loop spun on
+			// the stale cycle at full speed. Wait a little instead, and
+			// have the add-on look whether the device is still there; if
+			// it is gone, media_addon_server releases this node.
+			if (!failing) {
+				fprintf(stderr, "multi_audio: %s: buffer exchange failed: "
+					"%s\n", Name(), strerror(exchangeStatus));
+				static_cast<MultiAudioAddOn*>(fAddOn)->DeviceFailed(fDevice);
+			}
+			failing = true;
+			locker.Unlock();
+			snooze(20000);
+			continue;
+		}
+		failing = false;
 
 		//PRINT(("MultiAudioNode::RunThread: buffer exchanged\n"));
 		//PRINT(("MultiAudioNode::RunThread: played_real_time: %lld\n", bufferInfo.played_real_time));

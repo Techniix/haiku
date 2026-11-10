@@ -1134,6 +1134,21 @@ NodeManager::SetNodeTimeSource(media_node_id node,
 
 
 void
+NodeManager::GetNodesWithTimeSource(media_node_id timeSource,
+	std::vector<media_node_id>& nodes)
+{
+	BAutolock _(this);
+
+	for (NodeMap::iterator iterator = fNodeMap.begin();
+			iterator != fNodeMap.end(); iterator++) {
+		registered_node& node = iterator->second;
+		if (node.timesource_id == timeSource && node.node_id != timeSource)
+			nodes.push_back(node.node_id);
+	}
+}
+
+
+void
 NodeManager::CleanupTeam(team_id team)
 {
 	BAutolock _(this);

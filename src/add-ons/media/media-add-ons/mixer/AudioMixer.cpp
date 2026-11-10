@@ -2349,6 +2349,17 @@ AudioMixer::_RouteOnce()
 	bool webChanged;
 	bigtime_t now = system_time();
 
+	// A device that is gone (unplugged) is not held off when it returns:
+	// the hold-off is for devices the default output switch took over.
+	for (int32 i = fLostDevices.CountNames(B_INT64_TYPE) - 1; i >= 0; i--) {
+		char* name;
+		type_code type;
+		if (fLostDevices.GetInfo(B_INT64_TYPE, i, &name, &type) == B_OK
+			&& !devices.HasString(name)) {
+			fLostDevices.RemoveName(name);
+		}
+	}
+
 	fCore->Lock();
 	webChanged = !(devices == fOutputDevices);
 	fOutputDevices = devices;

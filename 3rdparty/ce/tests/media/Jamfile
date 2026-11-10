@@ -15,7 +15,13 @@ Application media_ui_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# Hot-plugging QEMU's usb-audio device with the media services running.
+Application media_usb_test :
+	media_usb_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
-		: media_test media_ui_test ;
+		: media_test media_ui_test media_usb_test ;
 }
