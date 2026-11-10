@@ -390,6 +390,8 @@ struct Capture {
 	int32		badCycles;		// cycle not the successor of the last one
 	int32		badFrameSteps;	// frame counter not one period further
 	int32		badTimes;		// record time not after the last one
+	int32		overruns;		// periods the driver dropped and said so
+	uint32		seams[8];		// frame positions of those drops
 	int64		firstFrames;
 	int64		lastFrames;
 	bigtime_t	firstTime;
@@ -415,6 +417,7 @@ struct Capture {
 	{
 		frames = 0;
 		exchanges = recordCycles = badCycles = badFrameSteps = badTimes = 0;
+		overruns = 0;
 		firstFrames = lastFrames = -1;
 		firstTime = lastTime = 0;
 		error = B_OK;
@@ -456,12 +459,31 @@ record(Stream& stream, Capture& capture, double seconds)
 			continue;
 
 		capture.recordCycles++;
-		if (lastCycle >= 0 && cycle != (lastCycle + 1) % recordCount)
-			capture.badCycles++;
-		if (capture.firstFrames >= 0
-			&& info.recorded_frames_count - capture.lastFrames
-				!= (int64)recordFrames) {
-			capture.badFrameSteps++;
+		int64 frameStep = capture.firstFrames >= 0
+			? info.recorded_frames_count - capture.lastFrames : 0;
+		if (lastCycle >= 0 && recordCount > 2
+			&& cycle == (lastCycle + 2) % recordCount
+			&& frameStep == 2 * (int64)recordFrames) {
+			// An overrun the driver reported correctly: the device had
+			// filled every capture buffer before this exchange, so the
+			// driver dropped the oldest period and queued it again
+			// (take_capture_buffer()); the cycle and the frame counter
+			// both skip exactly one period, which is how a client sees
+			// the loss. QEMU's SDL audio back end runs the card's input and
+			// output on two threads that each sleep one period per period,
+			// so the input can run ahead of the output that paces the
+			// exchanges by more than a period over a phase; on hardware
+			// both share the card's clock. One such drop per phase is
+			// accepted (see report_capture()); anything else still counts
+			// as a bad cycle or frame step.
+			if (capture.overruns < 8)
+				capture.seams[capture.overruns] = capture.frames;
+			capture.overruns++;
+		} else {
+			if (lastCycle >= 0 && cycle != (lastCycle + 1) % recordCount)
+				capture.badCycles++;
+			if (capture.firstFrames >= 0 && frameStep != (int64)recordFrames)
+				capture.badFrameSteps++;
 		}
 		if (capture.firstFrames >= 0
 			&& info.recorded_real_time <= capture.lastTime) {
@@ -517,12 +539,23 @@ struct ToneCheck {
 
 static ToneCheck
 check_tone(const int16* samples, uint32 frames, uint32 skip, double rate,
-	double hertz, double amplitude)
+	double hertz, double amplitude, const uint32* seams = NULL,
+	int32 seamCount = 0)
 {
 	ToneCheck result = { 0, 1.0, 1e9, 0 };
 	uint32 window = (uint32)(rate / 10);
 	double expected = amplitude / sqrt(2.0);
 	for (uint32 start = skip; start + window <= frames; start += window) {
+		// A window across a reported overrun holds two pieces of the tone
+		// that do not join up; it is left out (the drop itself is checked
+		// in report_capture()).
+		bool acrossSeam = false;
+		for (int32 i = 0; i < seamCount; i++) {
+			if (seams[i] > start && seams[i] < start + window)
+				acrossSeam = true;
+		}
+		if (acrossSeam)
+			continue;
 		const int16* chunk = samples + start;
 		double energy = 0;
 		for (uint32 i = 0; i < window; i++)
@@ -583,11 +616,13 @@ report_capture(const char* phase, Stream& stream, Capture& capture,
 	// may not, while the device fills the first capture period.
 	snprintf(name, sizeof(name), "%s.record_cycles", phase);
 	report(name, capture.recordCycles >= capture.exchanges - 3
-			&& capture.badCycles == 0 && capture.badTimes == 0,
+			&& capture.badCycles == 0 && capture.badTimes == 0
+			&& capture.overruns <= 1,
 		"%" B_PRId32 " record cycles in %" B_PRId32 " exchanges, %" B_PRId32
-		" out of order, %" B_PRId32 " with times not increasing",
+		" out of order, %" B_PRId32 " with times not increasing, %" B_PRId32
+		" reported overrun(s) (at most 1)",
 		capture.recordCycles, capture.exchanges, capture.badCycles,
-		capture.badTimes);
+		capture.badTimes, capture.overruns);
 
 	snprintf(name, sizeof(name), "%s.frame_count", phase);
 	report(name, capture.badFrameSteps == 0 && capture.recordCycles > 0,
@@ -604,11 +639,12 @@ report_capture(const char* phase, Stream& stream, Capture& capture,
 		measured, stream.rateHertz, ratio);
 
 	uint32 skip = stream.rateHertz / 5;
+	int32 seamCount = min_c(capture.overruns, (int32)8);
 	ToneCheck leftCheck = check_tone(capture.left, capture.frames, skip,
-		stream.rateHertz, left, amplitude);
+		stream.rateHertz, left, amplitude, capture.seams, seamCount);
 	ToneCheck rightCheck = check_tone(capture.right, capture.frames, skip,
-		stream.rateHertz, right, amplitude);
-	int32 minimumWindows = (int32)((seconds - 0.4) * 10);
+		stream.rateHertz, right, amplitude, capture.seams, seamCount);
+	int32 minimumWindows = (int32)((seconds - 0.4) * 10) - seamCount;
 	snprintf(name, sizeof(name), "%s.signal", phase);
 	report(name, leftCheck.windows >= minimumWindows
 			&& rightCheck.windows >= minimumWindows
