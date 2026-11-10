@@ -248,6 +248,18 @@ DPCQueue::Cancel(DPCCallback* callback)
 	locker.Unlock();
 	waitEntry.Wait();
 
+	// The condition variable lives on this stack frame (or on that of
+	// another canceller, which waits here as well). Wait() returns as soon
+	// as the notifier has unblocked us, while the notifier may still be
+	// inside ConditionVariable::NotifyAll(), about to release the
+	// variable's spinlock. Returning now would let the frame be reused
+	// under it ("release_spinlock: lock ... was already released" from the
+	// DPC thread, seen with two CPUs during timerfd_test). _Thread()
+	// notifies with fLock held, so taking fLock once here guarantees that
+	// it is done with the variable.
+	locker.Lock();
+	locker.Unlock();
+
 	return false;
 }
 
@@ -299,12 +311,18 @@ DPCQueue::_Thread()
 
 		fCallbackInProgress = NULL;
 
-		// wake up threads waiting for the callback to be done
+		// Wake up threads waiting for the callback to be done. The variable
+		// is on a waiter's stack: notify it with fLock held, so that the
+		// waiter, which takes fLock after its Wait() returns (see Cancel()),
+		// cannot return and reuse that stack before NotifyAll() has
+		// released the variable's spinlock. The lock order (fLock, then the
+		// variable's lock, then the woken thread's scheduler lock) is the
+		// one Cancel() already uses when it adds its entry.
 		ConditionVariable* doneCondition = fCallbackDoneCondition;
 		fCallbackDoneCondition = NULL;
-		locker.Unlock();
 		if (doneCondition != NULL)
 			doneCondition->NotifyAll();
+		locker.Unlock();
 	}
 
 	return B_OK;

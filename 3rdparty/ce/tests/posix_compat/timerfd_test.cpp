@@ -18,6 +18,8 @@
 
 #include <OS.h>
 
+#include <pthread.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -427,6 +429,77 @@ test_stress()
 }
 
 
+struct StressWorker {
+	int			index;
+	int			iterations;
+	int			created;
+};
+
+
+static void*
+stress_worker(void* data)
+{
+	StressWorker* worker = (StressWorker*)data;
+	for (int i = 0; i < worker->iterations; i++) {
+		int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+		if (fd < 0)
+			break;
+		worker->created++;
+		// Periods from 20 to 160 us keep the high-priority DPC thread busy
+		// almost all the time; the close lands inside a running DPC (the
+		// case where DPCQueue::Cancel() waits on its stack condition
+		// variable) often enough to hit a bad window within a run.
+		set_relative(fd, 20 + (i % 8) * 20, 20 + (i % 8) * 20);
+		bigtime_t until = system_time() + (i + worker->index) % 5 * 15;
+		while (system_time() < until)
+			;
+		if (i % 3 == 0)
+			read_count(fd);
+		close(fd);
+	}
+	return NULL;
+}
+
+
+static void
+test_stress_concurrent()
+{
+	// Several threads close armed fast timers at once, so that, with more
+	// than one CPU, a close on one CPU meets the timer's DPC running on
+	// another. DPCQueue::Cancel() then waits for the DPC on a condition
+	// variable on its own stack; the DPC thread used to call NotifyAll()
+	// on it after dropping the queue lock, so the canceller could return
+	// and reuse the stack while NotifyAll() still held the variable's
+	// spinlock, and the kernel panicked with "release_spinlock: lock ...
+	// was already released" (--smp 2). A kernel panic fails the run; the
+	// check itself only confirms that every timer was created and closed.
+	const int kThreads = 6;
+	const int kIterations = 2500;
+	StressWorker workers[kThreads];
+	pthread_t threads[kThreads];
+	bigtime_t start = system_time();
+	int started = 0;
+	for (int i = 0; i < kThreads; i++) {
+		workers[i].index = i;
+		workers[i].iterations = kIterations;
+		workers[i].created = 0;
+		if (pthread_create(&threads[i], NULL, stress_worker, &workers[i]) == 0)
+			started++;
+		else
+			break;
+	}
+	int created = 0;
+	for (int i = 0; i < started; i++) {
+		pthread_join(threads[i], NULL);
+		created += workers[i].created;
+	}
+	report("stress_close_concurrent",
+		started == kThreads && created == kThreads * kIterations,
+		"%d threads, %d timers in %lld us", started, created,
+		(long long)(system_time() - start));
+}
+
+
 int
 main()
 {
@@ -450,6 +523,7 @@ main()
 	test_errors(fd);
 	test_descriptor(fd);
 	test_stress();
+	test_stress_concurrent();
 
 	close(fd);
 
