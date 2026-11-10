@@ -9,5 +9,6 @@ SubInclude HAIKU_TOP 3rdparty ce tests package_priority ;
 SubInclude HAIKU_TOP 3rdparty ce tests pointer ;
 SubInclude HAIKU_TOP 3rdparty ce tests posix_compat ;
 SubInclude HAIKU_TOP 3rdparty ce tests shortcut_keys ;
+SubInclude HAIKU_TOP 3rdparty ce tests usb_audio ;
 SubInclude HAIKU_TOP 3rdparty ce tests virtio_block ;
 SubInclude HAIKU_TOP 3rdparty ce tests virtio_sound ;

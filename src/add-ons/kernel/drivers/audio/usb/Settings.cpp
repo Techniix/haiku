@@ -80,8 +80,14 @@ void usb_audio_trace(uint32 bits, const char* func, const char* fmt, ...)
 	static char buffer[1024];
 	char* buf_ptr = buffer;
 	if (gLogFilePath == NULL) {
-		strlcpy(buffer, prefix, sizeof(buffer));
-		buf_ptr += strlen(prefix);
+		// Renga: errors in yellow, as drivers using the usual ERROR()
+		// macro print them, so that they stand out in the syslog (and the
+		// test harness can tell them from information).
+		if ((bits & ERR) != 0)
+			strlcpy(buffer, "\33[33m" DRIVER_NAME ":\33[0m", sizeof(buffer));
+		else
+			strlcpy(buffer, prefix, sizeof(buffer));
+		buf_ptr += strlen(buffer);
 	}
 
 	if (gAddTimeStamp) {

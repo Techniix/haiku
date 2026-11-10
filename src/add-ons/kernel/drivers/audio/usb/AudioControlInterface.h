@@ -87,6 +87,7 @@ public:
 	virtual					~_Terminal();
 
 			uint16			TerminalType() { return fTerminalType; }
+			uint8			ClockSourceID() { return fClockSourceId; }
 			bool			IsUSBIO();
 	virtual	const char*		Name();
 	static	const char*		_GetTerminalDescription(uint16 TerminalType);
@@ -224,7 +225,14 @@ public:
 								usb_audiocontrol_header_descriptor* Header);
 	virtual					~ClockSource();
 
+			uint8			Attributes() { return fAttributes; }
+			uint8			ControlsBitmap() { return fControlsBitmap; }
+			// UAC2 4.7.2.1: bmControls D1..0 is the frequency control.
+			bool			CanSetFrequency();
+
 protected:
+			uint8			fAttributes;
+			uint8			fControlsBitmap;
 };
 
 
@@ -234,7 +242,8 @@ public:
 								usb_audiocontrol_header_descriptor* Header);
 	virtual					~ClockSelector();
 
-protected:
+			Vector<uint8>	fInputPins;
+			uint8			fControlsBitmap;
 };
 
 
@@ -293,14 +302,30 @@ public:
 			status_t		SetMix(multi_mix_value_info* Info);
 			status_t		ListMixControls(multi_mix_control_info* Info);
 
-protected:
-			status_t		InitACHeader(size_t interface,
-								usb_audiocontrol_header_descriptor* Header);
+			// A class-specific request to an entity of this interface
+			// (bmRequestType class, recipient interface).
+			status_t		ClassRequest(bool in, uint8 request,
+								uint16 value, uint8 entity, void* data,
+								size_t length, size_t* _actualLength);
+			uint8			InterfaceNumber() { return fInterfaceNumber; }
+
+			// UAC2 clock entities (4.7.2.1-4.7.2.3).
+			uint8			ResolveClockSource(uint8 clockID);
+			status_t		GetClockRates(uint8 clockID, Vector<uint32>& rates,
+								bool& continuous, uint32& minimum,
+								uint32& maximum);
+			status_t		GetClockRate(uint8 clockID, uint32& rate);
+			status_t		SetClockRate(uint8 clockID, uint32 rate);
+			bool			IsClockValid(uint8 clockID);
 
 			uint32			GetTerminalChannels(
 								Vector<multi_channel_info>& Channels,
 								AudioChannelCluster* cluster,
 								channel_kind kind, uint32 connectors = 0);
+
+protected:
+			status_t		InitACHeader(size_t interface,
+								usb_audiocontrol_header_descriptor* Header);
 
 			void			_HarvestRecordFeatureUnits(_AudioControl* rootControl,
 								AudioControlsMap& Map);
@@ -334,6 +359,7 @@ protected:
 			bool			_InitGainLimits(multi_mix_control& Control);
 
 			size_t			fInterface;
+			uint8			fInterfaceNumber;
 			status_t		fStatus;
 			// part of AudioControl Header description
 			uint16			fADCSpecification;

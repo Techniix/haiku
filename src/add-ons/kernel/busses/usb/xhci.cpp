@@ -1129,8 +1129,13 @@ XHCI::SubmitNormalRequest(Transfer* transfer)
 			FreeDescriptor(td);
 			return status;
 		}
-		WriteDescriptor(td, transfer->Vector(),
-			transfer->VectorCount(), transfer->IsPhysical());
+		if (isochronousData != NULL) {
+			_CopyIsochronous(td, isochronousData, transfer->Vector(),
+				transfer->VectorCount(), transfer->IsPhysical(), true);
+		} else {
+			WriteDescriptor(td, transfer->Vector(),
+				transfer->VectorCount(), transfer->IsPhysical());
+		}
 	}
 
 	td->transfer = transfer;
@@ -1558,6 +1563,76 @@ XHCI::ReadDescriptor(xhci_td* descriptor, generic_io_vec* vector, size_t vectorC
 
 	TRACE("read descriptor (%" B_PRIuSIZE " bytes)\n", read);
 	return read;
+}
+
+
+/*!	Renga: copies the data of an isochronous transfer between the caller's
+	vectors and the descriptor's buffers. SubmitNormalRequest() gives every
+	packet a TRB of its own with a buffer of the largest packet's size, and
+	the packets lie back to back in the caller's data (packet n starts after
+	the request lengths of packets 0 to n - 1, as on the other host
+	controllers and in the USB_isochronous.h interface). WriteDescriptor()
+	and ReadDescriptor() fill the buffers completely one after the other, so
+	as soon as two packets differ in length (44.1 kHz audio alternates 44
+	and 45 frames per millisecond; asynchronous devices ask for one frame
+	more or less now and then), every packet after the first shorter one got
+	the wrong bytes. With packets of equal length both ways agree.
+
+	For IN transfers each packet's bytes go to its place in the caller's
+	data; a short packet leaves the rest of its place as it was (the caller
+	reads usb_iso_packet_descriptor::actual_length).
+*/
+size_t
+XHCI::_CopyIsochronous(xhci_td* descriptor,
+	usb_isochronous_data* isochronousData, generic_io_vec* vector,
+	size_t vectorCount, bool physical, bool toDescriptor)
+{
+	size_t copied = 0;
+	size_t vecIdx = 0, vecUsed = 0;
+	for (uint32 packet = 0; packet < isochronousData->packet_count
+			&& packet < descriptor->buffer_count; packet++) {
+		const usb_iso_packet_descriptor& packetDescriptor
+			= isochronousData->packet_descriptors[packet];
+		size_t length = packetDescriptor.request_length > 0
+			? (size_t)packetDescriptor.request_length : 0;
+		size_t wanted = length;
+		if (!toDescriptor) {
+			size_t actual = packetDescriptor.actual_length > 0
+				? (size_t)packetDescriptor.actual_length : 0;
+			if (actual < wanted)
+				wanted = actual;
+		}
+		if (length > descriptor->buffer_size)
+			length = wanted = descriptor->buffer_size;
+
+		size_t bufUsed = 0;
+		while (length > 0 && vecIdx < vectorCount) {
+			size_t toCopy = min_c(length, vector[vecIdx].length - vecUsed);
+			size_t useful = min_c(toCopy, wanted > bufUsed
+				? wanted - bufUsed : 0);
+			if (useful > 0) {
+				generic_addr_t buffer
+					= (generic_addr_t)descriptor->buffers[packet] + bufUsed;
+				generic_addr_t data = vector[vecIdx].base + vecUsed;
+				status_t status = toDescriptor
+					? generic_memcpy(buffer, false, data, physical, useful)
+					: generic_memcpy(data, physical, buffer, false, useful);
+				ASSERT_ALWAYS(status == B_OK);
+				copied += useful;
+			}
+
+			bufUsed += toCopy;
+			length -= toCopy;
+			vecUsed += toCopy;
+			if (vecUsed == vector[vecIdx].length) {
+				vecIdx++;
+				vecUsed = 0;
+			}
+		}
+	}
+
+	TRACE("copied isochronous data (%" B_PRIuSIZE " bytes)\n", copied);
+	return copied;
 }
 
 
@@ -3207,7 +3282,11 @@ XHCI::FinishTransfers()
 			if (directionIn && actualLength > 0 && !transfer->IsPhysical()) {
 				TRACE("copying in iov count %ld\n", transfer->VectorCount());
 				status_t status = transfer->PrepareKernelAccess();
-				if (status == B_OK) {
+				if (status == B_OK && transfer->IsochronousData() != NULL) {
+					_CopyIsochronous(td, transfer->IsochronousData(),
+						transfer->Vector(), transfer->VectorCount(),
+						transfer->IsPhysical(), false);
+				} else if (status == B_OK) {
 					ReadDescriptor(td, transfer->Vector(),
 						transfer->VectorCount(), transfer->IsPhysical());
 				} else {

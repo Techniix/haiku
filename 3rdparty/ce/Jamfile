@@ -35,6 +35,13 @@ if $(CE_HARNESS) {
 	SEARCH on $(debugSettings) = [ FDirName $(guestDir) debug_server ] ;
 	AddFilesToHaikuImage home config settings system debug_server
 		: $(debugSettings) ;
+
+	# The minimum images have no sound card drivers but virtio_sound; the
+	# driver tests need the USB audio driver there too (the Renga images
+	# have it in the system package already).
+	if ! $(HAIKU_RENGA_IMAGE) {
+		AddDriversToHaikuImage audio hmulti : usb_audio ;
+	}
 }
 
 

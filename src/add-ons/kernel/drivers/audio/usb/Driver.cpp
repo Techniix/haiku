@@ -32,18 +32,8 @@ usb_audio_device_added(usb_device device, void** cookie)
 
 	MutexLocker _(gDriverLock);
 
-	// check if this is a replug of an existing device first
-	for (int32 i = 0; i < MAX_DEVICES; i++) {
-		if (gDevices[i] == NULL)
-			continue;
-
-		if (gDevices[i]->CompareAndReattach(device) != B_OK)
-			continue;
-
-		TRACE(INF, "The device is plugged back. Use entry at %ld.\n", i);
-		*cookie = gDevices[i];
-		return B_OK;
-	}
+	// A device plugged in again is a new device (see
+	// Device::CompareAndReattach()).
 
 	// no such device yet, create a new one
 	Device* audioDevice = new(std::nothrow) Device(device);
@@ -69,7 +59,7 @@ usb_audio_device_added(usb_device device, void** cookie)
 		gDevices[i] = audioDevice;
 		*cookie = audioDevice;
 
-		TRACE(INF, "New device is added at %ld.\n", i);
+		TRACE(INF, "New device is added at %" B_PRId32 ".\n", i);
 		return B_OK;
 	}
 
@@ -95,7 +85,7 @@ usb_audio_device_removed(void* cookie)
 			} else {
 				gDevices[i] = NULL;
 				delete device;
-				TRACE(INF, "Device at %ld deleted.\n", i);
+				TRACE(INF, "Device at %" B_PRId32 " deleted.\n", i);
 			}
 			break;
 		}
@@ -177,10 +167,19 @@ usb_audio_open(const char* name, uint32 flags, void** cookie)
 
 	*cookie = NULL;
 	status_t status = ENODEV;
-	for (int32 i = 0; i < MAX_DEVICES && gDevices[i] != NULL; i++) {
-		if (strcmp(gDeviceNames[i], name) == 0) {
+	// Device names carry the slot (publish_devices()); slots can be empty
+	// after a device was unplugged, and removed devices are not
+	// published any more.
+	for (int32 i = 0; i < MAX_DEVICES; i++) {
+		if (gDevices[i] == NULL || gDevices[i]->IsRemoved())
+			continue;
+		char deviceName[64];
+		snprintf(deviceName, sizeof(deviceName), "%s%" B_PRId32,
+			sDeviceBaseName, i + 1);
+		if (strcmp(deviceName, name) == 0) {
 			status = gDevices[i]->Open(flags);
-			*cookie = gDevices[i];
+			if (status == B_OK)
+				*cookie = gDevices[i];
 			break;
 		}
 	}
@@ -226,7 +225,22 @@ static status_t
 usb_audio_free(void* cookie)
 {
 	Device* device = (Device*)cookie;
-	return device->Free();
+	status_t status = device->Free();
+
+	// Renga: a device unplugged while it was open is deleted once its last
+	// user is gone (usb_audio_device_removed() could not).
+	MutexLocker _(gDriverLock);
+	if (device->IsRemoved() && !device->IsOpen()) {
+		for (int32 i = 0; i < MAX_DEVICES; i++) {
+			if (gDevices[i] == device) {
+				gDevices[i] = NULL;
+				delete device;
+				TRACE(INF, "Removed device at %" B_PRId32 " deleted.\n", i);
+				break;
+			}
+		}
+	}
+	return status;
 }
 
 
@@ -242,12 +256,13 @@ publish_devices()
 
 	int32 deviceCount = 0;
 	for (size_t i = 0; i < MAX_DEVICES; i++) {
-		if (gDevices[i] == NULL)
+		if (gDevices[i] == NULL || gDevices[i]->IsRemoved())
 			continue;
 
 		gDeviceNames[deviceCount] = (char*)malloc(strlen(sDeviceBaseName) + 4);
 		if (gDeviceNames[deviceCount]) {
-			sprintf(gDeviceNames[deviceCount], "%s%ld", sDeviceBaseName, i + 1);
+			sprintf(gDeviceNames[deviceCount], "%s%" B_PRIuSIZE,
+				sDeviceBaseName, i + 1);
 			TRACE(INF, "publishing %s\n", gDeviceNames[deviceCount]);
 			deviceCount++;
 		} else

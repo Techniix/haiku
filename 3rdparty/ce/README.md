@@ -353,6 +353,32 @@ and SDL's buffering, well under half a second. The default is 700/1300 Hz
 at amplitude 12000. `results.json` lists every tone written and how far QEMU
 read (`boot.capture_feed`).
 
+## USB audio
+
+Every run attaches an xhci controller (`audiousb`) with no devices on it,
+and four QEMU `wav` audio backends, `usbsnd0` to `usbsnd3`. A test plugs a
+QEMU `usb-audio` device in with `CE-HOST usb_audio add` and pulls the one
+plugged in last out with `CE-HOST usb_audio remove` (the harness uses the
+monitor's `device_add` and `device_del`). The n-th device plugged in plays
+into `usb-<n>.wav`, since QEMU closes a backend's file when its device goes
+and would start it again on the next plug-in. QEMU's `usb-audio` is a USB
+Audio Class 1 device: 48 kHz, 16-bit stereo playback, a feature unit with a
+master mute and a volume per channel. QEMU maps that volume linearly
+from -128 dB to +8 dB onto 0..255 and plays at that / 255, so 0 dB is
+240/255 (`qemu_usb_audio_gain()` in `ce-test.py`). It has no capture, no
+other rates and no Audio Class 2 mode (checked in QEMU 8.2's
+`hw/usb/dev-audio.c`).
+
+The minimum images get the `usb_audio` driver in
+`system/non-packaged/add-ons/kernel/drivers` (the Renga images have it in
+the system package), so the driver tests run on every boot path.
+
+Audio Class 2 is tested without hardware by `usb_audio_uac2_test`: the
+driver's own sources, built into a userland program against a mock USB
+stack (`tests/usb_audio/shim/` stands in for the few kernel headers they
+include) with one synthetic high-speed UAC2 device (see "Current
+suites").
+
 ## Media Kit tests
 
 The harness image keeps media_server from starting at boot (the driver tests
@@ -415,6 +441,40 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   shared memory, the libc additions, user contexts, and TCP (keepalive,
   `TCP_INFO`, orderly and abortive close).
 - **shortcut_keys**: Ctrl as the shortcut key, see above.
+- **usb_audio**: plugs QEMU's `usb-audio` in while the guest runs and
+  drives `/dev/audio/hmulti/usb/<n>` with the multi_audio add-on's ioctl
+  sequence: the device's product string as its name, its one rate and
+  format (others refused), the feature unit's mute and volume controls
+  with QEMU's range (-127.996 to +8 dB in steps of 0.53125 dB) and their
+  values read back, buffer cycles, frame counters and pacing in five tone
+  phases (0 dB, -40 dB, muted, after a force stop, and while the device is
+  pulled out), a force stop from a second thread. Pulled out while it
+  plays, the waiting exchange must fail within 3 s (not time out), the
+  node must go, and ioctls on the open handle must fail; plugged in again
+  it must be published and play. The harness then finds the phases in
+  `usb-0.wav` and `usb-1.wav` (`usb_audio_out.*`): each in one piece, the
+  -40 dB phase at QEMU's level for it (0.6875 of the 0 dB phases), the
+  muted one absent.
+- **usb_audio_uac2**: the `usb_audio` driver's sources against a mock USB
+  stack with a synthetic USB Audio Class 2 device, "Renga UAC2 Test DAC":
+  high speed, a programmable clock source (six discrete rates, 44.1 to
+  192 kHz) behind a clock selector, playback (24-bit 3-byte and 16-bit
+  alternates, asynchronous with an explicit feedback endpoint) and capture
+  (24-bit), feature units with mute and volume. The mock answers only the
+  UAC2 forms of the class requests, checks every isochronous transfer as
+  Haiku's xhci driver does, runs its endpoints in real time, plays and
+  records a frame counter, and runs its clock 1000 ppm fast. Checks: rates
+  from the clock's RANGE answer, the formats of both alternates, gain
+  ranges from RANGE, volume and mute set and read back in UAC2 requests
+  only, the input following the output on the shared clock, the clock set
+  by SET CUR, the right alternates, playback and capture bit-exact (no
+  frame lost, repeated or misplaced) at 44.1 kHz/24-bit and 48 kHz/16-bit,
+  packets of only the two neighbours of the feedback's average (5.518 and
+  6.006 frames per microframe), force stop, removal while playing (the
+  exchange returns `B_DEV_NOT_READY` within 0.2 s, the node goes, the slot
+  is free again), and the packet and feedback arithmetic (44.1 kHz at full
+  speed, 11.025 kHz at high speed, 10.14 and 16.16 feedback values, and a
+  10.14 value sent at high speed).
 - **virtio_block**: flush and trim on two scratch disks, one offering
   DISCARD and one only WRITE ZEROES; the harness then checks on the host
   that the trimmed space was freed in the image files.

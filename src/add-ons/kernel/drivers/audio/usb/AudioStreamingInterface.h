@@ -1,6 +1,7 @@
 /*
  *	Driver for USB Audio Device Class devices.
  *	Copyright (c) 2009-13 S.Zharski <imker@gmx.li>
+ *	Copyright 2026, Renga contributors.
  *	Distributed under the terms of the MIT license.
  *
  */
@@ -14,120 +15,99 @@
 #include "AudioControlInterface.h"
 
 
-class ASInterfaceDescriptor {
-public:
-							ASInterfaceDescriptor(
-								usb_audio_streaming_interface_descriptor*
-								Descriptor);
-							~ASInterfaceDescriptor();
+/*!	One alternate setting of an audio streaming interface, as far as it can
+	carry PCM audio: the format (Type I: channels, subslot size, bit
+	resolution, the UAC1 format tag), the sample rates, the isochronous data
+	endpoint and, for asynchronous OUT endpoints, the feedback endpoint.
 
-// protected:
-			uint8			fTerminalLink;
-			uint8			fDelay;
-			uint16			fFormatTag;
-};
-
-
-class ASEndpointDescriptor {
-public:
-							ASEndpointDescriptor(
-								usb_endpoint_descriptor* Endpoint,
-								usb_audio_streaming_endpoint_descriptor*
-								Descriptor);
-							~ASEndpointDescriptor();
-
-// protected:
-			uint8			fCSAttributes;
-			uint8			fLockDelayUnits;
-			uint16			fLockDelay;
-			uint16			fMaxPacketSize;
-			uint8			fEndpointAddress;
-			uint8			fEndpointAttributes;
-};
-
-
-class _ASFormatDescriptor {
-public:
-							_ASFormatDescriptor(
-								usb_audio_format_descriptor* Descriptor);
-	virtual					~_ASFormatDescriptor();
-
-// protected:
-			uint8			fFormatType;
-	static	uint32			GetSamFreq(const usb_audio_sampling_freq& freq);
-	static	usb_audio_sampling_freq	GetSamFreq(uint32 rate);
-};
-
-
-class TypeIFormatDescriptor : public _ASFormatDescriptor {
-public:
-							TypeIFormatDescriptor(
-								usb_audio_format_descriptor* Descriptor);
-	virtual					~TypeIFormatDescriptor();
-
-			status_t		Init(usb_audio_format_descriptor* Descriptor);
-
-// protected:
-			uint8			fNumChannels;
-			uint8			fSubframeSize;
-			uint8			fBitResolution;
-			uint8			fSampleFrequencyType;
-			Vector<uint32>	fSampleFrequencies;
-};
-
-
-class TypeIIFormatDescriptor : public _ASFormatDescriptor {
-public:
-							TypeIIFormatDescriptor(
-								usb_audio_format_descriptor* Descriptor);
-	virtual					~TypeIIFormatDescriptor();
-
-// protected:
-			uint16			fMaxBitRate;
-			uint16			fSamplesPerFrame;
-			uint8			fSampleFrequencyType;
-			Vector<uint32>	fSampleFrequencies;
-};
-
-
-class TypeIIIFormatDescriptor : public TypeIFormatDescriptor {
-public:
-							TypeIIIFormatDescriptor(
-								usb_audio_format_descriptor* Descriptor);
-	virtual					~TypeIIIFormatDescriptor();
-
-// protected:
-};
-
-
+	UAC1 (Audio 1.0) alternates list their sample rates in the format
+	descriptor (discrete, or a continuous range). UAC2 (Audio 2.0)
+	alternates have none: the rates belong to the clock entity the
+	terminal is connected to and are read from the device with a RANGE
+	request (AudioControlInterface::GetClockRates()). The channel cluster
+	is the terminal's in UAC1 and the alternate's own in UAC2.
+*/
 class AudioStreamAlternate {
 public:
-									AudioStreamAlternate(size_t alternate,
-										ASInterfaceDescriptor* interface,
-										ASEndpointDescriptor* endpoint,
-										_ASFormatDescriptor* format);
-									~AudioStreamAlternate();
+								AudioStreamAlternate(size_t alternate,
+									uint16 specRelease,
+									usb_interface_info* interface);
+								~AudioStreamAlternate();
 
-			ASInterfaceDescriptor*	Interface()	{ return fInterface; }
-			ASEndpointDescriptor*	Endpoint()	{ return fEndpoint;	 }
-			_ASFormatDescriptor*	Format()	{ return fFormat;	 }
+			bool				IsUsable() const { return fUsable; }
+			bool				IsInput() const;
 
-			status_t				SetSamplingRate(uint32 newRate);
-			status_t				SetSamplingRateById(uint32 newId);
-			uint32					GetSamplingRate() { return fSamplingRate; }
-			uint32					GetSamplingRateId(uint32 rate);
-			uint32					GetSamplingRateIds();
-			uint32					GetFormatId();
-			status_t				SetFormatId(uint32 newFormatId);
-			uint32					SamplingRateFromId(uint32 id);
+			size_t				Alternate() const { return fAlternate; }
+			uint8				TerminalLink() const { return fTerminalLink; }
+			uint16				FormatTag() const { return fFormatTag; }
+			uint8				Channels() const { return fChannels; }
+			uint32				ChannelConfig() const
+									{ return fChannelConfig; }
+			uint8				SubslotSize() const { return fSubslotSize; }
+			uint8				BitResolution() const
+									{ return fBitResolution; }
 
-protected:
+			uint8				EndpointAddress() const
+									{ return fEndpointAddress; }
+			uint8				EndpointAttributes() const
+									{ return fEndpointAttributes; }
+			uint16				MaxPacketSize() const
+									{ return fMaxPacketSize; }
+			uint8				Interval() const { return fInterval; }
+			uint8				FeedbackAddress() const
+									{ return fFeedbackAddress; }
+			uint16				FeedbackMaxPacketSize() const
+									{ return fFeedbackMaxPacketSize; }
+			uint8				FeedbackInterval() const
+									{ return fFeedbackInterval; }
+			uint8				CSAttributes() const
+									{ return fCSAttributes; }
 
-			size_t					fAlternate;
-			ASInterfaceDescriptor*	fInterface;
-			ASEndpointDescriptor*	fEndpoint;
-			_ASFormatDescriptor*	fFormat;
-			uint32					fSamplingRate;
+			// The rates this alternate can play: discrete rates, or a
+			// continuous range [RateMin(), RateMax()].
+			bool				IsContinuous() const { return fContinuous; }
+			uint32				RateMin() const { return fRateMin; }
+			uint32				RateMax() const { return fRateMax; }
+			const Vector<uint32>& Rates() const { return fRates; }
+			void				SetRates(const Vector<uint32>& rates);
+			bool				SupportsRate(uint32 rate) const;
+
+			// hmulti format of the samples (B_FMT_*), 0 if none fits
+			uint32				FormatId() const;
+
+	static	uint32				SamplingRateId(uint32 rate);
+	static	uint32				SamplingRateFromId(uint32 id);
+	static	uint32				GetSamFreq(const usb_audio_sampling_freq& freq);
+	static	usb_audio_sampling_freq	GetSamFreq(uint32 rate);
+
+private:
+			void				_ParseEndpoints(usb_interface_info* interface);
+
+			size_t				fAlternate;
+			bool				fUsable;
+			uint16				fSpecRelease;
+
+			uint8				fTerminalLink;
+			uint16				fFormatTag;
+			uint8				fFormatType;
+			uint8				fChannels;
+			uint32				fChannelConfig;
+			uint8				fSubslotSize;
+			uint8				fBitResolution;
+
+			bool				fContinuous;
+			uint32				fRateMin;
+			uint32				fRateMax;
+			Vector<uint32>		fRates;
+
+			uint8				fEndpointAddress;
+			uint8				fEndpointAttributes;
+			uint16				fMaxPacketSize;
+			uint8				fInterval;
+			uint8				fCSAttributes;
+			uint8				fFeedbackAddress;
+			uint16				fFeedbackMaxPacketSize;
+			uint8				fFeedbackInterval;
 };
 
 
@@ -138,19 +118,26 @@ public:
 									size_t interface, usb_interface_list* List);
 								~AudioStreamingInterface();
 
-	//		status_t			InitCheck() { return fStatus; }
 			uint8				TerminalLink();
 			bool				IsInput() { return fIsInput; }
 
-			AudioChannelCluster* ChannelCluster();
+			// The channel cluster of the active alternate: from the
+			// terminal (UAC1) or the alternate itself (UAC2).
+			uint8				ChannelsCount();
+			uint32				ChannelsConfig();
 
 			void				GetFormatsAndRates(
 									multi_description* Description);
+
+			AudioStreamAlternate* ActiveAlternate()
+									{ return fAlternates.Count() > 0
+										? fAlternates[fActiveAlternate]
+										: NULL; }
 protected:
 			size_t				fInterface;
+			uint8				fInterfaceNumber;
 			AudioControlInterface*	fControlInterface;
 
-	//		status_t			fStatus;
 			bool				fIsInput;
 		// alternates of the streams
 			Vector<AudioStreamAlternate*>	fAlternates;
@@ -159,4 +146,3 @@ protected:
 
 
 #endif // _AUDIO_STREAMING_INTERFACE_H_
-

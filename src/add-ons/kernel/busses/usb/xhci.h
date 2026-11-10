@@ -165,6 +165,12 @@ private:
 									generic_io_vec *vector, size_t vectorCount, bool physical);
 			size_t				ReadDescriptor(xhci_td *descriptor,
 									generic_io_vec *vector, size_t vectorCount, bool physical);
+			// Renga: isochronous transfers have one buffer per packet, but
+			// the packets lie back to back in the caller's data.
+			size_t				_CopyIsochronous(xhci_td *descriptor,
+									usb_isochronous_data *isochronousData,
+									generic_io_vec *vector, size_t vectorCount,
+									bool physical, bool toDescriptor);
 
 			status_t			_LinkDescriptorForPipe(xhci_td *descriptor,
 									xhci_endpoint *endpoint);

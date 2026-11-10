@@ -105,9 +105,37 @@ MEDIA_PHASES = [
 MEDIA_FREQUENCIES = sorted({hz for phase in MEDIA_PHASES
 	for hz in phase[2:4] if hz} | {1550, 1700})
 
+
+def qemu_usb_audio_gain(db):
+	"""The factor QEMU's usb-audio device plays at for a feature unit volume
+	of db (hw/usb/dev-audio.c): it maps the 1/256 dB value from 0x8000
+	(-128 dB) to 0x0800 (+8 dB) linearly onto 0..255 and the mixing engine
+	scales by that / 255, so 0 dB is 240/255."""
+	raw = int(round(db * 256)) & 0xffff
+	step = ((raw - 0x8000) & 0xffff) * 255 + 0x4400
+	return min(step // 0x8800, 255) / 255.0
+
+
+# Phases of 3rdparty/ce/tests/usb_audio/usb_audio_test.cpp in what QEMU's
+# usb-audio devices recorded: (check, file, left Hz, right Hz, minimum
+# seconds, level relative to the "play" phase or None, present). Phases
+# that must be absent (muted) have present False.
+USB_AUDIO_PHASES = [
+	("usb_audio_out.play", "usb-0.wav", 600, 900, 1.6, None, True),
+	("usb_audio_out.volume", "usb-0.wav", 650, 950, 1.2,
+		qemu_usb_audio_gain(-40) / qemu_usb_audio_gain(0), True),
+	("usb_audio_out.mute", "usb-0.wav", 700, 1000, 0, None, False),
+	("usb_audio_out.restart", "usb-0.wav", 750, 1050, 1.2, 1.0, True),
+	("usb_audio_out.unplug", "usb-0.wav", 800, 1100, 1.0, 1.0, True),
+	("usb_audio_out.replug", "usb-1.wav", 850, 1150, 1.2, 1.0, True),
+]
+USB_AUDIO_FREQUENCIES = sorted({hz for phase in USB_AUDIO_PHASES
+	for hz in phase[2:4]})
+
+
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
-WATCHED_DRIVERS = ("virtio_sound", "virtio_block", "nvme_disk")
+WATCHED_DRIVERS = ("virtio_sound", "virtio_block", "nvme_disk", "usb_audio")
 
 # Compile-only targets: fast feedback before the image build.
 COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
@@ -118,6 +146,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
 	"virtio_input", "<input>tablet", "<input>virtio",
+	"usb_audio", "usb", "<usb>xhci", "usb_audio_test",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "Media", "desklink", "SoundRecorder"]
 
@@ -174,6 +203,16 @@ USB_CONTROLLERS = {
 }
 POINTER_ABS_MAX = 32767
 POINTER_REL_MAX = 200
+
+# USB audio devices the guest plugs in and out (CE-HOST usb_audio add |
+# remove): QEMU's usb-audio (USB Audio Class 1, 48 kHz 16-bit stereo, a
+# feature unit with mute and per-channel volume), on an xhci controller of
+# their own so that they are there with any --pointer-devices. Every add
+# gets the next audiodev, a wav recorder writing usb-<n>.wav, because QEMU
+# closes the file when the device goes and would start it again on the
+# next add. USB_AUDIO_DEVICES bounds the adds per run.
+USB_AUDIO_DEVICES = 4
+USB_AUDIO_CONTROLLER = "audiousb"
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
 TRACE_SOURCES = [
@@ -737,6 +776,8 @@ class SerialReader(threading.Thread):
 		self.screenshots = []	# saved on request, as PPM
 		self.line = b""		# incomplete last line, for CE-HOST requests
 		self.host_requests = []
+		self.usb_audio_added = 0		# usb-audio devices plugged in so far
+		self.usb_audio_plugged = []		# their indices, still plugged in
 		self.done = threading.Event()
 		self.kdl = threading.Event()
 		self.finished = threading.Event()
@@ -812,6 +853,10 @@ class SerialReader(threading.Thread):
 		  CE-HOST audio_in <left Hz> <right Hz> <amplitude>
 		      feed this stereo sine into the second sound card's capture
 		      input from now on (0-20000 Hz, amplitude 0-32767)
+		  CE-HOST usb_audio add|remove
+		      plug a QEMU usb-audio device into the audio xhci controller
+		      (it records into usb-<n>.wav, n counting the adds) or pull
+		      the one plugged in last out (USB_AUDIO_DEVICES)
 
 		Pointer and screenshot requests are carried out before the next
 		line is read, so they happen in order and before anything the test
@@ -835,6 +880,8 @@ class SerialReader(threading.Thread):
 			elif accepted and words[0] in ("pointer", "pointer_rel"):
 				if self.qmp_path is not None:
 					request["error"] = qmp_pointer(self.qmp_path, words)
+			elif accepted and words[0] == "usb_audio":
+				request["error"] = self._usb_audio(words[1])
 			elif accepted and words[0] == "screenshot":
 				path = os.path.join(os.path.dirname(self.log_path),
 					"screen-%s.ppm" % words[1])
@@ -849,6 +896,29 @@ class SerialReader(threading.Thread):
 			log("guest request %s: %s%s" % ("carried out" if accepted
 				else "refused", " ".join(words), ": " + request["error"]
 				if request.get("error") else ""))
+
+	def _usb_audio(self, action):
+		"""Plugs a QEMU usb-audio device in (the next audiodev, see
+		USB_AUDIO_DEVICES) or pulls the last one out, through the monitor.
+		Returns None or what went wrong."""
+		if self.monitor_path is None:
+			return "no monitor"
+		if action == "add":
+			index = self.usb_audio_added
+			if index >= USB_AUDIO_DEVICES:
+				return "all %d usb audio devices used" % USB_AUDIO_DEVICES
+			self.usb_audio_added += 1
+			self.usb_audio_plugged.append(index)
+			command = "device_add usb-audio,id=ceua%d,audiodev=usbsnd%d," \
+				"bus=%s.0" % (index, index, USB_AUDIO_CONTROLLER)
+		else:
+			if not self.usb_audio_plugged:
+				return "no usb audio device plugged in"
+			index = self.usb_audio_plugged.pop()
+			command = "device_del ceua%d" % index
+		if not monitor_command(self.monitor_path, command):
+			return "monitor command failed"
+		return None
 
 	def _send(self, command, settle=1.0):
 		try:
@@ -923,6 +993,8 @@ def host_request_allowed(words):
 		return all(re.fullmatch(r"\d{1,5}", w) is not None for w in words[1:]) \
 			and int(words[1]) <= 20000 and int(words[2]) <= 20000 \
 			and int(words[3]) <= 32767
+	if len(words) == 2 and words[0] == "usb_audio":
+		return words[1] in ("add", "remove")
 	if len(words) == 2 and words[0] == "screenshot":
 		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None
 	if len(words) == 3 and words[0] == "pointer_rel":
@@ -1094,6 +1166,11 @@ def boot(args, results_dir, report):
 				CAPTURE_RATE,
 				CAPTURE_PERIOD_FRAMES * 1000000 // CAPTURE_RATE),
 		"-device", "virtio-sound-pci,audiodev=snd1",
+		"-device", "qemu-xhci,id=%s" % USB_AUDIO_CONTROLLER,
+	] + [arg for n in range(USB_AUDIO_DEVICES) for arg in (
+		"-audiodev", "wav,id=usbsnd%d,path=%s,out.frequency=48000,"
+			"out.channels=2,out.format=s16"
+			% (n, os.path.join(results_dir, "usb-%d.wav" % n)))] + [
 		"-nic", "none",
 		# Device models report malformed guest requests as guest errors.
 		"-d", "guest_errors,unimp",
@@ -1862,14 +1939,16 @@ def tone_windows(samples, rate, candidates, window):
 	return results
 
 
-def media_segments(path, reader):
+def media_segments(path, reader, frequencies=None):
 	"""Segments of equal (left, right) tones in a recording, with their
 	length, per-channel RMS (interior windows) and start window."""
+	if frequencies is None:
+		frequencies = MEDIA_FREQUENCIES
 	rate, channels, samples = reader(path)
 	window = rate // 10
-	left = tone_windows(samples[0], rate, MEDIA_FREQUENCIES, window)
+	left = tone_windows(samples[0], rate, frequencies, window)
 	right = tone_windows(samples[1] if channels > 1 else samples[0], rate,
-		MEDIA_FREQUENCIES, window)
+		frequencies, window)
 	segments = []
 	for index, (l, r) in enumerate(zip(left, right)):
 		key = (l[0], r[0])
@@ -1957,6 +2036,64 @@ def analyze_media_audio(results_dir, report):
 			bound)})
 
 
+def analyze_usb_audio(results_dir, report):
+	"""The usb_audio_test phases in what QEMU's usb-audio devices played
+	(USB_AUDIO_PHASES): each phase in one piece, as long as it was played,
+	at the level the feature unit's volume calls for (QEMU's own mapping,
+	qemu_usb_audio_gain()), and the muted phase not at all."""
+	checks = []
+	report.setdefault("usb_audio_out", {})["checks"] = checks
+	recordings = {}
+	for name in sorted({phase[1] for phase in USB_AUDIO_PHASES}):
+		path = os.path.join(results_dir, name)
+		try:
+			recordings[name] = media_segments(path, read_wav,
+				USB_AUDIO_FREQUENCIES)
+		except (OSError, ValueError, struct.error) as error:
+			checks.append({"name": "usb_audio_out.recording", "pass": False,
+				"detail": "%s: %s" % (name, error)})
+			return
+	report["usb_audio_out"]["segments"] = {name: [{
+			"start": s["start"] / 10.0, "seconds": s["seconds"],
+			"left_hz": s["key"][0], "right_hz": s["key"][1],
+			"left_rms": round(s["left_rms"]),
+			"right_rms": round(s["right_rms"])}
+		for s in segments if s["seconds"] >= 0.2
+			and s["key"] != (None, None)]
+		for name, (_, _, segments) in recordings.items()}
+
+	def matching(recording, left, right):
+		return [s for s in recordings[recording][2]
+			if s["key"] == (left, right) and s["seconds"] >= 0.2]
+
+	reference = None
+	for name, recording, left, right, seconds, level, present \
+			in USB_AUDIO_PHASES:
+		pieces = matching(recording, left, right)
+		if not present:
+			checks.append({"name": name, "pass": not pieces,
+				"detail": "%s L %d / R %d Hz: %s" % (recording, left, right,
+					"%d piece(s), %.1fs" % (len(pieces),
+						sum(p["seconds"] for p in pieces)) if pieces
+					else "absent, as it should be")})
+			continue
+		segment = max(pieces, key=lambda p: p["seconds"], default=None)
+		passed = segment is not None and segment["seconds"] >= seconds \
+			and len(pieces) == 1
+		detail = "%s L %d / R %d Hz: %s" % (recording, left, right,
+			"%.1fs in %d piece(s)" % (segment["seconds"], len(pieces))
+				if segment else "not found")
+		if segment is not None and reference is None:
+			reference = segment
+		if passed and level is not None and reference is not None:
+			ratios = [segment[side] / reference[side]
+				for side in ("left_rms", "right_rms")]
+			passed = all(abs(r - level) <= 0.05 * level for r in ratios)
+			detail += ", level %.3f / %.3f of the first phase (want %.3f)" \
+				% (ratios[0], ratios[1], level)
+		checks.append({"name": name, "pass": passed, "detail": detail})
+
+
 # Screenshots media_ui_test asks for (CE-HOST screenshot): the
 # per-application audio controls (F-31/F-32).
 MEDIA_UI_SCREENSHOTS = ["volume_popup", "media_preferences",
@@ -1998,6 +2135,7 @@ def write_report(results_dir, report):
 	checks = list(report.get("tests", []))
 	checks += report.get("audio", {}).get("checks", [])
 	checks += report.get("media_audio", {}).get("checks", [])
+	checks += report.get("usb_audio_out", {}).get("checks", [])
 	checks += report.get("host_checks", [])
 	failed = [c for c in checks if not c["pass"]]
 
@@ -2274,6 +2412,8 @@ def main():
 		check_boot_menu(args, results_dir, report)
 		if not args.only or "vsnd_test" in args.only:
 			analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
+		if "usb_audio_test" in (args.only or available):
+			analyze_usb_audio(results_dir, report)
 		if "media_test" in (args.only or available):
 			analyze_media_audio(results_dir, report)
 		if "media_ui_test" in (args.only or available):

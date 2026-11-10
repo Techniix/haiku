@@ -576,6 +576,65 @@ expect("media phases: missing phases fail",
 		and not missing["media_audio.route_click_free"], str(missing))
 
 
+# The usb_audio_test phases (USB_AUDIO_PHASES) in synthetic recordings of
+# QEMU's usb-audio devices: the first plug-in's usb-0.wav, the second's
+# usb-1.wav. QEMU plays at 240/255 at 0 dB (qemu_usb_audio_gain()).
+def usb_tone(left, right, seconds, level):
+	count = int(seconds * RATE)
+	return [(int(level * 12000 * math.sin(2 * math.pi * left * i / RATE)),
+		int(level * 12000 * math.sin(2 * math.pi * right * i / RATE)))
+		for i in range(count)]
+
+
+def usb_recordings(volume=None, leak_mute=False, gap=False, no_replug=False):
+	media_tone = usb_tone
+	zero = ce_test.qemu_usb_audio_gain(0)
+	low = ce_test.qemu_usb_audio_gain(-40) if volume is None else volume
+	first = silence(0.4) + media_tone(600, 900, 2.0, zero)
+	first += media_tone(650, 950, 1.5, low)
+	first += media_tone(700, 1000, 1.0, zero) if leak_mute else silence(1.0)
+	restart = media_tone(750, 1050, 1.5, zero)
+	if gap:
+		restart = restart[:24000] + silence(0.3) + restart[24000:]
+	first += silence(0.2) + restart + media_tone(800, 1100, 1.5, zero)
+	directory = tempfile.mkdtemp()
+	write_wav(os.path.join(directory, "usb-0.wav"), first)
+	if not no_replug:
+		write_wav(os.path.join(directory, "usb-1.wav"), silence(0.3)
+			+ media_tone(850, 1150, 1.5, zero) + silence(0.2))
+	report = {}
+	ce_test.analyze_usb_audio(directory, report)
+	return {c["name"]: c for c in report["usb_audio_out"]["checks"]}
+
+
+checks = usb_recordings()
+expect("usb audio: clean recordings pass",
+	all(c["pass"] for c in checks.values()),
+	str([c["detail"] for c in checks.values() if not c["pass"]]))
+checks = usb_recordings(volume=ce_test.qemu_usb_audio_gain(-20))
+expect("usb audio: a wrong feature unit volume fails",
+	not checks["usb_audio_out.volume"]["pass"],
+	checks["usb_audio_out.volume"]["detail"])
+checks = usb_recordings(leak_mute=True)
+expect("usb audio: a muted phase that plays fails",
+	not checks["usb_audio_out.mute"]["pass"],
+	checks["usb_audio_out.mute"]["detail"])
+checks = usb_recordings(gap=True)
+expect("usb audio: a gap in a phase fails",
+	not checks["usb_audio_out.restart"]["pass"],
+	checks["usb_audio_out.restart"]["detail"])
+checks = usb_recordings(no_replug=True)
+expect("usb audio: no recording of the second plug-in fails",
+	"usb_audio_out.recording" in checks
+		and not checks["usb_audio_out.recording"]["pass"], str(list(checks)))
+expect("usb audio: hot-plug requests are checked",
+	ce_test.host_request_allowed(["usb_audio", "add"])
+		and ce_test.host_request_allowed(["usb_audio", "remove"])
+		and not ce_test.host_request_allowed(["usb_audio", "device_add",
+			"virtio-net"])
+		and not ce_test.host_request_allowed(["usb_audio"]))
+
+
 # Screenshots of the audio controls: saved and not blank.
 try:
 	from PIL import Image

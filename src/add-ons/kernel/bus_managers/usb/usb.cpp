@@ -518,6 +518,21 @@ usb_ioctl(uint32 opcode, void *buffer, size_t bufferSize)
 			return device->BuildDeviceName((char *)buffer, &index,
 				bufferSize, NULL);
 		}
+
+		case 'DSPD': {
+			// Renga: the speed a device runs at (usb_speed: 0 low, 1 full,
+			// 2 high, 3 super, 4 super+), as a uint32 in place of the
+			// usb_id passed in. Class drivers need it to read endpoint
+			// intervals (frames or microframes); the descriptors alone do
+			// not say. Older stacks answer B_DEV_INVALID_IOCTL.
+			if (bufferSize < sizeof(uint32))
+				return B_BAD_VALUE;
+			BReference<Object> object(gUSBStack->GetObject(*(usb_id *)buffer), true);
+			if (!object.IsSet() || (object->Type() & USB_OBJECT_DEVICE) == 0)
+				return B_BAD_VALUE;
+			*(uint32 *)buffer = ((Device *)object.Get())->Speed();
+			return B_OK;
+		}
 	}
 
 	return B_DEV_INVALID_IOCTL;

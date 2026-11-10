@@ -1,0 +1,37 @@
+SubDir HAIKU_TOP 3rdparty ce tests usb_audio ;
+
+UsePrivateHeaders audio ;
+
+# QEMU's usb-audio device, plugged in and out while the test runs
+# (CE-HOST usb_audio add|remove).
+Application usb_audio_test :
+	usb_audio_test.cpp
+;
+
+# The usb_audio driver's own sources against a mock USB stack with a
+# synthetic USB Audio Class 2 device (QEMU has none). shim/ stands in for
+# the few kernel headers the sources include; it comes before the kernel's
+# private headers, which provide util/Vector.h and util/VectorMap.h.
+local driverDir = [ FDirName $(HAIKU_TOP) src add-ons kernel drivers audio
+	usb ] ;
+SubDirSysHdrs [ FDirName $(SUBDIR) shim ] ;
+SubDirHdrs $(driverDir) ;
+SubDirSysHdrs [ FDirName $(HAIKU_TOP) headers private kernel ] ;
+SEARCH_SOURCE += $(driverDir) ;
+
+Application usb_audio_uac2_test :
+	uac2_test.cpp
+
+	Driver.cpp
+	Device.cpp
+	AudioControlInterface.cpp
+	AudioStreamingInterface.cpp
+	Stream.cpp
+	Settings.cpp
+	: [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: usb_audio_test usb_audio_uac2_test ;
+}
