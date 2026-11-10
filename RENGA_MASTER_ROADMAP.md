@@ -57,17 +57,18 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 
 ## Executive summary
 
-**What is Renga today?** Renga is a fork of Haiku (upstream base `4197d30f`, `hrev60381`, 2026-11-04) developed on the `ce/main` branch of Techniix/haiku. It is upstream Haiku plus 46 commits (2026-11-08 to 2026-11-09): about 17,200 added lines in upstream files and 9,600 in the fork's own `3rdparty/ce` directory. It boots in QEMU under BIOS and UEFI, from disk, CD and virtio-blk, and identifies itself as Renga in the boot loader, ISO volume ID, About window, Deskbar and Installer. The fork was named Renga on 2026-11-08 because Haiku, Inc.'s distribution guidelines do not allow "Haiku" in a distribution's name. `uname` still reports Haiku so ports keep detecting the platform.
+**What is Renga today?** Renga is a fork of Haiku (upstream base `4197d30f`, `hrev60381`, 2026-11-04) developed on the `ce/main` branch of Techniix/haiku. It is upstream Haiku plus 95 commits (2026-11-08 to 2026-11-09): about 26,600 added lines in upstream files and 18,400 in the fork's own `3rdparty/ce` directory. It boots in QEMU under BIOS and UEFI, from disk, CD and virtio-blk, and identifies itself as Renga in the boot loader, ISO volume ID, About window, Deskbar and Installer. The fork was named Renga on 2026-11-08 because Haiku, Inc.'s distribution guidelines do not allow "Haiku" in a distribution's name. `uname` still reports Haiku so ports keep detecting the platform.
 
 **What has been completed?** (all QEMU Tested; none Hardware Tested yet)
-- Fork foundation: branch model (`master` = upstream, work on `ce/main`), automatic `hrev` tag workflow, a headless QEMU test harness with hang capture, screenshots, key and pointer injection, and four boot paths. Current committed baseline: **619/619** checks (BIOS, also with 2 CPUs) and **616/616** (UEFI) since `F-43` phase A (`575f9cc0`); `renga-raw` **324/324**, from before `epoll`.
+- Fork foundation: branch model (`master` = upstream, work on `ce/main`), automatic `hrev` tag workflow, a headless QEMU test harness with hang capture, screenshots, key and pointer injection, and four boot paths. Current committed baseline: **655/655** checks (BIOS, also with 2 CPUs) and **652/652** (UEFI), and `renga-raw` **694/694** with the Media Kit and audio GUI checks, since `369f3e7d`.
 - `epoll`, `inotify` and `signalfd` (`F-15`, all three): Linux semantics including edge-triggered, one-shot, nesting and fork sharing (epoll, 84 checks); create/delete/rename with cookies, modify/attrib/close events, overflow (inotify, 47 checks); per-thread pending signals, SIGCHLD, queued realtime signals (signalfd, 28 checks).
 - Porting API pack 1, **6 of 6 items (100%)**: `eventfd`, `timerfd`, `memfd_create`, POSIX message queues, System V shared memory, libc fill-ins (`getrandom`, `getauxval`, `backtrace*`, `copy_file_range`, `sendmmsg`/`recvmmsg`), user contexts (x86_64), TCP keepalive.
+- Media Kit phase 1 (`F-31`, `F-32` controls): per-application volume and mute remembered by signature, any application on any output, "What you hear" and per-application loopback as Media Kit sources, recording gain, click-free changes, with controls in the Deskbar volume popup, the Media preferences and SoundRecorder (`ef41c576`, `369f3e7d`); `virtio_sound` capture (`F-02`, `19369300`); four upstream Media Kit bugs fixed on the way (section 10.2, 25-28).
 - Tier 1 work: `TCP_INFO`, abortive-close reset, `virtio_sound` playback, `virtio_block` flush/trim/resize and shipping on x86_64, NVMe multi-namespace, EFI loader boot-disk preference, boot menu timeout with countdown.
 - Identity: live-animated Renga boot splash, Renga branding, `renga-raw`/`renga-anyboot`/`renga-vmware` build profiles, Techniix repository preferred over HaikuPorts, Ctrl as the default shortcut key with a switch back to Alt.
 - Upstream bugs found and fixed in the fork (10 written up for later reporting, plus 2 newer ones): see [Section 10.2](#102-upstream-haiku-bugs-found-and-fixed-in-renga).
 
-**What is being developed now?** The Media Kit (`F-31`), starting with `virtio_sound` capture (`F-02`). The small Chromium OS gaps (`F-43` phase A) were finished on 2026-11-09 (`82cd4654` to `575f9cc0`): `thread_local` destructors, CPU affinity in libroot, `getdents64`, `getpeereid`, `POLLRDHUP`, `memfd` sealing, the QUIC UDP options and `MADV_DONTNEED`, with ten upstream bugs fixed on the way (section 10.2, 14-23). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
+**What is being developed now?** The Media Kit (`F-31`). Step 0, `virtio_sound` capture (`F-02`, `19369300`), and phase 1, mixing and routing with its controls (`F-32`; `4ca8c8b2`, `ef41c576`, `369f3e7d`), were finished on 2026-11-09 and are QEMU Tested. Left of phase 1: a low-latency mode, the cubeb back end, measured resampling quality, and hot-plug detection in the multi_audio add-on (see `F-31`). The small Chromium OS gaps (`F-43` phase A) were finished on 2026-11-09 (`82cd4654` to `575f9cc0`): `thread_local` destructors, CPU affinity in libroot, `getdents64`, `getpeereid`, `POLLRDHUP`, `memfd` sealing, the QUIC UDP options and `MADV_DONTNEED`, with ten upstream bugs fixed on the way (section 10.2, 14-23). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
 
 **What is blocked?**
 - NVMe multi-namespace (`F-04`) cannot reach Hardware Tested until the maintainer runs it on his real NVMe PC (pending, by his choice).
@@ -77,13 +78,13 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 
 **What should we work on next?** In the agreed order (2026-11-09):
 3. Periodic NTP sync (`F-30`).
-4. `virtio_sound` capture (`F-02`).
-5. Media Kit work (`F-31`), then the audio settings redesign (`F-32`).
+4. `virtio_sound` capture (`F-02`): done 2026-11-09.
+5. Media Kit work (`F-31`; phase 1 done 2026-11-09, with its controls, `F-32`): the rest of phase 1 (low-latency mode, cubeb back end), then phase 3 (capture APIs).
 6. In parallel: automate Lumina S1-S8 in QEMU (`F-25`).
 
 **What are the biggest remaining challenges?**
 - Everything is QEMU-only so far. No Renga change has a recorded real-hardware result.
-- The fork must carry all changes permanently. Upstream's `AGENTS.md` forbids AI-generated contributions, so rebase cost grows with every upstream file touched (79 upstream files today).
+- The fork must carry all changes permanently. Upstream's `AGENTS.md` forbids AI-generated contributions, so rebase cost grows with every upstream file touched (134 upstream files today).
 - The XL items upstream also lacks: suspend/resume, multi-monitor, compositing, modern Wi-Fi (through LinuxKPI), GPU 3D and hardware video. Each needs real hardware, cross-subsystem design, or both.
 - Lumina has about 18k lines that are compile-verified only. Its runtime behaviour inside app_server (lock nesting, hook timing) is unknown.
 
@@ -283,7 +284,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | ID | Component | Status | Testing |
 | --- | --- | --- | --- |
 | F-01 | Test harness | QEMU Tested | Self-test plus every run |
-| F-02 | virtio_sound | QEMU Tested (playback); capture Not Started | 33 + 4 audio checks |
+| F-02 | virtio_sound | QEMU Tested (playback and capture) | 69 `virtio_sound.*` + 4 audio checks |
 | F-03 | virtio_block | QEMU Tested | 20 checks + 2 host |
 | F-04 | NVMe multi-namespace | QEMU Tested | 18 checks + 4 host; hardware pending |
 | F-05 | TCP additions | QEMU Tested | 32 checks (loopback) |
@@ -312,8 +313,8 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-28 | Control Panel suite | Not Started | None |
 | F-29 | Upstream bug fixes carried | QEMU Tested | See section 10.2 |
 | F-30 | Periodic NTP sync | Not Started | None |
-| F-31 | Media Kit | Designed (6-phase plan) | None |
-| F-32 | Audio settings redesign | Not Started | None |
+| F-31 | Media Kit | Phase 1 QEMU Tested (low-latency mode and cubeb back end open); phases 2-6 Designed | 35 `media.*` + 11 `media_audio.*` (renga-raw) |
+| F-32 | Audio settings redesign | In Progress (phase-1 controls QEMU Tested) | 6 `media_ui.*` + 4 screenshots (renga-raw) |
 | F-33 | Compositor | Not Started | None |
 | F-34 | Wi-Fi | Not Started | None |
 | F-35 | GPU / graphics | Not Started | None |
@@ -458,17 +459,17 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | E (134-line stub, not in image) |
-| Renga maturity | Playback complete through hmulti; capture missing |
-| Status | **QEMU Tested** (playback); capture **Not Started** |
-| Completed | PCM playback (virtio 1.2 §5.14) as `/dev/audio/hmulti/virtio_sound/<n>`, 44.1/48 kHz, period ring paced by device completions, all user pointers checked (`658d1756`). Hardening: exclusive open, no spinning on error paths, `B_CANCELED` after force-stop, stale-completion filtering by stream generation, broken-device latch, correct per-buffer timestamps, `CE_TRACE` points (`fbbb290a`). Prerequisite kernel fix: device_manager now publishes driver directories after boot (`ce8fa869`). |
-| Remaining | Capture (RX queue), jack and control events, hardware mixer controls (`VIRTIO_SND_F_CTLS`), each visible in the Media preferences and the audio settings (`F-32`) |
-| Known bugs/limitations | One client at a time (as HDA). Volume through the Media Kit software mixer only. |
+| Renga maturity | Playback and capture complete through hmulti |
+| Status | **QEMU Tested** (playback and capture) |
+| Completed | PCM playback (virtio 1.2 §5.14) as `/dev/audio/hmulti/virtio_sound/<n>`, 44.1/48 kHz, period ring paced by device completions, all user pointers checked (`658d1756`). Hardening: exclusive open, no spinning on error paths, `B_CANCELED` after force-stop, stale-completion filtering by stream generation, broken-device latch, correct per-buffer timestamps, `CE_TRACE` points (`fbbb290a`). Prerequisite kernel fix: device_manager now publishes driver directories after boot (`ce8fa869`). Capture (`19369300`): the first stereo input stream as two hmulti input channels and an input bus; RX messages ride on the playback-paced buffer exchange (record cycle = oldest filled period, -1 if none; FIFO, overrun drops the oldest); input rate follows the output rate; RELEASE-flushed buffers no longer count as errors; event queue populated (jack, period and xrun events counted, logged at stop); jack info logged. Recording through the Media Kit and its recording gain work (`media.input_record`, `media.input_gain`). |
+| Remaining | Hardware mixer controls (`VIRTIO_SND_F_CTLS`), shown in the Media preferences; jack state shown to the user (QEMU 8.2 sends no jack events) |
+| Known bugs/limitations | One client at a time (as HDA). Volume through the Media Kit software mixer only. A client must keep playing (silence) to record: the exchange is paced by playback. The input runs at the output's rate. |
 | Dependencies | `F-01` (audio analysis) |
 | Difficulty | 3 (audit Tier 1) |
 | Risk | Low |
-| Testing status | 33 `virtio_sound.*` checks + 4 `audio.*` recording checks + `qemu.virtio_sound`, every run; real-time pacing within 0.3% |
-| Next milestone | Capture (agreed work order item 5) |
-| Recommended next action | Implement the RX queue with a loopback-style harness check (QEMU input from a WAV file) |
+| Testing status | 69 `virtio_sound.*` checks (36 for capture: five phases at 48 and 44.1 kHz, after a tone change, force-stop and reopen; signal purity 1.000, level 1.00, pacing 0.988-1.001) + 4 `audio.*` recording checks + `qemu.virtio_sound`, every run. The harness feeds the second card's input (QEMU SDL backend, `CE-HOST audio_in`). |
+| Next milestone | `VIRTIO_SND_F_CTLS` mixer controls |
+| Recommended next action | Negotiate `VIRTIO_SND_F_CTLS` and expose the controls as hmulti mix controls (QEMU 8.2 has none; needs a newer QEMU or another device to test) |
 | Links | PORTING.md "virtio-sound" |
 
 #### F-03 virtio_block
@@ -1224,23 +1225,31 @@ Checklist:
 | Field | Value |
 | --- | --- |
 | Upstream maturity | B/C/F (see section 2.2) |
-| Renga maturity | Unchanged (the `virtio_sound` hmulti driver feeds it) |
-| Status | **Designed** (phase plan agreed 2026-11-09) |
-| Completed | None (beyond the `virtio_sound` playback driver, `F-02`) |
-| Remaining | Six phases, agreed with the maintainer on 2026-11-09 ("the more functionality the better"); see the milestone checklist below |
-| Known bugs/limitations | Not applicable |
+| Renga maturity | Phase 1 mostly done: per-application streams, routing, loopback, recording gain, click-free changes |
+| Status | Phase 1 **QEMU Tested** (low-latency mode and cubeb back end open); phases 2-6 **Designed** |
+| Completed | Phase 1 (2026-11-09; `4ca8c8b2`, `ef41c576`, GUI `369f3e7d`): per-application streams identified by signature, volume and mute remembered per application across application and media service restarts; an "Output" choice per stream, played through mixer sinks (`MixerTap`) the mixer connects to other devices, falling back to the default output while a device is unavailable; the default output switch takes a device over from a sink (`DefaultManager`); "What you hear (loopback)" flavor of the mixer add-on recording all streams or one application (by signature), before the master volume; software recording gain on sound card inputs; gain ramps and one-buffer fades on mute and device moves; queued buffers in multi_audio (no more periodic dropouts); `BMediaRecorder` starts sound cards; distinct names for identical cards. |
+| Remaining | Rest of phase 1 (low-latency mode, cubeb back end, measured resampling quality, hot-plug detection in the multi_audio add-on); phases 2-6, agreed with the maintainer on 2026-11-09 ("the more functionality the better"); see the milestone checklist below |
+| Known bugs/limitations | The mixer's gain values keep upstream's bent "dB" scale (-12 on the slider is -3.3 dB; documented, not changed, so saved settings keep their meaning). Devices that appear after the media services started are not seen (the multi_audio add-on scans once); routes to them apply after a media services restart. A sink drifts against its device on real hardware with two clocks (no adaptive resampling yet; QEMU's devices share the host clock). |
 | Dependencies | Phase 1 needs `F-02` capture for loopback tests; phase 2 Bluetooth needs a working Bluetooth stack; phase 3 needs app_server work; phase 5 needs GPU drivers (`F-35`, the maintainer's NVIDIA driver rework, LinuxKPI GPU drivers) |
 | Difficulty | 4-9 by item (audit scale) |
 | Risk | Medium; High for phase 5 |
-| Testing status | None |
-| Next milestone | Phase 1: per-app streams with volume and mute |
-| Recommended next action | Start phase 1 after the agreed items before it (section 5.1); every phase-1 item is testable in QEMU with the harness's audio analysis |
+| Testing status | renga-raw only (the minimum images have no Media Kit): 35 `media.*` checks in the guest (loopback recordings: per-app volume and mute, click-free changes, routing, remembered settings, media services restart, default output switch, recording and its gain) and 11 `media_audio.*` checks on what both cards played (`audio.wav`, `sdl-out.raw`), all passing at `369f3e7d` |
+| Next milestone | Low-latency mode and the cubeb back end (rest of phase 1), then phase 3 |
+| Recommended next action | A low-latency mode in the mixer (smaller mix buffers when requested, measured with the harness's loopback timing), then the cubeb back end on `BSoundPlayer`/loopback for RengaPorts |
 | Links | Audit "Media Kit deep dive"; maintainer's notes 2026-11-09 |
 
 Milestone checklist (in order; phases 1 and 3 first because they unblock the most, including the maintainer's OBS and Sunshine ports):
 
-- [ ] **Phase 1, mixing and routing (foundation):** per-application streams with volume, mute and remembered per-app settings; system-wide routing (any app to any output, default device, streams follow hot-plugged USB/HDMI devices); loopback and recording (one app or the whole mix, "what you hear"); microphone capture with per-input gain; better sample-rate conversion, a low-latency mode, click-free device switches. Low-latency path with stable buffer sizes for emulators and games (Eglantine port, 2026-11-09: its SDL3 audio runs on `BSoundPlayer` because cubeb has no Haiku back end); and, better than SDL alone, a cubeb back end on the Media Kit published in RengaPorts, which Firefox and several emulators use, so many ports benefit at once.
-- [ ] **Phase 2, devices:** USB Audio Class 2, HDMI/DisplayPort audio, `virtio_sound` capture, hot-plug; a real UVC webcam driver exposed as a Media Kit video source; Bluetooth audio (A2DP) listed but unscheduled until the Bluetooth stack is finished.
+- [ ] **Phase 1, mixing and routing (foundation):** done 2026-11-09 except as marked below (`4ca8c8b2`, `ef41c576`, `369f3e7d`). Original scope: per-application streams with volume, mute and remembered per-app settings; system-wide routing (any app to any output, default device, streams follow hot-plugged USB/HDMI devices); loopback and recording (one app or the whole mix, "what you hear"); microphone capture with per-input gain; better sample-rate conversion, a low-latency mode, click-free device switches. Low-latency path with stable buffer sizes for emulators and games (Eglantine port, 2026-11-09: its SDL3 audio runs on `BSoundPlayer` because cubeb has no Haiku back end); and, better than SDL alone, a cubeb back end on the Media Kit published in RengaPorts, which Firefox and several emulators use, so many ports benefit at once.
+  - [x] Per-application streams with volume and mute, remembered per signature across application and media service restarts.
+  - [x] Default output device (existing, now also over a device a sink uses); any application on any output (mixer sinks); fallback to the default output while a device is unavailable.
+  - [ ] Streams follow hot-plugged devices: the mixer side is done (fallback and return), but the multi_audio add-on only scans at start, so new devices are seen after a media services restart. Needs device watching in the add-on (`NotifyFlavorChange()`) and a hot-pluggable audio device in QEMU (`usb-audio` with `usb_audio`) to test.
+  - [x] Loopback and recording: "What you hear" and one application as a Media Kit source (SoundRecorder, ports).
+  - [x] Microphone capture through the Media Kit with a recording gain per input.
+  - [x] Click-free volume, mute and device changes (gain ramps, one-buffer fades, measured).
+  - [ ] Better sample-rate conversion: not changed (the mixer's linear interpolation stays); a measurable quality check (THD of a resampled tone) comes with it.
+  - [ ] Low-latency mode and the cubeb back end (Eglantine's request).
+- [ ] **Phase 2, devices:** USB Audio Class 2, HDMI/DisplayPort audio, `virtio_sound` capture (done in `F-02`), hot-plug; a real UVC webcam driver exposed as a Media Kit video source; Bluetooth audio (A2DP) listed but unscheduled until the Bluetooth stack is finished.
 - [ ] **Phase 3, capture APIs:** app_server screen capture (full screen, window, region; steady frame rate; optional cursor; permission prompt on first use); a capture session that delivers screen, audio and camera with matched timestamps.
 - [ ] **Phase 4, codecs and streaming:** updated FFmpeg plug-in (AV1 via dav1d, modern HEVC/VP9, Opus/FLAC/AAC encode); one encode/decode API that picks hardware when present and software otherwise; HLS/DASH playback; RTMP and RTP/WebRTC-friendly output; network audio output.
   - Low-latency path with stable buffer sizes for emulators and games (Eglantine port, 2026-11-09; its SDL3 audio runs on `BSoundPlayer` because cubeb has no Haiku back end), on the phase-1 low-latency mode. Better than SDL alone: a cubeb back end for the Media Kit, published in RengaPorts, which Firefox and several emulators use, so many ports benefit at once.
@@ -1252,17 +1261,17 @@ Milestone checklist (in order; phases 1 and 3 first because they unblock the mos
 | Field | Value |
 | --- | --- |
 | Upstream maturity | Gain exists per mixer input; no per-app UI or per-stream sink selection |
-| Renga maturity | None |
-| Status | **Not Started** |
-| Completed | None |
-| Remaining | Per-app volume and routing, loopback and mixing; everyday controls up front, routing and loopback in an advanced view |
+| Renga maturity | Phase-1 controls in the existing preferences and Deskbar |
+| Status | **In Progress** (phase-1 controls QEMU Tested, `369f3e7d`) |
+| Completed | `ApplicationVolumesView` (volume, mute and output per application, shared by the Media preferences and desklink); Media preferences open on "Audio settings" with an "Applications" box (everyday) and an advanced checkbox for the output menus, plus a recording gain slider for the input; the mixer page shows each stream's "Output" menu; the Deskbar volume popup lists the applications under the master volume, with outputs; SoundRecorder records "What you hear" or one application. `Media --advanced-audio`, `SoundRecorder --input <label>`. |
+| Remaining | The full redesign as a Control Panel page (`F-28`); the Deskbar status area redesign (`F-41`); per-device pages; the controls of later Media Kit phases as they land |
 | Known bugs/limitations | Not applicable |
 | Dependencies | `F-31` |
 | Difficulty | 4 (per-app volume UI, Tier 2) |
 | Risk | Low |
-| Testing status | None |
-| Next milestone | After Media Kit routing |
-| Recommended next action | Wait for `F-31` |
+| Testing status | `media_ui` (renga-raw): each window up, screenshots of the popup, the audio settings (plain and advanced) and SoundRecorder, `media_ui.screenshots` on the host |
+| Next milestone | Controls for the rest of `F-31` phase 1 (low-latency switch) |
+| Recommended next action | Add the low-latency switch with its `F-31` work; design the Control Panel audio page with `F-28` |
 | Links | Audit "Planned from your notes" |
 
 ### Hardware platform
@@ -1462,7 +1471,8 @@ These have no full entries. All are **Not Started** in Renga unless noted. Diff 
 
 | Item | Register | What is missing |
 | --- | --- | --- |
-| `virtio_sound` | F-02 | Capture, jack/control events, hardware mixer controls |
+| `virtio_sound` | F-02 | Hardware mixer controls (`VIRTIO_SND_F_CTLS`); capture without playback |
+| Media Kit phase 1 | F-31 | Low-latency mode, cubeb back end, resampling quality, hot-plug detection in multi_audio |
 | `timerfd` | F-07 | `TFD_TIMER_CANCEL_ON_SET` (returns `EINVAL`) |
 | `memfd_create` | F-08 | File sealing |
 | ucontext | F-12 | Non-x86_64 architectures |
@@ -1502,8 +1512,8 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 2. **`epoll`, `inotify`, `signalfd`** (`F-15`): done 2026-11-09 (QEMU Tested).
 3. **Harness quick mode and timing**: done 2026-11-09 (`c36db227`): `--only` partial runs (never a pass), per-program timing, `harness.tests_ran`.
 4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too. Done 2026-11-09 (QEMU Tested, `82cd4654` to `575f9cc0`); fontconfig turned out to need nothing in Renga.
-5. **`virtio_sound` capture** (`F-02`). Done first, as step 0 of the Media Kit (its loopback and recording tests need it).
-6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`).
+5. **`virtio_sound` capture** (`F-02`). Done first, as step 0 of the Media Kit (its loopback and recording tests need it). Done 2026-11-09 (QEMU Tested, `19369300`).
+6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`). Phase 1 done 2026-11-09 with its controls (QEMU Tested, `4ca8c8b2`, `ef41c576`, `369f3e7d`), except the low-latency mode, the cubeb back end, resampling quality and hot-plug detection in the multi_audio add-on.
 7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
 8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Then the maintainer's real-hardware install.
 9. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
@@ -1527,7 +1537,7 @@ Later, with the GPU stage (needs the maintainer's NVIDIA hardware): zero-copy pr
 | Advanced partition manager | F-24 | Designed | Audit section 7 |
 | Lumina as core shell (after S1-S8) | F-25 | In Development | Audit section 5; Lumina docs |
 | Control Panel suite incl. LinuxKPI device manager | F-28 | Not Started | Maintainer notes; audit proposals |
-| Audio settings redesign | F-32 | Not Started | Maintainer notes |
+| Audio settings redesign | F-32 | In Progress (phase-1 controls QEMU Tested) | Maintainer notes |
 | LinuxKPI_HaikuOS integration | F-26 | Not Started | External project |
 | Renguin integration (ABI hook) | F-27 | Not Started | Audit Tier 4/5 |
 | Boot splash stage squares for Renga stages | F-16 | Not Started (part of F-16) | Audit "Planned from your notes" |
@@ -1569,7 +1579,7 @@ The audit reordered the original draft. Boot/install moves ahead of Lumina, and 
 | 2 | Boot and installation | Boot menu → chainloading → graphical; resize backend → DriveSetup queue → BFS resize → GPT move; installer wizard; EFI variables | Install alongside Windows and Linux in QEMU/OVMF, choose each from the menu, reboot into the last choice | Boot build-order steps: 1 of 8 complete, 1 partial |
 | 3 | Desktop modernization and Lumina | ShellListener, work-area API, pushed window events, tray protocol, settings center, themes, Lumina in image | Lumina default only after ShellListener + work-area API + Deskbar tray protocol (from the audit's critical-dependency table) | Not started (blocked on Stage 0 Lumina item) |
 | 4 | Porting APIs and ecosystem | mqueue, shm, eventfd/timerfd/memfd → kqueue filters, inotify → epoll; Renguin ABI hook; FUSE 3 → SMB; mDNS → printing; SLAAC → DHCPv6; signing | Unblocks Electron, Wine, Renguin | Pack 1 6 of 6 (100%); epoll, inotify, signalfd done |
-| 5 | Hardware and multimedia | UVC, screen capture, HDMI audio, mixer; GPIO/i2c_hid; sensors; SMART; BT; iflib; LinuxKPI Wi-Fi → WPA3; accelerant extension | Mostly needs hardware | Not started (Media Kit is next in the work order) |
+| 5 | Hardware and multimedia | UVC, screen capture, HDMI audio, mixer; GPIO/i2c_hid; sensors; SMART; BT; iflib; LinuxKPI Wi-Fi → WPA3; accelerant extension | Mostly needs hardware | In progress (Media Kit phase 1 and `virtio_sound` capture done) |
 | 6 | Advanced modernization | Suspend, multi-monitor, global HiDPI, compositor, HarfBuzz/BiDi, hardware decode, accessibility, pf, A2DP/BLE, mitigations, IOMMU | Pick by value | Not started |
 
 The audit's roadmap diagram is captioned "7 stages, 3 gates", but its text spells out gates for Stages 0 and 2 only. The Stage 3 gate above is taken from the audit's critical-dependency table.
@@ -1669,7 +1679,7 @@ graph LR
   ABI[Per-team syscall ABI hook]:::todo
   REN[F-27 Renguin]:::todo
   ELEC[Electron / Node / Chromium patch removal]:::todo
-  CAP[F-02 virtio_sound capture]:::todo
+  CAP[F-02 virtio_sound capture]:::done
   MEDIA[F-31 Media Kit]:::todo
   AUD[F-32 Audio settings]:::todo
   S18[Lumina S1-S8 automated]:::todo
@@ -1732,8 +1742,8 @@ graph LR
 | Compositor, virgl, hardware decode | Accelerant extension | Not started |
 | Multi-monitor | Driver multi-head (intel_extreme, radeon_hd, Quasar) | Not started |
 | Suspend-to-RAM | Driver suspend/resume hooks | Not started |
-| Audio settings redesign | Media Kit per-app routing | Not started |
-| virtio_sound capture tests | Harness audio input | Not started |
+| Audio settings redesign | Media Kit per-app routing | In progress (routing done in `ef41c576`) |
+| virtio_sound capture tests | Harness audio input | Done (`19369300`, SDL disk backend) |
 | Modern Wi-Fi | LinuxKPI_HaikuOS; real hardware | External |
 | LinuxKPI device manager UI | LinuxKPI_HaikuOS; Control Panel | Not started |
 
@@ -1757,23 +1767,23 @@ graph LR
 
 ### 8.1 Harness overview
 
-`3rdparty/ce/harness/ce-test.py` builds the test targets and an image with `CE_HARNESS=1`, boots it headless in QEMU with a snapshot disk, and runs every program installed in `/boot/system/non-packaged/bin/ce-tests` from a launch_daemon job, with no desktop needed. It then judges the run. A run fails if any check fails, a watched driver (`virtio_sound`, `virtio_block`, `nvme_disk`) prints an error, QEMU logs a device guest error or rejected memory access, or the kernel panics. Results go to `generated.x86_64/ce-test-results/<timestamp>/` (`summary.md`, `results.json`, `serial.log`, `serial.timed.log`, `qemu.log`, `build.log`, `audio.wav`, `kdl.log` on a stall, screenshots). A full run takes about 2.5 minutes: about 46 s to build the image and about 92 s in the guest (BIOS, minimum image). `--only <tests>` runs only the named test programs on a copy of the image for quick checks; such a run is labelled **PARTIAL**, exits with 2, and never counts. Every run checks `harness.tests_ran` (each program that should run ran to the end) and lists each program's time in `summary.md` (`c36db227`). Details: [README](https://github.com/Techniix/haiku/blob/ce/main/3rdparty/ce/README.md).
+`3rdparty/ce/harness/ce-test.py` builds the test targets and an image with `CE_HARNESS=1`, boots it headless in QEMU with a snapshot disk, and runs every program installed in `/boot/system/non-packaged/bin/ce-tests` from a launch_daemon job, with no desktop needed. It then judges the run. A run fails if any check fails, a watched driver (`virtio_sound`, `virtio_block`, `nvme_disk`) prints an error, QEMU logs a device guest error or rejected memory access, or the kernel panics. Results go to `generated.x86_64/ce-test-results/<timestamp>/` (`summary.md`, `results.json`, `serial.log`, `serial.timed.log`, `qemu.log`, `build.log`, `audio.wav`, `kdl.log` on a stall, screenshots). A full run takes about 2.5 minutes: about 46 s to build the image and about 92 s in the guest (BIOS, minimum image). `--only <tests>` runs only the named test programs on a copy of the image for quick checks; such a run is labelled **PARTIAL**, exits with 2, and never counts. Every run checks `harness.tests_ran` (each program that should run ran to the end) and lists each program's time in `summary.md` (`c36db227`). Two virtio sound cards are attached: one records into `audio.wav`, the other (QEMU's SDL backend) writes `sdl-out.raw` and records a tone the harness feeds (`19369300`). After the driver tests, the runner starts media_server and runs the Media Kit tests in `ce-tests-media/`; only the `renga-*` images have the Media Kit, so those run with `--profile renga-raw` (`ef41c576`). Details: [README](https://github.com/Techniix/haiku/blob/ce/main/3rdparty/ce/README.md).
 
-Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratch disks only), `CE-HOST sendkey` (at most two modifiers plus a letter, digit, ret, tab or esc; never sysrq or delete). Pointer and screenshot requests are in development.
+Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratch disks only), `CE-HOST sendkey` (at most two modifiers plus a letter, digit, ret, tab or esc; never sysrq or delete), `CE-HOST pointer`/`pointer_rel` (the attached tablets and the PS/2 mouse), `CE-HOST screenshot <name>`, and `CE-HOST audio_in <left Hz> <right Hz> <amplitude>` (the tone fed into the second sound card).
 
 ### 8.2 Boot paths covered
 
 | Path | Option | Image | Last recorded result |
 | --- | --- | --- | --- |
-| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 619/619 at `575f9cc0` |
-| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 616/616 at `575f9cc0` |
+| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 655/655 at `369f3e7d` |
+| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 652/652 at `369f3e7d` |
 | BIOS, CD-ROM (El Torito floppy) | `--media cdrom` | `minimum-anyboot` | 270/270 at `7b4a14df` |
 | UEFI, CD-ROM | `--firmware uefi --media cdrom` | `minimum-anyboot` | 273/273 at `22bf89ca` |
 | BIOS / UEFI, virtio-blk boot disk | `--disk-bus virtio` | either | BIOS 270/270 at `7b4a14df`; UEFI 271/271 at `2b728fa3` |
 | UEFI, two installs (decoy first) | `--two-installs` | `minimum-anyboot` | 272/272 at `2b728fa3` |
 | Boot menu countdown | `--boot-menu-timeout N` | either | 272/272 at `22bf89ca` (6 s) |
-| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 619/619 (`--smp 2`) at `575f9cc0`; 548/548 (`--smp 4`) at `1bfb2665` |
-| Full desktop image | `--profile renga-raw` | `renga-raw` | 286/286 |
+| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 655/655 (`--smp 2`) at `369f3e7d`; 548/548 (`--smp 4`) at `1bfb2665` |
+| Full desktop image | `--profile renga-raw` | `renga-raw` | 694/694 at `369f3e7d` (622/622 before the Media Kit work, the first run since `epoll`) |
 
 Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; any real hardware.
 
@@ -1816,6 +1826,10 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 **inotify suite (`F-15`, committed `b421d52a`):** 47 checks; baseline 452/452 (BIOS) with 1, 2 and 4 CPUs.
 
 **signalfd suite (`F-15`, committed `e1638a07`):** 28 checks; baseline 480/480 (BIOS) with 1, 2 and 4 CPUs, 477/477 (UEFI).
+
+**`virtio_sound` capture (`F-02`, committed `19369300`):** 36 `virtio_sound.capture.*` checks; baseline 655/655 (BIOS, 1 and 2 CPUs), 652/652 (UEFI). On the old driver `capture.cards` fails (no input channels) and no capture phase runs.
+
+**Media Kit phase 1 (`F-31`, `F-32`; committed `4ca8c8b2`, `ef41c576`, `369f3e7d`):** `renga-raw` only: 35 `media.*` checks in the guest, 11 `media_audio.*` checks on the host, 6 `media_ui.*` checks and `media_ui.screenshots`; `renga-raw` 694/694. Before the fixes the same tests found 11 Media Kit phases broken by periodic dropouts, a route click of 5782 against a bound of 2461, and a media_addon_server abort (a loopback's reference count). The minimum images skip the media phase (no Media Kit) and keep 655/652. `selftest.py`: 96 ok, 0 failures.
 
 **`F-43` phase A (committed `82cd4654` to `575f9cc0`):** new `posix_compat` programs `thread_atexit` (9 checks), `affinity` (15), `getdents` (13), `socket_ext` (35: `getpeereid`, `POLLRDHUP`), `quic_udp` (32), `vm_semantics` (20), and 19 sealing checks added to `memfd` (now 41). Baseline 619/619 (BIOS) with 1 and 2 CPUs, 616/616 (UEFI); 548/548 with 4 CPUs at `1bfb2665`. Run against the old code first, the new tests failed as follows: `quic_udp` 24 of 32 (stalled until a receive timeout was added); `vm_semantics` 7 of 20; `affinity` panicked the kernel with 2 CPUs; `socket_ext` found the IPv6 receive loop that stopped loopback traffic.
 
@@ -1954,6 +1968,12 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-09 | [`836867b5`](https://github.com/Techniix/haiku/commit/836867b5) | QUIC UDP options (ECN, packet info, don't-fragment), `sendmsg()` control messages, `MSG_CTRUNC`; five upstream network bugs fixed (`F-43`) | 32 checks (24 failed before); 599/599 BIOS and `--smp 2`, 596/596 UEFI |
 | 2026-11-09 | [`575f9cc0`](https://github.com/Techniix/haiku/commit/575f9cc0) | `MADV_DONTNEED` with Linux semantics (zero-fill, also after `fork()`); V8/PartitionAlloc memory patterns tested (`F-43`) | 20 checks (7 failed before); 619/619 BIOS and `--smp 2`, 616/616 UEFI |
 | 2026-11-09 | (this commit) | Roadmap: `F-43` phase A done, baselines, history, upstream bugs 14-24 | Documentation only |
+| 2026-11-09 | — | `renga-raw` run before the Media Kit work (first since `epoll`) | 622/622; nothing to fix |
+| 2026-11-09 | [`19369300`](https://github.com/Techniix/haiku/commit/19369300) | `virtio_sound` capture (RX stream) through hmulti; event queue; harness feeds the second card's input (SDL disk backend, `CE-HOST audio_in`) (`F-02`) | 36 checks; 655/655 BIOS and `--smp 2`, 652/652 UEFI; selftest 87 ok |
+| 2026-11-09 | [`4ca8c8b2`](https://github.com/Techniix/haiku/commit/4ca8c8b2) | multi_audio: queued buffers (no periodic dropouts), recording gain, distinct names for identical cards; `BMediaRecorder` starts sound cards (upstream bugs 25, 26, 28) | Verified with the next commit |
+| 2026-11-09 | [`ef41c576`](https://github.com/Techniix/haiku/commit/ef41c576) | Mixer: per-application streams, routing through sinks, loopback, click-free ramps; `DefaultManager` releases sinks; Media Kit tests and analysis (`F-31` phase 1; upstream bug 27) | 655/655 BIOS and `--smp 2`, 652/652 UEFI, `renga-raw` 688/688; selftest 93 ok |
+| 2026-11-09 | [`369f3e7d`](https://github.com/Techniix/haiku/commit/369f3e7d) | Audio GUI: per-application volume, mute and output in the Deskbar popup and Media preferences, recording gain, SoundRecorder records one application; screenshots (`F-32`) | 655/655 BIOS and `--smp 2`, 652/652 UEFI, `renga-raw` 694/694; selftest 96 ok |
+| 2026-11-09 | (this commit) | Roadmap: `F-02` capture, `F-31` phase 1, `F-32` controls, baselines, history, upstream bugs 25-28 | Documentation only |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
@@ -1985,8 +2005,12 @@ Items 1-10 are written up in the [upstream bug reports doc](https://claude.ai/ar
 | 22 | `recvmsg()` with a too small control buffer fails with `ENOMEM` (IPv6) instead of `MSG_CTRUNC` | quic_udp suite | `836867b5` |
 | 23 | `madvise(MADV_DONTNEED)` is accepted and does nothing; private memory keeps its contents | vm_semantics suite | `575f9cc0` |
 | 24 | IPv6 fragmentation: every fragment gets a new identification and reassembly miscounts the headers, so fragmented datagrams are never delivered | quic_udp suite | **Not fixed** (see `F-43` phase A findings) |
+| 25 | multi_audio keeps one received buffer per output and drops the next if it arrives before the card took the first; uneven delivery costs a buffer and, one period later, a period of silence (seen as a 1024-frame gap every 8-9 periods) | Media Kit tests (`media_audio.*`, phase analysis of `audio.wav`) | `4ca8c8b2` |
+| 26 | `BMediaRecorder::Start()` only starts the time source of a source that is a time source (every sound card), not the node: recording from a card nothing plays on gets no data | Media Kit tests (`media.input_record`) | `4ca8c8b2` |
+| 27 | The system mixer's auto-stop stops the default sound card when nothing plays, also while something records from that card's input | Code review during the Media Kit tests | `ef41c576` |
+| 28 | Identical sound cards get the same flavor name and share one settings entry; neither can be told apart in the Media preferences | Media Kit tests (two virtio cards) | `4ca8c8b2` |
 
-Upstream behaviours observed and **not** changed: aliases on the loop interface get no routes, and a down interface still delivers on cached routes (`9c6d9157`). Partition devices report `logical_block_size` 0 (`0758b116`). An intermittent burst of rejected framebuffer writes, first seen in older runs, turned out to be a Renga bug (the splash thread) and was fixed in `a44b1890`.
+Upstream behaviours observed and **not** changed: the mixer's gain values are labelled dB but follow a bent scale (-12 on the slider is -3.3 dB), kept so saved settings keep their meaning (`ef41c576`, documented in PORTING.md). Aliases on the loop interface get no routes, and a down interface still delivers on cached routes (`9c6d9157`). Partition devices report `logical_block_size` 0 (`0758b116`). An intermittent burst of rejected framebuffer writes, first seen in older runs, turned out to be a Renga bug (the splash thread) and was fixed in `a44b1890`.
 
 ### 10.3 Decisions log
 
@@ -2023,6 +2047,9 @@ Upstream behaviours observed and **not** changed: aliases on the loop interface 
 | 2026-11-09 | Backwards compatibility is a guarantee: Renga always runs the Haiku programs, and the BeOS programs Haiku ran, as Haiku did before Renga; enforced by an ABI check against the upstream base and runtime checks (`F-46`) | `F-46`, section 1.2 |
 | 2026-11-09 | BeOS programs: Renga stays 64-bit; running 32-bit Haiku and BeOS programs on 64-bit Renga comes last of everything, the lowest priority on the roadmap | `F-46` |
 | 2026-11-09 | Eglantine port requirements: zero-copy presentation by extending overlay bitmaps and fullscreen direct scanout on the accelerant extension, with a Haiku Vulkan surface named together with X547 (`F-47`); NVK coverage starting from `vulkaninfo` on real hardware (`F-35`); hole punching, huge pages, cheap small mappings (`F-48`); `futex()` (`F-49`); game mode compatible with Feral's gamemode client API (`F-50`); raw HID and libusb (`F-42`); low-latency audio and a cubeb back end (`F-31` phase 1); in-game video decode (`F-31` phase 5). The port-performance batch goes after LinuxKPI | `F-47`-`F-50`, `F-35`, `F-42`, `F-31`, section 5.1 |
+| 2026-11-09 | Media Kit phase 1 on the existing system mixer, in PipeWire/PulseAudio terms: streams are routed inside the mixer through sinks it connects to other devices, never by moving applications' connections; loopbacks are a flavor of the mixer add-on | `F-31`, `ef41c576` |
+| 2026-11-09 | Media Kit tests run on the `renga-*` images only (the minimum images have no Media Kit); renga-raw runs are required for media and GUI changes anyway | `ef41c576`, section 8 |
+| 2026-11-09 | The Media preferences open on "Audio settings" (everyday controls, per-application volume) instead of the mixer's detailed page | `F-32`, `369f3e7d` |
 
 ---
 
