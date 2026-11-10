@@ -488,5 +488,92 @@ windows = feed_tones(feeder.path)
 expect("capture feed check notices a phase jump",
 	min(w[0][1] for w in windows) < 0.9, str([w[0] for w in windows]))
 
+
+# The driver phases must still be found when the Media Kit tests play other
+# tones on the same card afterwards.
+checks, report = analyze(good + tone(1500, 2500, 2.0) + tone(1600, 2500, 1.0))
+expect("foreign tones after the phases do not disturb them",
+	all(checks.values()), str(checks))
+checks, report = analyze(good[:int(2.0 * RATE)] + silence(0.05)
+	+ good[int(2.05 * RATE):] + tone(1500, 2500, 2.0))
+expect("a gap is still found with foreign tones present",
+	not checks["audio.phase1"], str(checks))
+
+
+# The Media Kit phases (MEDIA_PHASES) in synthetic recordings of both cards.
+def media_tone(left, right, seconds, level=1.0, rate=RATE):
+	count = int(seconds * rate)
+	amplitude = 5800
+	return [(int(level * amplitude * math.sin(2 * math.pi * left * i / rate))
+			if left else 0,
+		int(amplitude * math.sin(2 * math.pi * right * i / rate))
+			if right else 0) for i in range(count)]
+
+
+def fade(frames, start, end):
+	"""Scales frames linearly from start to end (one buffer of fade)."""
+	count = len(frames)
+	return [(int(l * (start + (end - start) * i / count)),
+		int(r * (start + (end - start) * i / count)))
+		for i, (l, r) in enumerate(frames)]
+
+
+def media_recordings(volume=None, click=False, drop_phase=None):
+	"""Synthetic recordings of the Media Kit phases; volume (A's level in
+	the volume phase), click (B cut off on the second card) and drop_phase
+	(a predicate on audio.wav frames to leave out) make known-bad ones."""
+	gain12 = ce_test.mixer_gain(-12.0412) if volume is None else volume
+	gain6 = ce_test.mixer_gain(-6.0206)
+	wav = silence(0.5) + media_tone(1500, 2500, 2.0) \
+		+ media_tone(1600, 2500, 2.0, gain12) + media_tone(0, 2600, 1.5) \
+		+ media_tone(1800, 0, 2.0) + media_tone(1800, 2750, 1.5) \
+		+ media_tone(1900, 0, 2.0, gain6) + silence(0.5)
+	b = media_tone(0, 2700, 2.0)
+	sdl = silence(0.5) + fade(b[:1024], 0, 1) + b[1024:-1024] \
+		+ fade(b[-1024:], 1, 0) + silence(0.5)
+	b = media_tone(0, 2750, 1.5)
+	# Known bad: the stream cut off without its fade-out when it moves
+	# back to the default output.
+	sdl += fade(b[:1024], 0, 1) + b[1024:-1024] \
+		+ (b[-1024:-700] if click else fade(b[-1024:], 1, 0))
+	sdl += silence(0.5) + media_tone(0, 2800, 1.5) + silence(0.3) \
+		+ media_tone(0, 2850, 1.5) + media_tone(2000, 2900, 1.5)
+	directory = tempfile.mkdtemp()
+	write_wav(os.path.join(directory, "audio.wav"),
+		[f for f in wav if drop_phase is None or not drop_phase(f)])
+	with open(os.path.join(directory, "sdl-out.raw"), "wb") as raw:
+		raw.write(b"".join(struct.pack("<hh", l, r) for l, r in sdl))
+	report = {}
+	ce_test.analyze_media_audio(directory, report)
+	return {c["name"]: c for c in report["media_audio"]["checks"]}
+
+
+checks = media_recordings()
+expect("media phases: clean recordings pass",
+	all(c["pass"] for c in checks.values()),
+	str([c["detail"] for c in checks.values() if not c["pass"]]))
+checks = media_recordings(volume=0.5)
+expect("media phases: a wrong application volume fails",
+	not checks["media_audio.app_volume"]["pass"],
+	checks["media_audio.app_volume"]["detail"])
+checks = media_recordings(click=True)
+expect("media phases: a stream cut off on the second card fails",
+	not checks["media_audio.route_click_free"]["pass"],
+	checks["media_audio.route_click_free"]["detail"])
+# Known bad: B never left the default output (its 2750 Hz phase is missing
+# from audio.wav).
+directory = tempfile.mkdtemp()
+frames = silence(0.5) + media_tone(1500, 2500, 2.0) + silence(0.5)
+write_wav(os.path.join(directory, "audio.wav"), frames)
+with open(os.path.join(directory, "sdl-out.raw"), "wb") as raw:
+	raw.write(b"\0" * 48000 * 4)
+report = {}
+ce_test.analyze_media_audio(directory, report)
+missing = {c["name"]: c["pass"] for c in report["media_audio"]["checks"]}
+expect("media phases: missing phases fail",
+	missing["media_audio.both"] and not missing["media_audio.route_back"]
+		and not missing["media_audio.route_second_card"]
+		and not missing["media_audio.route_click_free"], str(missing))
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

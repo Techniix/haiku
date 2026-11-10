@@ -55,6 +55,37 @@ for test in /boot/system/non-packaged/bin/ce-tests/*; do
 	fi
 done
 
+# Second phase: the Media Kit tests, with the media services running. The
+# harness job keeps media_server from starting at boot (see ce-harness), so
+# that the tests above have the sound cards to themselves; it is started
+# here, by hand, once they are done. The tests stop it again when they end.
+# Only images with the Media Kit (the renga-* profiles) can run them; the
+# minimum images have no media_server or libmedia.
+media_tests=/boot/system/non-packaged/bin/ce-tests-media
+started_media=no
+if [ ! -x /boot/system/servers/media_server ]; then
+	echo "CE-INFO no Media Kit in this image, media tests skipped"
+	media_tests=/nonexistent
+fi
+for test in "$media_tests"/*; do
+	[ -x "$test" ] || continue
+	if [ -f "$selection" ]; then
+		wanted=no
+		while read -r name; do
+			[ "$name" = "$(basename "$test")" ] && wanted=yes
+		done < "$selection"
+		[ "$wanted" = yes ] || continue
+	fi
+	if [ "$started_media" = no ]; then
+		echo "CE-INFO starting media_server"
+		/boot/system/servers/media_server &
+		started_media=yes
+	fi
+	echo "CE-INFO running $(basename "$test")"
+	"$test"
+	echo "CE-INFO $(basename "$test") exited with $?"
+done
+
 echo "CE-INFO /dev after tests:"
 ls -R /dev/audio 2>&1
 echo "CE-HARNESS END"

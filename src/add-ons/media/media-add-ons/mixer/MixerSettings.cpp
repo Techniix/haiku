@@ -236,17 +236,7 @@ void
 MixerSettings::SaveConnectionSettings(MixerInput *input)
 {
 	fLocker->Lock();
-	int index = -1;
-
-	// try to find matching name first
-	for (int i = 0; i < MAX_INPUT_SETTINGS; i++) {
-		if (fInputSetting[i].IsEmpty())
-			continue;
-		if (!strcmp(fInputSetting[i].FindString("name"), input->MediaInput().name)) {
-			index = i;
-			break;
-		}
-	}
+	int index = _FindInputSetting(input);
 	if (index == -1) {
 		// try to find empty location
 		for (int i = 0; i < MAX_INPUT_SETTINGS; i++) {
@@ -270,6 +260,11 @@ MixerSettings::SaveConnectionSettings(MixerInput *input)
 	fInputSetting[index].MakeEmpty();
 	fInputSetting[index].AddInt64("lru", system_time());
 	fInputSetting[index].AddString("name", input->MediaInput().name);
+	// Renga: streams of an application share its settings, whatever their
+	// connection is called, and remember the output device they play on.
+	if (input->AppSignature()[0] != '\0')
+		fInputSetting[index].AddString("signature", input->AppSignature());
+	fInputSetting[index].AddString("route", input->Route());
 
 	int count = input->GetInputChannelCount();
 	fInputSetting[index].AddInt32("InputChannelCount", count);
@@ -289,14 +284,8 @@ void
 MixerSettings::LoadConnectionSettings(MixerInput *input)
 {
 	fLocker->Lock();
-	int index;
-	for (index = 0; index < MAX_INPUT_SETTINGS; index++) {
-		if (fInputSetting[index].IsEmpty())
-			continue;
-		if (!strcmp(fInputSetting[index].FindString("name"), input->MediaInput().name))
-			break;
-	}
-	if (index == MAX_INPUT_SETTINGS) {
+	int index = _FindInputSetting(input);
+	if (index < 0) {
 		TRACE("LoadConnectionSettings: entry not found\n");
 		fLocker->Unlock();
 		return;
@@ -310,6 +299,9 @@ MixerSettings::LoadConnectionSettings(MixerInput *input)
 			input->SetInputChannelGain(i, fInputSetting[index].FindFloat("InputChannelGain", i));
 		input->SetEnabled(fInputSetting[index].FindBool("InputIsEnabled"));
 	}
+	const char* route;
+	if (fInputSetting[index].FindString("route", &route) == B_OK)
+		input->SetRoute(route);
 
 	// XXX should load channel destinations and mixer channels
 
@@ -577,4 +569,31 @@ MixerSettings::_save_thread_(void *arg)
 {
 	static_cast<MixerSettings *>(arg)->SaveThread();
 	return 0;
+}
+
+
+/*!	The settings entry of \a input: the one of its application if it has a
+	signature, otherwise the one with its connection name (and no
+	signature). Returns -1 if there is none. Called with fLocker held.
+*/
+int
+MixerSettings::_FindInputSetting(MixerInput* input)
+{
+	const char* signature = input->AppSignature();
+	for (int i = 0; i < MAX_INPUT_SETTINGS; i++) {
+		if (fInputSetting[i].IsEmpty())
+			continue;
+		const char* entrySignature;
+		bool hasSignature = fInputSetting[i].FindString("signature",
+			&entrySignature) == B_OK;
+		if (signature[0] != '\0') {
+			if (hasSignature && strcmp(entrySignature, signature) == 0)
+				return i;
+		} else if (!hasSignature
+			&& !strcmp(fInputSetting[i].FindString("name"),
+				input->MediaInput().name)) {
+			return i;
+		}
+	}
+	return -1;
 }

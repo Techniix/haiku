@@ -32,6 +32,7 @@ public:
 private:
 			media_format*		fFormat;
 			flavor_info*		fInfo;
+			flavor_info*		fLoopbackInfo;
 };
 
 #endif	// _AUDIOMIXER_ADDON_H

@@ -13,6 +13,7 @@
 
 #include <Buffer.h>
 #include <Locker.h>
+#include <String.h>
 #include <TimeSource.h>
 
 
@@ -20,7 +21,10 @@ class AudioMixer;
 class BBufferGroup;
 class MixerInput;
 class MixerOutput;
+class MixerTap;
 class Resampler;
+struct chan_info;
+template<class value> class RtList;
 
 
 // The number of "enum media_multi_channels" types from MediaDefs.h
@@ -79,7 +83,48 @@ public:
 
 			uint32				OutputChannelCount();
 
+	// Taps (sinks and loopbacks, see MixerTap): the mix thread feeds every
+	// registered tap. The core holds no reference: sinks are owned by the
+	// AudioMixer's router, loopbacks by whoever instantiated them, and a
+	// tap leaves the core before it is deleted.
+			void				AddTap(MixerTap* tap);
+			bool				RemoveTap(MixerTap* tap);
+			int32				CountTaps() const;
+			MixerTap*			TapAt(int32 index) const;
+
+	// Routing: the default output device's flavor name, and which sink
+	// carries each input (by MixerInput::Route()). Call UpdateRouting()
+	// after a route or the set of sinks changed.
+			void				SetPrimaryDeviceName(const char* name);
+			const char*			PrimaryDeviceName() const
+									{ return fPrimaryDeviceName.String(); }
+			void				UpdateRouting();
+
 private:
+	typedef RtList<chan_info> chan_info_list;
+
+	enum {
+		kMixPrimary,		// streams on the default output
+		kMixSink,			// streams on one sink
+		kMixAll,			// every stream (loopback "what you hear")
+		kMixApplication		// the streams of one application
+	};
+
+			bool				_InputFade(MixerInput* input, int mode,
+									MixerTap* tap, const char* signature,
+									float& fadeStart, float& fadeEnd);
+			bool				_Mix(float* destination, int mode,
+									MixerTap* tap, const char* signature,
+									int64 framePos, bigtime_t eventTime,
+									chan_info_list* inputChanInfos,
+									chan_info_list* mixChanInfos);
+			void				_FinishMixCycle(int64 framePos,
+									bigtime_t eventTime);
+			void				_FeedTaps(int64 framePos, bigtime_t eventTime,
+									chan_info_list* inputChanInfos,
+									chan_info_list* mixChanInfos,
+									bool silent);
+
 			void				_StartMixThread();
 			void				_StopMixThread();
 
@@ -120,6 +165,11 @@ private:
 			thread_id			fMixThread;
 			sem_id				fMixThreadWaitSem;
 			float				fOutputGain;
+
+			BList*				fTaps;
+			BString				fPrimaryDeviceName;
+			float*				fTapBuffer;		// a sink's or loopback's mix
+			float*				fAllBuffer;		// sum of every target
 
 	friend class MixerInput;
 		// NOTE: debug only

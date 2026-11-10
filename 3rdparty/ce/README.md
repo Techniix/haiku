@@ -353,8 +353,39 @@ and SDL's buffering, well under half a second. The default is 700/1300 Hz
 at amplitude 12000. `results.json` lists every tone written and how far QEMU
 read (`boot.capture_feed`).
 
+## Media Kit tests
+
+The harness image keeps media_server from starting at boot (the driver tests
+need the sound cards to themselves). After every program in `ce-tests/` has
+run, the runner starts media_server by hand and runs the programs in
+`ce-tests-media/` (Jamfiles install them with `bin ce-tests-media :`). They
+need the Media Kit, which only the `renga-*` images have: on the minimum
+images the runner says "media tests skipped" and the harness does not
+expect them (`installed_tests()` leaves them out for those profiles). So
+the Media Kit checks run with `--profile renga-raw`, which is required for
+any desktop or Media Kit change anyway. `--only media` works there too.
+
+`media_test` plays two applications (child processes with their own
+signatures, A on the left channel, B on the right, each with a tone of its
+own per phase), records through the loopback in the guest, and the harness
+finds the same phases in `audio.wav` and `sdl-out.raw` (`MEDIA_PHASES` in
+`ce-test.py`): per-application volume and mute, a stream moved to the
+second card and back, settings remembered after the applications and the
+media services restart, and the default output switching to the second
+card. `media_audio.route_click_free` checks that moving a stream to and from
+the second card left no step between two samples larger than the tone
+itself makes. The mixer's gain values follow its bent "dB" scale
+(`mixer_gain()`).
+
 ## Current suites
 
+- **media** (renga-* images): see "Media Kit tests". In the guest it checks
+  recording from the fed card through the Media Kit and its recording gain,
+  the output time source's rate while playing, the stream list with
+  signatures, the loopback of everything and of one application, volume
+  and mute (also that changing them does not click), routing, settings
+  remembered by application and across a media service restart, and the
+  default output switch.
 - **nvme**: one NVMe controller with two namespaces (48 MiB with 512-byte
   blocks, 80 MiB with 4096-byte blocks, each with an MBR partition). Checks
   that both are published (`/dev/disk/nvme/<id>/raw` and

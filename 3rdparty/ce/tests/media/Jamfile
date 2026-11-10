@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP 3rdparty ce tests media ;
+
+UsePrivateHeaders media ;
+
+# Runs in the harness's second phase, with media_server started (see
+# harness/guest/runner.sh), hence its own directory.
+Application media_test :
+	media_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media : media_test ;
+}

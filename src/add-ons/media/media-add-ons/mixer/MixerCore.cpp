@@ -25,6 +25,7 @@
 #include "Interpolate.h"
 #include "MixerInput.h"
 #include "MixerOutput.h"
+#include "MixerTap.h"
 #include "MixerUtils.h"
 #include "Resampler.h"
 #include "RtList.h"
@@ -58,6 +59,7 @@ struct chan_info {
 	const char 	*base;
 	uint32		sample_offset;
 	float		gain;
+	float		gain_delta;		// per frame: gain ramps, see _Mix()
 };
 
 
@@ -84,7 +86,10 @@ MixerCore::MixerCore(AudioMixer *node)
 	fTimeSource(0),
 	fMixThread(-1),
 	fMixThreadWaitSem(-1),
-	fOutputGain(1.0)
+	fOutputGain(1.0),
+	fTaps(new BList),
+	fTapBuffer(NULL),
+	fAllBuffer(NULL)
 {
 }
 
@@ -101,6 +106,12 @@ MixerCore::~MixerCore()
 
 	if (fMixBuffer)
 		rtm_free(fMixBuffer);
+	if (fTapBuffer)
+		rtm_free(fTapBuffer);
+	if (fAllBuffer)
+		rtm_free(fAllBuffer);
+
+	delete fTaps;
 
 	if (fTimeSource)
 		fTimeSource->Release();
@@ -458,6 +469,14 @@ MixerCore::_ApplyOutputFormat()
 	fMixBuffer = (float*)rtm_alloc(NULL, sizeof(float) * fMixBufferFrameCount
 		* fMixBufferChannelCount);
 	ASSERT(fMixBuffer != NULL);
+	if (fTapBuffer != NULL)
+		rtm_free(fTapBuffer);
+	if (fAllBuffer != NULL)
+		rtm_free(fAllBuffer);
+	fTapBuffer = (float*)rtm_alloc(NULL, sizeof(float) * fMixBufferFrameCount
+		* fMixBufferChannelCount);
+	fAllBuffer = (float*)rtm_alloc(NULL, sizeof(float) * fMixBufferFrameCount
+		* fMixBufferChannelCount);
 
 	_UpdateResamplers(format);
 
@@ -531,7 +550,6 @@ MixerCore::_MixThread()
 
 	ASSERT(fMixBufferFrameCount > 0);
 
-	typedef RtList<chan_info> chan_info_list;
 	chan_info_list inputChanInfos[MAX_CHANNEL_TYPES];
 	BStackOrHeapArray<chan_info_list, 16> mixChanInfos(fMixBufferChannelCount);
 		// TODO: this does not support changing output channel count
@@ -565,9 +583,16 @@ MixerCore::_MixThread()
 			continue;
 		}
 
-		// no inputs or output muted, skip further processing and just send an
-		// empty buffer
-		if (fInputs->IsEmpty() || fOutput->IsMuted()) {
+		// Nothing to mix: send silence, and keep the taps (sinks, loopback
+		// recorders) fed with it too.
+		bool tapsReady = false;
+		for (int32 i = 0; i < fTaps->CountItems(); i++) {
+			if (((MixerTap*)fTaps->ItemAt(i))->IsReady()) {
+				tapsReady = true;
+				break;
+			}
+		}
+		if (fInputs->IsEmpty() || (fOutput->IsMuted() && !tapsReady)) {
 			int size = fOutput->MediaOutput().format.u.raw_audio.buffer_size;
 			BBuffer* buffer = fBufferGroup->RequestBuffer(size,
 				bufferRequestTimeout);
@@ -593,6 +618,11 @@ MixerCore::_MixThread()
 					bufferIndex);
 			}
 
+			if (tapsReady) {
+				_FeedTaps(frameBase + framePos, eventTime, inputChanInfos,
+					&mixChanInfos[0], true);
+			}
+
 			bufferIndex++;
 			framePos += fMixBufferFrameCount;
 
@@ -609,75 +639,13 @@ MixerCore::_MixThread()
 		PRINT(4, "create new buffer event at %lld, reading input frames at "
 			"%lld\n", eventTime, currentFramePos);
 
-		// Init the channel information for each MixerInput.
-		for (int i = 0; MixerInput* input = Input(i); i++) {
-			int count = input->GetMixerChannelCount();
-			for (int channel = 0; channel < count; channel++) {
-				int type;
-				const float* base;
-				uint32 sampleOffset;
-				float gain;
-				if (!input->GetMixerChannelInfo(channel, currentFramePos,
-						eventTime, &base, &sampleOffset, &type, &gain)) {
-					continue;
-				}
-				if (type < 0 || type >= MAX_CHANNEL_TYPES)
-					continue;
-				chan_info* info = inputChanInfos[type].Create();
-				info->base = (const char*)base;
-				info->sample_offset = sampleOffset;
-				info->gain = gain;
-			}
-		}
-
-		for (int channel = 0; channel < fMixBufferChannelCount; channel++) {
-			int sourceCount = fOutput->GetOutputChannelSourceCount(channel);
-			for (int i = 0; i < sourceCount; i++) {
-				int type;
-				float gain;
-				fOutput->GetOutputChannelSourceInfoAt(channel, i, &type,
-					&gain);
-				if (type < 0 || type >= MAX_CHANNEL_TYPES)
-					continue;
-				int count = inputChanInfos[type].CountItems();
-				for (int j = 0; j < count; j++) {
-					chan_info* info = inputChanInfos[type].ItemAt(j);
-					chan_info* newInfo = mixChanInfos[channel].Create();
-					newInfo->base = info->base;
-					newInfo->sample_offset = info->sample_offset;
-					newInfo->gain = info->gain * gain;
-				}
-			}
-		}
-
-		memset(fMixBuffer, 0,
-			fMixBufferChannelCount * fMixBufferFrameCount * sizeof(float));
-		for (int channel = 0; channel < fMixBufferChannelCount; channel++) {
-			PRINT(5, "_MixThread: channel %d has %d sources\n", channel,
-				mixChanInfos[channel].CountItems());
-
-			int count = mixChanInfos[channel].CountItems();
-			for (int i = 0; i < count; i++) {
-				chan_info* info = mixChanInfos[channel].ItemAt(i);
-				PRINT(5, "_MixThread:   base %p, sample-offset %2d, gain %.3f\n",
-					info->base, info->sample_offset, info->gain);
-				// This looks slightly ugly, but the current GCC will generate
-				// the fastest code this way.
-				// fMixBufferFrameCount is always > 0.
-				uint32 dstSampleOffset
-					= fMixBufferChannelCount * sizeof(float);
-				uint32 srcSampleOffset = info->sample_offset;
-				char* dst = (char*)&fMixBuffer[channel];
-				char* src = (char*)info->base;
-				float gain = info->gain;
-				int j = fMixBufferFrameCount;
-				do {
-					*(float*)dst += *(const float*)src * gain;
-					dst += dstSampleOffset;
-					src += srcSampleOffset;
-				 } while (--j);
-			}
-		}
+		// The default output gets the streams not routed to a sink; the
+		// sinks and loopbacks get theirs in _FeedTaps().
+		_Mix(fMixBuffer, kMixPrimary, NULL, NULL, currentFramePos, eventTime,
+			inputChanInfos, &mixChanInfos[0]);
+		_FeedTaps(currentFramePos, eventTime, inputChanInfos,
+			&mixChanInfos[0], false);
+		_FinishMixCycle(currentFramePos, eventTime);
 
 		// request a buffer
 		BBuffer* buffer;
@@ -697,7 +665,8 @@ MixerCore::_MixThread()
 					bytes_per_frame(fOutput->MediaOutput().format.u.raw_audio),
 					frames_per_buffer(
 						fOutput->MediaOutput().format.u.raw_audio),
-					fOutputGain * fOutput->GetOutputChannelGain(i));
+					fOutput->IsMuted() ? 0.0f
+						: fOutputGain * fOutput->GetOutputChannelGain(i));
 			}
 			PRINT(4, "send buffer, inframes %ld, outframes %ld\n",
 				fMixBufferFrameCount,
@@ -726,15 +695,314 @@ MixerCore::_MixThread()
 				bufferIndex);
 		}
 
-		// make all lists empty
-		for (int i = 0; i < MAX_CHANNEL_TYPES; i++)
-			inputChanInfos[i].MakeEmpty();
-		for (int i = 0; i < fOutput->GetOutputChannelCount(); i++)
-			mixChanInfos[i].MakeEmpty();
-
 		bufferIndex++;
 		framePos += fMixBufferFrameCount;
 
 		Unlock();
+	}
+}
+
+
+// #pragma mark - taps and routing
+
+
+void
+MixerCore::AddTap(MixerTap* tap)
+{
+	ASSERT_LOCKED();
+	if (!fTaps->HasItem(tap))
+		fTaps->AddItem(tap);
+	UpdateRouting();
+}
+
+
+bool
+MixerCore::RemoveTap(MixerTap* tap)
+{
+	ASSERT_LOCKED();
+	if (!fTaps->RemoveItem(tap))
+		return false;
+	for (int32 i = 0; MixerInput* input = Input(i); i++) {
+		if (input->Sink() == tap)
+			input->SetSink(NULL);
+		if (input->PreviousSink() == tap)
+			input->SetPreviousSink(NULL);
+	}
+	return true;
+}
+
+
+int32
+MixerCore::CountTaps() const
+{
+	return fTaps->CountItems();
+}
+
+
+MixerTap*
+MixerCore::TapAt(int32 index) const
+{
+	return (MixerTap*)fTaps->ItemAt(index);
+}
+
+
+void
+MixerCore::SetPrimaryDeviceName(const char* name)
+{
+	ASSERT_LOCKED();
+	fPrimaryDeviceName = name != NULL ? name : "";
+	UpdateRouting();
+}
+
+
+void
+MixerCore::UpdateRouting()
+{
+	ASSERT_LOCKED();
+	for (int32 i = 0; MixerInput* input = Input(i); i++) {
+		MixerTap* sink = NULL;
+		const char* route = input->Route();
+		if (route[0] != '\0' && fPrimaryDeviceName != route) {
+			for (int32 j = 0; j < fTaps->CountItems(); j++) {
+				MixerTap* tap = (MixerTap*)fTaps->ItemAt(j);
+				if (tap->Kind() == MixerTap::kSink && !tap->IsDead()
+					&& strcmp(tap->DeviceName(), route) == 0) {
+					sink = tap;
+					break;
+				}
+			}
+		}
+		input->SetSink(sink);
+	}
+}
+
+
+/*!	Whether \a input goes into the mix of the given target this cycle, and
+	with which fade: a stream that moves between the default output and a
+	sink (a route change, or a sink that became ready or went away) fades
+	out over one buffer on the old one and in on the new one, so that a
+	device switch does not click.
+*/
+bool
+MixerCore::_InputFade(MixerInput* input, int mode, MixerTap* tap,
+	const char* signature, float& fadeStart, float& fadeEnd)
+{
+	fadeStart = fadeEnd = 1.0f;
+	switch (mode) {
+		case kMixAll:
+			return true;
+		case kMixApplication:
+			return signature != NULL && signature[0] != '\0'
+				&& strcmp(input->AppSignature(), signature) == 0;
+	}
+
+	MixerTap* now = input->Sink();
+	if (now != NULL && !now->IsReady())
+		now = NULL;
+	MixerTap* before = input->PreviousSink();
+	MixerTap* target = mode == kMixPrimary ? NULL : tap;
+
+	bool isNow = now == target;
+	bool wasBefore = before == target;
+	if (!isNow && !wasBefore)
+		return false;
+	fadeStart = wasBefore ? 1.0f : 0.0f;
+	fadeEnd = isNow ? 1.0f : 0.0f;
+	return true;
+}
+
+
+/*!	Mixes the inputs that belong to the given target into \a destination
+	(fMixBufferChannelCount interleaved channels, fMixBufferFrameCount
+	frames), through the output's channel mapping. Gains ramp linearly over
+	the buffer from what each input channel had in the previous buffer (and
+	the fade of _InputFade()), so volume changes, mute and device switches
+	do not click. Returns whether any input contributed.
+*/
+bool
+MixerCore::_Mix(float* destination, int mode, MixerTap* tap,
+	const char* signature, int64 framePos, bigtime_t eventTime,
+	chan_info_list* inputChanInfos, chan_info_list* mixChanInfos)
+{
+	bool any = false;
+	float frames = (float)fMixBufferFrameCount;
+
+	for (int i = 0; MixerInput* input = Input(i); i++) {
+		float fadeStart, fadeEnd;
+		if (!_InputFade(input, mode, tap, signature, fadeStart, fadeEnd))
+			continue;
+
+		int count = input->GetMixerChannelCount();
+		for (int channel = 0; channel < count; channel++) {
+			int type;
+			const float* base;
+			uint32 sampleOffset;
+			float gain;
+			if (!input->GetMixerChannelInfo(channel, framePos, eventTime,
+					&base, &sampleOffset, &type, &gain, true)) {
+				continue;
+			}
+			if (type < 0 || type >= MAX_CHANNEL_TYPES)
+				continue;
+			float last = input->LastMixerChannelGain(channel);
+			if (last < 0)
+				last = gain;
+			float start = last * fadeStart;
+			float end = gain * fadeEnd;
+			if (start == 0 && end == 0)
+				continue;
+			chan_info* info = inputChanInfos[type].Create();
+			info->base = (const char*)base;
+			info->sample_offset = sampleOffset;
+			info->gain = start;
+			info->gain_delta = (end - start) / frames;
+			any = true;
+		}
+	}
+
+	for (int channel = 0; channel < fMixBufferChannelCount; channel++) {
+		int sourceCount = fOutput->GetOutputChannelSourceCount(channel);
+		for (int i = 0; i < sourceCount; i++) {
+			int type;
+			float gain;
+			fOutput->GetOutputChannelSourceInfoAt(channel, i, &type, &gain);
+			if (type < 0 || type >= MAX_CHANNEL_TYPES)
+				continue;
+			int count = inputChanInfos[type].CountItems();
+			for (int j = 0; j < count; j++) {
+				chan_info* info = inputChanInfos[type].ItemAt(j);
+				chan_info* newInfo = mixChanInfos[channel].Create();
+				newInfo->base = info->base;
+				newInfo->sample_offset = info->sample_offset;
+				newInfo->gain = info->gain * gain;
+				newInfo->gain_delta = info->gain_delta * gain;
+			}
+		}
+	}
+
+	memset(destination, 0,
+		fMixBufferChannelCount * fMixBufferFrameCount * sizeof(float));
+	for (int channel = 0; channel < fMixBufferChannelCount; channel++) {
+		int count = mixChanInfos[channel].CountItems();
+		for (int i = 0; i < count; i++) {
+			chan_info* info = mixChanInfos[channel].ItemAt(i);
+			// This looks slightly ugly, but the current GCC will generate
+			// the fastest code this way.
+			// fMixBufferFrameCount is always > 0.
+			uint32 dstSampleOffset = fMixBufferChannelCount * sizeof(float);
+			uint32 srcSampleOffset = info->sample_offset;
+			char* dst = (char*)&destination[channel];
+			char* src = (char*)info->base;
+			float gain = info->gain;
+			int j = fMixBufferFrameCount;
+			if (info->gain_delta == 0) {
+				do {
+					*(float*)dst += *(const float*)src * gain;
+					dst += dstSampleOffset;
+					src += srcSampleOffset;
+				} while (--j);
+			} else {
+				float delta = info->gain_delta;
+				do {
+					*(float*)dst += *(const float*)src * gain;
+					gain += delta;
+					dst += dstSampleOffset;
+					src += srcSampleOffset;
+				} while (--j);
+			}
+		}
+	}
+
+	for (int i = 0; i < MAX_CHANNEL_TYPES; i++)
+		inputChanInfos[i].MakeEmpty();
+	for (int i = 0; i < fMixBufferChannelCount; i++)
+		mixChanInfos[i].MakeEmpty();
+	return any;
+}
+
+
+/*!	Remembers, per input, the gains and the sink of the cycle just mixed:
+	the starting point of the next cycle's ramps and fades.
+*/
+void
+MixerCore::_FinishMixCycle(int64 framePos, bigtime_t eventTime)
+{
+	for (int i = 0; MixerInput* input = Input(i); i++) {
+		int count = input->GetMixerChannelCount();
+		for (int channel = 0; channel < count; channel++) {
+			int type;
+			const float* base;
+			uint32 sampleOffset;
+			float gain;
+			if (input->GetMixerChannelInfo(channel, framePos, eventTime,
+					&base, &sampleOffset, &type, &gain, true)) {
+				input->SetLastMixerChannelGain(channel, gain);
+			}
+		}
+		MixerTap* now = input->Sink();
+		input->SetPreviousSink(now != NULL && now->IsReady() ? now : NULL);
+	}
+}
+
+
+/*!	Feeds the sinks (the streams routed to them, at the master volume) and
+	the loopbacks (every stream, or one application's, before the master
+	volume, so that a recording does not depend on the speaker volume).
+*/
+void
+MixerCore::_FeedTaps(int64 framePos, bigtime_t eventTime,
+	chan_info_list* inputChanInfos, chan_info_list* mixChanInfos, bool silent)
+{
+	if (fTaps->IsEmpty() || fTapBuffer == NULL || fAllBuffer == NULL)
+		return;
+
+	size_t bytes = fMixBufferChannelCount * fMixBufferFrameCount
+		* sizeof(float);
+	float masterGain = 0;
+	if (!fOutput->IsMuted()) {
+		for (int i = 0; i < fMixBufferChannelCount; i++)
+			masterGain += fOutput->GetOutputChannelGain(i);
+		masterGain = fOutputGain * masterGain / fMixBufferChannelCount;
+	}
+
+	bool allMixed = false;
+	for (int32 i = 0; i < fTaps->CountItems(); i++) {
+		MixerTap* tap = (MixerTap*)fTaps->ItemAt(i);
+		if (!tap->IsReady())
+			continue;
+
+		if (silent) {
+			memset(fTapBuffer, 0, bytes);
+			tap->Push(fTapBuffer, fMixBufferChannelCount,
+				fMixBufferFrameCount, fMixBufferFrameRate, eventTime, fTimeSource->ID(), 1.0f);
+			continue;
+		}
+
+		if (tap->Kind() == MixerTap::kSink) {
+			_Mix(fTapBuffer, kMixSink, tap, NULL, framePos, eventTime,
+				inputChanInfos, mixChanInfos);
+			tap->Push(fTapBuffer, fMixBufferChannelCount,
+				fMixBufferFrameCount, fMixBufferFrameRate, eventTime,
+				fTimeSource->ID(), masterGain);
+			continue;
+		}
+
+		char signature[B_MIME_TYPE_LENGTH];
+		if (!tap->GetMixSource(signature, sizeof(signature)))
+			continue;
+		if (signature[0] == '\0') {
+			if (!allMixed) {
+				_Mix(fAllBuffer, kMixAll, NULL, NULL, framePos, eventTime,
+					inputChanInfos, mixChanInfos);
+				allMixed = true;
+			}
+			tap->Push(fAllBuffer, fMixBufferChannelCount,
+				fMixBufferFrameCount, fMixBufferFrameRate, eventTime, fTimeSource->ID(), 1.0f);
+		} else {
+			_Mix(fTapBuffer, kMixApplication, NULL, signature, framePos,
+				eventTime, inputChanInfos, mixChanInfos);
+			tap->Push(fTapBuffer, fMixBufferChannelCount,
+				fMixBufferFrameCount, fMixBufferFrameRate, eventTime, fTimeSource->ID(), 1.0f);
+		}
 	}
 }

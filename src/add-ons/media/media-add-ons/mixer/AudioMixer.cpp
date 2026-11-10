@@ -14,19 +14,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <Autolock.h>
 #include <Buffer.h>
 #include <Catalog.h>
 #include <FindDirectory.h>
+#include <MediaAddOn.h>
 #include <MediaDefs.h>
 #include <MediaRoster.h>
 #include <ParameterWeb.h>
 #include <Path.h>
 #include <RealtimeAlloc.h>
+#include <Roster.h>
 #include <TimeSource.h>
 
 #include "MixerCore.h"
 #include "MixerInput.h"
 #include "MixerOutput.h"
+#include "MixerTap.h"
 #include "MixerUtils.h"
 
 
@@ -66,6 +70,26 @@
 #define PARAM_STR5(id)						(((id) << 16) | ((5) << 10) | 0xa)
 #define PARAM_STR6(id)						(((id) << 16) | ((6) << 10) | 0xa)
 #define PARAM_STR7(id)						(((id) << 16) | ((7) << 10) | 0xa)
+
+// Renga additions (see PORTING.md, "Per-application audio"): the
+// application a stream comes from (a hidden null parameter named after its
+// signature), and the output device it plays on.
+#define PARAM_APP(id)						(((id) << 16) | 0xb)
+#define PARAM_OUTPUT(id)					(((id) << 16) | 0xc)
+#define PARAM_IS_OUTPUT(id)					(((id) & 0xf) == 0xc)
+
+// How often the router looks at routes, sinks and output devices when
+// nothing wakes it, and how long a device whose sink someone else
+// disconnected is left alone.
+static const bigtime_t kRouterInterval = 2000000;
+static const bigtime_t kLostDeviceHoldOff = 5000000;
+// A sink takes streams only this long after its device was started: until
+// the device plays, buffers would pile up in its queue and the first ones,
+// with the stream's fade-in, be dropped. And a sink nobody routes to any
+// more is kept this long, so that the fade-out of the last stream that
+// left it is played (and a quick change back needs no new connection).
+static const bigtime_t kSinkStartDelay = 300000;
+static const bigtime_t kSinkKeepAlive = 1000000;
 
 #define PARAM(id)							((id) >> 16)
 #define ETC(id)								((id) >> 16)
@@ -107,7 +131,11 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 	fInternalLatency(1),
 	fAutoStop(false),
 	fLastLateNotification(0),
-	fLastLateness(0)
+	fLastLateness(0),
+	fIsSystemMixer(isSystemMixer),
+	fRouterThread(-1),
+	fRouterSem(-1),
+	fRouterQuit(false)
 {
 	BMediaNode::AddNodeKind(B_SYSTEM_MIXER);
 
@@ -132,14 +160,56 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 
 		// enable auto-stop on the auto started (system) mixer
 		SetAutoStop(true);
+
+		BAutolock locker(sSystemMixerLock);
+		sSystemMixer = this;
+		locker.Unlock();
+
+		// The router creates and removes the sinks streams are routed to.
+		fRouterSem = create_sem(0, "mixer router");
+		fRouterThread = spawn_thread(_RouterThreadEntry, "mixer router",
+			B_NORMAL_PRIORITY, this);
+		if (fRouterThread >= 0)
+			resume_thread(fRouterThread);
 	}
 
 	ApplySettings();
 }
 
 
+AudioMixer* AudioMixer::sSystemMixer = NULL;
+BLocker AudioMixer::sSystemMixerLock("system mixer");
+
+
 AudioMixer::~AudioMixer()
 {
+	if (fIsSystemMixer) {
+		BAutolock locker(sSystemMixerLock);
+		if (sSystemMixer == this)
+			sSystemMixer = NULL;
+	}
+	if (fRouterThread >= 0) {
+		fRouterQuit = true;
+		release_sem(fRouterSem);
+		status_t result;
+		wait_for_thread(fRouterThread, &result);
+	}
+	if (fRouterSem >= 0)
+		delete_sem(fRouterSem);
+
+	// Give the devices back that sinks were playing on.
+	BList sinks;
+	fCore->Lock();
+	for (int32 i = fCore->CountTaps() - 1; i >= 0; i--) {
+		MixerTap* tap = fCore->TapAt(i);
+		fCore->RemoveTap(tap);
+		if (tap->Kind() == MixerTap::kSink)
+			sinks.AddItem(tap);
+	}
+	fCore->Unlock();
+	for (int32 i = 0; i < sinks.CountItems(); i++)
+		_RemoveSink((MixerTap*)sinks.ItemAt(i));
+
 	BMediaEventLooper::Quit();
 	SetParameterWeb(NULL);
 
@@ -434,6 +504,11 @@ AudioMixer::_AutoStart()
 void
 AudioMixer::_AutoStop()
 {
+	// Renga: loopbacks and sinks get the (silent) mix while nothing plays,
+	// so that a recording of "what you hear" keeps its timing.
+	if (fCore->CountTaps() > 0)
+		return;
+
 	fCore->Stop();
 
 	MixerOutput* mixerOutput = fCore->Output();
@@ -445,6 +520,16 @@ AudioMixer::_AutoStop()
 	media_node output;
 	if (roster->GetNodeFor(outputID, &output) != B_OK)
 		return;
+
+	// Renga: the sound card also records; stopping it because nothing plays
+	// would stop a recording from its input.
+	media_output recording;
+	int32 recordings = 0;
+	if (roster->GetConnectedOutputsFor(output, &recording, 1, &recordings)
+			== B_OK && recordings > 0) {
+		roster->ReleaseNode(output);
+		return;
+	}
 
 	roster->StopNode(output, 0, true);
 
@@ -496,7 +581,11 @@ AudioMixer::Connected(const media_source &producer,
 	MixerInput *input;
 	input = fCore->AddInput(*out_input);
 
+	// Which application it is: its settings (volume, mute, output) are
+	// remembered by signature.
+	_IdentifyApplication(input, producer);
 	fCore->Settings()->LoadConnectionSettings(input);
+	fCore->UpdateRouting();
 
 	if (fAutoStop && fCore->CountInputs() == 1)
 		_AutoStart();
@@ -509,6 +598,7 @@ AudioMixer::Connected(const media_source &producer,
 	// But we have no special buffer requirements anyway...
 
 	UpdateParameterWeb();
+	_WakeRouter();
 
 	return B_OK;
 }
@@ -537,6 +627,7 @@ AudioMixer::Disconnected(const media_source &producer,
 
 	fCore->Unlock();
 	UpdateParameterWeb();
+	_WakeRouter();
 }
 
 
@@ -1060,6 +1151,7 @@ AudioMixer::Connect(status_t error, const media_source &source,
 	}
 
 	UpdateParameterWeb();
+	_WakeRouter();
 }
 
 
@@ -1099,6 +1191,7 @@ AudioMixer::Disconnect(const media_source& what, const media_destination& where)
 	fCore->Unlock();
 	EventQueue()->FlushEvents(0, BTimedEventQueue::B_ALWAYS);
 	UpdateParameterWeb();
+	_WakeRouter();
 }
 
 
@@ -1480,7 +1573,7 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 		for (int i = 0; (input = fCore->Input(i)); i++)
 			if (input->ID() == param)
 				break;
-		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id)))
+		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id) && !PARAM_IS_OUTPUT(id)))
 			goto err;
 		if (PARAM_IS_MUTE(id)) {
 			// input mute control
@@ -1488,6 +1581,20 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 				goto err;
 			*ioSize = sizeof(int32);
 			static_cast<int32 *>(value)[0] = !input->IsEnabled();
+		}
+		if (PARAM_IS_OUTPUT(id)) {
+			// output device: 0 default, n the n-th device of the web's list,
+			// count + 1 a device that is not available now
+			if (*ioSize < sizeof(int32))
+				goto err;
+			*ioSize = sizeof(int32);
+			int32 index = 0;
+			if (input->Route()[0] != '\0') {
+				index = fOutputDevices.IndexOf(input->Route());
+				index = index >= 0 ? index + 1
+					: fOutputDevices.CountStrings() + 1;
+			}
+			static_cast<int32 *>(value)[0] = index;
 		}
 		if (PARAM_IS_GAIN(id)) {
 			// input gain control
@@ -1568,6 +1675,7 @@ void
 AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 	size_t size)
 {
+	bool wakeRouter = false;
 	TRACE("SetParameterValue: id 0x%08lx, size %ld\n", id, size);
 	bool update = false;
 	int param = PARAM(id);
@@ -1705,13 +1813,27 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 		for (int i = 0; (input = fCore->Input(i)); i++)
 			if (input->ID() == param)
 				break;
-		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id)))
+		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id) && !PARAM_IS_OUTPUT(id)))
 			goto err;
 		if (PARAM_IS_MUTE(id)) {
 			// input mute control
 			if (size != sizeof(int32))
 				goto err;
 			input->SetEnabled(!static_cast<const int32 *>(value)[0]);
+		}
+		if (PARAM_IS_OUTPUT(id)) {
+			// output device, see GetParameterValue()
+			if (size != sizeof(int32))
+				goto err;
+			int32 index = static_cast<const int32 *>(value)[0];
+			if (index == 0)
+				input->SetRoute("");
+			else if (index - 1 < fOutputDevices.CountStrings())
+				input->SetRoute(fOutputDevices.StringAt(index - 1));
+			else
+				goto err;
+			fCore->UpdateRouting();
+			wakeRouter = true;
 		}
 		if (PARAM_IS_GAIN(id)) {
 			// input gain control
@@ -1813,6 +1935,8 @@ err:
 	fCore->Unlock();
 	if (update)
 		UpdateParameterWeb();
+	if (wakeRouter)
+		_WakeRouter();
 }
 
 
@@ -1869,7 +1993,12 @@ AudioMixer::UpdateParameterWeb()
 	for (int i = 0; (in = fCore->Input(i)); i++) {
 		group = top->MakeGroup("");
 		group->MakeNullParameter(PARAM_STR1(in->ID()), B_MEDIA_RAW_AUDIO,
-			in->MediaInput().name, B_WEB_BUFFER_INPUT);
+			in->DisplayName(), B_WEB_BUFFER_INPUT);
+		if (in->AppSignature()[0] != '\0') {
+			group->MakeNullParameter(PARAM_APP(in->ID()), B_MEDIA_RAW_AUDIO,
+				in->AppSignature(), "renga:app_signature")
+					->SetFlags(B_HIDDEN_PARAMETER);
+		}
 		group->MakeNullParameter(PARAM_STR2(in->ID()), B_MEDIA_RAW_AUDIO,
 			StringForFormat(buf, in), B_GENERIC);
 		group->MakeDiscreteParameter(PARAM_MUTE(in->ID()), B_MEDIA_RAW_AUDIO,
@@ -1912,6 +2041,17 @@ AudioMixer::UpdateParameterWeb()
 					B_TRANSLATE("dB"), DB_MIN, DB_MAX, 0.1)
 						->SetChannelCount(in->GetMixerChannelCount());
 			}
+		}
+		dp = group->MakeDiscreteParameter(PARAM_OUTPUT(in->ID()),
+			B_MEDIA_RAW_AUDIO, B_TRANSLATE("Output"), B_OUTPUT_MUX);
+		dp->AddItem(0, B_TRANSLATE("Default output"));
+		for (int32 j = 0; j < fOutputDevices.CountStrings(); j++)
+			dp->AddItem(j + 1, fOutputDevices.StringAt(j).String());
+		if (in->Route()[0] != '\0' && !fOutputDevices.HasString(in->Route())) {
+			BString unavailable(in->Route());
+			unavailable << " " << B_TRANSLATE("(not available)");
+			dp->AddItem(fOutputDevices.CountStrings() + 1,
+				unavailable.String());
 		}
 		group->MakeNullParameter(PARAM_STR3(in->ID()), B_MEDIA_RAW_AUDIO,
 			B_TRANSLATE("To master"), B_WEB_BUFFER_OUTPUT);
@@ -2015,4 +2155,397 @@ AudioMixer::UpdateParameterWeb()
 	*/
 	fCore->Unlock();
 	SetParameterWeb(web);
+	_UpdateLoopbackSources();
+}
+
+
+// #pragma mark - applications, routing, loopbacks
+
+
+/*!	Finds out which application \a producer belongs to, from the team that
+	owns its port. Producers in the media_addon_server itself (other media
+	add-ons) are not applications.
+*/
+void
+AudioMixer::_IdentifyApplication(MixerInput* input,
+	const media_source& producer)
+{
+	port_info portInfo;
+	if (get_port_info(producer.port, &portInfo) != B_OK)
+		return;
+
+	thread_info threadInfo;
+	get_thread_info(find_thread(NULL), &threadInfo);
+	if (portInfo.team == threadInfo.team)
+		return;
+
+	app_info appInfo;
+	if (be_roster != NULL
+		&& be_roster->GetRunningAppInfo(portInfo.team, &appInfo) == B_OK) {
+		input->SetApplication(portInfo.team, appInfo.signature,
+			appInfo.ref.name);
+	} else
+		input->SetApplication(portInfo.team, "", "");
+}
+
+
+/*!	Tells every loopback which applications have streams, for the choice in
+	its parameter web. This happens with the core locked: a tap leaves the
+	core in its destructor (TapDeleted()), which therefore cannot run
+	meanwhile. Taking references instead is not possible: this is also
+	called while a loopback is being registered, before it has one.
+*/
+void
+AudioMixer::_UpdateLoopbackSources()
+{
+	BStringList signatures;
+	BStringList names;
+
+	fCore->Lock();
+	for (int32 i = 0; MixerInput* input = fCore->Input(i); i++) {
+		if (input->AppSignature()[0] == '\0'
+			|| signatures.HasString(input->AppSignature())) {
+			continue;
+		}
+		signatures.Add(input->AppSignature());
+		names.Add(input->DisplayName());
+	}
+	for (int32 i = 0; i < fCore->CountTaps(); i++) {
+		MixerTap* tap = fCore->TapAt(i);
+		if (tap->Kind() == MixerTap::kLoopback)
+			tap->SetApplications(signatures, names);
+	}
+	fCore->Unlock();
+}
+
+
+status_t
+AudioMixer::AttachLoopback(MixerTap* tap)
+{
+	BAutolock locker(sSystemMixerLock);
+	if (sSystemMixer == NULL)
+		return B_NO_INIT;
+	AudioMixer* mixer = sSystemMixer;
+	mixer->fCore->Lock();
+	mixer->fCore->AddTap(tap);
+	// An auto-stopped mixer (nothing plays) mixes silence for the loopback.
+	if (mixer->fAutoStop && mixer->fCore->CountInputs() == 0)
+		mixer->_AutoStart();
+	mixer->fCore->Unlock();
+	locker.Unlock();
+
+	mixer->_UpdateLoopbackSources();
+	return B_OK;
+}
+
+
+void
+AudioMixer::TapDeleted(MixerTap* tap)
+{
+	BAutolock locker(sSystemMixerLock);
+	if (sSystemMixer == NULL)
+		return;
+	AudioMixer* mixer = sSystemMixer;
+	mixer->fCore->Lock();
+	if (mixer->fCore->RemoveTap(tap) && mixer->fAutoStop
+		&& mixer->fCore->CountInputs() == 0 && mixer->fCore->CountTaps() == 0) {
+		mixer->_AutoStop();
+	}
+	mixer->fCore->Unlock();
+}
+
+
+void
+AudioMixer::_WakeRouter()
+{
+	if (fRouterSem >= 0)
+		release_sem(fRouterSem);
+}
+
+
+status_t
+AudioMixer::_RouterThreadEntry(void* data)
+{
+	((AudioMixer*)data)->_RouterThread();
+	return B_OK;
+}
+
+
+/*!	The router: keeps one sink per output device that streams are routed to
+	(other than the default output), and drops sinks nobody uses any more,
+	whose device went away, or whose device became the default output. It
+	runs in its own thread because it talks to the media_server and to
+	other nodes, which must not happen in the mixer's control thread.
+	Streams whose device is not available play on the default output until
+	it is; that is what makes them follow devices that come and go.
+*/
+void
+AudioMixer::_RouterThread()
+{
+	while (!fRouterQuit) {
+		acquire_sem_etc(fRouterSem, 1, B_RELATIVE_TIMEOUT, kRouterInterval);
+		if (fRouterQuit)
+			break;
+		// Coalesce wake-ups that arrived meanwhile.
+		int32 count;
+		if (get_sem_count(fRouterSem, &count) == B_OK && count > 0)
+			acquire_sem_etc(fRouterSem, count, B_RELATIVE_TIMEOUT, 0);
+		_RouteOnce();
+	}
+}
+
+
+void
+AudioMixer::_ScanOutputDevices(BStringList& names)
+{
+	dormant_node_info infos[32];
+	int32 count = 32;
+	media_format format;
+	format.type = B_MEDIA_RAW_AUDIO;
+	format.u.raw_audio = media_raw_audio_format::wildcard;
+	if (BMediaRoster::Roster()->GetDormantNodes(infos, &count, &format, NULL,
+			NULL, B_BUFFER_CONSUMER | B_PHYSICAL_OUTPUT, 0) != B_OK) {
+		return;
+	}
+	for (int32 i = 0; i < count; i++) {
+		if (!names.HasString(infos[i].name))
+			names.Add(infos[i].name);
+	}
+}
+
+
+void
+AudioMixer::_RouteOnce()
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+
+	BStringList devices;
+	_ScanOutputDevices(devices);
+
+	// The default output: the device the mixer's output is connected to.
+	port_id primaryPort = -1;
+	fCore->Lock();
+	if (fCore->Output() != NULL)
+		primaryPort = fCore->Output()->MediaOutput().destination.port;
+	fCore->Unlock();
+
+	media_node_id primaryNode = -1;
+	BString primaryName;
+	if (primaryPort >= 0) {
+		primaryNode = roster->NodeIDFor(primaryPort);
+		media_node node;
+		if (primaryNode >= 0 && roster->GetNodeFor(primaryNode, &node)
+				== B_OK) {
+			dormant_node_info info;
+			if (roster->GetDormantNodeFor(node, &info) == B_OK)
+				primaryName = info.name;
+			roster->ReleaseNode(node);
+		}
+	}
+
+	BList remove;
+	BStringList have;
+	BStringList wanted;
+	bool webChanged;
+	bigtime_t now = system_time();
+
+	fCore->Lock();
+	webChanged = !(devices == fOutputDevices);
+	fOutputDevices = devices;
+	fCore->SetPrimaryDeviceName(primaryName.String());
+
+	for (int32 i = 0; MixerInput* input = fCore->Input(i); i++) {
+		const char* route = input->Route();
+		if (route[0] != '\0' && primaryName != route
+			&& !wanted.HasString(route)) {
+			wanted.Add(route);
+		}
+	}
+	for (int32 i = fCore->CountTaps() - 1; i >= 0; i--) {
+		MixerTap* tap = fCore->TapAt(i);
+		if (tap->Kind() != MixerTap::kSink)
+			continue;
+		bool connected = tap->IsConnected();
+		bool unwanted = !wanted.HasString(tap->DeviceName());
+		if (unwanted && tap->UnwantedSince() == 0)
+			tap->SetUnwantedSince(now);
+		else if (!unwanted)
+			tap->SetUnwantedSince(0);
+		if (!connected || tap->IsDead() || primaryName == tap->DeviceName()
+			|| (unwanted && now - tap->UnwantedSince() >= kSinkKeepAlive)) {
+			if (!connected && !tap->IsDead()) {
+				// Someone else disconnected it (the default output is
+				// switching to that device): leave the device alone a while.
+				fLostDevices.RemoveName(tap->DeviceName());
+				fLostDevices.AddInt64(tap->DeviceName(), now);
+			}
+			fCore->RemoveTap(tap);
+			remove.AddItem(tap);
+		} else
+			have.Add(tap->DeviceName());
+	}
+	fCore->UpdateRouting();
+	fCore->Unlock();
+
+	for (int32 i = 0; i < remove.CountItems(); i++)
+		_RemoveSink((MixerTap*)remove.ItemAt(i));
+
+	for (int32 i = 0; i < wanted.CountStrings(); i++) {
+		const char* name = wanted.StringAt(i).String();
+		if (have.HasString(name) || !devices.HasString(name))
+			continue;
+		bigtime_t lost;
+		if (fLostDevices.FindInt64(name, &lost) == B_OK
+			&& now - lost < kLostDeviceHoldOff) {
+			continue;
+		}
+		_CreateSink(name, primaryNode);
+	}
+
+	if (webChanged)
+		UpdateParameterWeb();
+}
+
+
+/*!	Connects a new sink to the output device named \a deviceName, so that
+	streams routed there play on it. The device gets the mixer's time
+	source, like the default output, so that buffer times mean the same on
+	both.
+*/
+status_t
+AudioMixer::_CreateSink(const char* deviceName, media_node_id primaryNode)
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+
+	dormant_node_info infos[32];
+	int32 count = 32;
+	media_format format;
+	format.type = B_MEDIA_RAW_AUDIO;
+	format.u.raw_audio = media_raw_audio_format::wildcard;
+	if (roster->GetDormantNodes(infos, &count, &format, NULL, NULL,
+			B_BUFFER_CONSUMER | B_PHYSICAL_OUTPUT, 0) != B_OK) {
+		return B_ERROR;
+	}
+	int32 index = 0;
+	while (index < count && strcmp(infos[index].name, deviceName) != 0)
+		index++;
+	if (index == count)
+		return B_ENTRY_NOT_FOUND;
+
+	media_node device;
+	media_node_id instances[4];
+	int32 instanceCount = 4;
+	status_t status;
+	if (roster->GetInstancesFor(infos[index].addon, infos[index].flavor_id,
+			instances, &instanceCount) == B_OK && instanceCount > 0) {
+		status = roster->GetNodeFor(instances[0], &device);
+	} else {
+		status = roster->InstantiateDormantNode(infos[index], &device,
+			B_FLAVOR_IS_GLOBAL);
+	}
+	if (status != B_OK)
+		return status;
+	if (device.node == primaryNode) {
+		roster->ReleaseNode(device);
+		return B_OK;
+	}
+
+	media_input input;
+	int32 inputCount;
+	status = roster->GetFreeInputsFor(device, &input, 1, &inputCount,
+		B_MEDIA_RAW_AUDIO);
+	if (status != B_OK || inputCount < 1) {
+		roster->ReleaseNode(device);
+		return B_BUSY;
+	}
+
+	BString name("Mixer sink: ");
+	name << deviceName;
+	MixerTap* tap = new(std::nothrow) MixerTap(NULL, MixerTap::kSink,
+		name.String(), 0);
+	if (tap == NULL) {
+		roster->ReleaseNode(device);
+		return B_NO_MEMORY;
+	}
+	tap->SetDeviceName(deviceName);
+	tap->SetDeviceNode(device.node);
+	status = roster->RegisterNode(tap);
+	if (status != B_OK) {
+		tap->Release();
+		roster->ReleaseNode(device);
+		return status;
+	}
+
+	media_output output;
+	int32 outputCount;
+	status = roster->GetFreeOutputsFor(tap->Node(), &output, 1, &outputCount,
+		B_MEDIA_RAW_AUDIO);
+	if (status == B_OK && outputCount < 1)
+		status = B_ERROR;
+
+	media_output newOutput;
+	media_input newInput;
+	if (status == B_OK) {
+		// The device's own format first, like the DefaultManager does for
+		// the default output, then whatever it accepts.
+		if (roster->GetFormatFor(input, &format) != B_OK) {
+			format.Clear();
+			format.type = B_MEDIA_RAW_AUDIO;
+		}
+		status = roster->Connect(output.source, input.destination, &format,
+			&newOutput, &newInput);
+		if (status != B_OK) {
+			format.Clear();
+			format.type = B_MEDIA_RAW_AUDIO;
+			status = roster->Connect(output.source, input.destination,
+				&format, &newOutput, &newInput);
+		}
+	}
+	if (status != B_OK) {
+		roster->UnregisterNode(tap);
+		tap->Release();
+		roster->ReleaseNode(device);
+		return status;
+	}
+
+	if (TimeSource() != NULL) {
+		media_node_id timeSource = TimeSource()->ID();
+		roster->SetTimeSourceFor(device.node, timeSource);
+		roster->SetTimeSourceFor(tap->ID(), timeSource);
+	}
+	roster->SetRunModeNode(device, BMediaNode::B_RECORDING);
+	bigtime_t startTime = TimeSource() != NULL ? TimeSource()->Now() : 0;
+	roster->StartNode(device, startTime);
+	roster->StartNode(tap->Node(), startTime);
+	bigtime_t startLatency = 0;
+	roster->GetStartLatencyFor(device, &startLatency);
+	tap->SetActiveAt(system_time() + startLatency + kSinkStartDelay);
+
+	fCore->Lock();
+	fCore->AddTap(tap);
+	fCore->UpdateRouting();
+	fCore->Unlock();
+	return B_OK;
+}
+
+
+//!	Disconnects and deletes a sink that has left the core.
+void
+AudioMixer::_RemoveSink(MixerTap* tap)
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_output output;
+	if (tap->GetConnection(output)) {
+		roster->Disconnect(tap->ID(), output.source, tap->DeviceNode(),
+			output.destination);
+	}
+	media_node device;
+	if (tap->DeviceNode() >= 0
+		&& roster->GetNodeFor(tap->DeviceNode(), &device) == B_OK) {
+		// Once for GetNodeFor(), once for the reference _CreateSink() kept.
+		roster->ReleaseNode(device);
+		roster->ReleaseNode(device);
+	}
+	roster->UnregisterNode(tap);
+	tap->Release();
 }

@@ -14,10 +14,15 @@
 #include <Controllable.h>
 #include <MediaEventLooper.h>
 #include <MediaNode.h>
+#include <Message.h>
+#include <StringList.h>
 
 
+class BLocker;
 class MixerCore;
+class MixerInput;
 class MixerOutput;
+class MixerTap;
 
 
 class AudioMixer : public BBufferConsumer, public BBufferProducer,
@@ -44,6 +49,11 @@ public:
 
 			float				dB_to_Gain(float db);
 			float				Gain_to_dB(float gain);
+
+	// Loopbacks (MixerTap flavors of this add-on) attach themselves to the
+	// system mixer when they are registered, and leave it when deleted.
+	static	status_t			AttachLoopback(MixerTap* tap);
+	static	void				TapDeleted(MixerTap* tap);
 
 	// BMediaNode methods
 	virtual	BMediaAddOn*		AddOn(int32* _internalID) const;
@@ -133,6 +143,18 @@ private:
 			void				_AutoStart();
 			void				_AutoStop();
 
+			void				_IdentifyApplication(MixerInput* input,
+									const media_source& producer);
+			void				_UpdateLoopbackSources();
+			void				_WakeRouter();
+	static	status_t			_RouterThreadEntry(void* data);
+			void				_RouterThread();
+			void				_RouteOnce();
+			status_t			_CreateSink(const char* deviceName,
+									media_node_id primaryNode);
+			void				_RemoveSink(MixerTap* tap);
+			void				_ScanOutputDevices(BStringList& names);
+
 			BMediaAddOn*		fAddOn;
 			MixerCore*			fCore;
 			BParameterWeb*		fWeb;
@@ -143,6 +165,21 @@ private:
 			media_format		fDefaultFormat;
 			bigtime_t			fLastLateNotification;
 			bigtime_t			fLastLateness;
+
+			bool				fIsSystemMixer;
+			// The output devices (flavor names) routes can choose, as the
+			// parameter web lists them; fCore's lock.
+			BStringList			fOutputDevices;
+			thread_id			fRouterThread;
+			sem_id				fRouterSem;
+			volatile bool		fRouterQuit;
+			// Devices whose sink was disconnected by someone else, and
+			// when: not reclaimed for a while (the default output may be
+			// switching to it).
+			BMessage			fLostDevices;	// name: int64 time
+
+	static	AudioMixer*			sSystemMixer;
+	static	BLocker				sSystemMixerLock;
 };
 
 

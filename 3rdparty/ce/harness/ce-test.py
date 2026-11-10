@@ -72,6 +72,39 @@ CAPTURE_PERIOD_FRAMES = 480
 CAPTURE_DEFAULT_TONE = (700, 1300, 12000)
 CAPTURE_LEAD_SECONDS = 30
 
+# Phases of 3rdparty/ce/tests/media/media_test.cpp, as the cards play them.
+# Application A plays on the left channel only, B on the right only, with a
+# tone of its own in every phase, so that a phase is found by its tones.
+# Entries: (check, recording, left Hz, right Hz, minimum seconds, left level
+# relative to the "both" phase or None). None as a frequency: silent.
+def mixer_gain(db):
+	"""The gain the system mixer applies for a gain parameter value: its
+	"dB" bend the scale (exponent 1.8 below 0, 1.4 above, over -60..+18),
+	as upstream Haiku's mixer always did. -12 is about -3.3 real dB."""
+	maximum, exponent = (18.0, 1.4) if db > 0 else (60.0, 1.8)
+	scaled = (abs(db) * maximum ** (1 / exponent) / maximum) ** exponent
+	return 10 ** ((scaled if db > 0 else -scaled) / 20)
+
+
+MEDIA_REFERENCE = ("audio.wav", 1500, 2500)
+MEDIA_PHASES = [
+	("media_audio.both", "audio.wav", 1500, 2500, 1.0, None),
+	("media_audio.app_volume", "audio.wav", 1600, 2500, 1.0,
+		mixer_gain(-12.0412)),
+	("media_audio.app_mute", "audio.wav", None, 2600, 0.8, None),
+	("media_audio.route_default_side", "audio.wav", 1800, None, 1.0, 1.0),
+	("media_audio.route_second_card", "sdl-out.raw", None, 2700, 1.0, None),
+	("media_audio.route_back", "audio.wav", 1800, 2750, 0.8, None),
+	("media_audio.remembered_route", "sdl-out.raw", None, 2800, 1.0, None),
+	("media_audio.remembered_volume", "audio.wav", 1900, None, 1.0,
+		mixer_gain(-6.0206)),
+	("media_audio.route_after_restart", "sdl-out.raw", None, 2850, 1.0, None),
+	("media_audio.default_output_switch", "sdl-out.raw", 2000, 2900, 1.0,
+		None),
+]
+MEDIA_FREQUENCIES = sorted({hz for phase in MEDIA_PHASES
+	for hz in phase[2:4] if hz} | {1550, 1700})
+
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
 WATCHED_DRIVERS = ("virtio_sound", "virtio_block", "nvme_disk")
@@ -84,7 +117,9 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"virtio_block", "vblk_test", "nvme_disk", "nvme_test",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
-	"virtio_input", "<input>tablet", "<input>virtio"]
+	"virtio_input", "<input>tablet", "<input>virtio",
+	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
+	"media_test"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -389,19 +424,26 @@ def make_decoy(image, decoy):
 	return True
 
 
-def installed_tests():
+def installed_tests(profile=None):
 	"""Names of the test programs harness images carry, in the order the
-	guest runner runs them (it runs /boot/system/non-packaged/bin/ce-tests/*,
-	sorted by the shell's glob): every name listed after "bin ce-tests :" in
-	an AddFilesToHaikuImage rule of the 3rdparty/ce/tests Jamfiles."""
-	names = set()
+	guest runner runs them: first /boot/system/non-packaged/bin/ce-tests/*,
+	then, with media_server started, ce-tests-media/* (each sorted, like the
+	shell's glob): every name listed after "bin ce-tests :" or
+	"bin ce-tests-media :" in an AddFilesToHaikuImage rule of the
+	3rdparty/ce/tests Jamfiles. The media tests only run on images with the
+	Media Kit (the renga-* profiles): for other profiles they are left out.
+	"""
+	names = {"ce-tests": set(), "ce-tests-media": set()}
 	for jamfile in glob.glob(os.path.join(HAIKU_TOP, "3rdparty", "ce",
 			"tests", "*", "Jamfile")):
 		with open(jamfile) as jamFile:
 			text = jamFile.read()
-		for match in re.finditer(r"\bbin\s+ce-tests\s*:\s*([^;]*);", text):
-			names.update(match.group(1).split())
-	return sorted(names)
+		for match in re.finditer(
+				r"\bbin\s+(ce-tests(?:-media)?)\s*:\s*([^;]*);", text):
+			names[match.group(1)].update(match.group(2).split())
+	media = sorted(names["ce-tests-media"]) \
+		if profile is None or profile.startswith("renga-") else []
+	return sorted(names["ce-tests"]) + media
 
 
 def selected_tests(text, available):
@@ -1710,6 +1752,11 @@ def analyze_audio(results_dir, report, phases):
 			best = max(candidates,
 				key=lambda hz: goertzel_power(chunk, rate, hz))
 			purity = 2 * goertzel_power(chunk, rate, best) / (window * energy)
+			# A tone that is none of the phases' (the Media Kit tests play
+			# on this card later) is "other", not the nearest phase tone.
+			# A gap in a phase tone still leaves about half its energy.
+			if purity < 0.3:
+				best = "other"
 			label.append((best, purity))
 		labels.append(label)
 
@@ -1725,7 +1772,7 @@ def analyze_audio(results_dir, report, phases):
 
 	summary = []
 	for segment in segments:
-		if all(hz is None for hz in segment["key"]):
+		if all(hz is None or hz == "other" for hz in segment["key"]):
 			continue
 		# The first and last window of a segment straddle its edges (silence
 		# or the neighbouring phase), so only interior windows count.
@@ -1760,12 +1807,163 @@ def analyze_audio(results_dir, report, phases):
 		})
 
 
+def read_raw_audio(path, rate=CAPTURE_RATE, channels=2):
+	"""Raw s16le audio as written by SDL's disk driver: (rate, channels,
+	samples per channel)."""
+	with open(path, "rb") as rawFile:
+		payload = rawFile.read()
+	frame_count = len(payload) // (2 * channels)
+	values = struct.unpack("<%dh" % (frame_count * channels),
+		payload[:frame_count * channels * 2])
+	return rate, channels, [values[c::channels] for c in range(channels)]
+
+
+def tone_windows(samples, rate, candidates, window):
+	"""Per window of one channel: (dominant candidate Hz or None for
+	silence or "other" for anything else, purity, RMS). Uses numpy when it
+	is there (the Media Kit phases add a minute or more of tones)."""
+	results = []
+	try:
+		import numpy
+		data = numpy.asarray(samples, dtype=numpy.float64)
+		count = len(data) // window
+		if count == 0:
+			return results
+		blocks = data[:count * window].reshape(count, window)
+		energy = (blocks * blocks).sum(axis=1)
+		n = numpy.arange(window)
+		powers = []
+		for hz in candidates:
+			phasor = numpy.exp(-2j * numpy.pi * hz * n / rate)
+			powers.append(numpy.abs(blocks @ phasor) ** 2)
+		powers = numpy.array(powers)
+		best = powers.argmax(axis=0)
+		for i in range(count):
+			rms = math.sqrt(energy[i] / window)
+			if rms < 100:
+				results.append((None, 0.0, rms))
+				continue
+			purity = 2 * powers[best[i], i] / (window * energy[i])
+			results.append((candidates[best[i]] if purity >= 0.5
+				else "other", float(purity), rms))
+		return results
+	except ImportError:
+		pass
+	for start in range(0, len(samples) - window + 1, window):
+		chunk = samples[start:start + window]
+		energy = sum(x * x for x in chunk)
+		rms = math.sqrt(energy / window)
+		if rms < 100:
+			results.append((None, 0.0, rms))
+			continue
+		best = max(candidates, key=lambda hz: goertzel_power(chunk, rate, hz))
+		purity = 2 * goertzel_power(chunk, rate, best) / (window * energy)
+		results.append((best if purity >= 0.5 else "other", purity, rms))
+	return results
+
+
+def media_segments(path, reader):
+	"""Segments of equal (left, right) tones in a recording, with their
+	length, per-channel RMS (interior windows) and start window."""
+	rate, channels, samples = reader(path)
+	window = rate // 10
+	left = tone_windows(samples[0], rate, MEDIA_FREQUENCIES, window)
+	right = tone_windows(samples[1] if channels > 1 else samples[0], rate,
+		MEDIA_FREQUENCIES, window)
+	segments = []
+	for index, (l, r) in enumerate(zip(left, right)):
+		key = (l[0], r[0])
+		if segments and segments[-1]["key"] == key:
+			segments[-1]["windows"].append((l, r))
+		else:
+			segments.append({"key": key, "start": index, "windows": [(l, r)]})
+	for segment in segments:
+		windows = segment["windows"]
+		interior = windows[1:-1] if len(windows) > 2 else windows
+		segment["seconds"] = len(windows) / 10.0
+		segment["left_rms"] = sum(w[0][2] for w in interior) / len(interior)
+		segment["right_rms"] = sum(w[1][2] for w in interior) / len(interior)
+	return rate, samples, segments
+
+
+def analyze_media_audio(results_dir, report):
+	"""The Media Kit phases in what the two cards played (MEDIA_PHASES):
+	per-application volume and mute, routing to the second card and back,
+	settings remembered across application and media service restarts, and
+	the default output switch. Also that moving a stream to and from the
+	second card did not click there: no step between two samples larger
+	than the tone itself makes (sdl-out.raw only carries the Media Kit
+	phases; the driver tests play silence on that card)."""
+	checks = []
+	report.setdefault("media_audio", {})["checks"] = checks
+	recordings = {}
+	for name, reader in (("audio.wav", read_wav),
+			("sdl-out.raw", read_raw_audio)):
+		try:
+			recordings[name] = media_segments(os.path.join(results_dir, name),
+				reader)
+		except (OSError, ValueError, struct.error) as error:
+			checks.append({"name": "media_audio.recording", "pass": False,
+				"detail": "%s: %s" % (name, error)})
+			return
+	report["media_audio"]["segments"] = {name: [{"start": s["start"] / 10.0,
+			"seconds": s["seconds"], "left_hz": s["key"][0],
+			"right_hz": s["key"][1], "left_rms": round(s["left_rms"]),
+			"right_rms": round(s["right_rms"])}
+		for s in segments if s["seconds"] >= 0.3
+			and s["key"] != (None, None)]
+		for name, (_, _, segments) in recordings.items()}
+
+	def longest(recording, left, right):
+		matching = [s for s in recordings[recording][2]
+			if s["key"] == (left, right)]
+		return max(matching, key=lambda s: s["seconds"], default=None)
+
+	reference = longest(*MEDIA_REFERENCE)
+	for name, recording, left, right, seconds, level in MEDIA_PHASES:
+		segment = longest(recording, left, right)
+		passed = segment is not None and segment["seconds"] >= seconds
+		detail = "%s L %s / R %s Hz: %s" % (recording, left or "-",
+			right or "-", "%.1fs" % segment["seconds"] if segment
+				else "not found")
+		if passed and level is not None and reference is not None:
+			ratio = segment["left_rms"] / reference["left_rms"]
+			passed = abs(ratio - level) <= 0.12 * level
+			detail += ", left level %.3f of the reference (want %.3f)" % (
+				ratio, level)
+		checks.append({"name": name, "pass": passed, "detail": detail})
+
+	# Click check around the moves to and from the second card.
+	rate, samples, segments = recordings["sdl-out.raw"]
+	first = longest("sdl-out.raw", None, 2700)
+	last = longest("sdl-out.raw", None, 2750)
+	if first is None or last is None:
+		checks.append({"name": "media_audio.route_click_free", "pass": False,
+			"detail": "the route phases are not in sdl-out.raw"})
+		return
+	window = rate // 10
+	start = max(0, (first["start"] - 3) * window)
+	end = min(len(samples[1]), (last["start"] + len(last["windows"]) + 3)
+		* window)
+	region = samples[1][start:end]
+	peak = max((abs(x) for x in region), default=0)
+	step = max((abs(region[i] - region[i - 1])
+		for i in range(1, len(region))), default=0)
+	bound = 2 * math.pi * 2750 / rate * peak * 1.15 + 60
+	checks.append({"name": "media_audio.route_click_free",
+		"pass": len(region) > 0 and step <= bound,
+		"detail": "largest step %d around the moves (%.1f s), a 2750 Hz tone "
+			"at peak %d makes at most %d" % (step, len(region) / rate, peak,
+			bound)})
+
+
 # #pragma mark - report
 
 
 def write_report(results_dir, report):
 	checks = list(report.get("tests", []))
 	checks += report.get("audio", {}).get("checks", [])
+	checks += report.get("media_audio", {}).get("checks", [])
 	checks += report.get("host_checks", [])
 	failed = [c for c in checks if not c["pass"]]
 
@@ -1979,7 +2177,11 @@ def main():
 		help="build the drivers under test with their TRACE() output on")
 	args = parser.parse_args()
 	args.output = os.path.abspath(args.output)
-	available = installed_tests()
+	if args.profile is None:
+		args.profile = "minimum-anyboot" \
+			if args.firmware == "uefi" or args.media == "cdrom" \
+			else "minimum-raw"
+	available = installed_tests(args.profile)
 	if args.list_tests:
 		print("\n".join(available))
 		return 0
@@ -2038,6 +2240,8 @@ def main():
 		check_boot_menu(args, results_dir, report)
 		if not args.only or "vsnd_test" in args.only:
 			analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
+		if "media_test" in (args.only or available):
+			analyze_media_audio(results_dir, report)
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

@@ -56,6 +56,7 @@ private:
 			void				_FindAudioMixer();
 			void				_FindTimeSource();
 
+			int32				_ReleaseMixerSinks(const media_node& soundcard);
 			status_t			_ConnectMixerToOutput();
 
 private:

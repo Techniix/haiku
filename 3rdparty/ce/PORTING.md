@@ -21,6 +21,7 @@ updates this file in the same commit.
 | `memfd_create()`, file sealing (`F_ADD_SEALS`, `F_GET_SEALS`) | `<sys/mman.h>`, `<fcntl.h>` | `-lgnu` | Missing | Available |
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
 | `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback and capture) |
+| Per-application volume, mute and output device; loopback ("What you hear", one application) as a Media Kit source | (Media Kit nodes and parameters) | libmedia (nothing extra) | Missing | Available |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
 | `signalfd()` | `<sys/signalfd.h>` | `-lgnu` | Missing | Available |
@@ -732,6 +733,60 @@ to record.
 
 Since: commits `658d1756`, `fbbb290a` (playback); capture in the commit that
 changed this paragraph. Tests: `vsnd_test.cpp`.
+
+### Per-application audio, routing and loopback
+
+The system mixer keeps every application's stream apart (PipeWire and
+PulseAudio call them sink inputs): each has its own volume, mute and output
+device, remembered per application signature across application and media
+service restarts. Recording "what you hear", or one application, is an
+ordinary Media Kit source. Nothing changed in the public API; ports use
+plain Media Kit calls:
+
+- **Capture of the system's sound (OBS, Sunshine, screen recorders).** The
+  mixer add-on has a second flavor, "What you hear (loopback)"
+  (`B_BUFFER_PRODUCER | B_PHYSICAL_INPUT`, `B_FLAVOR_IS_GLOBAL`). Find it
+  with `BMediaRoster::GetDormantNodes()` (kinds `B_PHYSICAL_INPUT`),
+  instantiate it with `InstantiateDormantNode(info, &node,
+  B_FLAVOR_IS_GLOBAL)`, and connect to its output like to a sound card's
+  input (`BMediaRecorder::Connect(node, &output, &format)`). Each instance
+  is independent. It records every stream before the master volume, so a
+  recording does not depend on the speaker volume; its preferred format is
+  16-bit stereo at the mixer's rate, but it converts to any raw audio format
+  and rate asked for (float, 32/16/8-bit; 1-8 channels; 4-384 kHz).
+- **Capture of one application.** Set the loopback's text parameter 2
+  (`B_TEXT_PARAMETER`, hidden, named `renga:loopback_signature`) to the
+  application's signature; an empty string records everything again. The
+  discrete parameter 1 offers the same choice by name for generic GUIs.
+  The selection survives the application quitting and starting again.
+- **Per-stream controls.** Each stream is a group in the system mixer's
+  parameter web, as before, with a `B_MUTE` and a `B_GAIN` parameter, and
+  two additions: a hidden null parameter of kind `renga:app_signature`
+  named after the application's signature, and a `B_OUTPUT_MUX` discrete
+  parameter "Output" (0: the default output, n: the n-th output device).
+  The stream's mixer input id is the parameters' `id >> 16`.
+  `headers/private/media/AudioStreamControl.h` wraps this (header-only, no
+  ABI) for Renga's own tools; ports may copy it.
+- **Gain values are not plain decibels.** As in upstream Haiku, the mixer's
+  "dB" bend the scale for even-feeling sliders (exponent 1.8 below 0 dB and
+  1.4 above, over -60 to +18): -12 on the slider is about -3.3 dB. Code
+  that needs a precise attenuation should invert that curve
+  (`mixer_gain()` in `3rdparty/ce/tests/media/media_test.cpp`).
+- **Output devices** keep their flavor names; identical cards now get
+  " 2", " 3", ... so that each can be chosen (two virtio cards: "Virtio
+  Sound", "Virtio Sound 2"). A stream routed to a device that is not
+  available plays on the default output until the device is there again.
+- **Recording gain.** Sound card inputs (multi_audio) have a software
+  "Recording gain" parameter (`B_GAIN`, -40 to +20 dB, real decibels, id
+  `0x52474e01`), for cards without a gain control of their own.
+- **Recording from a sound card nothing plays on works.**
+  `BMediaRecorder::Start()` now also starts a source that is its own time
+  source (every sound card); upstream only started its time source, so
+  such a recording got no data. The mixer no longer stops the default
+  sound card while something records from its input.
+
+Since: the commits that added `MixerTap` to the mixer add-on. Tests:
+`media_test.cpp` (renga-* images).
 
 ### Ctrl is the shortcut key
 

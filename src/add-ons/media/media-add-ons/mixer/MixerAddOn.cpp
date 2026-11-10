@@ -15,6 +15,7 @@
 #include <MediaNode.h>
 
 #include "AudioMixer.h"
+#include "MixerTap.h"
 
 
 // instantiation function
@@ -27,7 +28,8 @@ AudioMixerAddon::AudioMixerAddon(image_id image)
 	:
 	BMediaAddOn(image),
 	fFormat(new media_format),
-	fInfo(new flavor_info)
+	fInfo(new flavor_info),
+	fLoopbackInfo(new flavor_info)
 {
 	fFormat->type = B_MEDIA_RAW_AUDIO;
 	fFormat->u.raw_audio = media_raw_audio_format::wildcard;
@@ -42,6 +44,22 @@ AudioMixerAddon::AudioMixerAddon(image_id image)
 	fInfo->in_formats = fFormat;
 	fInfo->out_format_count = 1;
 	fInfo->out_formats = fFormat;
+
+	// Renga: what the system mixer plays, as a source recorders list next
+	// to the sound cards' inputs (see MixerTap). Instantiated in the
+	// media_addon_server, where the system mixer runs.
+	fLoopbackInfo->internal_id = 1;
+	fLoopbackInfo->name = "What you hear (loopback)";
+	fLoopbackInfo->info = "Records what the system mixer plays: all "
+		"applications, or one of them";
+	fLoopbackInfo->kinds = B_BUFFER_PRODUCER | B_PHYSICAL_INPUT
+		| B_CONTROLLABLE;
+	fLoopbackInfo->flavor_flags = B_FLAVOR_IS_GLOBAL;
+	fLoopbackInfo->possible_count = 0;
+	fLoopbackInfo->in_format_count = 0;
+	fLoopbackInfo->in_formats = NULL;
+	fLoopbackInfo->out_format_count = 1;
+	fLoopbackInfo->out_formats = fFormat;
 }
 
 
@@ -49,6 +67,7 @@ AudioMixerAddon::~AudioMixerAddon()
 {
 	delete fFormat;
 	delete fInfo;
+	delete fLoopbackInfo;
 }
 
 
@@ -65,18 +84,19 @@ AudioMixerAddon::InitCheck(const char** out_failure_text)
 int32
 AudioMixerAddon::CountFlavors()
 {
-	return 1;
+	return 2;
 }
 
 
 status_t
 AudioMixerAddon::GetFlavorAt(int32 n, const flavor_info** out_info)
 {
-	// only the 0th flavor exists
-	if (n != 0)
+	if (n == 0)
+		*out_info = fInfo;
+	else if (n == 1)
+		*out_info = fLoopbackInfo;
+	else
 		return B_ERROR;
-
-	*out_info = fInfo;
 	return B_OK;
 }
 
@@ -85,6 +105,10 @@ BMediaNode *
 AudioMixerAddon::InstantiateNodeFor(const flavor_info* info, BMessage* config,
 	status_t* out_error)
 {
+	if (info != NULL && info->internal_id == 1) {
+		return new MixerTap(this, MixerTap::kLoopback,
+			"What you hear (loopback)", 1);
+	}
 	return new AudioMixer(this, false);
 }
 

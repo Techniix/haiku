@@ -682,6 +682,10 @@ DefaultManager::_ConnectMixerToOutput()
 
 	rv = fRoster->GetFreeInputsFor(soundcard, inputs, MAX_INPUT_INFOS, &count,
 		B_MEDIA_RAW_AUDIO);
+	if (rv == B_OK && count < 1 && _ReleaseMixerSinks(soundcard) > 0) {
+		rv = fRoster->GetFreeInputsFor(soundcard, inputs, MAX_INPUT_INFOS,
+			&count, B_MEDIA_RAW_AUDIO);
+	}
 	if (rv != B_OK || count < 1) {
 		TRACE("DefaultManager: can't find free soundcard inputs\n");
 		rv = B_ERROR;
@@ -787,6 +791,44 @@ finish:
 	fRoster->ReleaseNode(soundcard);
 	fRoster->ReleaseNode(timesource);
 	return rv;
+}
+
+
+/*!	Renga: the system mixer plays streams routed to another device than the
+	default output through "Mixer sink" producers it connects to that
+	device (see the mixer add-on's MixerTap). When the user makes such a
+	device the default output, the mixer itself takes its input over:
+	disconnect the sinks from it. The mixer then plays those streams on the
+	default output, which is that device. Returns how many were removed.
+*/
+int32
+DefaultManager::_ReleaseMixerSinks(const media_node& soundcard)
+{
+	media_input inputs[MAX_INPUT_INFOS];
+	int32 count;
+	if (fRoster->GetConnectedInputsFor(soundcard, inputs, MAX_INPUT_INFOS,
+			&count) != B_OK) {
+		return 0;
+	}
+
+	int32 released = 0;
+	for (int32 i = 0; i < count; i++) {
+		media_node_id producerID = fRoster->NodeIDFor(inputs[i].source.port);
+		media_node producer;
+		if (producerID < 0 || fRoster->GetNodeFor(producerID, &producer)
+				!= B_OK) {
+			continue;
+		}
+		live_node_info info;
+		if (fRoster->GetLiveNodeInfo(producer, &info) == B_OK
+			&& strncmp(info.name, "Mixer sink", 10) == 0
+			&& fRoster->Disconnect(producerID, inputs[i].source,
+				soundcard.node, inputs[i].destination) == B_OK) {
+			released++;
+		}
+		fRoster->ReleaseNode(producer);
+	}
+	return released;
 }
 
 

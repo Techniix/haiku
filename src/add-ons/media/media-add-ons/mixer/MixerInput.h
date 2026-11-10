@@ -11,6 +11,7 @@
 
 #include <MediaNode.h>
 #include <RealtimeAlloc.h>
+#include <String.h>
 
 #include "MixerCore.h"
 #include "MixerDebug.h"
@@ -18,6 +19,7 @@
 
 
 class ByteSwap;
+class MixerTap;
 class Resampler;
 
 
@@ -62,12 +64,43 @@ public:
 			void				SetEnabled(bool enabled);
 			bool				IsEnabled();
 
+	// The application the stream comes from (from the producer's team),
+	// and its display name; empty if unknown.
+			const char*			AppSignature() const
+									{ return fAppSignature.String(); }
+			const char*			AppName() const
+									{ return fAppName.String(); }
+			team_id				Team() const { return fTeam; }
+			void				SetApplication(team_id team,
+									const char* signature, const char* name);
+	// The name shown for the stream: the application's, or the
+	// connection's.
+			const char*			DisplayName() const;
+
+	// Routing: the output device (its flavor name) the stream should play
+	// on; empty for the default output. Sink() is the tap that currently
+	// carries it, or NULL while it plays on the default output (also when
+	// the chosen device is not available).
+			const char*			Route() const { return fRoute.String(); }
+			void				SetRoute(const char* deviceName);
+			MixerTap*			Sink() const { return fSink; }
+			void				SetSink(MixerTap* sink) { fSink = sink; }
+	// Gain ramps: the gain each mixer channel had in the last mixed buffer,
+	// so that a change is spread over the next buffer instead of a step.
+			float				LastMixerChannelGain(int mixerChannel);
+			void				SetLastMixerChannelGain(int mixerChannel,
+									float gain);
+
 	// only for use by MixerCore
 			bool				GetMixerChannelInfo(int mixerChannel,
 									int64 framepos, bigtime_t time,
 									const float** _buffer,
 									uint32* _sampleOffset, int* _type,
-									float* _gain);
+									float* _gain, bool evenIfMuted = false);
+	// The sink the stream was mixed into last time (see MixerCore).
+			MixerTap*			PreviousSink() const { return fPreviousSink; }
+			void				SetPreviousSink(MixerTap* sink)
+									{ fPreviousSink = sink; }
 
 protected:
 	friend class MixerCore;
@@ -112,6 +145,14 @@ private:
 			rtm_pool*			fRtmPool;
 			bool				fUserOverridesChannelDestinations;
 			int32				fDebugMixBufferFrames;
+
+			BString				fAppSignature;
+			BString				fAppName;
+			team_id				fTeam;
+			BString				fRoute;
+			MixerTap*			fSink;
+			MixerTap*			fPreviousSink;
+			float				fLastGain[MAX_CHANNEL_TYPES];
 };
 
 
@@ -125,12 +166,12 @@ MixerInput::GetMixerChannelCount()
 inline bool
 MixerInput::GetMixerChannelInfo(int mixerChannel, int64 framepos,
 	bigtime_t time, const float** buffer, uint32* sampleOffset, int* type,
-	float* gain)
+	float* gain, bool evenIfMuted)
 {
 	// this function should not be called if we don't have a mix buffer!
 	ASSERT(fMixBuffer != NULL);
 	ASSERT(mixerChannel >= 0 && mixerChannel < fMixerChannelCount);
-	if (!fEnabled)
+	if (!fEnabled && !evenIfMuted)
 		return false;
 
 #if DEBUG
@@ -163,7 +204,7 @@ MixerInput::GetMixerChannelInfo(int mixerChannel, int64 framepos,
 		+ (offset * sizeof(float) * fInputChannelCount));
 	*sampleOffset = sizeof(float) * fInputChannelCount;
 	*type = fMixerChannelInfo[mixerChannel].destination_type;
-	*gain = fMixerChannelInfo[mixerChannel].destination_gain;
+	*gain = fEnabled ? fMixerChannelInfo[mixerChannel].destination_gain : 0;
 	return true;
 }
 

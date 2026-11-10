@@ -54,6 +54,7 @@ class MixerSettings {
 		void							LoadConnectionSettings(MixerOutput *output);
 	
 	protected:
+		int								_FindInputSetting(MixerInput* input);
 		void							StartDeferredSave();
 		void							StopDeferredSave();
 	

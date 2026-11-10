@@ -40,8 +40,14 @@ MixerInput::MixerInput(MixerCore* core, const media_input& input,
 	fFractionalFrames(0.0),
 	fResampler(NULL),
 	fRtmPool(NULL),
-	fUserOverridesChannelDestinations(false)
+	fUserOverridesChannelDestinations(false),
+	fTeam(-1),
+	fSink(NULL),
+	fPreviousSink(NULL)
 {
+	for (int i = 0; i < MAX_CHANNEL_TYPES; i++)
+		fLastGain[i] = -1;
+
 	fix_multiaudio_format(&fInput.format.u.raw_audio);
 	PRINT_INPUT("MixerInput::MixerInput", fInput);
 	PRINT_CHANNEL_MASK(fInput.format);
@@ -731,4 +737,48 @@ MixerInput::SetMixBufferFormat(int32 framerate, int32 frames)
 
 	_UpdateInputChannelDestinationMask();
 	_UpdateInputChannelDestinations();
+}
+
+
+// #pragma mark - application, routing
+
+
+void
+MixerInput::SetApplication(team_id team, const char* signature,
+	const char* name)
+{
+	fTeam = team;
+	fAppSignature = signature != NULL ? signature : "";
+	fAppName = name != NULL ? name : "";
+}
+
+
+const char*
+MixerInput::DisplayName() const
+{
+	return fAppName.Length() > 0 ? fAppName.String() : fInput.name;
+}
+
+
+void
+MixerInput::SetRoute(const char* deviceName)
+{
+	fRoute = deviceName != NULL ? deviceName : "";
+}
+
+
+float
+MixerInput::LastMixerChannelGain(int mixerChannel)
+{
+	if (mixerChannel < 0 || mixerChannel >= MAX_CHANNEL_TYPES)
+		return -1;
+	return fLastGain[mixerChannel];
+}
+
+
+void
+MixerInput::SetLastMixerChannelGain(int mixerChannel, float gain)
+{
+	if (mixerChannel >= 0 && mixerChannel < MAX_CHANNEL_TYPES)
+		fLastGain[mixerChannel] = gain;
 }
