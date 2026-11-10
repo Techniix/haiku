@@ -70,7 +70,8 @@ Stream::Stream(Device* device, size_t interface, usb_interface_list* List)
 	fCycles(0),
 	fReportedCycles(0),
 	fUnderruns(0),
-	fInsideNotify(0)
+	fInsideNotify(0),
+	fOutstanding(0)
 {
 	B_INITIALIZE_SPINLOCK(&fLock);
 	memset(fTransfers, 0, sizeof(fTransfers));
@@ -237,6 +238,7 @@ Stream::OnRemove()
 		gUSBModule->cancel_queued_transfers(fFeedbackEndpoint);
 	while (atomic_get(&fInsideNotify) != 0)
 		snooze(100);
+	_WaitForCompletions(1000000);
 	fIsRunning = false;
 }
 
@@ -409,6 +411,19 @@ Stream::_FreeTransfers()
 	fTransferArea = -1;
 	fTransferCount = 0;
 	fFeedbackData = NULL;
+}
+
+
+/*!	Renga: lets go of transfers a callback may still use, without freeing
+	them (Stop() when a completion did not come within a second).
+*/
+void
+Stream::_ForgetTransfers()
+{
+	fTransferArea = -1;
+	fTransferCount = 0;
+	fFeedbackData = NULL;
+	atomic_set(&fOutstanding, 0);
 }
 
 
@@ -715,9 +730,14 @@ Stream::_QueueTransfer(StreamTransfer* transfer)
 		transfer->length = (size_t)fMaxPacketBytes * transfer->packetCount;
 	}
 
-	return gUSBModule->queue_isochronous(fStreamEndpoint, transfer->data,
-		transfer->length, transfer->packets, transfer->packetCount, NULL,
-		USB_ISO_ASAP, Stream::_TransferCallback, transfer);
+	atomic_add(&fOutstanding, 1);
+	status_t status = gUSBModule->queue_isochronous(fStreamEndpoint,
+		transfer->data, transfer->length, transfer->packets,
+		transfer->packetCount, NULL, USB_ISO_ASAP, Stream::_TransferCallback,
+		transfer);
+	if (status != B_OK)
+		atomic_add(&fOutstanding, -1);
+	return status;
 }
 
 
@@ -737,9 +757,13 @@ Stream::_QueueFeedback()
 	fFeedbackTransfer.packets[0].actual_length = 0;
 	fFeedbackTransfer.packets[0].status = B_NO_INIT;
 	fFeedbackTransfer.length = length;
-	return gUSBModule->queue_isochronous(fFeedbackEndpoint, fFeedbackData,
-		length, fFeedbackTransfer.packets, 1, NULL, USB_ISO_ASAP,
-		Stream::_FeedbackCallback, &fFeedbackTransfer);
+	atomic_add(&fOutstanding, 1);
+	status_t status = gUSBModule->queue_isochronous(fFeedbackEndpoint,
+		fFeedbackData, length, fFeedbackTransfer.packets, 1, NULL,
+		USB_ISO_ASAP, Stream::_FeedbackCallback, &fFeedbackTransfer);
+	if (status != B_OK)
+		atomic_add(&fOutstanding, -1);
+	return status;
 }
 
 
@@ -820,6 +844,7 @@ Stream::Stop()
 	// wait until possible notification handling finished...
 	while (atomic_get(&fInsideNotify) != 0)
 		snooze(100);
+	bool drained = _WaitForCompletions(1000000);
 	fIsRunning = false;
 
 	if (!fDevice->IsRemoved() && fConfiguration != NULL) {
@@ -828,8 +853,36 @@ Stream::Stop()
 			&fConfiguration->interface[fInterface].alt[0]);
 	}
 	fStreamEndpoint = fFeedbackEndpoint = 0;
-	_FreeTransfers();
+	if (drained)
+		_FreeTransfers();
+	else {
+		// A completion is still to come: leaking the buffers beats
+		// handing freed memory to its callback.
+		TRACE(ERR, "%" B_PRId32 " transfer(s) never completed; their "
+			"buffers are kept\n", atomic_get(&fOutstanding));
+		_ForgetTransfers();
+	}
 	return B_OK;
+}
+
+
+/*!	Renga: waits until every queued transfer's callback has returned.
+	fInsideNotify alone does not do: the stack takes a finished transfer
+	off its queue before it calls the callback, so cancel_queued_transfers()
+	does not see it and the callback may not have begun when Stop() looks
+	(xhci's finisher thread; the uac2 test's mock bus has the same window).
+	Freeing the transfers then hands freed memory to the callback.
+*/
+bool
+Stream::_WaitForCompletions(bigtime_t timeout)
+{
+	bigtime_t deadline = system_time() + timeout;
+	while (atomic_get(&fOutstanding) > 0) {
+		if (system_time() > deadline)
+			return false;
+		snooze(100);
+	}
+	return true;
 }
 
 
@@ -844,6 +897,8 @@ Stream::_TransferCallback(void* cookie, status_t status, void* data,
 	if (status == B_CANCELED || stream->fStopping || !stream->fIsRunning
 		|| stream->fDevice->IsRemoved()) {
 		atomic_add(&stream->fInsideNotify, -1);
+		atomic_add(&stream->fOutstanding, -1);
+			// the last access to the stream
 		return;
 	}
 
@@ -863,6 +918,7 @@ Stream::_TransferCallback(void* cookie, status_t status, void* data,
 		TRACE(ERR, "requeueing a transfer failed: %s\n", strerror(status));
 
 	atomic_add(&stream->fInsideNotify, -1);
+	atomic_add(&stream->fOutstanding, -1);
 }
 
 
@@ -877,6 +933,8 @@ Stream::_FeedbackCallback(void* cookie, status_t status, void* data,
 	if (status == B_CANCELED || stream->fStopping || !stream->fIsRunning
 		|| stream->fDevice->IsRemoved()) {
 		atomic_add(&stream->fInsideNotify, -1);
+		atomic_add(&stream->fOutstanding, -1);
+			// the last access to the stream
 		return;
 	}
 
@@ -895,6 +953,7 @@ Stream::_FeedbackCallback(void* cookie, status_t status, void* data,
 
 	stream->_QueueFeedback();
 	atomic_add(&stream->fInsideNotify, -1);
+	atomic_add(&stream->fOutstanding, -1);
 }
 
 

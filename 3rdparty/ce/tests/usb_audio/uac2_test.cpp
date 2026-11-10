@@ -1126,7 +1126,7 @@ stopper(void* data)
 {
 	Stopper* stop = (Stopper*)data;
 	snooze(stop->delay);
-	stop->at = system_time();
+	__atomic_store_n(&stop->at, system_time(), __ATOMIC_SEQ_CST);
 	if (stop->remove)
 		usb_audio_device_removed(stop->deviceCookie);
 	else
@@ -1135,8 +1135,15 @@ stopper(void* data)
 }
 
 
+/*!	Exchanges until one fails. With \a stop, an exchange that began after
+	the stop and succeeded means the stop came between two exchanges, not
+	during the wait: the hmulti protocol then restarts the streams (the hda
+	driver does the same), so this returns B_INTERRUPTED for the caller to
+	try again.
+*/
 static status_t
-exchange_until_error(Client& client, bigtime_t& returnedAt)
+exchange_until_error(Client& client, bigtime_t& returnedAt,
+	Stopper* stop = NULL)
 {
 	multi_buffer_info info;
 	memset(&info, 0, sizeof(info));
@@ -1145,9 +1152,16 @@ exchange_until_error(Client& client, bigtime_t& returnedAt)
 	bigtime_t end = system_time() + 5000000;
 	status_t status = B_OK;
 	while (system_time() < end) {
+		bigtime_t began = system_time();
 		status = control(B_MULTI_BUFFER_EXCHANGE, &info, sizeof(info));
 		if (status != B_OK)
 			break;
+		bigtime_t stoppedAt = stop != NULL
+			? __atomic_load_n(&stop->at, __ATOMIC_SEQ_CST) : 0;
+		if (stoppedAt != 0 && began > stoppedAt) {
+			status = B_INTERRUPTED;
+			break;
+		}
 		fill(client, (info.playback_buffer_cycle - 1 + count) % count);
 	}
 	returnedAt = system_time();
@@ -1414,18 +1428,26 @@ main()
 	check_packets("play_48k.packets", 48000.0 / 8000 * kDeviceClockError);
 
 	// A force stop from another thread while an exchange waits.
-	Stopper stop = { 300000, 0, false, deviceCookie };
+	// A stop that falls between two exchanges is missed by design (see
+	// exchange_until_error()); on SMP that happens now and then, so up to
+	// five tries.
+	Stopper stop;
 	pthread_t thread;
-	pthread_create(&thread, NULL, stopper, &stop);
 	bigtime_t returnedAt;
-	status = exchange_until_error(client, returnedAt);
-	pthread_join(thread, NULL);
+	int tries = 0;
+	do {
+		stop = (Stopper){ 300000, 0, false, deviceCookie };
+		pthread_create(&thread, NULL, stopper, &stop);
+		status = exchange_until_error(client, returnedAt, &stop);
+		pthread_join(thread, NULL);
+		tries++;
+	} while (status == B_INTERRUPTED && tries < 5);
 	report("force_stop", status == B_CANCELED
 			&& returnedAt - stop.at < 200000
 			&& sActiveAlternate[kInterfacePlayback] == 0,
-		"exchange returned '%s' %d us after the stop, playback alternate %d",
-		strerror(status), (int)(returnedAt - stop.at),
-		(int)sActiveAlternate[kInterfacePlayback]);
+		"exchange returned '%s' %d us after the stop, playback alternate %d"
+		" (try %d)", strerror(status), (int)(returnedAt - stop.at),
+		(int)sActiveAlternate[kInterfacePlayback], tries);
 
 	// The device goes away while it plays.
 	stop.remove = true;

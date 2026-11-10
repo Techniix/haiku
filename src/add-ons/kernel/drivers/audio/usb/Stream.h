@@ -161,6 +161,9 @@ protected:
 			int32			fUnderruns;
 
 			int32			fInsideNotify;
+			// Transfers queued whose callback has not finished yet; see
+			// _WaitForCompletions()
+			int32			fOutstanding;
 
 private:
 			status_t		_ChooseAlternate();
@@ -168,6 +171,7 @@ private:
 			status_t		_SetupBuffers();
 			status_t		_SetupTransfers();
 			void			_FreeTransfers();
+			void			_ForgetTransfers();
 			status_t		_SetRate();
 			status_t		_FindPipes();
 			status_t		_QueueTransfer(StreamTransfer* transfer);
@@ -175,6 +179,7 @@ private:
 			void			_DrainTransfer(StreamTransfer* transfer);
 			void			_Advance(uint32 frames, bigtime_t now);
 			status_t		_QueueFeedback();
+			bool			_WaitForCompletions(bigtime_t timeout);
 	static	void			_TransferCallback(void* cookie, status_t status,
 								void* data, size_t actualLength);
 	static	void			_FeedbackCallback(void* cookie, status_t status,
