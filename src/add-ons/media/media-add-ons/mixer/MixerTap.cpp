@@ -18,6 +18,16 @@
 #include <ParameterWeb.h>
 #include <TimeSource.h>
 
+#include <MediaRosterEx.h>
+	// (its debug macros give way to the mixer's)
+#undef ERROR
+#undef TRACE
+#undef CALLED
+#undef PRINT
+#undef PRINT_FORMAT
+#undef PRINT_INPUT
+#undef PRINT_OUTPUT
+
 #include "AudioMixer.h"
 #include "MixerDebug.h"
 
@@ -67,7 +77,17 @@ MixerTap::MixerTap(BMediaAddOn* addOn, kind_t kind, const char* name,
 	fSendErrors(0),
 	fPushTimeSource(-1),
 	fActiveAt(0),
-	fUnwantedSince(0)
+	fUnwantedSince(0),
+	fDeviceClock(NULL),
+	fDriftCount(0),
+	fDriftNext(0),
+	fDriftRestarts(0),
+	fDriftRejected(0),
+	fDrift(0),
+	fMeasuredDrift(0),
+	fDriftValid(false),
+	fFramesIn(0),
+	fFramesOut(0)
 {
 	fLast[0] = fLast[1] = 0;
 	fOutput.node = media_node::null;
@@ -90,6 +110,8 @@ MixerTap::~MixerTap()
 	if (fOwnBufferGroup)
 		delete fBufferGroup;
 	delete[] fFifo;
+	if (fDeviceClock != NULL)
+		fDeviceClock->Release();
 }
 
 
@@ -179,6 +201,99 @@ MixerTap::IsReady()
 
 
 void
+MixerTap::SetDeviceNode(media_node_id node)
+{
+	BTimeSource* clock = NULL;
+	if (node >= 0) {
+		// the device node's own published time, whatever time source it
+		// is slaved to
+		clock = MediaRosterEx(BMediaRoster::Roster())
+			->MakeTimeSourceObject(node);
+	}
+	BAutolock locker(fLock);
+	if (fDeviceClock != NULL)
+		fDeviceClock->Release();
+	fDeviceClock = clock;
+	fDeviceNode = node;
+	fDriftValid = false;
+	fDriftCount = 0;
+	fDriftNext = 0;
+	fDrift = 0;
+}
+
+
+/*!	Estimates how fast the device's clock runs against the mixer's: both
+	clocks' performance times at the same real time, sampled once a second,
+	and the slope of a least-squares line through the last 16 samples. A
+	published time source is extrapolated between the device's buffer
+	completions, which come in bursts on virtual hardware (several ms of
+	jitter): a two-point estimate over two seconds was off by up to
+	1000 ppm in QEMU; the fit over 16 s follows the actual difference
+	(QEMU's virtual cards wander against each other by about that much). Called by
+	the mix thread with fLock held; reading a time source does not block.
+	The adaptive resampling follows the estimate, so a sink neither runs
+	dry nor piles up on hardware whose cards run from separate crystals.
+*/
+void
+MixerTap::_UpdateDrift(BTimeSource* mixerClock)
+{
+	if (fDeviceClock == NULL)
+		return;
+	bigtime_t real = BTimeSource::RealTime();
+	bigtime_t device = fDeviceClock->PerformanceTimeFor(real);
+	bigtime_t mixer = mixerClock->PerformanceTimeFor(real);
+	if (fDriftCount > 0) {
+		int32 last = (fDriftNext + kDriftSamples - 1) % kDriftSamples;
+		bigtime_t mixerSpan = mixer - fDriftMixer[last];
+		if (mixerSpan >= 0 && mixerSpan < 1000000)
+			return;
+		double slope = mixerSpan > 0
+			? (double)(device - fDriftDevice[last]) / mixerSpan : 0;
+		if (mixerSpan < 0 || fabs(slope - 1.0) > 0.05) {
+			// a jump (a clock restarted, a time base changed): start over
+			fDriftRestarts++;
+			fDriftCount = 0;
+			fDriftNext = 0;
+		}
+	}
+	fDriftMixer[fDriftNext] = mixer;
+	fDriftDevice[fDriftNext] = device;
+	fDriftNext = (fDriftNext + 1) % kDriftSamples;
+	if (fDriftCount < kDriftSamples)
+		fDriftCount++;
+	if (fDriftCount < 4)
+		return;
+
+	// least squares, relative to the oldest sample for precision
+	int32 first = (fDriftNext + kDriftSamples - fDriftCount) % kDriftSamples;
+	double sumX = 0, sumY = 0, sumXX = 0, sumXY = 0;
+	for (int32 i = 0; i < fDriftCount; i++) {
+		int32 k = (first + i) % kDriftSamples;
+		double x = (double)(fDriftMixer[k] - fDriftMixer[first]);
+		double y = (double)(fDriftDevice[k] - fDriftDevice[first]) - x;
+		sumX += x;
+		sumY += y;
+		sumXX += x * x;
+		sumXY += x * y;
+	}
+	double n = fDriftCount;
+	double denominator = n * sumXX - sumX * sumX;
+	if (denominator <= 0)
+		return;
+	double measured = (n * sumXY - sumX * sumY) / denominator;
+	if (fabs(measured) > 0.02) {
+		// more than any crystal is off (virtual cards can be off by
+		// 0.8 %, see media_drift_test): a clock misbehaving
+		fDriftRejected++;
+		return;
+	}
+	fMeasuredDrift = measured;
+	fDrift = measured;
+	fDriftValid = true;
+}
+
+
+void
 MixerTap::_ResetConversion()
 {
 	fFifoFrames = 0;
@@ -190,7 +305,8 @@ MixerTap::_ResetConversion()
 
 void
 MixerTap::Push(const float* data, int32 channels, int32 frames, float rate,
-	bigtime_t startTime, media_node_id timeSource, float gain)
+	bigtime_t startTime, media_node_id timeSource, float gain,
+	BTimeSource* mixerClock)
 {
 	fPushTimeSource = timeSource;
 	// Never block the mix thread: if the node's own thread holds the lock
@@ -209,8 +325,14 @@ MixerTap::Push(const float* data, int32 channels, int32 frames, float rate,
 		fLastRate = rate;
 	}
 
+	// Renga (F-31): a sink's device has a clock of its own; it plays
+	// (1 + drift) of its frames in one second of the mixer's clock, so the
+	// mix is resampled to that many.
+	if (fKind == kSink && mixerClock != NULL)
+		_UpdateDrift(mixerClock);
+
 	// Room for what this push produces plus a few buffers.
-	double step = rate / fRate;
+	double step = rate / (fRate * (1.0 + fDrift));
 	uint32 produced = (uint32)(frames / step) + 2;
 	uint32 needed = fFifoFrames + produced;
 	if (needed > fFifoCapacity) {
@@ -265,6 +387,8 @@ MixerTap::Push(const float* data, int32 channels, int32 frames, float rate,
 		fLast[c] = data[(frames - 1) * channels + source];
 	}
 	fFifoFrames += written;
+	fFramesIn += frames;
+	fFramesOut += written;
 
 	_SendBuffers();
 	fLock.Unlock();
@@ -350,7 +474,9 @@ MixerTap::_SendBuffers()
 		fFifoFrames -= fBufferFrames;
 		memmove(fFifo, fFifo + fBufferFrames * fChannels,
 			fFifoFrames * fChannels * sizeof(float));
-		fFifoTime += (bigtime_t)(fBufferFrames * 1000000.0 / fRate);
+		// in the mixer's time: the device plays (1 + drift) frames a second
+		fFifoTime += (bigtime_t)(fBufferFrames * 1000000.0
+			/ (fRate * (1.0 + fDrift)));
 
 		if (fDead)
 			break;
@@ -679,6 +805,17 @@ MixerTap::EnableOutput(const media_source& what, bool enabled,
 void
 MixerTap::_UpdateWeb()
 {
+	if (fKind == kSink) {
+		// Renga (F-31): the clock drift correction, for diagnostics and the
+		// harness
+		BParameterWeb* web = new BParameterWeb();
+		BParameterGroup* group = web->MakeGroup("Sink");
+		BTextParameter* drift = group->MakeTextParameter(kDriftParameter,
+			B_MEDIA_RAW_AUDIO, "Clock drift", "renga:clock_drift", 96);
+		drift->SetFlags(B_HIDDEN_PARAMETER);
+		SetParameterWeb(web);
+		return;
+	}
 	if (fKind != kLoopback)
 		return;
 
@@ -724,6 +861,19 @@ MixerTap::GetParameterValue(int32 id, bigtime_t* _lastChange, void* value,
 		}
 		*(int32*)value = index;
 		*_size = sizeof(int32);
+		return B_OK;
+	}
+	if (id == kDriftParameter) {
+		char text[128];
+		snprintf(text, sizeof(text), "%.1f %.1f %" B_PRId64 " %" B_PRId64
+			" %" B_PRId32 " %" B_PRId32 " %" B_PRId32, fMeasuredDrift * 1e6,
+			fDrift * 1e6, fFramesIn, fFramesOut, fDriftCount, fDriftRestarts,
+			fDriftRejected);
+		size_t length = strlen(text) + 1;
+		if (*_size < length)
+			return B_BAD_VALUE;
+		memcpy(value, text, length);
+		*_size = length;
 		return B_OK;
 	}
 	if (id == kSignatureParameter) {

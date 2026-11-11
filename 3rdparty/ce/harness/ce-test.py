@@ -228,7 +228,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
 	"media_sound_test", "Audio", "media_hwvideo_test",
-	"media_resample_test",
+	"media_resample_test", "media_drift_test",
 	"software_video_accelerator",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
 	"media_stream_test", "Screenshot",
@@ -3085,10 +3085,26 @@ def read_raw_audio(path, rate=CAPTURE_RATE, channels=2):
 	return rate, channels, [values[c::channels] for c in range(channels)]
 
 
-def tone_windows(samples, rate, candidates, window):
+# How far a tone may be off its frequency in a card's recording: a stream
+# that reaches a card through a mixer sink is resampled to that card's own
+# pace (clock-drift correction, F-31), and QEMU's second card (SDL's disk
+# driver, one sleep per period) runs about 0.5-0.8 % slow, so its file,
+# read at the nominal 48 kHz, has the tones that much higher. Upwards
+# only (and 0.2 % down): the candidates are 50 Hz apart, under 2 % at the
+# top, so a band both ways would let a tone take its neighbour's name.
+TONE_SPREAD = 0.01
+
+
+def tone_windows(samples, rate, candidates, window, spread=0.0):
 	"""Per window of one channel: (dominant candidate Hz or None for
-	silence or "other" for anything else, purity, RMS). Uses numpy when it
-	is there (the Media Kit phases add a minute or more of tones)."""
+	silence or "other" for anything else, purity, RMS). With \a spread, a
+	candidate also matches up to that fraction above it (and a fifth of
+	it below; the best of a few frequencies). Uses numpy when it is there (the Media Kit
+	phases add a minute or more of tones)."""
+	offsets = [0.0]
+	if spread > 0:
+		steps = 5
+		offsets = [spread * k / steps for k in range(-1, steps + 1)]
 	results = []
 	try:
 		import numpy
@@ -3101,8 +3117,14 @@ def tone_windows(samples, rate, candidates, window):
 		n = numpy.arange(window)
 		powers = []
 		for hz in candidates:
-			phasor = numpy.exp(-2j * numpy.pi * hz * n / rate)
-			powers.append(numpy.abs(blocks @ phasor) ** 2)
+			best_power = None
+			for offset in offsets:
+				phasor = numpy.exp(-2j * numpy.pi * hz * (1 + offset) * n
+					/ rate)
+				power = numpy.abs(blocks @ phasor) ** 2
+				best_power = power if best_power is None \
+					else numpy.maximum(best_power, power)
+			powers.append(best_power)
 		powers = numpy.array(powers)
 		best = powers.argmax(axis=0)
 		for i in range(count):
@@ -3123,22 +3145,25 @@ def tone_windows(samples, rate, candidates, window):
 		if rms < 100:
 			results.append((None, 0.0, rms))
 			continue
-		best = max(candidates, key=lambda hz: goertzel_power(chunk, rate, hz))
-		purity = 2 * goertzel_power(chunk, rate, best) / (window * energy)
+		def power(hz):
+			return max(goertzel_power(chunk, rate, hz * (1 + offset))
+				for offset in offsets)
+		best = max(candidates, key=power)
+		purity = 2 * power(best) / (window * energy)
 		results.append((best if purity >= 0.5 else "other", purity, rms))
 	return results
 
 
-def media_segments(path, reader, frequencies=None):
+def media_segments(path, reader, frequencies=None, spread=0.0):
 	"""Segments of equal (left, right) tones in a recording, with their
 	length, per-channel RMS (interior windows) and start window."""
 	if frequencies is None:
 		frequencies = MEDIA_FREQUENCIES
 	rate, channels, samples = reader(path)
 	window = rate // 10
-	left = tone_windows(samples[0], rate, frequencies, window)
+	left = tone_windows(samples[0], rate, frequencies, window, spread)
 	right = tone_windows(samples[1] if channels > 1 else samples[0], rate,
-		frequencies, window)
+		frequencies, window, spread)
 	segments = []
 	for index, (l, r) in enumerate(zip(left, right)):
 		key = (l[0], r[0])
@@ -3170,7 +3195,7 @@ def analyze_media_audio(results_dir, report):
 			("sdl-out.raw", read_raw_audio)):
 		try:
 			recordings[name] = media_segments(os.path.join(results_dir, name),
-				reader)
+				reader, spread=TONE_SPREAD if name == "sdl-out.raw" else 0.0)
 		except (OSError, ValueError, struct.error) as error:
 			checks.append({"name": "media_audio.recording", "pass": False,
 				"detail": "%s: %s" % (name, error)})
@@ -3250,7 +3275,8 @@ def analyze_sound_audio(results_dir, report):
 			("sdl-out.raw", read_raw_audio)):
 		try:
 			recordings[name] = media_segments(os.path.join(results_dir, name),
-				reader, SOUND_FREQUENCIES)
+				reader, SOUND_FREQUENCIES,
+				spread=TONE_SPREAD if name == "sdl-out.raw" else 0.0)
 		except (OSError, ValueError, struct.error) as error:
 			checks.append({"name": "sound_audio.recording", "pass": False,
 				"detail": "%s: %s" % (name, error)})

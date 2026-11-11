@@ -14,6 +14,7 @@
 #include <StringList.h>
 
 
+class BTimeSource;
 class MixerCore;
 
 
@@ -56,8 +57,9 @@ public:
 									{ return fDeviceName.String(); }
 			void				SetDeviceName(const char* name);
 			media_node_id		DeviceNode() const { return fDeviceNode; }
-			void				SetDeviceNode(media_node_id node)
-									{ fDeviceNode = node; }
+	// Also opens the device's clock (its published time), for the drift
+	// correction; not from the mix thread.
+			void				SetDeviceNode(media_node_id node);
 
 	// loopbacks: whose streams; empty for all
 			BString				SourceSignature();
@@ -75,7 +77,8 @@ public:
 			void				Push(const float* data, int32 channels,
 									int32 frames, float rate,
 									bigtime_t startTime,
-									media_node_id timeSource, float gain);
+									media_node_id timeSource, float gain,
+									BTimeSource* mixerClock = NULL);
 	// Whether Push() can deliver anything; false once sending failed for
 	// good (the consumer is gone).
 			bool				IsReady();
@@ -148,7 +151,10 @@ public:
 	// The parameter ids of a loopback's web (see PORTING.md).
 	enum {
 		kSourceParameter = 1,		// discrete: 0 all, n: application n
-		kSignatureParameter = 2		// text: signature, "" for all
+		kSignatureParameter = 2,	// text: signature, "" for all
+		kDriftParameter = 3			// sinks, text (hidden, kind
+									// "renga:clock_drift"): "<measured ppm>
+									// <applied ppm> <frames in> <frames out>"
 	};
 
 private:
@@ -156,6 +162,7 @@ private:
 			void				_ResetConversion();
 			void				_UpdateWeb();
 			void				_SendBuffers();
+			void				_UpdateDrift(BTimeSource* mixerClock);
 
 			BMediaAddOn*		fAddOn;
 			kind_t				fKind;
@@ -192,6 +199,22 @@ private:
 			media_node_id		fPushTimeSource;
 			volatile bigtime_t	fActiveAt;
 			bigtime_t			fUnwantedSince;
+
+			// clock drift correction (sinks): the device's clock against
+			// the mixer's, the latter's frames resampled to the former's
+			BTimeSource*		fDeviceClock;
+			enum { kDriftSamples = 16 };	// one a second
+			bigtime_t			fDriftMixer[kDriftSamples];
+			bigtime_t			fDriftDevice[kDriftSamples];
+			int32				fDriftCount;
+			int32				fDriftNext;
+			int32				fDriftRestarts;	// for the test hook
+			int32				fDriftRejected;
+			double				fDrift;			// device / mixer - 1
+			double				fMeasuredDrift;
+			bool				fDriftValid;
+			int64				fFramesIn;
+			int64				fFramesOut;
 };
 
 

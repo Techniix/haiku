@@ -735,6 +735,19 @@ of a 1 GiB guest was, so the bounce path went untested.
   -34.7 / -8.8 dB, windowed sinc -74.0 / -52.4 dB. New settings must
   default to the windowed sinc. (Not 1 kHz: the host looks for
   `virtio_sound_test`'s 1 kHz phase on the first card.)
+- **media_drift** (`media_drift_test`, renga-* images): clock-drift
+  correction of mixer sinks (F-31). A stream routed to the second virtio
+  card goes through a sink that compares that card's clock with the
+  mixer's (a least-squares line through 16 samples, one a second) and
+  resamples the mix to the card's pace. QEMU's two cards do not keep the
+  same pace (each follows its own audio back end: the second measured
+  4800 to 8000 ppm slow, wandering by about 1000 ppm), so the test skews
+  the second card's published clock by +6000 ppm with multi_audio's
+  hidden `renga:clock_skew_ppm` test hook and checks the change: the
+  estimate settles (full window, no restarts), moves by 6000 +- 1500 ppm,
+  the sink produces as many more frames as the estimate says (within
+  400 ppm), and comes back when the skew is removed. Two cards with
+  their own crystals are needed to hear the correction.
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
   Media Kit tests): the low-latency audio mode (roadmap F-31,
   `headers/private/media/LowLatencyAudio.h`). A child process plays

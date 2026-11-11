@@ -1013,7 +1013,7 @@ MixerCore::_FeedTaps(int64 framePos, bigtime_t eventTime,
 				inputChanInfos, mixChanInfos);
 			tap->Push(fTapBuffer, fMixBufferChannelCount,
 				fMixBufferFrameCount, fMixBufferFrameRate, eventTime,
-				fTimeSource->ID(), masterGain);
+				fTimeSource->ID(), masterGain, fTimeSource);
 			continue;
 		}
 

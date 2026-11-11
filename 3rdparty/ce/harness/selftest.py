@@ -518,26 +518,28 @@ def fade(frames, start, end):
 		for i, (l, r) in enumerate(frames)]
 
 
-def media_recordings(volume=None, click=False, drop_phase=None):
+def media_recordings(volume=None, click=False, drop_phase=None, pace=1.0):
 	"""Synthetic recordings of the Media Kit phases; volume (A's level in
 	the volume phase), click (B cut off on the second card) and drop_phase
-	(a predicate on audio.wav frames to leave out) make known-bad ones."""
+	(a predicate on audio.wav frames to leave out) make known-bad ones.
+	pace scales the second card's tones (a sink resampling to a card that
+	runs slow raises them in its file, F-31 clock-drift correction)."""
 	gain12 = ce_test.mixer_gain(-12.0412) if volume is None else volume
 	gain6 = ce_test.mixer_gain(-6.0206)
 	wav = silence(0.5) + media_tone(1500, 2500, 2.0) \
 		+ media_tone(1600, 2500, 2.0, gain12) + media_tone(0, 2600, 1.5) \
 		+ media_tone(1800, 0, 2.0) + media_tone(1800, 2750, 1.5) \
 		+ media_tone(1900, 0, 2.0, gain6) + silence(0.5)
-	b = media_tone(0, 2700, 2.0)
+	b = media_tone(0, 2700 * pace, 2.0)
 	sdl = silence(0.5) + fade(b[:1024], 0, 1) + b[1024:-1024] \
 		+ fade(b[-1024:], 1, 0) + silence(0.5)
-	b = media_tone(0, 2750, 1.5)
+	b = media_tone(0, 2750 * pace, 1.5)
 	# Known bad: the stream cut off without its fade-out when it moves
 	# back to the default output.
 	sdl += fade(b[:1024], 0, 1) + b[1024:-1024] \
 		+ (b[-1024:-700] if click else fade(b[-1024:], 1, 0))
-	sdl += silence(0.5) + media_tone(0, 2800, 1.5) + silence(0.3) \
-		+ media_tone(0, 2850, 1.5) + media_tone(2000, 2900, 1.5)
+	sdl += silence(0.5) + media_tone(0, 2800 * pace, 1.5) + silence(0.3) \
+		+ media_tone(0, 2850 * pace, 1.5) + media_tone(2000 * pace, 2900 * pace, 1.5)
 	directory = tempfile.mkdtemp()
 	write_wav(os.path.join(directory, "audio.wav"),
 		[f for f in wav if drop_phase is None or not drop_phase(f)])
@@ -552,6 +554,14 @@ checks = media_recordings()
 expect("media phases: clean recordings pass",
 	all(c["pass"] for c in checks.values()),
 	str([c["detail"] for c in checks.values() if not c["pass"]]))
+checks = media_recordings(pace=1.007)
+expect("media phases: tones 0.7 % high on the second card pass",
+	all(c["pass"] for c in checks.values()),
+	str([c["detail"] for c in checks.values() if not c["pass"]]))
+checks = media_recordings(pace=1.04)
+expect("media phases: tones 4 % off on the second card fail",
+	not checks["media_audio.route_second_card"]["pass"],
+	checks["media_audio.route_second_card"]["detail"])
 checks = media_recordings(volume=0.5)
 expect("media phases: a wrong application volume fails",
 	not checks["media_audio.app_volume"]["pass"],

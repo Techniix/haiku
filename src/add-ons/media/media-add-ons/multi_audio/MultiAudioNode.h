@@ -210,6 +210,8 @@ private:
 			void	 			_AllocateBuffers(node_output& channel);
 			BBuffer*	 		_FillNextBuffer(multi_buffer_info& info,
 									node_output& output);
+			bigtime_t			_SkewedTime(bigtime_t performanceTime,
+									bigtime_t realTime);
 			void				_UpdateTimeSource(multi_buffer_info& info,
 									node_input& input);
 
@@ -275,6 +277,12 @@ private:
 			status_t			_ApplyBufferFrames();
 			int32				fBufferFramesSetting;
 			int32				fPeriodRequest;
+			// Renga (F-31): a skew of the published clock, in ppm, to test
+			// the mixer's drift correction without hardware (hidden
+			// parameter "renga:clock_skew_ppm"; never saved)
+			int32				fClockSkew;
+			bigtime_t			fSkewSince;		// real time the skew was set
+			bigtime_t			fSkewOffset;	// accumulated before that
 };
 
 

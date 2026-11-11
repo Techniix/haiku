@@ -46,6 +46,7 @@
 // mixer asks for while a low-latency stream plays (hidden, not saved).
 #define PARAMETER_ID_BUFFER_FRAMES		0x52474e02
 #define PARAMETER_ID_PERIOD_REQUEST		0x52474e03
+#define PARAMETER_ID_CLOCK_SKEW			0x52474e04
 static const int32 kBufferFrameChoices[] = { 128, 256, 512, 1024, 2048, 4096 };
 static const float kMinInputGain = -40.0f;
 static const float kMaxInputGain = 20.0f;
@@ -293,7 +294,10 @@ MultiAudioNode::MultiAudioNode(BMediaAddOn* addon, const char* name,
 	fInputGain(1.0f),
 	fInputGainChanged(0),
 	fBufferFramesSetting(0),
-	fPeriodRequest(0)
+	fPeriodRequest(0),
+	fClockSkew(0),
+	fSkewSince(0),
+	fSkewOffset(0)
 {
 	CALLED();
 	fInitStatus = B_NO_INIT;
@@ -1445,6 +1449,14 @@ MultiAudioNode::GetParameterValue(int32 id, bigtime_t* lastChange, void* value,
 		*lastChange = fInputGainChanged;
 		return B_OK;
 	}
+	if (id == PARAMETER_ID_CLOCK_SKEW) {
+		if (*size < sizeof(int32))
+			return B_NO_MEMORY;
+		memcpy(value, &fClockSkew, sizeof(int32));
+		*size = sizeof(int32);
+		*lastChange = 0;
+		return B_OK;
+	}
 	if (id == PARAMETER_ID_BUFFER_FRAMES || id == PARAMETER_ID_PERIOD_REQUEST) {
 		if (*size < sizeof(int32))
 			return B_NO_MEMORY;
@@ -1569,6 +1581,21 @@ MultiAudioNode::SetParameterValue(int32 id, bigtime_t performanceTime,
 		return;
 	}
 
+	if (id == PARAMETER_ID_CLOCK_SKEW) {
+		if (size < sizeof(int32))
+			return;
+		int32 skew;
+		memcpy(&skew, value, sizeof(int32));
+		if (skew < -10000 || skew > 10000)
+			return;
+		// keep what the old skew added, continue from now
+		bigtime_t now = system_time();
+		if (fClockSkew != 0)
+			fSkewOffset += (bigtime_t)((now - fSkewSince) * (fClockSkew / 1e6));
+		fSkewSince = now;
+		fClockSkew = skew;
+		return;
+	}
 	if (id == PARAMETER_ID_BUFFER_FRAMES || id == PARAMETER_ID_PERIOD_REQUEST) {
 		if (size < sizeof(int32))
 			return;
@@ -1796,6 +1823,12 @@ MultiAudioNode::MakeParameterWeb()
 		request->AddItem(0, "None");
 		request->AddItem(BPrivate::kLowLatencyPeriodFrames, "Low latency");
 		request->SetFlags(B_HIDDEN_PARAMETER);
+		// a test hook, see fClockSkew
+		BDiscreteParameter* skew = outputGroup->MakeDiscreteParameter(
+			PARAMETER_ID_CLOCK_SKEW, B_MEDIA_RAW_AUDIO, "Clock skew",
+			"renga:clock_skew_ppm");
+		skew->AddItem(0, "None");
+		skew->SetFlags(B_HIDDEN_PARAMETER);
 	}
 
 	if (description.input_channel_count > 0) {
@@ -2313,8 +2346,25 @@ MultiAudioNode::_UpdateTimeSource(multi_buffer_info& info, node_input& input)
 
 	fTimeComputer.AddTimeStamp(info.played_real_time,
 		info.played_frames_count);
-	PublishTime(fTimeComputer.PerformanceTime(), fTimeComputer.RealTime(),
-		fTimeComputer.Drift());
+	PublishTime(_SkewedTime(fTimeComputer.PerformanceTime(),
+			fTimeComputer.RealTime()),
+		fTimeComputer.RealTime(),
+		fTimeComputer.Drift() + fClockSkew / 1000000.0f);
+}
+
+
+/*!	Renga (F-31): the performance time as published with the test skew:
+	a clock that gains fClockSkew ppm of real time since the skew was set
+	(in real time, so that period changes, which restart the time base, do
+	not disturb it).
+*/
+bigtime_t
+MultiAudioNode::_SkewedTime(bigtime_t performanceTime, bigtime_t realTime)
+{
+	bigtime_t skewed = performanceTime + fSkewOffset;
+	if (fClockSkew != 0 && realTime > fSkewSince)
+		skewed += (bigtime_t)((realTime - fSkewSince) * (fClockSkew / 1e6));
+	return skewed;
 }
 
 
@@ -2408,8 +2458,10 @@ MultiAudioNode::GetConfigurationFor(BMessage* message)
 		if (parameter->Type() != BParameter::B_CONTINUOUS_PARAMETER
 			&& parameter->Type() != BParameter::B_DISCRETE_PARAMETER)
 			continue;
-		// Renga: the mixer's period request lasts while it runs.
-		if (parameter->ID() == PARAMETER_ID_PERIOD_REQUEST)
+		// Renga: the mixer's period request lasts while it runs; the
+		// clock skew is a test hook.
+		if (parameter->ID() == PARAMETER_ID_PERIOD_REQUEST
+			|| parameter->ID() == PARAMETER_ID_CLOCK_SKEW)
 			continue;
 
 		PRINT(("getting parameter %" B_PRIi32 "\n", parameter->ID()));
