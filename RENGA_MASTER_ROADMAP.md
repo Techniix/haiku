@@ -341,6 +341,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-54 | Driverless printing and scanning (IPP Everywhere, eSCL) | Not Started | None |
 | F-55 | Colour emoji in app_server | Not Started | None |
 | F-56 | Profiling and tracing tools | Not Started | None |
+| F-57 | WebKit keep-up (HaikuWebKit rebase, WebPositive quick fixes) | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -1324,6 +1325,24 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Next milestone | Later (maintainer 2026-11-10), before the GPU and performance stage |
 | Recommended next action | Later |
 | Links | Proposed by the main session and approved by the maintainer, 2026-11-10 |
+
+#### F-57 WebKit keep-up (HaikuWebKit rebase and WebPositive quick fixes)
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | HaikuWebKit 1.10.0 (separate repository and package) with WebPositive in-tree (`src/apps/webpositive`); behind current WebKit |
+| Renga maturity | Same as upstream |
+| Status | **Designed** |
+| Completed | None |
+| Remaining | One rebase of HaikuWebKit onto a recent WebKit release (security fixes, modern site support) shipped through RengaPorts; keep the `BWebView` API stable so existing Haiku programs that embed it keep working (F-46). Proposed quick improvements, pending the maintainer's pick: a current user agent string, `prefers-color-scheme` following the Appearance dark setting, HTML5 audio and video through the new Media Kit codecs, WebPositive crashes reported to the F-51 crash log |
+| Known bugs/limitations | Not a full engine project: Chromium (F-43) is the primary browser |
+| Dependencies | F-43 (scheduled after the Chromium phases), Media Kit (for HTML5 media) |
+| Difficulty | 7 (rebase); 2-4 (quick fixes) |
+| Risk | Medium (rebase); Low (quick fixes) |
+| Testing status | None |
+| Next milestone | After the Chromium phases (maintainer 2026-11-11) |
+| Recommended next action | Later |
+| Links | Decided by the maintainer, 2026-11-11: plan around Chromium, do one WebKit rebase, keep the API |
 
 ### Bundled applications
 
