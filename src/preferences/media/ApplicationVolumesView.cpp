@@ -272,19 +272,27 @@ ApplicationVolumesView::_Rebuild()
 		row->signature = stream->signature;
 		row->changed = 0;
 
-		row->name = new BStringView("name", stream->name.String());
+		// Views named after the application's signature, so that
+		// scripting (the harness) can address one application's controls.
+		BString suffix(":");
+		suffix << (stream->signature.Length() > 0 ? stream->signature
+			: stream->name);
+		row->name = new BStringView((BString("name") << suffix).String(),
+			stream->name.String());
 		if (stream->signature.Length() > 0)
 			row->name->SetToolTip(stream->signature.String());
 
 		BMessage* volume = new BMessage(kMsgVolume);
 		volume->AddInt32("id", stream->id);
-		row->volume = new GainSlider("volume", volume);
+		row->volume = new GainSlider((BString("volume") << suffix).String(),
+			volume);
 		row->volume->SetTarget(this);
 		row->volume->SetToolTip(B_TRANSLATE("Volume of this application"));
 
 		BMessage* mute = new BMessage(kMsgMute);
 		mute->AddInt32("id", stream->id);
-		row->mute = new BCheckBox("mute", B_TRANSLATE("Mute"), mute);
+		row->mute = new BCheckBox((BString("mute") << suffix).String(),
+			B_TRANSLATE("Mute"), mute);
 		row->mute->SetTarget(this);
 
 		row->output = NULL;
@@ -299,7 +307,8 @@ ApplicationVolumesView::_Rebuild()
 				item->SetTarget(this);
 				menu->AddItem(item);
 			}
-			row->output = new BMenuField("output", NULL, menu);
+			row->output = new BMenuField(
+				(BString("output") << suffix).String(), NULL, menu);
 			row->output->SetToolTip(
 				B_TRANSLATE("Where this application plays"));
 		}
@@ -308,7 +317,8 @@ ApplicationVolumesView::_Rebuild()
 		if (fShowLowLatency && stream->hasLowLatency) {
 			BMessage* lowLatency = new BMessage(kMsgLowLatency);
 			lowLatency->AddInt32("id", stream->id);
-			row->lowLatency = new BCheckBox("lowLatency",
+			row->lowLatency = new BCheckBox(
+				(BString("lowLatency") << suffix).String(),
 				B_TRANSLATE("Low latency"), lowLatency);
 			row->lowLatency->SetTarget(this);
 			row->lowLatency->SetToolTip(B_TRANSLATE("Short sound card "

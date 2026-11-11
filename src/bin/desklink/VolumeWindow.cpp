@@ -19,9 +19,17 @@
 #include <MenuItem.h>
 #include <MessageRunner.h>
 #include <Screen.h>
+#include <SpaceLayoutItem.h>
+
+#include <Button.h>
+#include <Roster.h>
 
 #include "ApplicationVolumesView.h"
+#include "OutputMenuField.h"
 #include "VolumeControl.h"
+
+
+static const uint32 kMsgOpenAudioSettings = 'opAS';
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -50,18 +58,29 @@ VolumeWindow::VolumeWindow(BRect frame)
 
 	fVolumeSlider->SetTarget(this);
 
-	// Renga (F-31/F-32): the applications that play, each with its volume,
-	// mute and output device, below the master volume.
+	// Renga (F-31/F-32): where sound plays, the same menu as the Audio
+	// preferences' Output page; the applications that play, each with its
+	// volume, mute and output device, below the master volume; and the way
+	// to the Audio preferences.
+	fOutput = new OutputMenuField("output", B_TRANSLATE("Output:"));
+	box->AddChild(fOutput);
 	fApplications = new ApplicationVolumesView("applications", true);
 	fSeparator = new BSeparatorView(B_TRANSLATE("Applications"));
 	box->AddChild(fSeparator);
 	box->AddChild(fApplications);
+	BButton* settings = new BButton("audioSettings",
+		B_TRANSLATE("Audio settings" B_UTF8_ELLIPSIS),
+		new BMessage(kMsgOpenAudioSettings));
+	settings->SetTarget(this);
+	BGroupView* buttons = new BGroupView(B_HORIZONTAL);
+	buttons->GroupLayout()->AddItem(BSpaceLayoutItem::CreateGlue());
+	buttons->AddChild(settings);
+	box->AddChild(buttons);
 	if (fApplications->CountStreams() == 0) {
 		fSeparator->Hide();
 		fApplications->Hide();
-		ResizeTo(300, 50);
-	} else
-		ResizeToPreferred();
+	}
+	ResizeToPreferred();
 
 	// Make sure it's not outside the screen.
 	const int32 kMargin = 3;
@@ -113,6 +132,11 @@ VolumeWindow::MessageReceived(BMessage* message)
 				BMessageRunner::StartSending(this, &quit, 150000, 1);
 			} else
 				Quit();
+			break;
+
+		case kMsgOpenAudioSettings:
+			be_roster->Launch("application/x-vnd.Renga-Audio");
+			Quit();
 			break;
 
 		case B_QUIT_REQUESTED:

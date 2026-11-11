@@ -19,6 +19,7 @@
 
 class ApplicationVolumesView;
 class BSeparatorView;
+class OutputMenuField;
 class VolumeControl;
 
 class VolumeWindow : public BWindow {
@@ -34,6 +35,7 @@ protected:
 
 private:
 			VolumeControl*	fVolumeSlider;
+			OutputMenuField*	fOutput;
 			ApplicationVolumesView* fApplications;
 			BSeparatorView*	fSeparator;
 

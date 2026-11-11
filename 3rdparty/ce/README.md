@@ -450,7 +450,8 @@ read (`boot.capture_feed`).
 ## USB audio
 
 Every run attaches an xhci controller (`audiousb`) with no devices on it,
-and four QEMU `wav` audio backends, `usbsnd0` to `usbsnd3`. A test plugs a
+and five QEMU `wav` audio backends, `usbsnd0` to `usbsnd4` (`usb_audio_test`
+plugs in twice, `media_sound_test` once, `media_usb_test` twice). A test plugs a
 QEMU `usb-audio` device in with `CE-HOST usb_audio add` and pulls the one
 plugged in last out with `CE-HOST usb_audio remove` (the harness uses the
 monitor's `device_add` and `device_del`). The n-th device plugged in plays
@@ -615,13 +616,41 @@ of a 1 GiB guest was, so the bounce path went untested.
 - **media_ui** (renga-* images): with two applications playing ("Music"
   and "Browser", copies of media_test's player), one of them quieter and on
   the second card, it opens the Deskbar volume popup (`desklink
-  --volume-control`), the Media preferences (`Media`, and `Media
+  --volume-control`: master volume, the output device menu shared with the
+  Audio preferences, the applications, "Audio settings…"), the Media preferences (`Media`, and `Media
   --advanced-audio` with the output menus shown) and SoundRecorder recording
   one application (`SoundRecorder --input "What you hear: Music"`), checks
   each window is up and has the harness save `screen-volume_popup.png`,
   `screen-media_preferences.png`, `screen-media_preferences_advanced.png`
   and `screen-soundrecorder_application.png`. `media_ui.screenshots` (host)
   checks that all four were saved and are not blank.
+- **sound_settings** (`media_sound_test`, renga-* images, before
+  `media_test`): the Audio preferences (roadmap F-32, `src/preferences/
+  audio`). With two players ("Music" on the left, "Browser" on the
+  right), every page is shown and saved (`sound_output`, `sound_input`,
+  `sound_applications`, `sound_devices`, and with advanced settings,
+  after the output switch, the hot-plug and a search: 11 screenshots,
+  `sound_settings.screenshots`), and every control is used as a click
+  uses it, through the window's `'AuCt'` message (a control's value set
+  and invoked, a menu item chosen; `'AuSt'` returns the window's state),
+  then checked against what it changes: the master volume slider at -12
+  (the mixer's master gain) and Mute, the output device menu (the default
+  output and the card the mixer plays on, there and back), "Play a test
+  sound" (1250 Hz at 0.25 in a loopback recording of the Audio
+  preferences' own stream), the buffer size menu (the card's parameter),
+  an application's volume (loopback level ratio on the mixer's scale) and
+  mute, its output menu and "Low latency" switch (advanced), the input
+  device menu with the level meter (it must show the fed tone's peak on
+  the fed card and nothing on the other), the recording gain (-6 dB halves
+  what the input records), the device list (both cards; QEMU's
+  `usb-audio` plugged in through `CE-HOST usb_audio add` must appear and,
+  after `remove`, leave), the search ("microphone" leads to Input,
+  "low latency" to Applications with the advanced settings shown) and the
+  command line (`Audio --page applications --advanced`). The harness finds
+  the phases in what the cards played (`sound_audio.*`): the master
+  volume's level, nothing while muted, the default output on the second
+  card and back, Browser routed to the second card while Music stays.
+  Everything is put back for `media_test`.
 - **media_usb** (renga-* images, last of the audio Media Kit tests): plugs QEMU's
   `usb-audio` in with the media services running. The device must be
   listed and get a node within seconds (no restart). One application is

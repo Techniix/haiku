@@ -2014,6 +2014,14 @@ AudioControlInterface::GetMix(multi_mix_value_info* Info)
 			&data, length, &actualLength);
 
 		if (status != B_OK || actualLength != length) {
+			// Renga: a request cancelled because the device is being pulled
+			// out (B_CANCELED, before Removed() is called) is not an error.
+			if (status == B_CANCELED || fDevice->IsRemoved()) {
+				TRACE(INF, "Request (%04x:%04x) cancelled, the device is "
+					"gone\n", REQ_VALUE(Info->values[i].id),
+					REQ_INDEX(Info->values[i].id));
+				continue;
+			}
 			TRACE(ERR, "Request (%04x:%04x) failed:%#08x; received %d of %d\n",
 				REQ_VALUE(Info->values[i].id), REQ_INDEX(Info->values[i].id),
 				status, actualLength, length);
@@ -2151,6 +2159,14 @@ AudioControlInterface::SetMix(multi_mix_value_info* Info)
 			&data, length, &actualLength);
 
 		if (status != B_OK || actualLength != length) {
+			// Renga: a request cancelled because the device is being pulled
+			// out (B_CANCELED, before Removed() is called) is not an error.
+			if (status == B_CANCELED || fDevice->IsRemoved()) {
+				TRACE(INF, "Request (%04x:%04x) cancelled, the device is "
+					"gone\n", REQ_VALUE(Info->values[i].id),
+					REQ_INDEX(Info->values[i].id));
+				continue;
+			}
 			TRACE(ERR, "Request (%04x:%04x) failed:%#08x; send %d of %d\n",
 				REQ_VALUE(Info->values[i].id), REQ_INDEX(Info->values[i].id),
 				status, actualLength, length);

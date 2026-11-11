@@ -669,6 +669,50 @@ expect("media usb: a missing second plug-in fails",
 	not all(c["pass"] for c in checks.values()), str(list(checks)))
 
 
+# media_sound_test's phases (SOUND_PHASES): the Audio preferences'
+# master volume, mute, output menu and per-application output menu.
+def sound_recordings(master=None, mute_leaks=False, stays_default=False):
+	gain = ce_test.mixer_gain(-12) if master is None else master
+	wav = silence(0.4) + media_tone(4100, 4150, 1.6) \
+		+ media_tone(4200, 4250, 1.6, gain)
+	wav += media_tone(4300, 4350, 1.2) if mute_leaks else silence(1.2)
+	sdl = silence(4.8)
+	if stays_default:
+		wav += media_tone(4400, 4450, 1.6)
+		sdl += silence(1.6)
+	else:
+		wav += silence(1.6)
+		sdl += media_tone(4400, 4450, 1.6)
+	wav += media_tone(4500, 4550, 1.6) + media_tone(4600, 0, 1.6) \
+		+ silence(0.3)
+	sdl += silence(1.6) + media_tone(0, 4650, 1.6) + silence(0.3)
+	directory = tempfile.mkdtemp()
+	write_wav(os.path.join(directory, "audio.wav"), wav)
+	with open(os.path.join(directory, "sdl-out.raw"), "wb") as raw:
+		raw.write(b"".join(struct.pack("<hh", l, r) for l, r in sdl))
+	report = {}
+	ce_test.analyze_sound_audio(directory, report)
+	return {c["name"]: c for c in report["sound_audio"]["checks"]}
+
+
+checks = sound_recordings()
+expect("sound settings: clean recordings pass",
+	all(c["pass"] for c in checks.values()),
+	str([c["detail"] for c in checks.values() if not c["pass"]]))
+checks = sound_recordings(master=1.0)
+expect("sound settings: a master volume that did nothing fails",
+	not checks["sound_audio.master_volume"]["pass"],
+	checks["sound_audio.master_volume"]["detail"])
+checks = sound_recordings(mute_leaks=True)
+expect("sound settings: sound while muted fails",
+	not checks["sound_audio.master_mute"]["pass"],
+	checks["sound_audio.master_mute"]["detail"])
+checks = sound_recordings(stays_default=True)
+expect("sound settings: an output menu that did not move the sound fails",
+	not checks["sound_audio.default_output_second"]["pass"],
+	checks["sound_audio.default_output_second"]["detail"])
+
+
 # Screenshots of the audio controls: saved and not blank.
 try:
 	from PIL import Image

@@ -105,6 +105,36 @@ MEDIA_PHASES = [
 MEDIA_FREQUENCIES = sorted({hz for phase in MEDIA_PHASES
 	for hz in phase[2:4] if hz} | {1550, 1700})
 
+# Phases of 3rdparty/ce/tests/media/media_sound_test.cpp: the Audio
+# preferences' controls, used as a click uses them (F-32). Entries: (check,
+# recording, left Hz, right Hz, minimum seconds, level of the left channel
+# relative to the first phase or None, present). "Music" plays on the left,
+# "Browser" on the right; the master volume at -12 on its slider (the
+# mixer's bent scale), muted (absent), the default output moved to the
+# second card with the Output page's menu and back, Browser routed to the
+# second card with its menu on the Applications page.
+SOUND_PHASES = [
+	("sound_audio.master_reference", "audio.wav", 4100, 4150, 1.0, None,
+		True),
+	("sound_audio.master_volume", "audio.wav", 4200, 4250, 1.0,
+		mixer_gain(-12), True),
+	("sound_audio.master_mute", "audio.wav", 4300, 4350, 0, None, False),
+	("sound_audio.default_output_second", "sdl-out.raw", 4400, 4450, 1.0,
+		None, True),
+	("sound_audio.default_output_back", "audio.wav", 4500, 4550, 1.0, None,
+		True),
+	("sound_audio.app_output_default_side", "audio.wav", 4600, None, 1.0,
+		None, True),
+	("sound_audio.app_output_routed", "sdl-out.raw", None, 4650, 1.0, None,
+		True),
+]
+SOUND_FREQUENCIES = sorted({hz for phase in SOUND_PHASES
+	for hz in phase[2:4] if hz} | {4700})
+SOUND_SCREENSHOTS = ["sound_output", "sound_input", "sound_applications",
+	"sound_devices", "sound_output_second", "sound_output_advanced",
+	"sound_applications_volume", "sound_applications_advanced",
+	"sound_devices_advanced", "sound_devices_usb", "sound_search"]
+
 
 def qemu_usb_audio_gain(db):
 	"""The factor QEMU's usb-audio device plays at for a feature unit volume
@@ -197,6 +227,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"video_producer_demo.media_addon", "media_video_test",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
+	"media_sound_test", "Audio",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
 	"media_stream_test", "Screenshot",
 	"SoundRecorder", "media_addon_server", "crash_collector",
@@ -262,8 +293,10 @@ POINTER_REL_MAX = 200
 # their own so that they are there with any --pointer-devices. Every add
 # gets the next audiodev, a wav recorder writing usb-<n>.wav, because QEMU
 # closes the file when the device goes and would start it again on the
-# next add. USB_AUDIO_DEVICES bounds the adds per run.
-USB_AUDIO_DEVICES = 4
+# next add. USB_AUDIO_DEVICES bounds the adds per run: usb_audio_test plugs
+# in twice, media_sound_test (the Audio preferences' device list) once,
+# media_usb_test twice.
+USB_AUDIO_DEVICES = 5
 USB_AUDIO_CONTROLLER = "audiousb"
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
@@ -3203,6 +3236,53 @@ def analyze_media_audio(results_dir, report):
 		"pass": len(region) > 0 and step <= bound, "detail": detail})
 
 
+def analyze_sound_audio(results_dir, report):
+	"""The media_sound_test phases (SOUND_PHASES) in what the two virtio
+	cards played: what the Audio preferences' master volume, mute, output
+	device menu and per-application output menu changed. A phase that must
+	be absent may not show for 0.3 s or more."""
+	checks = []
+	report.setdefault("sound_audio", {})["checks"] = checks
+	recordings = {}
+	for name, reader in (("audio.wav", read_wav),
+			("sdl-out.raw", read_raw_audio)):
+		try:
+			recordings[name] = media_segments(os.path.join(results_dir, name),
+				reader, SOUND_FREQUENCIES)
+		except (OSError, ValueError, struct.error) as error:
+			checks.append({"name": "sound_audio.recording", "pass": False,
+				"detail": "%s: %s" % (name, error)})
+			return
+
+	def longest(recording, left, right):
+		matching = [s for s in recordings[recording][2]
+			if s["key"] == (left, right)]
+		return max(matching, key=lambda s: s["seconds"], default=None)
+
+	reference = None
+	for name, recording, left, right, seconds, level, present \
+			in SOUND_PHASES:
+		segment = longest(recording, left, right)
+		where = "%s L %s / R %s Hz" % (recording, left or "-", right or "-")
+		if not present:
+			absent = segment is None or segment["seconds"] < 0.3
+			checks.append({"name": name, "pass": absent,
+				"detail": "%s: %s" % (where, "absent, as it should be"
+					if absent else "%.1fs" % segment["seconds"])})
+			continue
+		passed = segment is not None and segment["seconds"] >= seconds
+		detail = "%s: %s" % (where, "%.1fs" % segment["seconds"]
+			if segment else "not found")
+		if reference is None and segment is not None:
+			reference = segment
+		if passed and level is not None and reference is not None:
+			ratio = segment["left_rms"] / reference["left_rms"]
+			passed = abs(ratio - level) <= 0.08 * level
+			detail += ", left level %.3f of the first phase (want %.3f)" % (
+				ratio, level)
+		checks.append({"name": name, "pass": passed, "detail": detail})
+
+
 def analyze_usb_audio(results_dir, report):
 	"""The usb_audio_test phases in what QEMU's usb-audio devices played
 	(USB_AUDIO_PHASES): each phase in one piece, as long as it was played,
@@ -3457,6 +3537,7 @@ def write_report(results_dir, report):
 	checks += report.get("media_audio", {}).get("checks", [])
 	checks += report.get("usb_audio_out", {}).get("checks", [])
 	checks += report.get("media_usb_audio", {}).get("checks", [])
+	checks += report.get("sound_audio", {}).get("checks", [])
 	checks += report.get("host_checks", [])
 	failed = [c for c in checks if not c["pass"]]
 
@@ -3799,6 +3880,10 @@ def main():
 			analyze_usb_audio(results_dir, report)
 		if "media_test" in (args.only or available):
 			analyze_media_audio(results_dir, report)
+		if "media_sound_test" in (args.only or available):
+			analyze_sound_audio(results_dir, report)
+			check_screenshots(results_dir, report, SOUND_SCREENSHOTS,
+				"sound_settings.screenshots")
 		if "media_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, MEDIA_UI_SCREENSHOTS,
 				"media_ui.screenshots")

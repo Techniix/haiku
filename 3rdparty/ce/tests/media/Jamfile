@@ -9,6 +9,13 @@ Application media_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# The Audio preferences (F-32): every page, every control against what it
+# changes (loopback recordings, the mixer, the default devices, hot-plug).
+Application media_sound_test :
+	media_sound_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 # Screenshots of the per-application audio controls (desktop images).
 Application media_ui_test :
 	media_ui_test.cpp
@@ -56,7 +63,8 @@ Application sound_latency_test :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
-		: media_test media_ui_test media_usb_test media_video_test
+		: media_test media_sound_test media_ui_test media_usb_test
+		media_video_test
 		screen_capture_test sound_latency_test media_codec_test
 		media_stream_test ;
 }

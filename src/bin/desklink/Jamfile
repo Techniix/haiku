@@ -4,9 +4,13 @@ UsePrivateHeaders app interface locale media shared ;
 
 # The per-application volume controls are shared with the Media preferences.
 SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src preferences media ] ;
+# The output device menu is shared with the Audio preferences (F-32).
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src preferences audio ] ;
 
 Application desklink :
 	ApplicationVolumesView.cpp
+	AudioDevices.cpp
+	OutputMenuField.cpp
 	desklink.cpp
 	DeskButton.cpp
 	MediaReplicant.cpp
@@ -23,6 +27,7 @@ DoCatalogs desklink :
 	:
 	ApplicationVolumesView.cpp
 	DeskButton.cpp
+	OutputMenuField.cpp
 	MediaReplicant.cpp
 	VolumeControl.cpp
 	VolumeWindow.cpp

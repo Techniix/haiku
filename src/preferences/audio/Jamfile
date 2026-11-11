@@ -1,0 +1,32 @@
+SubDir HAIKU_TOP src preferences audio ;
+
+# The Audio preferences (roadmap F-32): the audio settings brought together
+# in one window with a sidebar and search, built as a view the Control Panel
+# (F-28) can take over. The per-application controls are shared with the
+# Media preferences and the Deskbar volume popup, the master volume with
+# desklink.
+
+UsePrivateHeaders media shared ;
+
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src preferences media ] ;
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src bin desklink ] ;
+
+Application Audio :
+	Audio.cpp
+	AudioDevices.cpp
+	AudioSettingsView.cpp
+	OutputMenuField.cpp
+	ApplicationVolumesView.cpp
+	MixerControl.cpp
+	: be media localestub [ TargetLibsupc++ ]
+	: Audio.rdef
+;
+
+DoCatalogs Audio :
+	x-vnd.Renga-Audio
+	:
+	Audio.cpp
+	AudioSettingsView.cpp
+	OutputMenuField.cpp
+	ApplicationVolumesView.cpp
+;

@@ -48,6 +48,7 @@
 
 
 static const uint32 kMsgOpenMediaSettings = 'mese';
+static const uint32 kMsgOpenAudioSettings = 'ause';
 
 static const char* kReplicantName = "MediaReplicant";
 	// R5 name needed, Media prefs manel removes by name
@@ -240,6 +241,10 @@ MediaReplicant::MouseDown(BPoint where)
 		BPopUpMenu* menu = new BPopUpMenu("", false, false);
 		menu->SetFont(be_plain_font);
 
+		// Renga (F-32): the Audio preferences first, the Media
+		// preferences (every node's own controls) after them
+		menu->AddItem(new BMenuItem(B_TRANSLATE("Audio settings" B_UTF8_ELLIPSIS),
+			new BMessage(kMsgOpenAudioSettings)));
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Media preferences" B_UTF8_ELLIPSIS),
 			new BMessage(kMsgOpenMediaSettings)));
 
@@ -283,6 +288,11 @@ void
 MediaReplicant::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
+		case kMsgOpenAudioSettings:
+			_Launch("Audio", "application/x-vnd.Renga-Audio",
+				B_SYSTEM_PREFERENCES_DIRECTORY, "Audio");
+			break;
+
 		case kMsgOpenMediaSettings:
 			_Launch("Media Preferences", "application/x-vnd.Haiku-Media",
 				B_SYSTEM_PREFERENCES_DIRECTORY, "Media");
