@@ -200,6 +200,8 @@ LATENCY_MAX_ZERO_RUN = 16
 LATENCY_MAX_GAP = 4 * 256
 # MediaPlayer playing an HLS stream from media_stream_test's server (F-31).
 STREAM_SCREENSHOTS = ["mediaplayer_hls"]
+# WebPositive playing media_html5_test's WebM and MP4 clips (F-57).
+HTML5_SCREENSHOTS = ["html5_webm", "html5_mp4"]
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
@@ -228,10 +230,10 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
 	"media_sound_test", "Audio", "media_hwvideo_test",
-	"media_resample_test", "media_drift_test",
+	"media_resample_test", "media_drift_test", "media_html5_test",
 	"software_video_accelerator",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
-	"media_stream_test", "Screenshot",
+	"media_stream_test", "libbnetapi.so", "http_streamer", "Screenshot",
 	"SoundRecorder", "media_addon_server", "crash_collector",
 	"crashlog_test", "SystemLogs", "debug_server"]
 
@@ -3932,6 +3934,9 @@ def main():
 		if "media_stream_test" in (args.only or available):
 			check_screenshots(results_dir, report, STREAM_SCREENSHOTS,
 				"media_stream.screenshots")
+		if "media_html5_test" in (args.only or available):
+			check_screenshots(results_dir, report, HTML5_SCREENSHOTS,
+				"html5_media.screenshots")
 		if "installer_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, INSTALLER_SCREENSHOTS,
 				"installer_ui.screenshots")

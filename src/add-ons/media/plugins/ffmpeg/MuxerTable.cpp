@@ -485,6 +485,108 @@ const media_file_format gMuxerTable[] = {
 		"wv",
 		{ 0 }
 	},
+	// Renga (F-57): the MIME types web pages give for what the plug-in
+	// reads (HaikuWebKit answers canPlayType() from this list). Readable
+	// only; FFmpeg recognises the content itself, so these entries only
+	// name the types.
+	{
+		media_file_format::B_READABLE
+			| media_file_format::B_KNOWS_ENCODED_AUDIO
+			| media_file_format::B_KNOWS_ENCODED_VIDEO,
+		{ 0 },
+		B_MISC_FORMAT_FAMILY,
+		100,
+		{ 0 },
+		"audio/flac",
+		"FLAC audio",
+		"flac-read",
+		"flac",
+		{ 0 }
+	},
+	{
+		media_file_format::B_READABLE
+			| media_file_format::B_KNOWS_ENCODED_AUDIO
+			| media_file_format::B_KNOWS_ENCODED_VIDEO,
+		{ 0 },
+		B_MISC_FORMAT_FAMILY,
+		100,
+		{ 0 },
+		"audio/aac",
+		"AAC audio (ADTS)",
+		"aac-read",
+		"aac",
+		{ 0 }
+	},
+	{
+		media_file_format::B_READABLE
+			| media_file_format::B_KNOWS_ENCODED_AUDIO
+			| media_file_format::B_KNOWS_ENCODED_VIDEO,
+		{ 0 },
+		B_MISC_FORMAT_FAMILY,
+		100,
+		{ 0 },
+		"audio/x-m4a",
+		"MPEG-4 audio",
+		"m4a-read",
+		"m4a",
+		{ 0 }
+	},
+	{
+		media_file_format::B_READABLE
+			| media_file_format::B_KNOWS_ENCODED_AUDIO
+			| media_file_format::B_KNOWS_ENCODED_VIDEO,
+		{ 0 },
+		B_MISC_FORMAT_FAMILY,
+		100,
+		{ 0 },
+		"video/quicktime",
+		"QuickTime movie",
+		"mov-read",
+		"mov",
+		{ 0 }
+	},
+	{
+		media_file_format::B_READABLE
+			| media_file_format::B_KNOWS_ENCODED_AUDIO
+			| media_file_format::B_KNOWS_ENCODED_VIDEO,
+		{ 0 },
+		B_MISC_FORMAT_FAMILY,
+		100,
+		{ 0 },
+		"application/vnd.apple.mpegurl",
+		"HTTP Live Streaming playlist",
+		"m3u8-read",
+		"m3u8",
+		{ 0 }
+	},
+	{
+		media_file_format::B_READABLE
+			| media_file_format::B_KNOWS_ENCODED_AUDIO
+			| media_file_format::B_KNOWS_ENCODED_VIDEO,
+		{ 0 },
+		B_MISC_FORMAT_FAMILY,
+		100,
+		{ 0 },
+		"application/x-mpegurl",
+		"HTTP Live Streaming playlist",
+		"m3u8-read",
+		"m3u8",
+		{ 0 }
+	},
+	{
+		media_file_format::B_READABLE
+			| media_file_format::B_KNOWS_ENCODED_AUDIO
+			| media_file_format::B_KNOWS_ENCODED_VIDEO,
+		{ 0 },
+		B_MISC_FORMAT_FAMILY,
+		100,
+		{ 0 },
+		"application/dash+xml",
+		"MPEG-DASH manifest",
+		"mpd-read",
+		"mpd",
+		{ 0 }
+	},
 };
 
 const size_t gMuxerCount = sizeof(gMuxerTable) / sizeof(media_file_format);

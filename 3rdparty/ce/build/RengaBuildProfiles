@@ -46,6 +46,16 @@ rule DefineRengaBuildProfiles
 			HAIKU_MMC_LABEL ?= Renga ;
 
 			HAIKU_RENGA_EXTRA_PACKAGES ?= ;
+
+			# A web browser (F-57): upstream adds WebPositive (and with it
+			# HaikuWebKit) only to its release and nightly profiles, so the
+			# regular build Renga images are made from had none.
+			if $(HAIKU_PACKAGING_ARCHS) in x86_gcc2 x86 x86_64 {
+				AddOptionalHaikuImagePackages WebPositive ;
+			}
+			# room for it (HaikuWebKit alone is about 60 MiB) and for
+			# what Renga adds; upstream's release images are 800 MiB
+			HAIKU_IMAGE_SIZE ?= 1000 ;
 		}
 	}
 }

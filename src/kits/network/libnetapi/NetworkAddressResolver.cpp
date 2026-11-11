@@ -169,6 +169,23 @@ BNetworkAddressResolver::SetTo(int family, const char* host,
 		hint.ai_flags |= AI_PASSIVE;
 	}
 
+	// Renga: a numeric address needs no resolving, and AI_ADDRCONFIG must
+	// not apply to it: without a configured non-loopback address of its
+	// family, getaddrinfo() skips the numeric form and asks DNS instead,
+	// so "127.0.0.1" took 56 s to fail on a machine without a network
+	// (the Media Kit's HTTP streamer from a local server, for example).
+	if (host != NULL && (hint.ai_flags & AI_NUMERICHOST) == 0) {
+		addrinfo numericHint = hint;
+		numericHint.ai_flags &= ~AI_ADDRCONFIG;
+		numericHint.ai_flags |= AI_NUMERICHOST;
+		if (getaddrinfo(hostString.String(),
+				portString.Length() != 0 ? portString.String() : NULL,
+				&numericHint, &fInfo) == 0) {
+			return fStatus = B_OK;
+		}
+		fInfo = NULL;
+	}
+
 	int status = getaddrinfo(host != NULL ? hostString.String() : NULL,
 		portString.Length() != 0 ? portString.String() : NULL, &hint, &fInfo);
 	if (status == 0)

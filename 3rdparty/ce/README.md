@@ -748,6 +748,22 @@ of a 1 GiB guest was, so the bounce path went untested.
   the sink produces as many more frames as the estimate says (within
   400 ppm), and comes back when the skew is removed. Two cards with
   their own crystals are needed to hear the correction.
+- **html5_media** (`media_html5_test`, renga-* images): HTML5 media in
+  WebPositive through the Media Kit (F-57 item 4). A local HTTP server
+  in the test (byte ranges, a thread per connection) serves a WebM
+  (VP9 + Opus) and an MP4 (MPEG-4 + AAC, index moved to the front with
+  libavformat as web MP4s have it) clip with 440 Hz left and 660 Hz
+  right, and a page with each. In-tree checks: `BNetworkAddress` resolves
+  `127.0.0.1` at once without a network (it took 56 s and failed, so the
+  HTTP streamer could not reach a local server), `BMediaFile` on each
+  clip's URL decodes both tracks, and WebKit's audio path without WebKit
+  (the decoded format handed to a `BSoundPlayer`, one `ReadFrames()` per
+  callback) plays both tones cleanly. In WebPositive: `canPlayType()`
+  answers for WebM, MP4, Ogg Vorbis, FLAC, MP3 and HLS, and both clips
+  start playing ("playing" event); screenshots `html5_webm` and
+  `html5_mp4` (`html5_media.screenshots`). WebPositive's own sound is
+  logged, not checked: the packaged HaikuWebKit 1.10.0 plays it with gaps
+  (WebM) or not at all (MP4), see the roadmap (F-57).
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
   Media Kit tests): the low-latency audio mode (roadmap F-31,
   `headers/private/media/LowLatencyAudio.h`). A child process plays
