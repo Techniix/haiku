@@ -22,6 +22,9 @@ struct mtx {
 		struct {
 			spinlock		lock;
 			cpu_status		state;
+			thread_id		owner;
+				// the holder, for mtx_owned(); the union's size is
+				// set by the larger members, so this adds nothing
 		}					spinlock_;
 	} u;
 };

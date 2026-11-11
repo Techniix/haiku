@@ -113,8 +113,14 @@ mtx_owned(struct mtx* mutex)
 		return mutex->u.recursive.holder == find_thread(NULL);
 #endif
 	}
-	if (mutex->type == MTX_SPIN)
-		return mutex->u.spinlock_.lock.lock != 0;
+	if (mutex->type == MTX_SPIN) {
+		// Owned by the calling thread, as FreeBSD's mtx_owned() means:
+		// "locked at all" made mtx_assert(MA_NOTOWNED) panic whenever
+		// another CPU held the lock at that moment (seen with two CPUs in
+		// a taskqueue thread starting while the queue was being used).
+		return B_SPINLOCK_IS_LOCKED(&mutex->u.spinlock_.lock)
+			&& mutex->u.spinlock_.owner == find_thread(NULL);
+	}
 
 	return 0;
 }
