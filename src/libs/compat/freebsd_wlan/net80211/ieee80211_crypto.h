@@ -300,5 +300,109 @@ void	ieee80211_notify_michael_failure(struct ieee80211vap *,
 uint16_t	ieee80211_crypto_init_aad(const struct ieee80211_frame *,
 		uint8_t *, int);
 
+/**
+ * @brief Return the key data.
+ *
+ * This returns a pointer to the key data.  Note it does not
+ * guarantee the TX/RX MIC will be immediately after the key.
+ * Callers must use ieee80211_crypto_get_key_txmic_data()
+ * and ieee80211_crypto_get_key_rxmic_data() for that.
+ *
+ * Note: there's no locking; this needs to be called in
+ * a situation where the ieee80211_key won't disappear.
+ *
+ * @param k ieee80211_key
+ * @returns NULL if no key data is available, or a pointer
+ *  to the key data.
+ */
+static inline const uint8_t *
+ieee80211_crypto_get_key_data(const struct ieee80211_key *k)
+{
+	return (k->wk_key);
+}
+
+/**
+ * @brief Return the key length in bytes.
+ *
+ * This doesn't include any TX/RX MIC (eg from TKIP).
+ *
+ * Note: there's no locking; this needs to be called in
+ * a situation where the ieee80211_key won't disappear.
+ *
+ * @param k ieee80211_key
+ * @returns the key length (without any MIC) in bytes
+ */
+static inline const uint16_t
+ieee80211_crypto_get_key_len(const struct ieee80211_key *k)
+{
+	return (k->wk_keylen);
+}
+
+/**
+ * @brief Return the TX MIC data.
+ *
+ * This returns a pointer to the TX MIC data.
+ *
+ * Note: there's no locking; this needs to be called in
+ * a situation where the ieee80211_key won't disappear.
+ *
+ * @param k ieee80211_key
+ * @returns NULL if no key data is available, or a pointer
+ *  to the TX MIC data.
+ */
+static inline const uint8_t *
+ieee80211_crypto_get_key_txmic_data(const struct ieee80211_key *k)
+{
+	return (k->wk_txmic);
+}
+
+/**
+ * @brief Return the TX MIC length in bytes.
+ *
+ * Note: there's no locking; this needs to be called in
+ * a situation where the ieee80211_key won't disappear.
+ *
+ * @param k ieee80211_key
+ * @returns the TX MIC length in bytes
+ */
+static inline const uint16_t
+ieee80211_crypto_get_key_txmic_len(const struct ieee80211_key *k)
+{
+	return (k->wk_cipher->ic_miclen);
+}
+
+/**
+ * @brief Return the RX MIC data.
+ *
+ * This returns a pointer to the RX MIC data.
+ *
+ * Note: there's no locking; this needs to be called in
+ * a situation where the ieee80211_key won't disappear.
+ *
+ * @param k ieee80211_key
+ * @returns NULL if no key data is available, or a pointer
+ *  to the RX MIC data.
+ */
+static inline const uint8_t *
+ieee80211_crypto_get_key_rxmic_data(const struct ieee80211_key *k)
+{
+	return (k->wk_rxmic);
+}
+
+/**
+ * @brief Return the RX MIC length in bytes.
+ *
+ * Note: there's no locking; this needs to be called in
+ * a situation where the ieee80211_key won't disappear.
+ *
+ * @param k ieee80211_key
+ * @returns the RX MIC length in bytes
+ */
+static inline const uint16_t
+ieee80211_crypto_get_key_rxmic_len(const struct ieee80211_key *k)
+{
+	return (k->wk_cipher->ic_miclen);
+}
+
 #endif /* defined(__KERNEL__) || defined(_KERNEL) */
 #endif /* _NET80211_IEEE80211_CRYPTO_H_ */
