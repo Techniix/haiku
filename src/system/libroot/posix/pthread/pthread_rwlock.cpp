@@ -217,6 +217,14 @@ private:
 
 			if (!waiter.queued)
 				return waiter.status;
+
+			// Still queued after an interruption: the kernel left
+			// B_INTERRUPTED in the wait status, and blocking again would
+			// return at once (a busy loop until the lock is handed over).
+			// Arm it again; we hold the structure lock, so the unblock
+			// cannot slip in between.
+			if (status == B_INTERRUPTED)
+				waiter.userThread->wait_status = 1;
 		} while (status == B_INTERRUPTED);
 
 		// we're still queued, which means an error (timeout, interrupt)

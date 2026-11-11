@@ -37,7 +37,11 @@ RWLockManager::ReadLock(RWLockable* lockable)
 {
 	AutoLocker<RWLockManager> locker(this);
 
-	if (lockable->fWaiters.IsEmpty()) {
+	// Readers may enter while nobody holds or waits for the write lock, and
+	// the write lock's owner may read-lock it, too. (Upstream only looked at
+	// the queue and let readers in while a writer held the lock.)
+	if (lockable->fOwner == find_thread(NULL)
+		|| (lockable->fOwner < 0 && lockable->fWaiters.IsEmpty())) {
 		lockable->fReaderCount++;
 		return true;
 	}
@@ -51,7 +55,11 @@ RWLockManager::TryReadLock(RWLockable* lockable)
 {
 	AutoLocker<RWLockManager> locker(this);
 
-	if (lockable->fWaiters.IsEmpty()) {
+	// Readers may enter while nobody holds or waits for the write lock, and
+	// the write lock's owner may read-lock it, too. (Upstream only looked at
+	// the queue and let readers in while a writer held the lock.)
+	if (lockable->fOwner == find_thread(NULL)
+		|| (lockable->fOwner < 0 && lockable->fWaiters.IsEmpty())) {
 		lockable->fReaderCount++;
 		return true;
 	}
@@ -65,7 +73,11 @@ RWLockManager::ReadLockWithTimeout(RWLockable* lockable, bigtime_t timeout)
 {
 	AutoLocker<RWLockManager> locker(this);
 
-	if (lockable->fWaiters.IsEmpty()) {
+	// Readers may enter while nobody holds or waits for the write lock, and
+	// the write lock's owner may read-lock it, too. (Upstream only looked at
+	// the queue and let readers in while a writer held the lock.)
+	if (lockable->fOwner == find_thread(NULL)
+		|| (lockable->fOwner < 0 && lockable->fWaiters.IsEmpty())) {
 		lockable->fReaderCount++;
 		return B_OK;
 	}
@@ -101,7 +113,10 @@ RWLockManager::WriteLock(RWLockable* lockable)
 		return true;
 	}
 
-	if (lockable->fReaderCount == 0 && lockable->fWaiters.IsEmpty()) {
+	// (Upstream did not check for another writer here: a second writer
+	// got the lock while the first still held it.)
+	if (lockable->fOwner < 0 && lockable->fReaderCount == 0
+		&& lockable->fWaiters.IsEmpty()) {
 		lockable->fOwnerCount = 1;
 		lockable->fOwner = find_thread(NULL);
 		return true;
@@ -123,7 +138,10 @@ RWLockManager::TryWriteLock(RWLockable* lockable)
 		return true;
 	}
 
-	if (lockable->fReaderCount == 0 && lockable->fWaiters.IsEmpty()) {
+	// (Upstream did not check for another writer here: a second writer
+	// got the lock while the first still held it.)
+	if (lockable->fOwner < 0 && lockable->fReaderCount == 0
+		&& lockable->fWaiters.IsEmpty()) {
 		lockable->fOwnerCount++;
 		lockable->fOwner = thread;
 		return true;
@@ -145,7 +163,10 @@ RWLockManager::WriteLockWithTimeout(RWLockable* lockable, bigtime_t timeout)
 		return B_OK;
 	}
 
-	if (lockable->fReaderCount == 0 && lockable->fWaiters.IsEmpty()) {
+	// (Upstream did not check for another writer here: a second writer
+	// got the lock while the first still held it.)
+	if (lockable->fOwner < 0 && lockable->fReaderCount == 0
+		&& lockable->fWaiters.IsEmpty()) {
 		lockable->fOwnerCount++;
 		lockable->fOwner = thread;
 		return B_OK;
@@ -185,16 +206,37 @@ RWLockManager::_Wait(RWLockable* lockable, bool writer, bigtime_t timeout)
 	waiter.queued = true;
 	get_user_thread()->wait_status = 1;
 
+	// An absolute timeout, so that waiting again after an interruption does
+	// not start the time over.
+	uint32 flags = 0;
+	if (timeout >= 0 && timeout != B_INFINITE_TIMEOUT) {
+		bigtime_t now = system_time();
+		flags = B_ABSOLUTE_TIMEOUT;
+		timeout = timeout > B_INFINITE_TIMEOUT - now
+			? B_INFINITE_TIMEOUT : now + timeout;
+	}
+
 	// wait
 	Unlock();
 
 	status_t error;
-	do {
-		error = _kern_block_thread(
-			timeout >= 0 ? B_RELATIVE_TIMEOUT : 0, timeout);
-			// TODO: When interrupted we should adjust the timeout, respectively
-			// convert to an absolute timeout in the first place!
-	} while (error == B_INTERRUPTED);
+	while (true) {
+		error = _kern_block_thread(flags, timeout);
+		if (error != B_INTERRUPTED)
+			break;
+
+		// Interrupted by a signal (SIGCHLD interrupts even when ignored): the
+		// kernel left B_INTERRUPTED in our wait status, so blocking again
+		// would return at once and _kern_unblock_thread() would not wake us
+		// any more. Check under the manager's lock whether _Unblock() has
+		// given us the lock meanwhile; if not, arm the wait status again
+		// while holding it, so that the hand-over cannot be lost.
+		Lock();
+		if (!waiter.queued)
+			return waiter.status;
+		get_user_thread()->wait_status = 1;
+		Unlock();
+	}
 
 	Lock();
 

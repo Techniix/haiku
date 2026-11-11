@@ -16,6 +16,8 @@ typedef struct rw_lock_waiter {
 	rw_lock_waiter *	next;
 	thread_id			thread;
 	bool				writer;
+	bool				queued;
+		// cleared (with lock->lock held) when the waiter is given the lock
 } rw_lock_waiter;
 
 
@@ -26,6 +28,7 @@ rw_lock_wait(rw_lock *lock, bool writer)
 	waiter.thread = find_thread(NULL);
 	waiter.next = NULL;
 	waiter.writer = writer;
+	waiter.queued = true;
 
 	if (lock->waiters != NULL)
 		lock->last_waiter->next = &waiter;
@@ -39,9 +42,30 @@ rw_lock_wait(rw_lock *lock, bool writer)
 	mutex_unlock(&lock->lock);
 
 	status_t result;
-	do {
+	while (true) {
 		result = _kern_block_thread(0, 0);
-	} while (result == B_INTERRUPTED);
+		if (result != B_INTERRUPTED)
+			break;
+
+		// A signal interrupted the wait (a team's threads are interrupted by
+		// SIGCHLD even when it is ignored). The kernel has stored
+		// B_INTERRUPTED as our wait status, so blocking again would return at
+		// once, and _kern_unblock_thread() no longer touches a wait status
+		// that is not positive: the hand-over from rw_lock_unblock() would be
+		// lost and we would spin here for ever, with the lock already ours.
+		// Look at the waiter under the structure lock instead: if we have
+		// been given the lock meanwhile, we are done; otherwise arm the wait
+		// status again while still holding it, so that the unblock cannot
+		// slip in between.
+		mutex_lock(&lock->lock);
+		if (!waiter.queued) {
+			mutex_unlock(&lock->lock);
+			result = B_OK;
+			break;
+		}
+		get_user_thread()->wait_status = 1;
+		mutex_unlock(&lock->lock);
+	}
 
 	// and lock it again before returning
 	mutex_lock(&lock->lock);
@@ -66,6 +90,7 @@ rw_lock_unblock(rw_lock *lock)
 
 		lock->waiters = waiter->next;
 		lock->holder = waiter->thread;
+		waiter->queued = false;
 		_kern_unblock_thread(waiter->thread, B_OK);
 		return;
 	}
@@ -73,6 +98,7 @@ rw_lock_unblock(rw_lock *lock)
 	while (waiter != NULL && !waiter->writer) {
 		lock->reader_count++;
 		lock->waiters = waiter->next;
+		waiter->queued = false;
 		_kern_unblock_thread(waiter->thread, B_OK);
 		waiter = lock->waiters;
 	}

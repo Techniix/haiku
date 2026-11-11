@@ -185,7 +185,7 @@ WATCHED_DRIVERS = ("virtio_sound", "virtio_block", "nvme_disk", "usb_audio")
 COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"libnetwork.so", "libbsd.so", "libc_ext_test", "virtio_sound",
 	"vsnd_test", "affinity_test", "epoll_test", "eventfd_test", "getdents_test", "inotify_test", "memfd_test", "mqueue_test", "quic_udp_test", "shm_test", "signalfd_test", "socket_ext_test", "thread_atexit_test", "timerfd_test",
-	"ucontext_test", "vm_semantics_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
+	"ucontext_test", "user_locks_test", "vm_semantics_test", "tcp_keepalive_test", "tcp_close_test", "tcp_info_test", "tcp",
 	"virtio_block", "vblk_test", "nvme_disk", "nvme_test",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
@@ -2122,6 +2122,38 @@ def convert_screenshots(paths):
 	return names
 
 
+class HostLoadSampler(threading.Thread):
+	"""Samples the host's one-minute load average every 10 s while the guest
+	runs. QEMU without KVM runs the guest at the host's mercy: a run with
+	the host's CPUs busy (a build, another QEMU) misses audio deadlines the
+	guest would keep otherwise, and the timing checks of the Media Kit tests
+	(media.click_free_volume, media_latency.*) are the first to fail. The
+	summary shows the highest load next to the host's CPU count, so that
+	such a failure can be told from a regression."""
+
+	def __init__(self):
+		threading.Thread.__init__(self, daemon=True)
+		self.samples = []
+		self.stop = threading.Event()
+
+	def run(self):
+		while True:
+			try:
+				self.samples.append(round(os.getloadavg()[0], 2))
+			except OSError:
+				return
+			if self.stop.wait(10):
+				return
+
+	def result(self):
+		self.stop.set()
+		if not self.samples:
+			return None
+		return {"cpus": os.cpu_count(), "max": max(self.samples),
+			"mean": round(sum(self.samples) / len(self.samples), 2),
+			"samples": len(self.samples)}
+
+
 def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		menu_script=None):
 	"""Boots the test image (or \a image: another disk, booted as it is)
@@ -2285,6 +2317,8 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		SDL_DISKAUDIOFILEIN=feed,
 		SDL_DISKAUDIOFILE=os.path.join(results_dir, "sdl-out.raw"))
 
+	loadSampler = HostLoadSampler()
+	loadSampler.start()
 	started = time.time()
 	qemu_stderr = open(os.path.join(results_dir, "qemu.stderr.log"), "wb")
 	process = subprocess.Popen(qemu, stdin=subprocess.PIPE,
@@ -2392,6 +2426,7 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 	bootReport["expected_kdl_unanswered"] = reader.kdl_expected
 	bootReport["status"] = status
 	bootReport["seconds"] = round(time.time() - started, 1)
+	bootReport["host_load"] = loadSampler.result()
 	bootReport["runner_finished"] = reader.finished.is_set()
 	bootReport["host_requests"] = reader.host_requests
 	if menuDriver is not None:
@@ -3503,6 +3538,13 @@ def write_report(results_dir, report):
 		if "stall_after_seconds" in boot:
 			lines.append("- serial output stopped at %ss; the harness pressed "
 				"Alt+SysRq+D" % boot["stall_after_seconds"])
+		load = boot.get("host_load")
+		if load:
+			lines.append("- host load while the guest ran: highest %s, mean "
+				"%s (one-minute load average, %s host CPUs%s)" % (load["max"],
+				load["mean"], load["cpus"],
+				"; busier than the guest needs, timing checks may suffer"
+				if load["cpus"] and load["max"] > load["cpus"] + 0.5 else ""))
 		if boot.get("screenshots"):
 			lines.append("- screenshots: " + ", ".join(boot["screenshots"]))
 		if boot.get("kdl_log"):

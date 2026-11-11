@@ -108,6 +108,14 @@ Application vm_semantics_test :
 	vm_semantics_test.cpp
 ;
 
+# User-level reader/writer locks after a signal: libroot's rw_lock,
+# pthread_rwlock_t (libroot) and RWLockManager (libshared).
+UsePrivateHeaders shared ;
+Application user_locks_test :
+	user_locks_test.cpp
+	: be shared [ TargetLibstdc++ ] [ TargetLibsupc++ ]
+;
+
 Application timerfd_test :
 	timerfd_test.cpp
 	: libgnu.so
@@ -115,5 +123,5 @@ Application timerfd_test :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test
-		mqueue_test quic_udp_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test vm_semantics_test ;
+		mqueue_test quic_udp_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test user_locks_test vm_semantics_test ;
 }

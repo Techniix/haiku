@@ -252,6 +252,13 @@ without a kernel crash, and every check passed.
   deadlock comes with every backtrace and lock holder. The run is reported
   as `stall-kernel-debugger` (or `stall` if KDL does not answer, which means
   interrupts are off).
+- **Host load.** QEMU without KVM runs the guest at the host's mercy. The
+  harness samples the host's one-minute load average every 10 s while the
+  guest runs and `summary.md` shows the highest and the mean next to the
+  host's CPU count, marked when the host was busier than the guest needs
+  (another build or QEMU). The timing checks of the Media Kit tests
+  (`media.click_free_volume`, `media_latency.*`) fail first on a busy host;
+  the line tells such a run from a regression.
 - **Screenshots.** `--screenshots` saves `screen-<t>s.png` at the given
   seconds after QEMU starts, through the monitor's `screendump`: the boot
   splash, or any UI a test brings up.
@@ -729,7 +736,14 @@ of a 1 GiB guest was, so the bounce path went untested.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **posix_compat**: eventfd, timerfd, memfd, POSIX message queues, System V
   shared memory, the libc additions, user contexts, and TCP (keepalive,
-  `TCP_INFO`, orderly and abortive close).
+  `TCP_INFO`, orderly and abortive close). `user_locks_test` (suite
+  `user_locks`): libroot's `rw_lock` (app_server's `MultiLocker`),
+  `pthread_rwlock_t` and libshared's `RWLockManager` when a signal
+  interrupts a waiting thread (SIGCHLD, which interrupts even when ignored,
+  and SIGUSR1 with a handler): the waiter must use no CPU time while it
+  waits, get the lock within 3 s of its release, and the lock must be free
+  afterwards. A second writer or a reader must wait for an `RWLockManager`
+  write lock.
 - **shortcut_keys**: Ctrl as the shortcut key, see above.
 - **usb_audio**: plugs QEMU's `usb-audio` in while the guest runs and
   drives `/dev/audio/hmulti/usb/<n>` with the multi_audio add-on's ioctl
