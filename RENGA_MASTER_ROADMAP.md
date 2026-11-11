@@ -71,7 +71,7 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 - Identity: live-animated Renga boot splash, Renga branding, `renga-raw`/`renga-anyboot`/`renga-vmware` build profiles, Techniix repository preferred over HaikuPorts, Ctrl as the default shortcut key with a switch back to Alt.
 - Upstream bugs found and fixed in the fork (10 written up for later reporting, plus 2 newer ones): see [Section 10.2](#102-upstream-haiku-bugs-found-and-fixed-in-renga).
 
-**What is being developed now?** The Media Kit (`F-31`) on 2026-11-11: the low-latency audio mode (`b97b48c7`), HDMI/DisplayPort playback in `hda` (`2af2370d`, needs hardware), phase 4 encode/decode API with WebM codecs (`eb769e72`) and streaming (`2756f347`), all QEMU Tested except HDMI; a cubeb back end recipe in RengaPorts (not built yet). Also The maintainer's first real-hardware install. Boot loader first part (`F-22`, `170b3815`, 2026-11-10/11): the boot menu lists and starts other operating systems (UEFI: EFI loaders on every EFI system partition through `LoadImage`/`StartImage`; BIOS: partition boot records and other disks' MBRs, chainloaded) and removable media found in the background, with a default entry and timeout set in the new Boot menu preferences; QEMU Tested on both firmwares (`--other-systems`). Installer in-place replacement (`F-23` early part, `7ce49272`): existing Haiku/Renga installations are detected and named; upgrade (keeps home, settings and installed packages, the old system kept as a bootable package state), replace (keeps files) and erase (second confirmation naming the volume), with a command-line mode; QEMU Tested on BIOS and UEFI (`--installer-upgrade`: upgrade, then boot the upgraded disk and its old state from the boot menu). Test steps for the maintainer are in the hand-over (`REAL-HARDWARE-TEST.md`). Before that: the Media Kit (`F-31`). Phase 3, capture APIs, was done on 2026-11-10 (`4d383de9`, `3fd8fe19`, `30e05e0b`; QEMU Tested), with screen recording in Screenshot (`F-44`). Phase 2, devices, was worked on 2026-11-10 (`042cbb63`, `569433a9`, `b0c4cd43`, `7ba2f32e`, `64f9fbad`): USB audio, hot-plug, HDMI sink detection and UVC cameras, QEMU Tested where QEMU has the device and Implemented (needs hardware) where it does not; HDMI playback is the open item. Step 0, `virtio_sound` capture (`F-02`, `19369300`), and phase 1, mixing and routing with its controls (`F-32`; `4ca8c8b2`, `ef41c576`, `369f3e7d`), were finished on 2026-11-09 and are QEMU Tested. Left of phase 1: a low-latency mode, the cubeb back end and measured resampling quality (see `F-31`); hot-plug detection in the multi_audio add-on was done in phase 2 (`569433a9`). The small Chromium OS gaps (`F-43` phase A) were finished on 2026-11-09 (`82cd4654` to `575f9cc0`): `thread_local` destructors, CPU affinity in libroot, `getdents64`, `getpeereid`, `POLLRDHUP`, `memfd` sealing, the QUIC UDP options and `MADV_DONTNEED`, with ten upstream bugs fixed on the way (section 10.2, 14-23). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
+**What is being developed now?** LinuxKPI in Renga (`F-26`, `F-34`; 2026-11-11, [`c9134779`](https://github.com/Techniix/haiku/commit/c9134779) to [`947dbafd`](https://github.com/Techniix/haiku/commit/947dbafd)): the maintainer's working MT7922 Wi-Fi driver (`mt7921e`, LinuxKPI_HaikuOS branch `stage-c`) is built in-tree with the image, with its firmware in the system package; LinuxKPI Manager and `lkpictl` are built and installed; the LinuxKPI core is QEMU Tested against QEMU's `edu` device; Wi-Fi itself needs the maintainer's regression check on his MT7922 (`WIFI-HARDWARE-TEST.md` in the hand-over). Before that: The Media Kit (`F-31`) on 2026-11-11: the low-latency audio mode (`b97b48c7`), HDMI/DisplayPort playback in `hda` (`2af2370d`, needs hardware), phase 4 encode/decode API with WebM codecs (`eb769e72`) and streaming (`2756f347`), all QEMU Tested except HDMI; a cubeb back end recipe in RengaPorts (not built yet). Also The maintainer's first real-hardware install. Boot loader first part (`F-22`, `170b3815`, 2026-11-10/11): the boot menu lists and starts other operating systems (UEFI: EFI loaders on every EFI system partition through `LoadImage`/`StartImage`; BIOS: partition boot records and other disks' MBRs, chainloaded) and removable media found in the background, with a default entry and timeout set in the new Boot menu preferences; QEMU Tested on both firmwares (`--other-systems`). Installer in-place replacement (`F-23` early part, `7ce49272`): existing Haiku/Renga installations are detected and named; upgrade (keeps home, settings and installed packages, the old system kept as a bootable package state), replace (keeps files) and erase (second confirmation naming the volume), with a command-line mode; QEMU Tested on BIOS and UEFI (`--installer-upgrade`: upgrade, then boot the upgraded disk and its old state from the boot menu). Test steps for the maintainer are in the hand-over (`REAL-HARDWARE-TEST.md`). Before that: the Media Kit (`F-31`). Phase 3, capture APIs, was done on 2026-11-10 (`4d383de9`, `3fd8fe19`, `30e05e0b`; QEMU Tested), with screen recording in Screenshot (`F-44`). Phase 2, devices, was worked on 2026-11-10 (`042cbb63`, `569433a9`, `b0c4cd43`, `7ba2f32e`, `64f9fbad`): USB audio, hot-plug, HDMI sink detection and UVC cameras, QEMU Tested where QEMU has the device and Implemented (needs hardware) where it does not; HDMI playback is the open item. Step 0, `virtio_sound` capture (`F-02`, `19369300`), and phase 1, mixing and routing with its controls (`F-32`; `4ca8c8b2`, `ef41c576`, `369f3e7d`), were finished on 2026-11-09 and are QEMU Tested. Left of phase 1: a low-latency mode, the cubeb back end and measured resampling quality (see `F-31`); hot-plug detection in the multi_audio add-on was done in phase 2 (`569433a9`). The small Chromium OS gaps (`F-43` phase A) were finished on 2026-11-09 (`82cd4654` to `575f9cc0`): `thread_local` destructors, CPU affinity in libroot, `getdents64`, `getpeereid`, `POLLRDHUP`, `memfd` sealing, the QUIC UDP options and `MADV_DONTNEED`, with ten upstream bugs fixed on the way (section 10.2, 14-23). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
 
 **What is blocked?**
 - NVMe multi-namespace (`F-04`) cannot reach Hardware Tested until the maintainer runs it on his real NVMe PC (pending, by his choice).
@@ -311,7 +311,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-23 | Installer redesign | Early part (in-place replacement) QEMU Tested; wizard Designed | `installer.*` with `--installer-upgrade` (27 BIOS, 28 UEFI checks in the installer suite); 4 `installer_ui.*` + screenshot (renga-raw) |
 | F-24 | Partition manager | Designed | None |
 | F-25 | Lumina shell | In Development (external repo) | Host unit tests only |
-| F-26 | LinuxKPI_HaikuOS | Not Started (in Renga) | None |
+| F-26 | LinuxKPI_HaikuOS | QEMU Tested (core, in-tree build, Manager and `lkpictl`); `mt7921e` Implemented in Renga, hardware regression check pending | 31 `linuxkpi.*` (every image), 10 `linuxkpi_ui.*` + `linuxkpi_ui.screenshots` (renga-raw) |
 | F-27 | Renguin | Designed (scheduled, work order item 13) | None |
 | F-28 | Control Panel suite | Not Started | None |
 | F-29 | Upstream bug fixes carried | QEMU Tested | See section 10.2 |
@@ -319,7 +319,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-31 | Media Kit | Phase 1 QEMU Tested (cubeb back end: recipe in RengaPorts, compile-checked only); phase 2 In Progress (USB audio UAC1, hot-plug QEMU Tested; UAC2, HDMI detection and playback, UVC Implemented, need hardware); phase 3 QEMU Tested; phase 4 QEMU Tested in part (encode/decode API, WebM codecs, HLS, UDP/RTP output; open: AAC/MP3/Vorbis encode, RTMP, FFmpeg update); phases 5-6 Designed | 35 `media.*` + 11 `media_audio.*` + 17 `media_usb.*` + 5 `media_usb_audio.*` (renga-raw); 46 `usb_audio.*` + 32 `usb_audio_uac2.*` + 6 `usb_audio_out.*`, 19 `hda_eld.*`, 18 `uvc.*` (every image); 39+7 `capture.*` + `capture.screenshots`, 21+2 `media_latency.*`, 17 `media_codec.*`, 9+1 `media_stream.*` (renga-raw) |
 | F-32 | Audio settings redesign | In Progress (phase-1, phase-2 and low-latency controls QEMU Tested; Screenshot format and stream controls QEMU Tested) | 6 `media_ui.*` + 4 screenshots, 2 `media_usb` screenshots, 7 `codycam.*` + 2 screenshots, `media_latency` 3 GUI checks + 2 screenshots, `mediaplayer_hls` screenshot (renga-raw) |
 | F-33 | Compositor | Not Started | None |
-| F-34 | Wi-Fi | Not Started | None |
+| F-34 | Wi-Fi | Implemented (MT7920/MT7921/MT7922 through LinuxKPI in the system package; worked on the maintainer's MT7922 as LinuxKPI_HaikuOS `stage-c`, Renga build not yet run on hardware) | `firmware_packaged`, `mt7921e_packaged`; no Wi-Fi in QEMU |
 | F-35 | GPU / graphics | Not Started | None |
 | F-36 | USB | Not Started | None |
 | F-37 | Power management / suspend | Not Started | None |
@@ -596,18 +596,18 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | C (FreeBSD 15 net80211 and OpenBSD iwm/iwx; no MediaTek, rtw88/89, ath10k/11k, BE200); WPA3 E |
-| Renga maturity | Unchanged |
-| Status | **Not Started** (in Renga) |
-| Completed | None in Renga |
-| Remaining | LinuxKPI Wi-Fi (mt7921 first) layered on `freebsd_wlan` as FreeBSD's `linux_80211.c` does; WPA3/SAE through net80211 + wpa_supplicant |
-| Known bugs/limitations | Not applicable |
-| Dependencies | `F-26` LinuxKPI_HaikuOS; real hardware |
+| Renga maturity | MediaTek MT7920/MT7921/MT7922 (`mt7921e`, Linux mt76 through LinuxKPI, `F-26`) in the system package with its firmware |
+| Status | **Implemented** (Renga build; the same driver source worked on the maintainer's MT7922 before the integration) |
+| Completed | `mt7921e` and firmware in the image ([`80944266`](https://github.com/Techniix/haiku/commit/80944266)); the `freebsd_wlan` changes it needs as commits ([`ff454846`](https://github.com/Techniix/haiku/commit/ff454846): net80211 key accessors, `ieee80211_ampdu_request()` returning 1 so A-MPDU TX sessions start). Scanning and connecting use `freebsd_wlan`'s existing GUI: the Deskbar network menu (scan list, password dialog) and Network preferences, which the maintainer already used with this driver ("mt7921e/0: Connected") |
+| Remaining | Hardware regression check of the Renga build (scan, WPA2, DHCP, traffic, speed; `WIFI-HARDWARE-TEST.md`); WPA3/SAE through net80211 + wpa_supplicant; power saving; suspend/resume; other chips |
+| Known bugs/limitations | Throughput differs a lot between the maintainer's mesh radios (~617/43 vs ~19/110 Mb/s); with software crypto LinuxKPI clears net80211's RX A-MPDU flag (hypothesis for the asymmetry, LinuxKPI_HaikuOS STATUS "speed") |
+| Dependencies | `F-26`; real hardware |
 | Difficulty | 9 (LinuxKPI Wi-Fi, Tier 5); WPA3 7 |
-| Risk | High |
-| Testing status | None; hardware only |
-| Next milestone | LinuxKPI driver loads in a Renga build |
-| Recommended next action | Define the integration point (package from Techniix repository vs in-tree) when `F-26` is ready |
-| Links | Audit Tier 5; classification "possible through porting existing code" |
+| Risk | Medium |
+| Testing status | No Wi-Fi device in QEMU: only packaging is checked there (`linuxkpi.mt7921e_packaged`, `linuxkpi.firmware_packaged`). Hardware: LinuxKPI_HaikuOS `stage-c` on the MT7922 `14c3:0616`, 2026-11-07 |
+| Next milestone | Hardware Tested with the Renga build |
+| Recommended next action | Maintainer: `WIFI-HARDWARE-TEST.md` |
+| Links | `F-26`; LinuxKPI_HaikuOS `docs/TESTING.md` |
 
 ### Porting APIs
 
@@ -789,18 +789,19 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | Not present upstream |
-| Renga maturity | No integration in the Renga tree |
-| Status | **Not Started** (in Renga) |
-| Completed | None in Renga |
-| Remaining | Build against the Renga nightly (audit: CI-build LinuxKPI against the fork); packaging; boot splash stage for LinuxKPI driver loading (planned as the first Renga-specific splash stage); device manager UI in the Control Panel (`F-28`) |
-| Known bugs/limitations | The external project's own state is not assessed here; it uses private headers (out-of-tree coupling risk) |
-| Dependencies | External repository; real hardware (MT7921/MT7922) |
+| Renga maturity | In-tree since 2026-11-11: LinuxKPI core, LinuxKPI 802.11, `mt7921e` (Linux mt76) in the system package with firmware, LinuxKPI Manager and `lkpictl`; QEMU test of the core |
+| Status | **QEMU Tested** (core, build, Manager, `lkpictl`); `mt7921e` **Implemented** in Renga (hardware regression check pending) |
+| Completed | Integration (2026-11-11): LinuxKPI_HaikuOS `stage-c` at `41549f2` copied in-tree at the repository's own paths (`src/libs/compat/linuxkpi`, `linuxkpi_wlan`, `linuxkpi_usb`, `linuxkpi_bt`, `drivers/network/wlan/mt7921e`, `drivers/network/lkpi_pcitest`, `src/apps/linuxkpimanager`, `src/bin/lkpictl`, `headers/private/linuxkpi`, `data/system/data/linuxkpi`), built with the image; its Haiku patches became Renga commits: 0001 [`c9134779`](https://github.com/Techniix/haiku/commit/c9134779), 0004 [`1b143de2`](https://github.com/Techniix/haiku/commit/1b143de2), 0002+0006 [`ff454846`](https://github.com/Techniix/haiku/commit/ff454846), 0007 [`16c9fa5d`](https://github.com/Techniix/haiku/commit/16c9fa5d); new upstream fix 0009 (spin mutex `mtx_owned()`, found by the new test with 2 CPUs) [`4bd97ba0`](https://github.com/Techniix/haiku/commit/4bd97ba0); integration and image [`80944266`](https://github.com/Techniix/haiku/commit/80944266) (mt7921e in `SYSTEM_ADD_ONS_DRIVERS_NET`, x86_64; firmware `mt7921e-fw-20261109.tgz` from linux-firmware `69e51bb26f3f`, MT7922 files byte-identical to the ones verified on the maintainer's card; Manager in the Applications menu; `lkpictl` in `/bin`); harness and GUI [`947dbafd`](https://github.com/Techniix/haiku/commit/947dbafd) (QEMU `edu` device, `lkpi_pcitest` functional test, `linuxkpi` and `linuxkpi_ui` suites, System logs: FreeBSD/LinuxKPI driver lines under their driver, `lkpictl report` in "Save a report"). Changes made in Renga went back to LinuxKPI_HaikuOS `stage-c` (`09be862` to `c69408b`); `tools/sync-renga.sh` keeps the copies in step |
+| Reworks onto Renga facilities | Reviewed shim by shim with the maintainer's rule "keep the verified hardware behaviour; when in doubt keep the working code". Done: the patches as proper commits (no patch step); the spin mutex fix in `freebsd_network` (benefits every FreeBSD driver); firmware from the system package instead of a hand copy; System logs integration and `lkpictl report` in its report (`F-51`). Kept, with reasons: timers, delayed work, tasklets and work queues run on `freebsd_network` callouts and taskqueues and sleep on `ConditionVariable` (no DPCs, so the DPC fix `62b132b3` does not apply; QEMU Tested now); atomics and spinlocks are `freebsd_network`'s on Haiku's kernel primitives, RCU is ConcurrencyKit `ck_epoch` as in FreeBSD (no Renga kernel RCU exists to move to); the DMA API needs no kernel facility (no IOMMU on Haiku; bouncing through a per-device pool is QEMU Tested now); MSI and `request_firmware` keep the `freebsd_network` paths that work on the hardware; the `%j`/`%t`/`%b` printf rewrite stays (adding `%j`/`%t` to the kernel's `vsnprintf` would not remove the `%b` rewrite). Not done: a LinuxKPI section in kernel crash reports (designed: an add-only `crash_report_add_section()` hook printing the driver's INFO/STATS keys from the debugger; not built because no LinuxKPI driver stays loaded in QEMU to test it; the report already lists `mt7921e` among the loaded images and keeps 64 KiB of the syslog with LinuxKPI's lines); a boot splash stage (`F-16`, see there) |
+| Remaining | Hardware regression check of the Renga build on the MT7922 (`WIFI-HARDWARE-TEST.md`); "Disable at boot" for a packaged driver in the Manager (needs the package system's blocked entries); one shared LinuxKPI kernel module instead of a copy per driver (LinuxKPI_HaikuOS MANAGER.md phase 5); the online driver support below; device manager UI in the Control Panel (`F-28`, the Manager is its start); net_device/NAPI/skb paths have no QEMU test (no Linux network driver is run there; extending LinuxKPI is out of scope for now by the maintainer's choice); Bluetooth (written in LinuxKPI_HaikuOS, not built; its driver directory is left out of Renga) |
+| Known bugs/limitations | Those of LinuxKPI_HaikuOS `docs/STATUS.md` (MSI only, no shared INTx; `sx` shared mode exclusive; tunables read at load only; per-driver copy of LinuxKPI). A non-packaged `mt7921e` overrides the packaged one (devfs priority). x86_64 only |
+| Dependencies | LinuxKPI_HaikuOS (upstream of the imported code and tools); real hardware (MT7921/MT7922) for Wi-Fi |
 | Difficulty | 9 (LinuxKPI Wi-Fi, Tier 5) |
-| Risk | High |
-| Testing status | None |
-| Next milestone | Builds against `ce/main` |
-| Recommended next action | Decide whether LinuxKPI ships as a Techniix package or under `3rdparty` |
-| Links | Audit section 1 hardware table, Tier 5 |
+| Risk | Medium (the driver works on hardware; the Renga build differs only by Renga's `freebsd_network` and the spin mutex fix) |
+| Testing status | QEMU Tested: `linuxkpi` suite on every image (15 checks of `lkpi_pcitest` against `edu`: MMIO, MSI raised and on completion, coherent DMA, streaming DMA above a 24-bit mask bounced in both directions with `dma_sync_single_for_cpu`, `timer_list`/delayed work/`hrtimer` fired and cancelled; LinuxKPI's 6 load-time self-tests; 4 load/unload cycles with an area-leak check; packaging checks; host check `linuxkpi.edu_no_clamp`), with 1 and 2 CPUs, BIOS and UEFI; `linuxkpi_ui` on renga-raw (lkpictl, Manager window and tabs with 4 screenshots, System logs). Wi-Fi: worked on the maintainer's MT7922 as `stage-c` (2026-11-07: scan, WPA2-PSK/CCMP, DHCP, Wi-Fi-only traffic, ~617/43 Mb/s); the Renga build is not yet run there |
+| Next milestone | Hardware Tested (Renga build on the MT7922) |
+| Recommended next action | The maintainer runs `WIFI-HARDWARE-TEST.md`; then merge `stage-c` into LinuxKPI_HaikuOS `main` (main is behind) |
+| Links | [LinuxKPI_HaikuOS](https://github.com/Techniix/LinuxKPI_HaikuOS) branch `stage-c` (`docs/STATUS.md` "Renga integration", `docs/MANAGER.md`); harness README "LinuxKPI"; audit section 1 hardware table, Tier 5 |
 
 **Planned feature (maintainer's idea, 2026-11-09; do when `F-26` starts): optional online driver support at install time.** The user chooses whether the Installer (and first boot) may go online to fetch LinuxKPI driver support for the hardware it finds, so a new installation works out of the box. Design notes:
 
@@ -820,7 +821,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Renga maturity | Live-animated Renga wordmark |
 | Status | **QEMU Tested** |
 | Completed | First a "Haiku Community Edition" wordmark (`f47090de`), replaced by the Renga wordmark with stage frames (`2c02b07b`), then a kernel splash player at 25 fps: airy gust, leaves through the letters, wordmark glide with overshoot, dappled light. Integer-only renderer shared with the host generator, so the loader's frame 0 is pixel-identical (`5da78dc1`). Animation paused while PCI has memory decoding off (`a44b1890`). Floppy boot archive fix needed by the size growth (`38762b42`). |
-| Remaining | Extra stage squares for Renga-specific stages (LinuxKPI first). Real-hardware observation. |
+| Remaining | Extra stage squares for Renga-specific stages (LinuxKPI first). Looked at 2026-11-11 and not done: LinuxKPI drivers load when net_server opens `/dev/net`, after the kernel's last splash stage (7, boot script) and while app_server takes the frame buffer (`boot_splash_stop_animation()`), so a stage icon there would rarely be seen; a useful LinuxKPI stage needs the splash to stay until the desktop (with `F-22`'s graphical boot work) and new stage artwork. Real-hardware observation. |
 | Known bugs/limitations | Static logo on 8-bit screens and screens too small. BIOS-CD KDL backtraces through static functions of boot modules show addresses (side effect of `38762b42`). |
 | Dependencies | None |
 | Difficulty | Not rated |
@@ -1676,7 +1677,7 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09). Done 2026-11-10 (`170b3815`, QEMU Tested on BIOS and UEFI; Windows itself needs the maintainer's PC).
 8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Done 2026-11-11 (`7ce49272`, QEMU Tested on BIOS and UEFI). Next: the maintainer's real-hardware install (`REAL-HARDWARE-TEST.md` in the hand-over).
 9. **Crash logs and system log viewer** (`F-51`), placed by the maintainer (2026-11-10): next after the current Media Kit stopping point, to support real-hardware testing. The remaining Media Kit phases continue after it. Status 2026-11-11: QEMU Tested ([`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1), [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192)); the real-hardware check is pending.
-10. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+10. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09). Done 2026-11-11 ([`c9134779`](https://github.com/Techniix/haiku/commit/c9134779) to [`947dbafd`](https://github.com/Techniix/haiku/commit/947dbafd)): in-tree, in the image, core QEMU Tested; Wi-Fi regression check on his PC pending. Scope set by the maintainer (2026-11-11): integrate what works and improve it where Renga allows; no new drivers, no Bluetooth driver, no stage f.
 11. **Port-performance batch** (`F-48` part a, `F-49`, `F-50`) with the **Linux/POSIX API batch 2** (`F-52`, added 2026-11-10), placed by the maintainer (2026-11-09): hole punching in memfds, `futex()`, game mode with its Control Panel switch. Small, harness-testable, and useful to Chromium, Wine and Mesa as well as Eglantine.
 12. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
 13. **Renguin** (`F-27`), placed by the maintainer (2026-11-11): integrate the Renguin repository into Renga and finish it as it goes, with its GUI (Renguin Manager) and the Renga APIs it needs (see `F-27`).
@@ -1699,7 +1700,7 @@ Later, with the GPU stage (needs the maintainer's NVIDIA hardware): zero-copy pr
 | Lumina as core shell (after S1-S8) | F-25 | In Development | Audit section 5; Lumina docs |
 | Control Panel suite incl. LinuxKPI device manager | F-28 | Not Started | Maintainer notes; audit proposals |
 | Audio settings redesign | F-32 | In Progress (phase-1 and phase-2 controls QEMU Tested) | Maintainer notes |
-| LinuxKPI_HaikuOS integration | F-26 | Not Started | External project |
+| LinuxKPI_HaikuOS integration | F-26 | QEMU Tested (core); Wi-Fi Implemented, hardware check pending | In-tree since 2026-11-11 |
 | Renguin integration (ABI hook) | F-27 | Not Started | Audit Tier 4/5 |
 | Boot splash stage squares for Renga stages | F-16 | Not Started (part of F-16) | Audit "Planned from your notes" |
 
@@ -1854,7 +1855,7 @@ graph LR
   RESIZE[Userland GPT/MBR resize]:::todo
   PART[F-24 Partition manager]:::todo
   INST[F-23 Installer wizard]:::todo
-  KPI[F-26 LinuxKPI_HaikuOS]:::todo
+  KPI[F-26 LinuxKPI_HaikuOS]:::done
   WIFI[F-34 Wi-Fi MT7921/MT7922]:::todo
   CP[F-28 Control Panel suite]:::todo
   ACC[Accelerant extension]:::todo
@@ -1906,8 +1907,8 @@ graph LR
 | Suspend-to-RAM | Driver suspend/resume hooks | Not started |
 | Audio settings redesign | Media Kit per-app routing | In progress (routing done in `ef41c576`) |
 | virtio_sound capture tests | Harness audio input | Done (`19369300`, SDL disk backend) |
-| Modern Wi-Fi | LinuxKPI_HaikuOS; real hardware | External |
-| LinuxKPI device manager UI | LinuxKPI_HaikuOS; Control Panel | Not started |
+| Modern Wi-Fi | LinuxKPI_HaikuOS; real hardware | MT7921/MT7922 Implemented in-tree (`80944266`) |
+| LinuxKPI device manager UI | LinuxKPI_HaikuOS; Control Panel | Started: LinuxKPI Manager in the image (`80944266`), to move into `F-28` |
 
 ### 7.3 External dependencies
 
@@ -1916,7 +1917,7 @@ graph LR
 | Techniix/haiku-packages (`techniix.github.io/haiku-packages`) | F-13, F-18 | Techniix ports built for stock Haiku |
 | [Techniix/RengaPorts](https://github.com/Techniix/RengaPorts) (`techniix.github.io/RengaPorts`) | F-13, F-45 | Recipes and package repository for software built for Renga; packages require `renga` |
 | Techniix/Lumina_HaikuOS | F-25 | Separate CMake build and host tests; the engine is to move in-tree later |
-| LinuxKPI_HaikuOS | F-26, F-34, F-28 | Out of tree; uses private headers |
+| LinuxKPI_HaikuOS | F-26, F-34, F-28 | Upstream of Renga's in-tree copy (branch `stage-c`); `tools/sync-renga.sh` |
 | Techniix/Renguin | F-27 | Out of tree |
 | Quasar (Techniix/nvidia-haiku) | F-35 | Stays out of tree (audit) |
 | HaikuPorts | Images | Priority 2 on Renga images |
@@ -1937,17 +1938,17 @@ Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratc
 
 | Path | Option | Image | Last recorded result |
 | --- | --- | --- | --- |
-| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 799/799 at `50f5bdb1` |
-| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 796/796 at `50f5bdb1` |
+| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 830/830 at `947dbafd` |
+| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 827/827 at `947dbafd` |
 | BIOS, CD-ROM (El Torito floppy) | `--media cdrom` | `minimum-anyboot` | 270/270 at `7b4a14df` |
 | UEFI, CD-ROM | `--firmware uefi --media cdrom` | `minimum-anyboot` | 273/273 at `22bf89ca` |
 | BIOS / UEFI, virtio-blk boot disk | `--disk-bus virtio` | either | BIOS 270/270 at `7b4a14df`; UEFI 271/271 at `2b728fa3` |
 | UEFI, two installs (decoy first) | `--two-installs` | `minimum-anyboot` | 272/272 at `2b728fa3` |
 | Boot menu countdown | `--boot-menu-timeout N` | either | 272/272 at `22bf89ca` (6 s) |
-| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 799/799 (`--smp 2`) at `50f5bdb1`; 548/548 (`--smp 4`) at `1bfb2665` |
+| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 830/830 (`--smp 2`) at `947dbafd`; 548/548 (`--smp 4`) at `1bfb2665` |
 | Other systems in the boot menu | `--other-systems` | either | BIOS 776/776, UEFI 774/774 at `170b3815` |
 | Installer upgrade, then the upgraded disk and its old state | `--installer-upgrade` | either (1200 MB) | BIOS 795/795, UEFI 793/793 at `7ce49272` |
-| Full desktop image | `--profile renga-raw` | `renga-raw` | 975/975 at `b33d6192` |
+| Full desktop image | `--profile renga-raw` | `renga-raw` | 1017/1017 at `947dbafd` |
 
 Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; any real hardware.
 
@@ -2007,6 +2008,8 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 
 **Crash reports and System logs (`F-51`; committed [`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1), [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192), 2026-11-11):** every image: `crashlog` 21 checks over three boots of one QEMU session (collector 7, application crash 2, panic report 9, user-entry report and no duplicates 3) and the host check `crashlog.debugger_reboots`; on renga-raw 32 (the attribute check gives way to 12 GUI checks: Deskbar entry, notification, viewer, live log and filters, previous boot, archive) and `crashlog.screenshots`. Baselines: 799/799 BIOS and `--smp 2`, 796/796 UEFI, renga-raw 975/975. `selftest.py`: 6 new cases, 0 failures. `--other-systems` and `--installer-upgrade` skip the suite (their image copies get `no-final-tests`); `--other-systems` (BIOS) passed 785/785 after it (at `b22ee42a`); `--installer-upgrade` and UEFI `--other-systems` were not run again.
 
+**LinuxKPI (`F-26`, `F-34`; committed [`c9134779`](https://github.com/Techniix/haiku/commit/c9134779) to [`947dbafd`](https://github.com/Techniix/haiku/commit/947dbafd), 2026-11-11):** every run attaches QEMU's `edu` device (`dma_mask=0xffffff`); every image: `linuxkpi` 30 guest checks (15 `edu_*` from `lkpi_pcitest`, 6 `selftest_*`, probe, MSI vector, load cycles, reload results, area leak, errors, 3 packaging checks) and the host check `linuxkpi.edu_no_clamp`; renga-raw: `linuxkpi_ui` 10 checks and `linuxkpi_ui.screenshots` (4). Baselines: **830/830** (BIOS, 1 and 2 CPUs), **827/827** (UEFI), renga-raw 1017/1017; `selftest.py` 0 failures (2 new cases). What the test found: with 2 CPUs a `mutex ... owned at fbsd_subr_taskqueue.c:535` panic on the fourth load (upstream bug 46, fixed in `4bd97ba0`); with edu's default 28-bit DMA mask the bounce path was never reached (hence 24 bits). Wi-Fi itself cannot be tested in QEMU. Intermittent while gating, in code not changed here: the first renga-raw run failed 5 media timing checks (`media.click_free_volume`, `media_latency.*`; all `linuxkpi*` passed); the rerun of the same image passed 1017/1017.
+
 ### 8.4 QEMU-only versus hardware-tested
 
 | Component | QEMU | VirtualBox | VMware | Real hardware |
@@ -2020,6 +2023,8 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 | Boot menu: other systems, removable media | Yes (test loaders and boot records) | No | No | Pending (maintainer's Windows, `REAL-HARDWARE-TEST.md`) |
 | Installer upgrade over Haiku | Yes (copies of the image as old Haiku) | No | No | Pending (maintainer's Haiku partition) |
 | Boot splash | Yes (screenshots) | No | No | No |
+| LinuxKPI core (`F-26`) | Yes (`edu` device: MMIO, MSI, DMA with bouncing, timers, work queues, load/unload) | No | No | Stages a-e passed on the MT7922 with LinuxKPI_HaikuOS `stage-c` (2026-11-06/07) |
+| Wi-Fi MT7921/MT7922 (`F-34`) | No (no device model) | No | No | Pending for the Renga build (`WIFI-HARDWARE-TEST.md`) |
 | Crash reports across a reboot (`F-51`) | Yes (warm reboot from the debugger, BIOS and OVMF) | No | No | Pending (maintainer's PC: does the 63 MiB region survive POST) |
 | VM mouse integration | In development | Planned (USB Tablet setting) | Not tested | Not applicable |
 | Lumina | No | Lumina docs describe a VirtualBox setup; never run | No | No |
@@ -2055,7 +2060,7 @@ Practices that keep QEMU results meaningful: new tests are run against the old c
 | Performance regressions | KPTI, compositor, polling i2c_hid, daemons; the boot splash thread | Medium-High | Opt-in; off by default; measure | Splash runs at `B_NORMAL_PRIORITY - 2` and stops when a graphics driver takes the framebuffer; no efficiency metrics in the harness yet |
 | Security model surprises | Port/semaphore permissions | High | Opt-in per-team policy only | Not touched |
 | Enabling deliberately disabled hardware | radeon_hd `#if 0`, Intel IDs | Medium | Per-ID, only on tested hardware | Not touched |
-| Out-of-tree coupling | Lumina engine, Quasar, LinuxKPI private headers | Medium | Move Lumina engine in-tree; CI-build the others against the fork | Not started |
+| Out-of-tree coupling | Lumina engine, Quasar, LinuxKPI private headers | Medium | Move Lumina engine in-tree; CI-build the others against the fork | LinuxKPI moved in-tree 2026-11-11 (`80944266`), built and tested with every image; Lumina and Quasar not started |
 | Unsigned packages | Techniix repo, HaikuPorts | Medium | Additive ed25519 signing | Not started; Techniix now wins over HaikuPorts, which raises the stakes of an unsigned repo |
 | Licensing | x264 (GPL) in FFmpeg; GRUB/rEFInd (GPLv3) | Medium | Optional packages; tree stays MIT | Fonts used in artwork are Lato (SIL OFL) |
 | Upstream bus factor | 76% of kernel commits from one developer | Medium | Track upstream; do not depend on upstream accepting features | Unchanged |
@@ -2185,6 +2190,14 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-11 | [`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1) | Kernel crash reports in the syslog ring on every debugger entry (ramoops design), EFI loader keeps the ring at 63 MiB across reboots, `crash_collector`, debug_server application crash reports, `crashlog_test` over three boots, harness `CE-HOST kdl_reboot` (`F-51`) | 799/799 BIOS and `--smp 2`, 796/796 UEFI |
 | 2026-11-11 | [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192) | System logs application (live syslog with filters, previous boot, crash reports, "Save a report"), crash notification at login, Deskbar entry; harness README (`F-51`) | renga-raw 975/975 |
 | 2026-11-11 | (this commit) | Roadmap: `F-51` QEMU Tested, baselines, history | Documentation only |
+| 2026-11-11 | [`c9134779`](https://github.com/Techniix/haiku/commit/c9134779) | `freebsd_network`: `taskqueue_enqueue_flags()`, `taskqueue_poll_is_busy()` (was LinuxKPI_HaikuOS patch 0001) (`F-26`) | Same tree as `947dbafd` |
+| 2026-11-11 | [`1b143de2`](https://github.com/Techniix/haiku/commit/1b143de2) | `freebsd_network`: `atomic_set_*()` is an OR (patch 0004; upstream bug 45) | Same tree |
+| 2026-11-11 | [`ff454846`](https://github.com/Techniix/haiku/commit/ff454846) | `freebsd_wlan`: net80211 key accessors; `ieee80211_ampdu_request()` returns 1 on success (patches 0002, 0006) (`F-34`) | Same tree |
+| 2026-11-11 | [`16c9fa5d`](https://github.com/Techniix/haiku/commit/16c9fa5d) | `freebsd_network`: driver-private control hook in `compat_control()` (patch 0007; LinuxKPI status interface) | Same tree |
+| 2026-11-11 | [`4bd97ba0`](https://github.com/Techniix/haiku/commit/4bd97ba0) | `freebsd_network`: `mtx_owned()` of a spin mutex is per thread (upstream bug 46, found by the `linuxkpi` suite with 2 CPUs) | `--smp 2` panicked without it |
+| 2026-11-11 | [`80944266`](https://github.com/Techniix/haiku/commit/80944266) | LinuxKPI in-tree (LinuxKPI_HaikuOS `stage-c` `41549f2`): `mt7921e` with firmware in the system package, LinuxKPI Manager, `lkpictl`; build hooks (patches 0003, 0005, 0008) (`F-26`, `F-34`) | Same tree |
+| 2026-11-11 | [`947dbafd`](https://github.com/Techniix/haiku/commit/947dbafd) | Harness: QEMU `edu` device, `lkpi_pcitest` functional test, `linuxkpi` and `linuxkpi_ui` suites; System logs files driver lines under their driver and adds `lkpictl report` to "Save a report" (`F-26`, `F-51`) | 830/830 BIOS and `--smp 2`, 827/827 UEFI, renga-raw 1017/1017; selftest 0 failures |
+| 2026-11-11 | (this commit) | Roadmap: `F-26` QEMU Tested, `F-34` Implemented, `F-16` LinuxKPI stage looked at, baselines, history, upstream bugs 45-46, decision on LinuxKPI delivery | Documentation only |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
@@ -2236,6 +2249,8 @@ Items 1-10 are written up in the [upstream bug reports doc](https://claude.ai/ar
 | 42 | CodyCam: the video consumer closes the application window when its node is released, so the preview cannot be torn down and built again; menus toggled instead of set, unbalanced `Show()`/`Hide()` of the error view | `codycam` tests (camera switch) | `64f9fbad` |
 | 43 | kernel `DPCQueue::Cancel()`: waits for a running callback on a condition variable on its own stack, but the DPC thread notified it after dropping the queue lock; the canceller could return and reuse the stack while `NotifyAll()` still held the variable's spinlock (`release_spinlock: lock ... was already released`, or a GPF in `_NotifyLocked()`) | `timerfd_test` with `--smp 2`; reproduced by `timerfd.stress_close_concurrent` | `62b132b3` |
 | 44 | FFmpeg media plug-in `AVCodecEncoder::_EncodeAudio()`: after `av_frame_unref()` the frame's sample format, rate and channel layout are left unset; FFmpeg 6 rejects such frames, so every audio encode through the Media Kit failed | Screen recording tests (`CaptureSession` writing PCM in Matroska) | `61a6a636` |
+| 45 | `freebsd_network` compat `machine/atomic.h`: `atomic_set_32()`/`atomic_set_int()` were a store; in FreeBSD's atomic(9) they OR the bits in (and `atomic_subtract_32(p, a - b)` negated only `a`) | LinuxKPI_HaikuOS (LinuxKPI work queues and tasklets set flag bits with it) | `1b143de2` |
+| 46 | `freebsd_network` `mtx_owned()` for `MTX_SPIN` mutexes was "locked by anyone", so `mtx_assert(MA_NOTOWNED)` panicked when another CPU held the lock (a fast taskqueue's thread starting while the queue was in use) | `linuxkpi` suite with `--smp 2` (fourth load of `lkpi_pcitest`) | `4bd97ba0` |
 
 Upstream behaviours observed and **not** changed: the mixer's gain values are labelled dB but follow a bent scale (-12 on the slider is -3.3 dB), kept so saved settings keep their meaning (`ef41c576`, documented in PORTING.md). Aliases on the loop interface get no routes, and a down interface still delivers on cached routes (`9c6d9157`). Partition devices report `logical_block_size` 0 (`0758b116`). An intermittent burst of rejected framebuffer writes, first seen in older runs, turned out to be a Renga bug (the splash thread) and was fixed in `a44b1890`.
 
@@ -2283,6 +2298,7 @@ Upstream behaviours observed and **not** changed: the mixer's gain values are la
 | 2026-11-09 | Media Kit phase 1 on the existing system mixer, in PipeWire/PulseAudio terms: streams are routed inside the mixer through sinks it connects to other devices, never by moving applications' connections; loopbacks are a flavor of the mixer add-on | `F-31`, `ef41c576` |
 | 2026-11-09 | Media Kit tests run on the `renga-*` images only (the minimum images have no Media Kit); renga-raw runs are required for media and GUI changes anyway | `ef41c576`, section 8 |
 | 2026-11-09 | The Media preferences open on "Audio settings" (everyday controls, per-application volume) instead of the mixer's detailed page | `F-32`, `369f3e7d` |
+| 2026-11-11 | LinuxKPI is carried **in-tree** at LinuxKPI_HaikuOS' own paths, built with the image and tested by the harness; LinuxKPI_HaikuOS stays the upstream of the LinuxKPI layer, the imported FreeBSD/Linux code and the tools (`tools/sync-renga.sh`); its Haiku patches become Renga commits. A Techniix/RengaPorts package was the alternative (rejected: the driver would miss the image, the harness and every boot path, and Renga's `freebsd_network` would still need the patches). Scope (maintainer): integrate what already works and keep it working; no new drivers, no Bluetooth driver, no stage f | `F-26`, `F-34`, `80944266` |
 
 ---
 
@@ -2349,7 +2365,7 @@ Open questions (add an answer row to [10.3](#103-decisions-log) when decided):
 
 1. **Version scheme.** AboutSystem shows "Renga hrev60381"; `HAIKU_VERSION` is upstream's `r1~beta6`. Needed before any public image.
 2. **Renga icons.** The Deskbar leaf icon and leaf-style app icons are still Haiku's.
-3. **LinuxKPI and Renguin delivery.** Techniix packages or in-tree under `3rdparty`?
+3. **LinuxKPI and Renguin delivery.** Techniix packages or in-tree under `3rdparty`? LinuxKPI: resolved 2026-11-11, in-tree at its own paths (decisions log). Renguin: see `F-27`.
 4. **Reserved syscall range for fork-only syscalls** (audit risk register). Not yet defined, although several syscalls have been added.
 5. **Rebase cadence.** The audit proposes fortnightly; no rebase done yet.
 6. **Techniix `repo.info` priority.** Lower it so hand-added configurations also prefer Techniix?
