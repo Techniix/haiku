@@ -25,6 +25,7 @@ updates this file in the same commit.
 | Sound cards plugged in and out while the media services run (USB audio): new outputs and inputs, default output fallback and return | (Media Kit, `B_MEDIA_FLAVORS_CHANGED`) | libmedia (nothing extra) | Seen only after a media services restart; no fallback | Available |
 | USB Audio Class 1 and 2 devices (headsets, DACs) | (driver `usb_audio`, hmulti) | | UAC1 only, broken at 44.1 kHz on xhci | Available (UAC2 not yet tried on hardware) |
 | UVC webcams (YUY2, MJPEG) as Media Kit video sources | (Media Kit, `usb_webcam` add-on) | libmedia (nothing extra) | Missing (UVC class not built) | Available (not yet tried on hardware) |
+| Screen, window or region capture (damage-based, timestamped, with the user's permission and an indicator); a capture session with system audio, one application's audio and the microphone, writing a file or feeding the port | `<ScreenCapture.h>`, `<CaptureSession.h>` (private headers) | libbe, libmedia (nothing extra) | Only `BScreen::ReadBitmap()` (whole frames, no damage, no consent) | Available |
 | HDMI/DisplayPort audio | (driver `hda`) | | Missing | Monitors detected and named in the syslog; no playback yet |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
@@ -835,6 +836,69 @@ Since: the commits that added the device watcher to the multi_audio
 add-on (hot-plug), UAC2 to `usb_audio`, and `UVCPayload.cpp` to
 `usb_webcam`. Tests: `media_usb_test.cpp`, `media_video_test.cpp`
 (renga-* images), `usb_audio`, `uvc` (every image).
+
+### Screen capture and capture sessions
+
+For screen recorders, streaming hosts and screen sharing (OBS, Sunshine,
+Chromium's screen sharing through the portal once `F-43` phase D exists).
+The concepts follow PipeWire's and the xdg-desktop-portal ScreenCast
+interface: the user consents per application, a source is the screen, a
+window or a region, frames carry damage and timestamps, audio comes from
+the mixer's loopback.
+
+- **`BPrivate::BScreenCapture`** (`headers/private/interface/ScreenCapture.h`,
+  libbe). `StartScreen()`, `StartWindow(serverToken)` (the token of
+  `get_window_info()`/`get_window_order()`, `headers/private/interface/
+  WindowInfo.h`) or `StartRegion(rect)`, with `SCREEN_CAPTURE_INCLUDE_CURSOR`
+  and, for windows, `SCREEN_CAPTURE_WINDOW_BORDER`. Then call
+  `NextFrame(bitmap, &changed, &damage, &time)` at your frame rate with
+  `B_RGB32` bitmaps of `Frame()`'s size: app_server copies only what changed
+  since that bitmap was last filled (from the back buffer, or the front
+  buffer with the cursor hidden), so an idle screen costs one round trip.
+  `damage` is what changed since the previous frame (frame coordinates),
+  `time` the `system_time()` of the copy. It never blocks; use two or more
+  bitmaps for double buffering. Status codes: `B_NOT_ALLOWED` (the user
+  said no, or did not answer within the timeout), `B_CANCELED` (the user
+  stopped the capture from the indicator or the preferences),
+  `B_ENTRY_NOT_FOUND` (the window is gone).
+- **Permission.** The first `Start...()` of an application (by signature)
+  shows the Screen recording prompt and waits for the answer (default
+  timeout 2 minutes; pass your own). "Remember my decision" stores it;
+  otherwise it holds until the application quits. The Screen recording
+  preferences (`/boot/system/preferences/ScreenRecording`) list the
+  decisions and the running captures; `ScreenRecording --set <signature>
+  allow|deny|ask` and `--list` do the same from scripts. While any capture
+  runs, a floating indicator with a Stop button is on screen. Haiku has no
+  sandbox: this is the user's consent and a visible indicator for the
+  normal capture path, not a security boundary (`BScreen::ReadBitmap()`
+  still works).
+- **`BPrivate::CaptureSession`** (`headers/private/media/CaptureSession.h`,
+  libmedia). One object combines the video above, sampled at a steady
+  frame rate, with the system mix (`systemAudio`), one application's
+  streams (`audioApplication` = its signature, through the phase-1
+  loopback) and the default audio input (`microphone`), all on
+  `system_time()`. Give it a `Listener` to get `VideoFrame(bitmap, damage,
+  time)` and `AudioData(int16 stereo 48 kHz, frames, time)` on its thread
+  (a port's own encoder or network sender), and/or an `entry_ref` to write
+  a file through the Media Kit's encoders. Today that is the FFmpeg
+  plug-in: Matroska with MPEG-4 video and 16-bit PCM audio by default
+  (`CheckEncoders()` says what is available; `fileFormat`, `videoCodec`,
+  `audioCodec` take other short names). Phase 4 brings better codecs.
+- **`BPrivate::ScreenCaptureNode`** (same header): the capture as a Media
+  Kit node, a `B_BUFFER_PRODUCER` of `B_RGB32` raw video at the frame rate,
+  each buffer's `start_time` the performance time the frame was taken.
+  Register it with `BMediaRoster::RegisterNode()`, connect its output, start
+  it.
+- **Limits.** Window capture copies the window's area of the screen:
+  without a compositor (`F-33`) a window on top of it shows in the
+  capture. Frames are sampled by the caller (no frame callbacks from
+  app_server yet). The video file has a constant frame rate; when the
+  encoder is slower than real time the session repeats frames to keep
+  audio and video in step. Multi-monitor capture waits for `F-38`.
+
+Since: the commits that added `ScreenCaptureManager` to app_server,
+`CaptureSession.cpp` to libmedia and recording to Screenshot. Tests:
+`screen_capture_test.cpp` (renga-* images).
 
 ### Ctrl is the shortcut key
 
