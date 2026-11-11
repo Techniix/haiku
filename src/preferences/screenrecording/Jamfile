@@ -1,0 +1,15 @@
+SubDir HAIKU_TOP src preferences screenrecording ;
+
+UsePrivateHeaders app interface shared ;
+
+Application ScreenRecording :
+	ScreenRecording.cpp
+	: be localestub libcolumnlistview.a [ TargetLibstdc++ ]
+	: ScreenRecording.rdef
+;
+
+DoCatalogs ScreenRecording :
+	x-vnd.Renga-ScreenRecording
+	:
+	ScreenRecording.cpp
+;

@@ -61,6 +61,9 @@ namespace BPrivate {
 };
 
 
+class ScreenCaptureManager;
+
+
 class Desktop : public DesktopObservable, public MessageLooper,
 	public ScreenOwner {
 public:
@@ -272,6 +275,10 @@ public:
 			Window*				WindowForClientLooperPort(port_id port);
 
 			StackAndTile*		GetStackAndTile() { return &fStackAndTile; }
+
+			// Renga: screen capture
+			ScreenCaptureManager* ScreenCapture() const
+									{ return fScreenCapture; }
 private:
 			WindowList&			_Windows(int32 index);
 
@@ -335,6 +342,7 @@ private:
 			uid_t				fUserID;
 			char*				fTargetScreen;
 			::VirtualScreen		fVirtualScreen;
+			ScreenCaptureManager* fScreenCapture;
 			ObjectDeleter<DesktopSettingsPrivate>
 								fSettings;
 			port_id				fMessagePort;

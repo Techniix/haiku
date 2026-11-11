@@ -47,6 +47,16 @@ public:
 };
 
 
+// Renga: told about every change of the front buffer (screen capture,
+// ScreenCaptureManager). Called with the HWInterface locked, possibly by
+// several threads in parallel.
+class HWInterfaceDamageListener {
+public:
+	virtual						~HWInterfaceDamageListener() {}
+	virtual	void				ScreenDamaged(const BRect& frame) = 0;
+};
+
+
 class HWInterface : protected MultiLocker {
 public:
 								HWInterface();
@@ -169,6 +179,11 @@ public:
 			bool				HideFloatingOverlays();
 			void				ShowFloatingOverlays();
 
+	// Renga: screen capture damage
+			void				SetDamageListener(
+									HWInterfaceDamageListener* listener)
+									{ fDamageListener = listener; }
+
 	// Listener support
 			bool				AddListener(HWInterfaceListener* listener);
 			void				RemoveListener(HWInterfaceListener* listener);
@@ -245,6 +260,7 @@ protected:
 
 private:
 			BList				fListeners;
+			HWInterfaceDamageListener* fDamageListener;
 };
 
 #endif // HW_INTERFACE_H

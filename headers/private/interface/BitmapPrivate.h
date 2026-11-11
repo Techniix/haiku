@@ -25,6 +25,9 @@ class BBitmap::Private {
 public:
 								Private(BBitmap* bitmap);
 			void				ReconnectToAppServer();
+			int32				ServerToken() const
+									{ return fBitmap->_ServerToken(); }
+										// Renga: screen capture
 private:
 			BBitmap*			fBitmap;
 };

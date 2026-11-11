@@ -85,6 +85,7 @@ SYSTEM_PREFERENCES += [ FFilterByBuildFeatures
 	Media
 	Printers
 	Repositories
+	ScreenRecording
 	ScreenSaver
 	Sounds
 ] ;

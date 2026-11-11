@@ -45,6 +45,7 @@ if [ FIsBuildFeatureEnabled fontconfig ] {
 	DrawState.cpp DrawingEngine.cpp Layer.cpp PictureBoundingBoxPlayer.cpp
 	ServerApp.cpp ServerBitmap.cpp ServerCursor.cpp ServerFont.cpp
 	ServerPicture.cpp ServerWindow.cpp View.cpp Window.cpp WorkspacesView.cpp
+	ScreenCaptureManager.cpp
 	$(decorator_src) $(font_src) ]
 	: [ BuildFeatureAttribute freetype : headers ]
 	  [ BuildFeatureAttribute fontconfig : headers ] ;
@@ -54,6 +55,7 @@ if [ FIsBuildFeatureEnabled fontconfig ] {
 	DrawState.cpp DrawingEngine.cpp Layer.cpp PictureBoundingBoxPlayer.cpp
 	ServerApp.cpp ServerBitmap.cpp ServerCursor.cpp ServerFont.cpp
 	ServerPicture.cpp ServerWindow.cpp View.cpp Window.cpp WorkspacesView.cpp
+	ScreenCaptureManager.cpp
 	$(decorator_src) $(font_src) ]
 	: [ BuildFeatureAttribute freetype : headers ] ;
 }
@@ -89,6 +91,7 @@ Application app_server :
 	RegionPool.cpp
 	Screen.cpp
 	ScreenConfigurations.cpp
+	ScreenCaptureManager.cpp
 	ScreenManager.cpp
 	ServerApp.cpp
 	ServerBitmap.cpp

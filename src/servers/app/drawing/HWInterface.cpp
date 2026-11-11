@@ -52,7 +52,8 @@ HWInterface::HWInterface()
 	fHardwareCursorEnabled(false),
 	fCursorLocation(0, 0),
 	fVGADevice(-1),
-	fListeners(20)
+	fListeners(20),
+	fDamageListener(NULL)
 {
 }
 
@@ -338,6 +339,9 @@ HWInterface::InvalidateRegion(const BRegion& region)
 status_t
 HWInterface::Invalidate(const BRect& frame)
 {
+	if (fDamageListener != NULL)
+		fDamageListener->ScreenDamaged(frame);
+
 	if (IsDoubleBuffered())
 		return CopyBackToFront(frame);
 

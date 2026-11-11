@@ -21,6 +21,8 @@
 
 #include "Desktop.h"
 
+#include <new>
+
 #include <stdio.h>
 #include <string.h>
 #include <syslog.h>
@@ -53,6 +55,7 @@
 #include "InputManager.h"
 #include "Screen.h"
 #include "ScreenManager.h"
+#include "ScreenCaptureManager.h"
 #include "ServerApp.h"
 #include "ServerConfig.h"
 #include "ServerCursor.h"
@@ -449,6 +452,10 @@ Desktop::Desktop(uid_t userID, const char* targetScreen)
 {
 	memset(fLastWorkspaceFocus, 0, sizeof(fLastWorkspaceFocus));
 
+	// Renga: screen capture (before anything can return early, so that the
+	// destructor always finds it set)
+	fScreenCapture = new(std::nothrow) ScreenCaptureManager(this);
+
 	char name[B_OS_NAME_LENGTH];
 	Desktop::_GetLooperName(name, sizeof(name));
 
@@ -470,6 +477,10 @@ Desktop::Desktop(uid_t userID, const char* targetScreen)
 
 Desktop::~Desktop()
 {
+	if (fVirtualScreen.HWInterface() != NULL)
+		fVirtualScreen.HWInterface()->SetDamageListener(NULL);
+	delete fScreenCapture;
+
 	delete_area(fSharedReadOnlyArea);
 	delete_port(fMessagePort);
 
@@ -526,6 +537,7 @@ Desktop::Init()
 	}
 
 	HWInterface()->SetDPMSMode(B_DPMS_ON);
+	HWInterface()->SetDamageListener(fScreenCapture);
 
 	// Restore brightness
 	{

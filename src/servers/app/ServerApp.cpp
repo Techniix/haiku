@@ -59,6 +59,7 @@
 #include "InputManager.h"
 #include "OffscreenServerWindow.h"
 #include "Screen.h"
+#include "ScreenCaptureManager.h"
 #include "ServerBitmap.h"
 #include "ServerConfig.h"
 #include "ServerCursor.h"
@@ -208,6 +209,9 @@ ServerApp::~ServerApp()
 		fPictureMap.begin()->second->SetOwner(NULL);
 
 	fDesktop->GetCursorManager().DeleteCursors(fClientTeam);
+
+	if (fDesktop->ScreenCapture() != NULL)
+		fDesktop->ScreenCapture()->ApplicationQuit(fClientTeam);
 
 	delete fAppFontManager;
 
@@ -3433,6 +3437,25 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			fLink.Flush();
 			break;
 		}
+
+		// Renga: screen capture
+		case AS_SCREEN_CAPTURE_START:
+		case AS_SCREEN_CAPTURE_FRAME:
+		case AS_SCREEN_CAPTURE_STOP:
+		case AS_SCREEN_CAPTURE_LIST:
+		case AS_SCREEN_CAPTURE_STOP_ANY:
+		case AS_SCREEN_CAPTURE_GET_PERMISSIONS:
+		case AS_SCREEN_CAPTURE_SET_PERMISSION:
+		case AS_SCREEN_CAPTURE_GET_REQUEST:
+		case AS_SCREEN_CAPTURE_ANSWER_REQUEST:
+			if (fDesktop->ScreenCapture() != NULL) {
+				fDesktop->ScreenCapture()->HandleMessage(this, code, link,
+					fLink);
+			} else {
+				fLink.StartMessage(B_NO_INIT);
+				fLink.Flush();
+			}
+			break;
 
 		case AS_GET_DRIVER_PATH:
 		{

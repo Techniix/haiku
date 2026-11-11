@@ -110,6 +110,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			Region.cpp
 			RegionSupport.cpp
 			Screen.cpp
+			ScreenCapture.cpp
 			ScrollBar.cpp
 			ScrollView.cpp
 			SeparatorItem.cpp
