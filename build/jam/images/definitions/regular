@@ -40,6 +40,7 @@ SYSTEM_APPS += [ FFilterByBuildFeatures
 	Icon-O-Matic@expat
 	LaunchBox
 	LegacyPackageInstaller
+	LinuxKPIManager@x86_64
 	Magnify
 	Mail
 	MediaConverter
@@ -61,6 +62,7 @@ DESKBAR_APPLICATIONS +=
 	CodyCam
 	HaikuDepot
 	Icon-O-Matic
+	LinuxKPIManager
 	Magnify
 	Mail
 	MediaConverter

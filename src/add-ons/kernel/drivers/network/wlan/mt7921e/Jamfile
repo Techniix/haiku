@@ -1,0 +1,42 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src add-ons kernel drivers network wlan mt7921e ;
+
+# MediaTek MT7921/MT7922 ("mt7921e") Wi-Fi: Linux mt76 as imported in FreeBSD
+# (imported/, see IMPORTED.md), built on LinuxKPI + LinuxKPI 802.11 +
+# freebsd_wlan. The Linux code is compiled in linux/core and linux/mt7921;
+# this directory holds only the Haiku glue.
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network compat ]
+	: true ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_wlan ] : true ;
+UsePrivateHeaders net system ;
+UsePrivateKernelHeaders ;
+
+SubDirCcFlags [ FDefines _KERNEL=1 _XOPEN_SOURCE ] ;
+
+KernelAddon mt7921e :
+	glue.c
+	:
+	<nogrist>mt7921e_mt7921.o
+	<nogrist>mt7921e_mt76.o
+	$(LINUXKPI_WLAN_LIBS)
+	;
+
+SubInclude HAIKU_TOP src add-ons kernel drivers network wlan mt7921e linux
+	core ;
+SubInclude HAIKU_TOP src add-ons kernel drivers network wlan mt7921e linux
+	mt7921 ;
+
+# Firmware from linux-firmware (mediatek/WIFI_*, redistributable under
+# LICENCE.mediatek), extracted into system/data/firmware/mt7921e when the
+# driver is part of a system package. Renga keeps the archive in
+# data/system/data/firmware/mt7921e (with a PROVENANCE file inside); a tree
+# without it never adds mt7921e to SYSTEM_ADD_ONS_DRIVERS_NET, so this has
+# no effect there. A copy in system/non-packaged/data/firmware/mt7921e is
+# still found first (freebsd_network firmware.c).
+HAIKU_WIFI_FIRMWARE_ARCHIVE on mt7921e = mt7921e-fw-20261109.tgz ;
+HAIKU_WIFI_FIRMWARE_DO_EXTRACT on mt7921e = true ;

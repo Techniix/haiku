@@ -1,0 +1,37 @@
+# LinuxKPI API coverage on Haiku. Format: Haiku driver_settings.
+# area <group> <name> <status> <note>
+# status: implemented, partial, stub, missing.
+# Hand-maintained from docs/ARCHITECTURE.md and docs/STATUS.md; update both.
+
+version "0.5-stage-e"
+
+area core "Threads, sleep queues, current"	implemented	"Per-thread records (never freed)"
+area core "Locks (mutex, spinlock, sx)"		partial		"sx shared mode is exclusive"
+area core "RCU"					implemented	"ConcurrencyKit epoch"
+area core "Work queues, tasklets, timers"	implemented	"Tasklets not bound to CPUs"
+area core "kthreads"				implemented	"Priorities capped at B_NORMAL_PRIORITY"
+area core "jiffies / time"			implemented	"1 ms timer"
+area core "SYSINIT ordering"			implemented	""
+area core "Module parameters / tunables"	partial		"Read at load from the driver settings file; not changeable while running"
+area core "sysctl / sysfs"			stub		"No sysctl tree on Haiku"
+area memory "kmalloc, slab (UMA)"		implemented	"object_cache"
+area memory "Pages, page_pool"			implemented	"One area per allocation"
+area memory "ioremap / MMIO"			implemented	""
+area memory "Memory attributes (WC/UC)"		missing		"Not applied to page allocations"
+area dma "Streaming DMA"			implemented	"Bounce pool below the DMA mask"
+area dma "Coherent DMA, dma_pool"		implemented	""
+area dma "IOMMU"				missing		"x86 identity mapping only"
+area bus "PCI config, BARs, MSI"		implemented	""
+area bus "Legacy INTx interrupts"		missing		"MSI only; shared INTx unsafe"
+area bus "pci_find_* lookups"			stub		"Return NULL"
+area bus "Power management (suspend/resume)"	missing		""
+area bus "USB"					missing		""
+area bus "ACPI"					stub		""
+area net "netdev / NAPI"			partial		"As needed by mac80211 drivers"
+area net "mac80211 / cfg80211 (LinuxKPI 802.11)"	partial		"Station mode; no AP/mesh/monitor"
+area net "802.11 hardware crypto"		partial		"Off by default (compat.linuxkpi.80211.hw_crypto)"
+area net "Firmware loading"			implemented	"/boot/system/[non-packaged/]data/firmware/<driver>"
+area gpu "DRM / KMS"				missing		"Planned"
+area gpu "dma-buf, fences"			missing		"Planned"
+area misc "debugfs"				stub		""
+area misc "Device tree / OF"			missing		"x86 only"

@@ -1,0 +1,25 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src add-ons kernel drivers network lkpi_pcitest ;
+
+# LinuxKPI stage (a)/(b) self-test driver. The Linux driver source is built
+# with LinuxKPI flags in linux/; this directory holds only Haiku glue.
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network compat ]
+	: true ;
+UsePrivateHeaders net system ;
+UsePrivateKernelHeaders ;
+
+SubDirCcFlags [ FDefines _KERNEL=1 _XOPEN_SOURCE ] ;
+
+KernelAddon lkpi_pcitest :
+	glue.c
+	:
+	<nogrist>lkpi_pcitest_linux.o
+	$(LINUXKPI_LIBS)
+	;
+
+SubInclude HAIKU_TOP src add-ons kernel drivers network lkpi_pcitest linux ;

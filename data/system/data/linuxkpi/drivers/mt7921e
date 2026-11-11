@@ -1,0 +1,82 @@
+# LinuxKPI driver manifest. Format: Haiku driver_settings (see
+# docs/MANAGER.md, "Driver manifests"). Read by LinuxKPI Manager and lkpictl;
+# the kernel never reads this file.
+
+name		mt7921e
+description	"MediaTek MT7920/MT7921/MT7922 Wi-Fi 6 (PCIe)"
+version		"0.5-stage-e"
+origin		"Linux mt76 (mt7921), via FreeBSD sys/contrib/dev/mediatek/mt76, freebsd-src b556d9c9ce94"
+license		"ISC (mt76); BSD-2-Clause (LinuxKPI)"
+class		network
+# Where the driver publishes devices, relative to /dev and to
+# add-ons/kernel/drivers/dev (the "enabled at boot" link).
+publish		net/mt7921e
+requires	linuxkpi linuxkpi_wlan freebsd_wlan freebsd_network
+firmware_dir	mt7921e
+
+# device <vendor> <device> <name> { firmware <files...> }
+device 14c3 7961 "MT7921" {
+	firmware WIFI_MT7961_patch_mcu_1_2_hdr.bin WIFI_RAM_CODE_MT7961_1.bin
+}
+device 14c3 0608 "MT7921" {
+	firmware WIFI_MT7961_patch_mcu_1_2_hdr.bin WIFI_RAM_CODE_MT7961_1.bin
+}
+device 14c3 7920 "MT7920" {
+	firmware WIFI_MT7961_patch_mcu_1a_2_hdr.bin WIFI_RAM_CODE_MT7961_1a.bin
+}
+device 14c3 7922 "MT7922" {
+	firmware WIFI_MT7922_patch_mcu_1_1_hdr.bin WIFI_RAM_CODE_MT7922_1.bin
+}
+device 14c3 0616 "MT7922" {
+	firmware WIFI_MT7922_patch_mcu_1_1_hdr.bin WIFI_RAM_CODE_MT7922_1.bin
+}
+device 0b48 7922 "MT7922 (ITTIM)" {
+	firmware WIFI_MT7922_patch_mcu_1_1_hdr.bin WIFI_RAM_CODE_MT7922_1.bin
+}
+
+# feature <id> <state> <label>; state: works, partial, experimental,
+# untested, missing. Verified states are the ones in docs/STATUS.md.
+feature firmware	works		"Firmware load and boot"
+feature scan		works		"Scanning"
+feature wpa2		works		"WPA2-PSK (CCMP) association"
+feature dhcp		works		"DHCP and IP traffic"
+feature ht		works		"802.11n (HT40)"
+feature ampdu_tx	partial		"TX aggregation (A-MPDU)"
+feature hw_crypto	experimental	"Hardware encryption"
+feature wpa3		untested	"WPA3-SAE"
+feature power_save	untested	"Power saving"
+feature suspend		missing		"Suspend / resume"
+feature bluetooth	missing		"Bluetooth (separate USB function)"
+
+# tunable <key> { type bool|int; min; max; default; label; description; risk }
+# risk: safe, experimental (may stop the connection), unsafe (not offered).
+tunable compat.linuxkpi.80211.hw_crypto {
+	type		bool
+	default		0
+	label		"Hardware encryption"
+	description	"Let the card encrypt and decrypt (CCMP) instead of the CPU. Also allows A-MPDU in both directions."
+	risk		experimental
+}
+tunable compat.linuxkpi.mt7921_pci_disable_aspm {
+	type		bool
+	default		0
+	label		"Disable PCIe power saving (ASPM)"
+	description	"Can help if the card stops responding after idle periods."
+	risk		safe
+}
+tunable compat.linuxkpi.mt7921_disable_clc {
+	type		bool
+	default		0
+	label		"Ignore firmware country table (CLC)"
+	description	"Use the generic regulatory limits instead of the firmware's per-country table."
+	risk		experimental
+}
+tunable compat.linuxkpi.80211.debug {
+	type		int
+	min		0
+	max		2147483647
+	default		0
+	label		"802.11 debug mask"
+	description	"Debug bitmask; only has an effect in builds with LINUXKPI_DEBUG_80211."
+	risk		safe
+}

@@ -1,0 +1,18 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src libs compat linuxkpi_usb haiku ;
+
+# Haiku side of LinuxKPI USB: compiled WITHOUT the LinuxKPI preinclude
+# (Haiku errno values and headers), like linuxkpi/haiku.
+
+UseHeaders [ FDirName $(SUBDIR) .. ] : true ;	# lkpi_usb_bridge.h
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat linuxkpi haiku ]
+	: true ;					# lkpi_driver.h
+UsePrivateKernelHeaders ;
+
+SubDirCcFlags [ FDefines _KERNEL=1 ] ;
+
+KernelMergeObject linuxkpi_usb_haiku.o :
+	lkpi_usb_haiku.c
+	;

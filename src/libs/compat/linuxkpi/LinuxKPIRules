@@ -1,0 +1,84 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+#
+# Jam rules for building LinuxKPI and Linux drivers on top of it.
+# Include from a Jamfile with:
+#   include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+#
+# Keep in sync with the profiles of tools/check-module.sh.
+
+rule UseLinuxKPI
+{
+	# UseLinuxKPI [ <LINUXKPI_VERSION> ] [ : <subsystems> ] ;
+	#
+	# Sets up the current SubDir to compile LinuxKPI code (no version) or a
+	# Linux driver (pass the LINUXKPI_VERSION FreeBSD uses for that driver,
+	# e.g. 70000 for mt76). Order matters: subsystem headers first (they
+	# replace FreeBSD's, e.g. linux/usb.h), then Haiku overlays, then
+	# verbatim FreeBSD headers, then LinuxKPI's own, then freebsd_network.
+	#
+	# <subsystems>: LinuxKPI subsystems written for Haiku whose headers the
+	# code uses: usb (linuxkpi_usb), bt (linuxkpi_bt; implies usb).
+
+	local lkpi = [ FDirName $(HAIKU_TOP) src libs compat linuxkpi ] ;
+	local subsystems = $(2) ;
+	if bt in $(subsystems) && ! ( usb in $(subsystems) ) {
+		subsystems += usb ;
+	}
+	if bt in $(subsystems) {
+		UseHeaders [ FDirName $(HAIKU_TOP) src libs compat linuxkpi_bt
+			include ] : true ;
+	}
+	if usb in $(subsystems) {
+		UseHeaders [ FDirName $(HAIKU_TOP) src libs compat linuxkpi_usb
+			include ] : true ;
+	}
+
+	UseHeaders [ FDirName $(lkpi) haiku include ] : true ;
+	UseHeaders [ FDirName $(lkpi) freebsd include ] : true ;
+	UseHeaders [ FDirName $(lkpi) freebsd ck include ] : true ;
+	UseHeaders [ FDirName $(lkpi) common include ] : true ;
+	UseHeaders [ FDirName $(lkpi) dummy include ] : true ;
+	UseHeaders [ FDirName $(lkpi) haiku ] : true ;
+	# LinuxKPI includes "compat/linuxkpi/common/include/..." in places.
+	UseHeaders [ FDirName $(HAIKU_TOP) src libs ] : true ;
+	UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network compat ]
+		: true ;
+	UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network ] : true ;
+	UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_wlan ] : true ;
+	UsePrivateHeaders net system ;
+	UsePrivateKernelHeaders ;
+
+	local defines = _KERNEL=1 _XOPEN_SOURCE FBSD_DRIVER=1 ;
+	if $(1) {
+		defines += LINUXKPI_VERSION=$(1) ;
+	}
+
+	SubDirCcFlags [ FDefines $(defines) ]
+		-include [ FDirName $(lkpi) haiku lkpi_haiku_preinclude.h ]
+		-Wno-unused -Wno-sign-compare -Wno-pointer-sign -Wno-multichar
+		-Werror=implicit-function-declaration -Werror=int-conversion
+		-Werror=incompatible-pointer-types
+		# net80211's opt_wlan.h &c. live next to its sources; last resort.
+		-idirafter [ FDirName $(HAIKU_TOP) src libs compat freebsd_wlan
+			net80211 ] ;
+}
+
+# Everything a LinuxKPI-based kernel add-on links, in order. Merge objects
+# (not static libraries) on purpose: LinuxKPI objects that are only reached
+# through SYSINIT linker sets (e.g. linux_current.o, which makes 'current'
+# work) would otherwise be dropped by the linker.
+# Merge objects carry no grist and don't start with "lib", so KernelAddon's
+# LinkAgainst would turn them into -l<name>; <nogrist> makes it bind the file
+# (the same trick Haiku uses for <nogrist>kernel.so).
+LINUXKPI_LIBS = <nogrist>linuxkpi.o <nogrist>linuxkpi_haiku.o
+	libfreebsd_network.a ;
+LINUXKPI_WLAN_LIBS = <nogrist>linuxkpi_wlan.o <nogrist>linuxkpi.o
+	<nogrist>linuxkpi_haiku.o
+	freebsd_wlan.a libfreebsd_network.a ;
+# Bluetooth controller drivers (USB transport): Linux HCI core and USB core
+# on Haiku's Bluetooth stack and USB bus manager (docs/BLUETOOTH.md).
+LINUXKPI_BT_LIBS = <nogrist>linuxkpi_bt.o <nogrist>linuxkpi_bt_haiku.o
+	<nogrist>linuxkpi_usb.o <nogrist>linuxkpi_usb_haiku.o
+	<nogrist>linuxkpi.o <nogrist>linuxkpi_haiku.o
+	libfreebsd_network.a ;

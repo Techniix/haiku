@@ -1,0 +1,16 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src bin lkpictl ;
+
+# Command-line front end of liblinuxkpi_manage (built in
+# src/apps/linuxkpimanager).
+
+UsePrivateHeaders shared system linuxkpi ;
+UsePrivateSystemHeaders ;
+SubDirHdrs $(HAIKU_TOP) src apps linuxkpimanager core ;
+
+Application lkpictl :
+	lkpictl.cpp
+	: liblinuxkpi_manage.a be bnetapi network [ TargetLibstdc++ ] [ TargetLibsupc++ ]
+	;

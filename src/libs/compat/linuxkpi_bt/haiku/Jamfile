@@ -1,0 +1,20 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src libs compat linuxkpi_bt haiku ;
+
+# Haiku side of LinuxKPI Bluetooth: compiled WITHOUT the LinuxKPI
+# preinclude, against Haiku's Bluetooth transport API
+# (<bluetooth/HCI/btHCI_transport.h>).
+
+UseHeaders [ FDirName $(SUBDIR) .. ] : true ;	# lkpi_bt_bridge.h
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat linuxkpi haiku ]
+	: true ;					# lkpi_driver.h
+UsePrivateHeaders bluetooth net ;
+UsePrivateKernelHeaders ;
+
+SubDirC++Flags [ FDefines _KERNEL=1 ] ;
+
+KernelMergeObject linuxkpi_bt_haiku.o :
+	lkpi_bt_haiku.cpp
+	;

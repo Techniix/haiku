@@ -55,6 +55,7 @@ SYSTEM_BIN = [ FFilterByBuildFeatures
 	listres
 	listsem
 	listusb
+	lkpictl@x86_64
 	locale
 	logger
 	login
@@ -338,6 +339,10 @@ SYSTEM_ADD_ONS_DRIVERS_NET = [ FFilterByBuildFeatures
 		vmxnet
 		vt612x
 	}@ # x86,x86_64,riscv64,arm64
+	x86_64 @{
+		# Renga: Linux mt76 through LinuxKPI (src/libs/compat/linuxkpi)
+		mt7921e
+	}@ # x86_64
 
 	etherpci
 	usb_davicom

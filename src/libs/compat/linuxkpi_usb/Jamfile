@@ -1,0 +1,22 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src libs compat linuxkpi_usb ;
+
+# LinuxKPI USB: Linux's USB driver API (linux/usb.h: usb_driver binding,
+# URBs, anchors, synchronous messages) on Haiku's USB bus manager. Written
+# for Haiku (MIT); FreeBSD's linux_usb.c is not used (it needs FreeBSD's USB
+# stack). Two halves: this one (LinuxKPI side) and haiku/ (Haiku side),
+# talking through lkpi_usb_bridge.h. See docs/BLUETOOTH.md.
+
+SubInclude HAIKU_TOP src libs compat linuxkpi_usb haiku ;
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseLinuxKPI : usb ;
+
+UseHeaders $(SUBDIR) : true ;
+
+KernelMergeObject linuxkpi_usb.o :
+	lkpi_usb.c
+	;

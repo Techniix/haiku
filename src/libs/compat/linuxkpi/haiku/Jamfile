@@ -1,0 +1,35 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src libs compat linuxkpi haiku ;
+
+# Haiku-side shims: compiled WITHOUT the LinuxKPI preinclude, i.e. with
+# Haiku's own errno values, kernel headers and type names. Only the overlay
+# headers are shared with the LinuxKPI side.
+
+UseHeaders [ FDirName $(SUBDIR) include ] : true ;
+UseHeaders [ FDirName $(SUBDIR) .. freebsd include ] : true ;
+UseHeaders [ FDirName $(SUBDIR) ] : true ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network compat ]
+	: true ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network ] : true ;
+UsePrivateHeaders net system ;
+UsePrivateKernelHeaders ;
+UsePrivateHeaders linuxkpi ;	# lkpi_control.h (shared with userland)
+
+SubDirCcFlags [ FDefines _KERNEL=1 _XOPEN_SOURCE ] -Wno-unused ;
+SubDirC++Flags [ FDefines _KERNEL=1 ] ;
+
+KernelMergeObject linuxkpi_haiku.o :
+	lkpi_control.c
+	lkpi_devfs.c
+	lkpi_driver.c
+	lkpi_errno.c
+	lkpi_printf.c
+	lkpi_haiku_pci.c
+	lkpi_newbus.c
+	lkpi_sx.c
+	lkpi_sysinit.c
+	lkpi_thread.cpp
+	lkpi_uma.cpp
+	;

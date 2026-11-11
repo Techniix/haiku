@@ -1,0 +1,37 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src apps linuxkpimanager ;
+
+# LinuxKPI Manager (GUI) and liblinuxkpi_manage (core/, shared with
+# src/bin/lkpictl). Design: docs/MANAGER.md in LinuxKPI_HaikuOS.
+
+UsePrivateHeaders interface shared system linuxkpi ;
+UsePrivateSystemHeaders ;
+SubDirHdrs [ FDirName $(SUBDIR) core ] ;
+SEARCH_SOURCE += [ FDirName $(SUBDIR) core ] ;
+
+StaticLibrary liblinuxkpi_manage.a :
+	Catalog.cpp
+	Hardware.cpp
+	KernelQuery.cpp
+	Logs.cpp
+	Report.cpp
+	Settings.cpp
+	;
+
+Application LinuxKPIManager :
+	App.cpp
+	MainWindow.cpp
+	SettingsWindow.cpp
+	: liblinuxkpi_manage.a libcolumnlistview.a be tracker bnetapi network localestub
+		[ TargetLibstdc++ ] [ TargetLibsupc++ ]
+	: LinuxKPIManager.rdef
+	;
+
+DoCatalogs LinuxKPIManager :
+	x-vnd.LinuxKPI-Manager
+	:
+	MainWindow.cpp
+	SettingsWindow.cpp
+	;

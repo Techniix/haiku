@@ -1,0 +1,27 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src add-ons kernel drivers network wlan mt7921e linux core ;
+
+# mt76 common code, with the source list and flags of FreeBSD's
+# sys/modules/mt76/core/Makefile and Makefile.inc (PCI only, no debugfs,
+# no ACPI SAR, no SoC WED, no USB/SDIO).
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseLinuxKPI 70000 ;
+
+local mt76 = [ FDirName $(SUBDIR) .. .. imported mt76 ] ;
+UseHeaders $(mt76) : true ;
+SEARCH_SOURCE += $(mt76) ;
+
+SubDirCcFlags -DCONFIG_ARCH_DMA_ADDR_T_64BIT
+	-include [ FDirName $(SUBDIR) kbuild_modname.h ] ;
+
+KernelMergeObject mt7921e_mt76.o :
+	mac80211.c mmio.c util.c dma.c eeprom.c tx.c agg-rx.c mcu.c
+	channel.c scan.c wed.c
+	pci.c
+	mt76_connac_mac.c mt76_connac_mcu.c mt76_connac3_mac.c
+	mt792x_core.c mt792x_mac.c mt792x_dma.c
+	;

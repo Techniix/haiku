@@ -1,0 +1,66 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src libs compat linuxkpi ;
+
+# LinuxKPI for Haiku: FreeBSD's sys/compat/linuxkpi on top of Haiku's
+# freebsd_network. See docs/ARCHITECTURE.md in LinuxKPI_HaikuOS.
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseLinuxKPI ;
+
+SEARCH_SOURCE += [ FDirName $(SUBDIR) common src ] ;
+SEARCH_SOURCE += [ FDirName $(SUBDIR) haiku ] ;
+SEARCH_SOURCE += [ FDirName $(SUBDIR) freebsd src ] ;
+SEARCH_SOURCE += [ FDirName $(SUBDIR) freebsd ck src ] ;
+
+KernelMergeObject linuxkpi.o :
+	# imported verbatim (common/src, see IMPORTED.md)
+	linux_current.c
+	linux_devres.c
+	linux_firmware.c
+	linux_hrtimer.c
+	linux_idr.c
+	linux_interrupt.c
+	linux_kmod.c
+	linux_kobject.c
+	linux_kthread.c
+	linux_lock.c
+	linux_netdev.c
+	linux_radix.c
+	linux_schedule.c
+	linux_skbuff.c
+	linux_slab.c
+	linux_tasklet.c
+	linux_timesub.c
+	linux_work.c
+	linux_xarray.c
+	linuxkpi_page_pool.c
+
+	# generated from imported files (tools/extract-compat.py, tools/derive.py)
+	lkpi_compat.c
+	lkpi_rcu.c
+
+	# Haiku implementations of FreeBSD-specific LinuxKPI parts
+	lkpi_gtaskqueue.c
+	lkpi_misc.c
+	lkpi_dma.c
+	lkpi_page.c
+	lkpi_pci.c
+	lkpi_sema.c
+	lkpi_selftest.c
+
+	# imported FreeBSD support code
+	ck_epoch.c
+	gsb_crc32_tab.c
+	;
+
+# Not built (replaced, see docs/ARCHITECTURE.md): linux_compat.c (cdev/file
+# layer; generic part -> lkpi_compat.c), linux_pci.c (-> lkpi_pci.c),
+# linux_page.c (-> lkpi_page.c), linux_rcu.c (-> lkpi_rcu.c), linux_domain.c.
+
+SubInclude HAIKU_TOP src libs compat linuxkpi haiku ;
+SubInclude HAIKU_TOP src libs compat linuxkpi_wlan ;
+SubInclude HAIKU_TOP src libs compat linuxkpi_usb ;
+SubInclude HAIKU_TOP src libs compat linuxkpi_bt ;

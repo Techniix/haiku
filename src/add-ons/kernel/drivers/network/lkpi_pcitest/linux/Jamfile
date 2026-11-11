@@ -1,0 +1,14 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src add-ons kernel drivers network lkpi_pcitest linux ;
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseLinuxKPI 70000 ;
+
+SEARCH_SOURCE += [ FDirName $(SUBDIR) .. ] ;
+
+KernelMergeObject lkpi_pcitest_linux.o :
+	lkpi_pcitest.c
+	;

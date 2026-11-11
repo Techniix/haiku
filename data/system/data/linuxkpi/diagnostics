@@ -1,0 +1,75 @@
+# Known log messages and what to do about them. Format: Haiku
+# driver_settings. Matching is a case-insensitive substring search on each
+# syslog line of a LinuxKPI driver. First matching rule wins, so specific rules
+# come first and catch-all "info" rules last.
+# rule { match <text>; severity info|warning|error; title; advice }
+
+rule {
+	match		"Name in use"
+	severity	error
+	title		"Another driver already owns this device"
+	advice		"Two drivers claim the same card. Remove the other driver's binary and its add-ons/kernel/drivers/dev/net link, then restart."
+}
+
+rule {
+	match		"no wireless device registered within"
+	severity	error
+	title		"The driver did not finish starting"
+	advice		"Usually missing or wrong firmware. Check that the files listed for your device are in /boot/system/non-packaged/data/firmware/<driver>/."
+}
+
+rule {
+	match		"initialisation failed; not attaching"
+	severity	error
+	title		"Card initialisation failed"
+	advice		"The card did not answer the driver. Check firmware, then power the machine off completely (not a restart) and try again."
+}
+
+rule {
+	match		"mbufq_enqueue failed"
+	severity	warning
+	title		"Transmit queue full"
+	advice		"Packets were dropped because the transmit queue was full. If this repeats, report it with an exported diagnostic report."
+}
+
+rule {
+	match		"skb alloc failed"
+	severity	warning
+	title		"Out of memory for a packet"
+	advice		"Report it with an exported diagnostic report."
+}
+
+rule {
+	match		"returned"
+	severity	warning
+	title		"A driver call returned an error"
+	advice		""
+}
+
+rule {
+	match		"failed"
+	severity	warning
+	title		"Something failed"
+	advice		""
+}
+
+rule {
+	match		"timeout"
+	severity	warning
+	title		"Timeout"
+	advice		""
+}
+
+rule {
+	match		"firmware"
+	severity	info
+	title		"Firmware message"
+	advice		""
+}
+
+rule {
+	match		"pool misses"
+	severity	info
+	title		"DMA statistics"
+	advice		"Pool misses above 0 mean the bounce pool ran out; report it if speed is poor."
+}

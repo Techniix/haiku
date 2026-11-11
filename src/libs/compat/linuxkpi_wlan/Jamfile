@@ -1,0 +1,27 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src libs compat linuxkpi_wlan ;
+
+# LinuxKPI 802.11: Linux mac80211/cfg80211 on top of freebsd_wlan's net80211.
+# imported/ is FreeBSD sys/compat/linuxkpi/common/src verbatim (IMPORTED.md);
+# haiku/ is written for Haiku. What freebsd_network/freebsd_wlan lack is in
+# the linuxkpi overlay headers (linuxkpi/haiku/include).
+# linuxkpi_80211_pm.c (suspend/resume helper device) is not built: it needs
+# newbus identify methods, which Haiku's compat layer does not have.
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseLinuxKPI ;
+
+SEARCH_SOURCE += [ FDirName $(SUBDIR) imported ] ;
+SEARCH_SOURCE += [ FDirName $(SUBDIR) haiku ] ;
+UseHeaders [ FDirName $(SUBDIR) imported ] : true ;
+
+KernelMergeObject linuxkpi_wlan.o :
+	linux_80211.c
+	linux_80211_macops.c
+
+	# Haiku: attach ordering for freebsd_wlan's start_wlan()
+	lkpi_wlan_haiku.c
+	;

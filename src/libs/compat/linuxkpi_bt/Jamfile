@@ -1,0 +1,21 @@
+# Copyright 2026, LinuxKPI_HaikuOS contributors.
+# Distributed under the terms of the MIT License.
+
+SubDir HAIKU_TOP src libs compat linuxkpi_bt ;
+
+# LinuxKPI Bluetooth: the transport-driver side of Linux's HCI core
+# (net/bluetooth/hci_core.h) on Haiku's Bluetooth stack. Written for Haiku
+# (MIT). Two halves: this one (LinuxKPI side) and haiku/ (Haiku side),
+# talking through lkpi_bt_bridge.h. See docs/BLUETOOTH.md.
+
+SubInclude HAIKU_TOP src libs compat linuxkpi_bt haiku ;
+
+include [ FDirName $(HAIKU_TOP) src libs compat linuxkpi LinuxKPIRules ] ;
+
+UseLinuxKPI : bt ;
+
+UseHeaders $(SUBDIR) : true ;
+
+KernelMergeObject linuxkpi_bt.o :
+	lkpi_hci.c
+	;

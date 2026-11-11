@@ -298,6 +298,20 @@ local fortuneFiles = [ Glob $(HAIKU_TOP)/data/system/data/fortunes
 fortuneFiles = $(fortuneFiles:G=data!fortunes) ;
 AddFilesToPackage data fortunes : $(fortuneFiles) ;
 
+# Renga: LinuxKPI driver manifests, API coverage and log diagnostics, read by
+# LinuxKPI Manager and lkpictl (the kernel never reads them). Kept in sync
+# with data/linuxkpi of LinuxKPI_HaikuOS.
+if $(TARGET_ARCH) = x86_64 {
+	local lkpiData = [ FDirName $(HAIKU_TOP) data system data linuxkpi ] ;
+	local lkpiFiles = coverage diagnostics ;
+	lkpiFiles = $(lkpiFiles:G=data!linuxkpi) ;
+	SEARCH on $(lkpiFiles) = $(lkpiData) ;
+	AddFilesToPackage data linuxkpi : $(lkpiFiles) ;
+	local lkpiDrivers = [ Glob $(lkpiData)/drivers : [a-z0-9]* ] ;
+	lkpiDrivers = $(lkpiDrivers:G=data!linuxkpi!drivers) ;
+	AddFilesToPackage data linuxkpi drivers : $(lkpiDrivers) ;
+}
+
 local fontDir = [ FDirName $(HAIKU_TOP) data system data fonts ] ;
 local psFonts = [ Glob $(fontDir)/psfonts : *.afm *.pfb ] ;
 AddFilesToPackage data fonts psfonts : $(psFonts) ;
