@@ -36,6 +36,11 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage home config settings system debug_server
 		: $(debugSettings) ;
 
+	# Upstream's kdl test driver (src/add-ons/kernel/drivers/misc/kdl.c),
+	# which panics when it is read: the crashlog suite's way into the
+	# kernel debugger (F-51). Harness images only.
+	AddDriversToHaikuImage misc : <driver>kdl ;
+
 	# The minimum images have no sound card drivers but virtio_sound; the
 	# driver tests need the USB audio driver there too (the Renga images
 	# have it in the system package already).

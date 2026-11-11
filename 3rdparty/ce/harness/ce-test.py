@@ -195,7 +195,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
 	"media_stream_test", "Screenshot",
-	"SoundRecorder", "media_addon_server"]
+	"SoundRecorder", "media_addon_server", "crash_collector",
+	"crashlog_test", "SystemLogs", "debug_server"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -268,6 +269,23 @@ TRACE_SOURCES = [
 
 # Serial console patterns
 KDL_PATTERNS = ("Welcome to Kernel Debugging Land", "kdebug>")
+
+# Kernel debugger entries the crashlog suite makes on purpose (F-51): it
+# prints this line, then "CE-HOST kdl_reboot", then enters the debugger; the
+# harness answers with "reboot" and the guest boots again in the same QEMU
+# session. Between the line and the next "CE-HARNESS START", a debugger
+# entry with one of these messages is not a kernel problem; any other one
+# still is.
+EXPECTED_KDL_MARKER = \
+	"CE-INFO crashlog: entering the kernel debugger on purpose"
+EXPECTED_KDL_MESSAGES = ("PANIC: requested from kdl driver.",
+	"USER: CE crash test")
+# Seconds to wait for the debugger's prompt before sending "reboot", and to
+# ignore its output afterwards (until the machine has reset).
+EXPECTED_KDL_PROMPT_TIMEOUT = 30
+EXPECTED_KDL_QUIET_SECONDS = 10
+# --stall for the boots after such a reboot (see boot()).
+EXPECTED_KDL_STALL = 240
 KDL_MAX_BACKTRACES = 120
 PANIC_PATTERN = re.compile(r"PANIC: (.*)")
 TEST_PATTERN = re.compile(r"^CE-TEST (\S+) (PASS|FAIL) ?(.*)")
@@ -518,26 +536,30 @@ def make_decoy(image, decoy):
 	return True
 
 
-def installed_tests(profile=None):
+def installed_tests(profile=None, final=True):
 	"""Names of the test programs harness images carry, in the order the
 	guest runner runs them: first /boot/system/non-packaged/bin/ce-tests/*,
-	then, with media_server started, ce-tests-media/* (each sorted, like the
-	shell's glob): every name listed after "bin ce-tests :" or
-	"bin ce-tests-media :" in an AddFilesToHaikuImage rule of the
+	then, with media_server started, ce-tests-media/*, then ce-tests-final/*
+	(each sorted, like the shell's glob): every name listed after
+	"bin ce-tests :", "bin ce-tests-media :" or "bin ce-tests-final :" in an
+	AddFilesToHaikuImage rule of the
 	3rdparty/ce/tests Jamfiles. The media tests only run on images with the
 	Media Kit (the renga-* profiles): for other profiles they are left out.
 	"""
-	names = {"ce-tests": set(), "ce-tests-media": set()}
+	names = {"ce-tests": set(), "ce-tests-media": set(),
+		"ce-tests-final": set()}
 	for jamfile in glob.glob(os.path.join(HAIKU_TOP, "3rdparty", "ce",
 			"tests", "*", "Jamfile")):
 		with open(jamfile) as jamFile:
 			text = jamFile.read()
 		for match in re.finditer(
-				r"\bbin\s+(ce-tests(?:-media)?)\s*:\s*([^;]*);", text):
+				r"\bbin\s+(ce-tests(?:-media|-final)?)\s*:\s*([^;]*);", text):
 			names[match.group(1)].update(match.group(2).split())
 	media = sorted(names["ce-tests-media"]) \
 		if profile is None or profile.startswith("renga-") else []
-	return sorted(names["ce-tests"]) + media
+	# ce-tests-final runs last, on every image (it ends the boot).
+	return sorted(names["ce-tests"]) + media \
+		+ (sorted(names["ce-tests-final"]) if final else [])
 
 
 def selected_tests(text, available):
@@ -561,6 +583,10 @@ def selected_tests(text, available):
 
 SELECTION_FILE = "/myfs/system/non-packaged/data/ce-harness/only"
 KERNEL_SETTINGS_FILE = "/myfs/home/config/settings/kernel/drivers/kernel"
+# With it, the runner skips the tests that end a boot (ce-tests-final):
+# runs that count boot loader starts or boot other disks themselves
+# (--other-systems, --installer-upgrade) must not get the crashlog reboots.
+NO_FINAL_TESTS_FILE = "/myfs/system/non-packaged/data/ce-harness/no-final-tests"
 
 
 def make_patched_image(args, image, copy):
@@ -599,6 +625,10 @@ def make_patched_image(args, image, copy):
 				% OTHER_SYSTEMS_EFI_DEFAULT
 		files.append((copy + ".kernel-settings", KERNEL_SETTINGS_FILE,
 			settings, "boot_menu_timeout %d" % timeout))
+	if args.other_systems or args.installer_upgrade:
+		files.append((copy + ".no-final", NO_FINAL_TESTS_FILE,
+			"skip the tests that end the boot\n",
+			"skip the tests that end the boot"))
 	if args.only:
 		files.append((copy + ".only", SELECTION_FILE,
 			"\n".join(args.only) + "\n", "\n".join(args.only)))
@@ -1642,6 +1672,13 @@ class SerialReader(threading.Thread):
 		self.last_output = time.time()
 		self.lock = threading.Lock()
 		self.kdl_text = ""	# everything printed since KDL was entered
+		# Debugger entries a test announced (CE-HOST kdl_reboot): how many
+		# are still expected, whether one is being answered now, and what
+		# happened to each (see _expected_kdl_reboot).
+		self.kdl_expected = 0
+		self.kdl_answering = False
+		self.expected_kdls = []
+		self.expected_kdl_text = ""
 
 	def run(self):
 		buffer = b""
@@ -1671,9 +1708,24 @@ class SerialReader(threading.Thread):
 				text = buffer.decode("latin-1")
 				if "CE-HARNESS END" in text:
 					self.finished.set()
-				if self.kdl.is_set():
+				if self.kdl_answering:
+					# An announced debugger entry: its output is kept apart
+					# and does not stop the run.
+					with self.lock:
+						self.expected_kdl_text += chunk.decode("latin-1")
+					buffer = b""
+				elif self.kdl.is_set():
 					with self.lock:
 						self.kdl_text += chunk.decode("latin-1")
+				elif self.kdl_expected > 0 \
+						and any(p in text for p in KDL_PATTERNS):
+					self.kdl_expected -= 1
+					with self.lock:
+						self.expected_kdl_text = text
+					buffer = b""
+					self.kdl_answering = True
+					threading.Thread(target=self._expected_kdl_reboot,
+						daemon=True).start()
 				elif any(p in text for p in KDL_PATTERNS):
 					with self.lock:
 						self.kdl_text = text
@@ -1714,6 +1766,10 @@ class SerialReader(threading.Thread):
 		      plug a QEMU usb-audio device into the audio xhci controller
 		      (it records into usb-<n>.wav, n counting the adds) or pull
 		      the one plugged in last out (USB_AUDIO_DEVICES)
+		  CE-HOST kdl_reboot
+		      the guest is about to enter the kernel debugger on purpose:
+		      answer the next entry with "reboot" instead of stopping the
+		      run (see _expected_kdl_reboot)
 
 		Pointer and screenshot requests are carried out before the next
 		line is read, so they happen in order and before anything the test
@@ -1741,6 +1797,8 @@ class SerialReader(threading.Thread):
 					request["error"] = qmp_pointer(self.qmp_path, words)
 			elif accepted and words[0] == "usb_audio":
 				request["error"] = self._usb_audio(words[1])
+			elif accepted and words[0] == "kdl_reboot":
+				self.kdl_expected += 1
 			elif accepted and words[0] == "screenshot":
 				path = os.path.join(os.path.dirname(self.log_path),
 					"screen-%s.ppm" % words[1])
@@ -1787,6 +1845,48 @@ class SerialReader(threading.Thread):
 			return False
 		time.sleep(settle)
 		return True
+
+	def _expected_kdl_reboot(self):
+		"""Answers a kernel debugger entry the guest announced: waits for
+		the prompt (the crash report is written before it), lets QEMU reset
+		the machine on a guest reboot instead of exiting (-no-reboot is
+		turned off for this one reboot through QMP's set-action), types
+		"reboot" and, once the machine has reset, turns -no-reboot on
+		again. The debugger's output goes to kdl-expected-<n>.log."""
+		entry = {"answered": False, "error": None}
+		self.expected_kdls.append(entry)
+		try:
+			deadline = time.time() + EXPECTED_KDL_PROMPT_TIMEOUT
+			while time.time() < deadline:
+				with self.lock:
+					if "kdebug>" in self.expected_kdl_text:
+						break
+				time.sleep(0.2)
+			else:
+				entry["error"] = "no debugger prompt"
+				return
+			time.sleep(1)
+			with self.lock:
+				text = self.expected_kdl_text
+			entry["message"] = next((m for m in EXPECTED_KDL_MESSAGES
+				if m in text), None)
+			if self.qmp_path is not None:
+				entry["error"] = qmp_execute(self.qmp_path, "set-action",
+					reboot="reset")
+			if entry["error"] is None and self._send("reboot", 1):
+				entry["answered"] = True
+			time.sleep(EXPECTED_KDL_QUIET_SECONDS)
+			if self.qmp_path is not None:
+				error = qmp_execute(self.qmp_path, "set-action",
+					reboot="shutdown")
+				if error and not entry["error"]:
+					entry["error"] = "restoring -no-reboot: " + error
+		finally:
+			with self.lock:
+				entry["text"] = self.expected_kdl_text
+				self.expected_kdl_text = ""
+			self.last_output = time.time()
+			self.kdl_answering = False
 
 	def _debug_session(self):
 		"""Collects what is needed to debug a panic or hang without a
@@ -1877,12 +1977,41 @@ def host_request_allowed(words):
 			and int(words[3]) <= 32767
 	if len(words) == 2 and words[0] == "usb_audio":
 		return words[1] in ("add", "remove")
+	if words == ["kdl_reboot"]:
+		return True
 	if len(words) == 2 and words[0] == "screenshot":
 		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None
 	if len(words) == 3 and words[0] == "pointer_rel":
 		return all(re.fullmatch(r"-?\d{1,3}", w) is not None
 			and abs(int(w)) <= POINTER_REL_MAX for w in words[1:])
 	return False
+
+
+def qmp_execute(path, command, **arguments):
+	"""Runs one QMP command. Returns None, or what went wrong."""
+	import socket
+	try:
+		with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+			sock.settimeout(5)
+			sock.connect(path)
+			stream = sock.makefile("rw")
+			stream.readline()		# greeting
+			for name, args in (("qmp_capabilities", {}),
+					(command, arguments)):
+				message = {"execute": name}
+				if args:
+					message["arguments"] = args
+				stream.write(json.dumps(message) + "\n")
+				stream.flush()
+				while True:
+					answer = json.loads(stream.readline())
+					if "event" not in answer:
+						break
+				if "error" in answer:
+					return "%s: %s" % (name, answer["error"].get("desc"))
+		return None
+	except (OSError, ValueError) as error:
+		return "%s: %s" % (command, error)
 
 
 def qmp_pointer(path, words):
@@ -2023,7 +2152,7 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 
 	patched = None
 	if not plainImage and (args.boot_menu_timeout or args.only
-			or args.other_systems):
+			or args.other_systems or args.installer_upgrade):
 		patched = os.path.join(results_dir, "patched.img")
 		error = make_patched_image(args, image, patched)
 		if error is not None:
@@ -2182,7 +2311,13 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 				"kernel-debugger"
 			break
 		silent = time.time() - reader.last_output
-		if stalled_at is None and silent > args.stall \
+		# The boots after an announced debugger entry (crashlog_test) are
+		# slow in QEMU (up to two minutes to the runner, with long quiet
+		# stretches while the boot volume is read); give them more time
+		# before calling it a hang.
+		stall = args.stall if not reader.expected_kdls \
+			else max(args.stall, EXPECTED_KDL_STALL)
+		if stalled_at is None and silent > stall \
 				and not reader.finished.is_set():
 			# No serial output for a long time: press Alt+SysRq+D, Haiku's
 			# emergency key for the kernel debugger, so that the session
@@ -2236,6 +2371,16 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 	for path in (monitor_path, qmp_path):
 		if os.path.exists(path):
 			os.unlink(path)
+	expected = []
+	for index, entry in enumerate(reader.expected_kdls):
+		name = "kdl-expected-%d.log" % (index + 1)
+		with open(os.path.join(results_dir, name), "w") as kdlFile:
+			kdlFile.write(entry.get("text", "").replace("\r", ""))
+		expected.append({"answered": entry["answered"],
+			"error": entry["error"], "message": entry.get("message"),
+			"log": name})
+	bootReport["expected_kdl"] = expected
+	bootReport["expected_kdl_unanswered"] = reader.kdl_expected
 	bootReport["status"] = status
 	bootReport["seconds"] = round(time.time() - started, 1)
 	bootReport["runner_finished"] = reader.finished.is_set()
@@ -2264,8 +2409,16 @@ def parse_serial(results_dir, report):
 	except OSError:
 		text = ""
 
+	in_expected_kdl = False
+	kept = []		# the text without the announced debugger entries
 	for line in text.splitlines():
 		line = line.rstrip("\r")
+		if line.startswith(EXPECTED_KDL_MARKER):
+			in_expected_kdl = True
+		elif line.startswith("CE-HARNESS START"):
+			in_expected_kdl = False
+		if not in_expected_kdl:
+			kept.append(line)
 		# Test output is only accepted at the start of a line: the same text
 		# can show up again inside other log lines (e.g. syslog echoes).
 		match = TEST_PATTERN.match(line)
@@ -2283,15 +2436,22 @@ def parse_serial(results_dir, report):
 			driver_lines.append(line)
 		if PANIC_PATTERN.search(line) or "vm_page_fault" in line \
 				or "Welcome to Kernel Debugging Land" in line:
-			problems.append(line)
+			# In an announced debugger entry, only its own panic and the
+			# debugger's welcome are expected.
+			if not in_expected_kdl \
+					or not (any(m in line for m in EXPECTED_KDL_MESSAGES)
+						or "Welcome to Kernel Debugging Land" in line):
+				problems.append(line)
 
 	settle_media_changed(text, tests)
 
-	# Keep the debugger output (backtrace) if there was a crash.
-	kdl_index = text.find("Welcome to Kernel Debugging Land")
+	# Keep the debugger output (backtrace) if there was a crash (not an
+	# announced debugger entry).
+	text_kept = "\n".join(kept)
+	kdl_index = text_kept.find("Welcome to Kernel Debugging Land")
 	if kdl_index >= 0:
-		start = text.rfind("\n", 0, max(0, kdl_index - 2000))
-		report["kernel_debugger"] = text[start:start + 8000]
+		start = text_kept.rfind("\n", 0, max(0, kdl_index - 2000))
+		report["kernel_debugger"] = text_kept[start:start + 8000]
 
 	for driver in WATCHED_DRIVERS:
 		marker = "\x1b[33m" + driver + ":"
@@ -2321,7 +2481,9 @@ def parse_serial(results_dir, report):
 		stamp, kind, rest = float(match.group(1)), match.group(2), \
 			match.group(3)
 		if kind == "CE-HARNESS" and rest.startswith("START"):
-			timed["runner_start"] = stamp
+			# the first boot's (crashlog_test reboots the guest; the
+			# runner's time then spans every boot)
+			timed.setdefault("runner_start", stamp)
 		elif kind == "CE-HARNESS" and rest.startswith("END"):
 			timed["runner_end"] = stamp
 		elif rest.startswith("running "):
@@ -3148,6 +3310,43 @@ def analyze_latency_audio(results_dir, report):
 		"detail": detail})
 
 
+# Screenshots crashlog_test asks for on images with System logs and a
+# desktop (F-51).
+CRASHLOG_SCREENSHOTS = ["crash_notification", "systemlogs_crash",
+	"systemlogs_live", "systemlogs_previous"]
+# Kernel debugger entries crashlog_test makes: the panic, then the user's.
+CRASHLOG_DEBUGGER_ENTRIES = 2
+
+
+def check_crashlog(results_dir, report):
+	"""The crashlog suite's debugger entries (F-51): each was announced,
+	answered with "reboot" and followed by a new boot of the guest runner.
+	Without this, a reboot that never came back would only show as fewer
+	crashlog checks."""
+	boot = report.get("boot", {})
+	entries = boot.get("expected_kdl", [])
+	try:
+		with open(os.path.join(results_dir, "serial.log"), "rb") as logFile:
+			text = logFile.read().decode("latin-1")
+	except OSError:
+		text = ""
+	starts = len(re.findall(r"^CE-HARNESS START", text, re.MULTILINE))
+	answered = [e for e in entries if e["answered"] and not e["error"]]
+	messages = [e.get("message") for e in entries]
+	report.setdefault("host_checks", []).append({
+		"name": "crashlog.debugger_reboots",
+		"pass": len(answered) == CRASHLOG_DEBUGGER_ENTRIES
+			and len(entries) == CRASHLOG_DEBUGGER_ENTRIES
+			and boot.get("expected_kdl_unanswered", 0) == 0
+			and None not in messages
+			and starts == CRASHLOG_DEBUGGER_ENTRIES + 1,
+		"detail": "%d of %d announced debugger entries answered with reboot "
+			"(%s), %d runner starts (want %d)%s" % (len(answered),
+			CRASHLOG_DEBUGGER_ENTRIES, ", ".join(str(m) for m in messages)
+				or "none", starts, CRASHLOG_DEBUGGER_ENTRIES + 1,
+			"".join("; %s" % e["error"] for e in entries if e["error"]))})
+
+
 # Screenshots media_ui_test asks for (CE-HOST screenshot): the
 # per-application audio controls (F-31/F-32).
 MEDIA_UI_SCREENSHOTS = ["volume_popup", "media_preferences",
@@ -3426,7 +3625,8 @@ def main():
 		args.profile = "minimum-anyboot" \
 			if args.firmware == "uefi" or args.media == "cdrom" \
 			else "minimum-raw"
-	available = installed_tests(args.profile)
+	available = installed_tests(args.profile,
+		final=not (args.other_systems or args.installer_upgrade))
 	if args.list_tests:
 		print("\n".join(available))
 		return 0
@@ -3507,6 +3707,9 @@ def main():
 		check_branding(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
 		check_installer_boots(args, results_dir, report)
+		if "crashlog_test" in (args.only or available) \
+				and not args.installer_upgrade:
+			check_crashlog(results_dir, report)
 		if args.other_systems:
 			check_other_systems(args, results_dir, report)
 		else:

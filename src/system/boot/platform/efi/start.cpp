@@ -95,6 +95,7 @@ convert_kernel_args()
 	fix_address(gKernelArgs.vesa_modes);
 	fix_address(gKernelArgs.edid_info);
 	fix_address(gKernelArgs.debug_output);
+	fix_address(gKernelArgs.previous_debug_output);
 	fix_address(gKernelArgs.boot_splash);
 
 	arch_convert_kernel_args();
@@ -258,6 +259,10 @@ efi_main(efi_handle image, efi_system_table *systemTable)
 #endif
 	timer_init();
 	smp_init();
+
+	// Renga (F-51): claim the debug syslog's fixed pages before anything
+	// else can be put there, so a previous session's log is kept.
+	debug_init_persistent_syslog();
 
 	main(&args);
 

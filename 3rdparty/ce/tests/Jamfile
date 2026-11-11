@@ -4,6 +4,7 @@ SubDir HAIKU_TOP 3rdparty ce tests ;
 # in harness images; the guest runner runs all of them.
 
 SubInclude HAIKU_TOP 3rdparty ce tests bootmenu ;
+SubInclude HAIKU_TOP 3rdparty ce tests crashlog ;
 SubInclude HAIKU_TOP 3rdparty ce tests hda_eld ;
 SubInclude HAIKU_TOP 3rdparty ce tests installer ;
 SubInclude HAIKU_TOP 3rdparty ce tests media ;

@@ -14,6 +14,7 @@ SYSTEM_BIN = [ FFilterByBuildFeatures
 	clear
 	collectcatkeys
 	copyattr
+	crash_collector
 	desklink
 	df
 	diskimage

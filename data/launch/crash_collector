@@ -1,0 +1,8 @@
+# Renga (roadmap F-51): saves the crash report the kernel debugger kept in
+# the previous session's syslog to /boot/system/var/log/crash, once per
+# boot, as soon as the boot volume is mounted (the kernel has written
+# /var/log/previous_syslog by then).
+job x-vnd.Renga-crash_collector {
+	launch /bin/crash_collector
+	on initial_volumes_mounted
+}

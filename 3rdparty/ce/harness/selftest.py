@@ -873,5 +873,60 @@ check = latency_check(silence(0.5) + tone(3100, 3300, 3.0) + silence(0.5))
 expect("latency: a tone too short (cut off) fails", not check["pass"],
 	check["detail"])
 
+# Crash reports (F-51): the announced debugger entries, and that a panic
+# outside them (or a different one inside them) is still a kernel problem.
+CRASH_SERIAL_GOOD = ("CE-HARNESS START\r\n"
+	"CE-INFO crashlog: entering the kernel debugger on purpose\r\n"
+	"CE-HOST kdl_reboot\r\nkdl: read\r\n"
+	"PANIC: requested from kdl driver.\r\n"
+	"Welcome to Kernel Debugging Land...\r\nkdebug> reboot\r\n"
+	"CE-HARNESS START\r\n"
+	"CE-INFO crashlog: entering the kernel debugger on purpose\r\n"
+	"CE-HOST kdl_reboot\r\nUSER: CE crash test\r\n"
+	"Welcome to Kernel Debugging Land...\r\nkdebug> reboot\r\n"
+	"CE-HARNESS START\r\nCE-HARNESS END\r\n")
+
+
+def crash_checks(serial, entries, unanswered=0):
+	directory = tempfile.mkdtemp()
+	with open(os.path.join(directory, "serial.log"), "w") as serialFile:
+		serialFile.write(serial)
+	report = {"boot": {"expected_kdl": entries,
+		"expected_kdl_unanswered": unanswered}}
+	ce_test.parse_serial(directory, report)
+	ce_test.check_crashlog(directory, report)
+	check = [c for c in report["host_checks"]
+		if c["name"] == "crashlog.debugger_reboots"][0]
+	return check["pass"], report.get("problems", []), \
+		report.get("kernel_debugger"), check["detail"]
+
+ANSWERED = [{"answered": True, "error": None,
+		"message": "PANIC: requested from kdl driver."},
+	{"answered": True, "error": None, "message": "USER: CE crash test"}]
+passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD, ANSWERED)
+expect("crashlog: two answered debugger entries pass", passed and not problems
+	and kdl is None, "%s %s" % (detail, problems))
+passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD,
+	ANSWERED[:1] + [{"answered": False, "error": "no debugger prompt",
+		"message": None}])
+expect("crashlog: an unanswered debugger entry fails", not passed, detail)
+passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
+	"CE-HARNESS START\r\nCE-HARNESS END", "CE-HARNESS END"), ANSWERED)
+expect("crashlog: a reboot that never came back fails", not passed, detail)
+passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD, ANSWERED,
+	unanswered=1)
+expect("crashlog: an announced entry that never came fails", not passed,
+	detail)
+passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
+	"PANIC: requested from kdl driver.", "PANIC: vm_page_fault: bad"),
+	ANSWERED)
+expect("crashlog: another panic inside the announced entry is a problem",
+	len(problems) > 0, str(problems))
+passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
+	"CE-HARNESS END", "PANIC: requested from kdl driver.\r\n"
+	"Welcome to Kernel Debugging Land...\r\nCE-HARNESS END"), ANSWERED)
+expect("crashlog: the same panic outside an announced entry is a problem",
+	len(problems) > 0 and kdl is not None, str(problems))
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

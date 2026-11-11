@@ -176,6 +176,28 @@ platform_allocate_region_below(void **_address, size_t size, phys_addr_t maxAddr
 }
 
 
+/*!	Makes pages the caller allocated from the firmware itself (with
+	AllocatePages(AllocateAddress)) a region of the kernel's address space,
+	like the regions platform_allocate_region() allocates. Renga (F-51): the
+	debug syslog buffer at its fixed physical address.
+*/
+extern "C" status_t
+platform_register_allocated_region(phys_addr_t address, size_t size)
+{
+	memory_region *region = new(std::nothrow) memory_region {
+		next: allocated_regions,
+		vaddr: 0,
+		paddr: address,
+		size: size
+	};
+	if (region == NULL)
+		return B_NO_MEMORY;
+
+	allocated_regions = region;
+	return B_OK;
+}
+
+
 /*!
 	Neither \a virtualAddress nor \a size need to be aligned, but the function
 	will map all pages the range intersects with.

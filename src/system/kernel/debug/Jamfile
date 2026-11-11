@@ -12,6 +12,7 @@ KernelMergeObject kernel_debug.o :
 	blue_screen.cpp
 	BreakpointManager.cpp
 	core_dump.cpp
+	crash_report.cpp
 	debug.cpp
 	debug_builtin_commands.cpp
 	debug_commands.cpp

@@ -250,6 +250,7 @@ SubInclude HAIKU_TOP src bin addattr ;
 SubInclude HAIKU_TOP src bin bfs_tools ;
 SubInclude HAIKU_TOP src bin cddb_lookup ;
 SubInclude HAIKU_TOP src bin consoled ;
+SubInclude HAIKU_TOP src bin crash_collector ;
 SubInclude HAIKU_TOP src bin desklink ;
 SubInclude HAIKU_TOP src bin fat_tools ;
 SubInclude HAIKU_TOP src bin fwcontrol ;

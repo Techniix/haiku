@@ -40,6 +40,24 @@ selection=/boot/system/non-packaged/data/ce-harness/only
 if [ -f "$selection" ]; then
 	echo "CE-INFO selection: $(tr '\n' ' ' < "$selection")"
 fi
+
+# Crash reports (crashlog_test, roadmap F-51) span several boots of the same
+# QEMU session: the end of a run panics on purpose, the harness answers the
+# kernel debugger with "reboot", and the boots after it only check what the
+# crash left (the test keeps its phase in this file).
+final_tests=/boot/system/non-packaged/bin/ce-tests-final
+crash_phase=/boot/system/non-packaged/data/ce-harness/crash-phase
+if [ -f "$crash_phase" ] && [ -x "$final_tests/crashlog_test" ]; then
+	echo "CE-INFO crash phase $(cat "$crash_phase"): only crashlog_test runs"
+	echo "CE-INFO running crashlog_test"
+	"$final_tests/crashlog_test"
+	echo "CE-INFO crashlog_test exited with $?"
+	echo "CE-HARNESS END"
+	sync
+	shutdown -q
+	exit 0
+fi
+
 for test in /boot/system/non-packaged/bin/ce-tests/*; do
 	if [ -f "$selection" ]; then
 		wanted=no
@@ -84,6 +102,27 @@ for test in "$media_tests"/*; do
 	echo "CE-INFO running $(basename "$test")"
 	"$test"
 	echo "CE-INFO $(basename "$test") exited with $?"
+done
+
+# Last: the tests that end the boot (ce-tests-final). crashlog_test --crash
+# checks what it can before a crash, then panics; the next boot runs it again
+# (above). If it returns, the panic did not happen; its checks say so.
+if [ -f /boot/system/non-packaged/data/ce-harness/no-final-tests ]; then
+	echo "CE-INFO tests that end the boot skipped (no-final-tests)"
+	final_tests=/nonexistent
+fi
+for test in "$final_tests"/*; do
+	[ -x "$test" ] || continue
+	if [ -f "$selection" ]; then
+		wanted=no
+		while read -r name; do
+			[ "$name" = "$(basename "$test")" ] && wanted=yes
+		done < "$selection"
+		[ "$wanted" = yes ] || continue
+	fi
+	echo "CE-INFO crash phase starts: $(basename "$test")"
+	"$test" --crash
+	echo "CE-INFO $(basename "$test") returned from its crash phase with $?"
 done
 
 echo "CE-INFO /dev after tests:"

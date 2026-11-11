@@ -48,6 +48,7 @@
 
 #include <syslog_daemon.h>
 
+#include "crash_report.h"
 #include "debug_builtin_commands.h"
 #include "debug_commands.h"
 #include "debug_output_filter.h"
@@ -888,6 +889,10 @@ kernel_debugger_loop(const char* messagePrefix, const char* message,
 			arch_debug_stack_trace();
 	}
 
+	// Renga (F-51): keep a crash report in the syslog buffer for the next
+	// boot.
+	crash_report_write(messagePrefix, message, args, cpu);
+
 	if (has_debugger_command("help")) {
 		// Commands are registered already -- execute panic() commands. Do that
 		// with paging disabled, so everything is printed, even if the user
@@ -1461,6 +1466,21 @@ err1:
 	sSyslogBuffer = NULL;
 	return status;
 }
+
+void
+debug_crash_report_syslog_write(const char* text, int32 length)
+{
+	if (sSyslogBuffer != NULL && sSyslogOutputEnabled)
+		syslog_write(text, length, false);
+}
+
+
+bool
+debug_crash_report_syslog_available()
+{
+	return sSyslogBuffer != NULL && sSyslogOutputEnabled;
+}
+
 
 static void
 syslog_init_post_modules()

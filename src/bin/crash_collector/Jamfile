@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP src bin crash_collector ;
+
+UsePrivateHeaders shared ;
+
+# Renga (roadmap F-51): saves the kernel debugger's crash reports from the
+# previous session's syslog into /boot/system/var/log/crash. Started once
+# per boot by data/launch/crash_collector.
+Application crash_collector :
+	crash_collector.cpp
+	: [ TargetLibstdc++ ]
+;

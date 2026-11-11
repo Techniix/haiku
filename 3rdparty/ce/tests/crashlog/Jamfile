@@ -1,0 +1,20 @@
+SubDir HAIKU_TOP 3rdparty ce tests crashlog ;
+
+UsePrivateHeaders shared ;
+UseBuildFeatureHeaders zlib ;
+
+# Crash reports and System logs (F-51), over three boots: see the source.
+# The runner starts it last, after every other test (ce-tests-final), since
+# its first part ends with a kernel panic and a reboot.
+Application crashlog_test :
+	crashlog_test.cpp
+	: be [ TargetLibstdc++ ] [ BuildFeatureAttribute zlib : library ]
+;
+
+Includes [ FGristFiles crashlog_test.cpp ]
+	: [ BuildFeatureAttribute zlib : headers ] ;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-final
+		: crashlog_test ;
+}

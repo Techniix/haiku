@@ -10,20 +10,26 @@
 
 #include <map>
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
 #include <strings.h>
+#include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <AppMisc.h>
 #include <AutoDeleter.h>
 #include <Autolock.h>
+#include <crash_report_format.h>
 #include <debug_support.h>
 #include <Entry.h>
 #include <FindDirectory.h>
 #include <Invoker.h>
 #include <Path.h>
+#include <String.h>
 
 #include <DriverSettings.h>
 #include <MessengerPrivate.h>
@@ -214,7 +220,9 @@ private:
 
 	void _LookupSymbolAddress(debug_symbol_lookup_context *lookupContext,
 		const void *address, char *buffer, int32 bufferSize);
-	void _PrintStackTrace(thread_id thread);
+	void _PrintStackTrace(thread_id thread, BString* report = NULL);
+	void _WriteCrashReport(thread_id thread, const char* reason,
+		const BString& stackTrace);
 	void _NotifyAppServer(team_id team);
 	void _NotifyRegistrar(team_id team, bool openAlert, bool stopShutdown);
 
@@ -853,7 +861,9 @@ TeamDebugHandler::_HandleMessage(DebugMessage *message)
 	debug_printf("debug_server: Thread %" B_PRId32 " entered the debugger: %s\n",
 		thread, buffer);
 
-	_PrintStackTrace(thread);
+	BString stackTrace;
+	_PrintStackTrace(thread, &stackTrace);
+	_WriteCrashReport(thread, buffer, stackTrace);
 
 	int32 debugAction = kActionPromptUser;
 	bool explicitActionFound = false;
@@ -946,7 +956,7 @@ TeamDebugHandler::_LookupSymbolAddress(
 
 
 void
-TeamDebugHandler::_PrintStackTrace(thread_id thread)
+TeamDebugHandler::_PrintStackTrace(thread_id thread, BString* report)
 {
 	// print a stacktrace
 	void *ip = NULL;
@@ -969,6 +979,10 @@ TeamDebugHandler::_PrintStackTrace(thread_id thread)
 			sizeof(symbolBuffer) - 1);
 
 		debug_printf("stack trace, current PC %p  %s:\n", ip, symbolBuffer);
+		if (report != NULL) {
+			report->SetToFormat("stack trace, current PC %p  %s:\n", ip,
+				symbolBuffer);
+		}
 
 		for (int32 i = 0; i < 50; i++) {
 			debug_stack_frame_info stackFrameInfo;
@@ -984,6 +998,12 @@ TeamDebugHandler::_PrintStackTrace(thread_id thread)
 
 			debug_printf("  (%p)  %p  %s\n", stackFrameInfo.frame,
 				stackFrameInfo.return_address, symbolBuffer);
+			if (report != NULL) {
+				BString line;
+				line.SetToFormat("  (%p)  %p  %s\n", stackFrameInfo.frame,
+					stackFrameInfo.return_address, symbolBuffer);
+				report->Append(line);
+			}
 
 			stackFrameAddress = stackFrameInfo.parent_frame;
 		}
@@ -992,6 +1012,72 @@ TeamDebugHandler::_PrintStackTrace(thread_id thread)
 		if (lookupContext)
 			debug_delete_symbol_lookup_context(lookupContext);
 	}
+}
+
+
+/*!	Renga (F-51): keeps a short report of every application crash in
+	/boot/system/var/log/crash (app-<name>-<date>.txt), where the System logs
+	application lists it next to the kernel's crash reports. It has what
+	debug_server also writes to the syslog: the program, the reason and the
+	crashing thread's stack trace. Debugger's full report ("Save report" in
+	the alert) is still saved to the Desktop as before.
+*/
+void
+TeamDebugHandler::_WriteCrashReport(thread_id thread, const char* reason,
+	const BString& stackTrace)
+{
+	mkdir("/boot/system/var/log", 0755);
+	mkdir(CRASH_REPORT_DIRECTORY, 0755);
+
+	time_t now = time(NULL);
+	struct tm localNow;
+	localtime_r(&now, &localNow);
+	char date[32];
+	strftime(date, sizeof(date), "%Y-%m-%d_%H-%M-%S", &localNow);
+
+	BString name(_LastPathComponent(fExecutablePath[0] != '\0'
+		? fExecutablePath : fTeamInfo.args));
+	// only characters that are safe in a file name
+	for (int32 i = 0; i < name.Length(); i++) {
+		char c = name[i];
+		if (!isalnum((unsigned char)c) && c != '-' && c != '_' && c != '.')
+			name.SetByteAt(i, '_');
+	}
+	if (name.IsEmpty())
+		name = "unknown";
+	name.Truncate(64);
+
+	BString path;
+	path.SetToFormat("%s/app-%s-%s.txt", CRASH_REPORT_DIRECTORY,
+		name.String(), date);
+	for (int32 i = 2; access(path.String(), F_OK) == 0 && i < 100; i++) {
+		path.SetToFormat("%s/app-%s-%s-%" B_PRId32 ".txt",
+			CRASH_REPORT_DIRECTORY, name.String(), date, i);
+	}
+
+	int fd = open(path.String(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+	if (fd < 0) {
+		debug_printf("debug_server: could not write a crash report to %s: "
+			"%s\n", path.String(), strerror(errno));
+		return;
+	}
+
+	char timeString[64];
+	strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &localNow);
+	BString text;
+	text.SetToFormat("Renga application crash report\n"
+		"time: %s\n"
+		"program: %s\n"
+		"command line: %s\n"
+		"team: %" B_PRId32 "\n"
+		"thread: %" B_PRId32 "\n"
+		"reason: %s\n\n",
+		timeString, fExecutablePath, fTeamInfo.args, fTeam, thread, reason);
+	text << stackTrace;
+	write(fd, text.String(), text.Length());
+	close(fd);
+
+	debug_printf("debug_server: crash report saved to %s\n", path.String());
 }
 
 
