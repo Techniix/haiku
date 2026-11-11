@@ -94,6 +94,10 @@ void uninit_wlan_stack(void);
 status_t start_wlan(device_t);
 status_t stop_wlan(device_t);
 status_t wlan_control(void*, uint32, void*, size_t);
+
+typedef status_t (*driver_control_hook)(void* cookie, uint32 op, void* arg,
+	size_t length);
+extern driver_control_hook gDriverControlHook;
 status_t wlan_close(void*);
 
 /* we define the driver methods with HAIKU_FBSD_DRIVERS_GLUE to

@@ -24,6 +24,16 @@
 #include <compat/net/if_media.h>
 
 
+/*
+ * Driver-private ioctl hook. A driver built on this layer may set it (once,
+ * before devices are published) to answer its own range of opcodes; it
+ * returns B_DEV_INVALID_IOCTL for opcodes it does not own. Requests reach
+ * here from the network stack (socket ioctl with an ifreq naming the
+ * interface) with "arg" still a userland pointer.
+ */
+driver_control_hook gDriverControlHook = NULL;
+
+
 static status_t
 compat_open(const char *name, uint32 flags, void **cookie)
 {
@@ -373,6 +383,12 @@ compat_control(void *cookie, uint32 op, void *arg, size_t length)
 			IFF_UNLOCKGIANT(ifp);
 			return status;
 		}
+	}
+
+	if (gDriverControlHook != NULL) {
+		status_t hookStatus = gDriverControlHook(cookie, op, arg, length);
+		if (hookStatus != B_DEV_INVALID_IOCTL)
+			return hookStatus;
 	}
 
 	return wlan_control(cookie, op, arg, length);
