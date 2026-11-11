@@ -88,6 +88,9 @@ public:
 	// Gain ramps: the gain each mixer channel had in the last mixed buffer,
 	// so that a change is spread over the next buffer instead of a step.
 			float				LastMixerChannelGain(int mixerChannel);
+			float				CycleMixerChannelGain(int mixerChannel);
+			void				SetCycleMixerChannelGain(int mixerChannel,
+									float gain);
 			void				SetLastMixerChannelGain(int mixerChannel,
 									float gain);
 
@@ -153,6 +156,8 @@ private:
 			MixerTap*			fSink;
 			MixerTap*			fPreviousSink;
 			float				fLastGain[MAX_CHANNEL_TYPES];
+			float				fCycleGain[MAX_CHANNEL_TYPES];
+				// the gain of this mix cycle, read once at its start
 };
 
 

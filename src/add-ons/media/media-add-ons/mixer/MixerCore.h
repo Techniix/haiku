@@ -118,6 +118,8 @@ private:
 									int64 framePos, bigtime_t eventTime,
 									chan_info_list* inputChanInfos,
 									chan_info_list* mixChanInfos);
+			void				_StartMixCycle(int64 framePos,
+									bigtime_t eventTime);
 			void				_FinishMixCycle(int64 framePos,
 									bigtime_t eventTime);
 			void				_FeedTaps(int64 framePos, bigtime_t eventTime,

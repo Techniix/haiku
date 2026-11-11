@@ -619,6 +619,7 @@ MixerCore::_MixThread()
 			}
 
 			if (tapsReady) {
+				_StartMixCycle(frameBase + framePos, eventTime);
 				_FeedTaps(frameBase + framePos, eventTime, inputChanInfos,
 					&mixChanInfos[0], true);
 			}
@@ -641,6 +642,7 @@ MixerCore::_MixThread()
 
 		// The default output gets the streams not routed to a sink; the
 		// sinks and loopbacks get theirs in _FeedTaps().
+		_StartMixCycle(currentFramePos, eventTime);
 		_Mix(fMixBuffer, kMixPrimary, NULL, NULL, currentFramePos, eventTime,
 			inputChanInfos, &mixChanInfos[0]);
 		_FeedTaps(currentFramePos, eventTime, inputChanInfos,
@@ -844,6 +846,11 @@ MixerCore::_Mix(float* destination, int mode, MixerTap* tap,
 			}
 			if (type < 0 || type >= MAX_CHANNEL_TYPES)
 				continue;
+			// The gain of this cycle, the same for every target (see
+			// _StartMixCycle()).
+			float cycle = input->CycleMixerChannelGain(channel);
+			if (cycle >= 0)
+				gain = cycle;
 			float last = input->LastMixerChannelGain(channel);
 			if (last < 0)
 				last = gain;
@@ -921,11 +928,17 @@ MixerCore::_Mix(float* destination, int mode, MixerTap* tap,
 }
 
 
-/*!	Remembers, per input, the gains and the sink of the cycle just mixed:
-	the starting point of the next cycle's ramps and fades.
+/*!	Reads, per input, the gains for the cycle about to be mixed, once: all
+	targets (default output, sinks, loopbacks) ramp to the same value, and
+	_FinishMixCycle() remembers exactly that value as the next ramp's start.
+	_FinishMixCycle() used to read the gains again after mixing; a volume
+	change that arrived while the cycle was being mixed was then taken as
+	already reached, and the next buffer jumped to it without a ramp
+	(media.click_free_volume failed in 4 of 37 renga-raw runs, a step of
+	0.076 where the tone alone makes 0.060).
 */
 void
-MixerCore::_FinishMixCycle(int64 framePos, bigtime_t eventTime)
+MixerCore::_StartMixCycle(int64 framePos, bigtime_t eventTime)
 {
 	for (int i = 0; MixerInput* input = Input(i); i++) {
 		int count = input->GetMixerChannelCount();
@@ -936,8 +949,25 @@ MixerCore::_FinishMixCycle(int64 framePos, bigtime_t eventTime)
 			float gain;
 			if (input->GetMixerChannelInfo(channel, framePos, eventTime,
 					&base, &sampleOffset, &type, &gain, true)) {
-				input->SetLastMixerChannelGain(channel, gain);
+				input->SetCycleMixerChannelGain(channel, gain);
 			}
+		}
+	}
+}
+
+
+/*!	Remembers, per input, the gains and the sink of the cycle just mixed:
+	the starting point of the next cycle's ramps and fades.
+*/
+void
+MixerCore::_FinishMixCycle(int64 framePos, bigtime_t eventTime)
+{
+	for (int i = 0; MixerInput* input = Input(i); i++) {
+		int count = input->GetMixerChannelCount();
+		for (int channel = 0; channel < count; channel++) {
+			float gain = input->CycleMixerChannelGain(channel);
+			if (gain >= 0)
+				input->SetLastMixerChannelGain(channel, gain);
 		}
 		MixerTap* now = input->Sink();
 		input->SetPreviousSink(now != NULL && now->IsReady() ? now : NULL);

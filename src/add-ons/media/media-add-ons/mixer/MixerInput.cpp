@@ -45,8 +45,11 @@ MixerInput::MixerInput(MixerCore* core, const media_input& input,
 	fSink(NULL),
 	fPreviousSink(NULL)
 {
-	for (int i = 0; i < MAX_CHANNEL_TYPES; i++)
+	for (int i = 0; i < MAX_CHANNEL_TYPES; i++) {
 		fLastGain[i] = -1;
+		fCycleGain[i] = -1;
+	}
+
 
 	fix_multiaudio_format(&fInput.format.u.raw_audio);
 	PRINT_INPUT("MixerInput::MixerInput", fInput);
@@ -773,6 +776,23 @@ MixerInput::LastMixerChannelGain(int mixerChannel)
 	if (mixerChannel < 0 || mixerChannel >= MAX_CHANNEL_TYPES)
 		return -1;
 	return fLastGain[mixerChannel];
+}
+
+
+float
+MixerInput::CycleMixerChannelGain(int mixerChannel)
+{
+	if (mixerChannel < 0 || mixerChannel >= MAX_CHANNEL_TYPES)
+		return -1;
+	return fCycleGain[mixerChannel];
+}
+
+
+void
+MixerInput::SetCycleMixerChannelGain(int mixerChannel, float gain)
+{
+	if (mixerChannel >= 0 && mixerChannel < MAX_CHANNEL_TYPES)
+		fCycleGain[mixerChannel] = gain;
 }
 
 
