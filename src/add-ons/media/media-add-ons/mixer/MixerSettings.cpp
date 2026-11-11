@@ -265,6 +265,7 @@ MixerSettings::SaveConnectionSettings(MixerInput *input)
 	if (input->AppSignature()[0] != '\0')
 		fInputSetting[index].AddString("signature", input->AppSignature());
 	fInputSetting[index].AddString("route", input->Route());
+	fInputSetting[index].AddBool("low_latency", input->LowLatency());
 
 	int count = input->GetInputChannelCount();
 	fInputSetting[index].AddInt32("InputChannelCount", count);
@@ -302,12 +303,30 @@ MixerSettings::LoadConnectionSettings(MixerInput *input)
 	const char* route;
 	if (fInputSetting[index].FindString("route", &route) == B_OK)
 		input->SetRoute(route);
+	input->SetLowLatency(fInputSetting[index].GetBool("low_latency", false));
 
 	// XXX should load channel destinations and mixer channels
 
 	fInputSetting[index].ReplaceInt64("lru", system_time());
 	fLocker->Unlock();
 	StartDeferredSave();
+}
+
+
+BString
+MixerSettings::LowLatencySignatures()
+{
+	BString list;
+	fLocker->Lock();
+	for (int i = 0; i < MAX_INPUT_SETTINGS; i++) {
+		const char* signature;
+		if (fInputSetting[i].GetBool("low_latency", false)
+			&& fInputSetting[i].FindString("signature", &signature) == B_OK) {
+			list << signature << "\n";
+		}
+	}
+	fLocker->Unlock();
+	return list;
 }
 
 

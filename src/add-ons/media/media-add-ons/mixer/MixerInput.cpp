@@ -43,6 +43,7 @@ MixerInput::MixerInput(MixerCore* core, const media_input& input,
 	fUserOverridesChannelDestinations(false),
 	fTeam(-1),
 	fSink(NULL),
+	fLowLatency(false),
 	fPreviousSink(NULL)
 {
 	for (int i = 0; i < MAX_CHANNEL_TYPES; i++) {

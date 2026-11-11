@@ -39,7 +39,8 @@ SoundPlayNode::SoundPlayNode(const char* name, BSoundPlayer* player)
 	fOutputEnabled(true),
 	fBufferGroup(NULL),
 	fFramesSent(0),
-	fTooEarlyCount(0)
+	fTooEarlyCount(0),
+	fPreferredBufferDuration(0)
 {
 	CALLED();
 	fOutput.format.type = B_MEDIA_RAW_AUDIO;
@@ -380,6 +381,17 @@ SoundPlayNode::PrepareToConnect(const media_source& what,
 	default_format.u.raw_audio.buffer_size = 0;
 	format->SpecializeTo(&default_format);
 
+	if (format->u.raw_audio.buffer_size == 0 && fPreferredBufferDuration > 0) {
+		// Renga: low-latency mode (LowLatencyAudio.h), one device period
+		size_t frames = (size_t)(format->u.raw_audio.frame_rate
+			* fPreferredBufferDuration / 1000000.0 + 0.5);
+		if (frames < 16)
+			frames = 16;
+		format->u.raw_audio.buffer_size = frames
+			* format->u.raw_audio.channel_count
+			* (format->u.raw_audio.format
+				& media_raw_audio_format::B_AUDIO_SIZE_MASK);
+	}
 	if (format->u.raw_audio.buffer_size == 0) {
 		format->u.raw_audio.buffer_size
 			= BMediaRoster::Roster()->AudioBufferSizeFor(

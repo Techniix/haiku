@@ -222,7 +222,7 @@ private:
 									int32 index, int32& numParameters);
 			void 				_ProcessMux(BDiscreteParameter* parameter,
 									int32 index);
-			void				_CreateFrequencyParameterGroup(
+			BParameterGroup*	_CreateFrequencyParameterGroup(
 									BParameterGroup* parentGroup,
 									const char* name, int32 parameterID,
 									uint32 rateMask);
@@ -268,6 +268,13 @@ private:
 			float				fInputGainDB;
 			volatile float		fInputGain;
 			bigtime_t			fInputGainChanged;
+
+			// Renga: low-latency mode (headers/private/media/
+			// LowLatencyAudio.h). The user's "Buffer size" (0 automatic)
+			// and the period the system mixer asks for (0 none).
+			status_t			_ApplyBufferFrames();
+			int32				fBufferFramesSetting;
+			int32				fPeriodRequest;
 };
 
 

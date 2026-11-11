@@ -50,6 +50,10 @@ class MixerSettings {
 		void							SaveConnectionSettings(MixerInput *input);
 		void							LoadConnectionSettings(MixerInput *input);
 
+		// Renga: the signatures whose streams use the low-latency mode,
+		// one per line
+		BString							LowLatencySignatures();
+
 		void							SaveConnectionSettings(MixerOutput *output);
 		void							LoadConnectionSettings(MixerOutput *output);
 	

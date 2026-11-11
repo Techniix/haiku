@@ -23,6 +23,8 @@
 
 #include <Referenceable.h>
 
+#include <LowLatencyAudio.h>
+
 #include "MultiAudioUtility.h"
 #ifdef DEBUG
 #	define PRINTING
@@ -39,6 +41,12 @@
 // gain control of its own (virtio_sound, many USB microphones). Far from
 // the small ids drivers use for their mix controls.
 #define PARAMETER_ID_INPUT_GAIN			0x52474e01
+// Renga: the low-latency mode (roadmap F-31, LowLatencyAudio.h): the
+// playback period the user chose (0 automatic) and the period the system
+// mixer asks for while a low-latency stream plays (hidden, not saved).
+#define PARAMETER_ID_BUFFER_FRAMES		0x52474e02
+#define PARAMETER_ID_PERIOD_REQUEST		0x52474e03
+static const int32 kBufferFrameChoices[] = { 128, 256, 512, 1024, 2048, 4096 };
 static const float kMinInputGain = -40.0f;
 static const float kMaxInputGain = 20.0f;
 
@@ -283,7 +291,9 @@ MultiAudioNode::MultiAudioNode(BMediaAddOn* addon, const char* name,
 	fConfig(),
 	fInputGainDB(0.0f),
 	fInputGain(1.0f),
-	fInputGainChanged(0)
+	fInputGainChanged(0),
+	fBufferFramesSetting(0),
+	fPeriodRequest(0)
 {
 	CALLED();
 	fInitStatus = B_NO_INIT;
@@ -1435,6 +1445,16 @@ MultiAudioNode::GetParameterValue(int32 id, bigtime_t* lastChange, void* value,
 		*lastChange = fInputGainChanged;
 		return B_OK;
 	}
+	if (id == PARAMETER_ID_BUFFER_FRAMES || id == PARAMETER_ID_PERIOD_REQUEST) {
+		if (*size < sizeof(int32))
+			return B_NO_MEMORY;
+		int32 frames = id == PARAMETER_ID_BUFFER_FRAMES
+			? fBufferFramesSetting : fPeriodRequest;
+		memcpy(value, &frames, sizeof(int32));
+		*size = sizeof(int32);
+		*lastChange = 0;
+		return B_OK;
+	}
 	BParameter* parameter = NULL;
 	for (int32 i = 0; i < fWeb->CountParameters(); i++) {
 		parameter = fWeb->ParameterAt(i);
@@ -1546,6 +1566,23 @@ MultiAudioNode::SetParameterValue(int32 id, bigtime_t performanceTime,
 		fInputGainChanged = TimeSource() != NULL ? TimeSource()->Now() : 0;
 		BroadcastNewParameterValue(performanceTime, id, &fInputGainDB,
 			sizeof(float));
+		return;
+	}
+
+	if (id == PARAMETER_ID_BUFFER_FRAMES || id == PARAMETER_ID_PERIOD_REQUEST) {
+		if (size < sizeof(int32))
+			return;
+		int32 frames;
+		memcpy(&frames, value, sizeof(int32));
+		if (frames < 0 || frames > 16384)
+			return;
+		if (id == PARAMETER_ID_BUFFER_FRAMES)
+			fBufferFramesSetting = frames;
+		else
+			fPeriodRequest = frames;
+		_ApplyBufferFrames();
+		BroadcastNewParameterValue(performanceTime, id, &frames,
+			sizeof(int32));
 		return;
 	}
 
@@ -1724,15 +1761,41 @@ MultiAudioNode::MakeParameterWeb()
 
 	const multi_description& description = fDevice->Description();
 
+	BParameterGroup* outputGroup;
 	if ((description.output_rates & B_SR_SAME_AS_INPUT) != 0) {
-		_CreateFrequencyParameterGroup(generalGroup,
+		outputGroup = _CreateFrequencyParameterGroup(generalGroup,
 			B_TRANSLATE("Input & Output"), PARAMETER_ID_INPUT_FREQUENCY,
 			description.input_rates);
 	} else {
 		_CreateFrequencyParameterGroup(generalGroup, B_TRANSLATE("Input"),
 			PARAMETER_ID_INPUT_FREQUENCY, description.input_rates);
-		_CreateFrequencyParameterGroup(generalGroup, B_TRANSLATE("Output"),
-			PARAMETER_ID_OUTPUT_FREQUENCY, description.output_rates);
+		outputGroup = _CreateFrequencyParameterGroup(generalGroup,
+			B_TRANSLATE("Output"), PARAMETER_ID_OUTPUT_FREQUENCY,
+			description.output_rates);
+	}
+
+	if (description.output_channel_count > 0) {
+		// Renga: the playback period (low-latency mode, F-31), under the
+		// output frequency
+		BDiscreteParameter* frames = outputGroup->MakeDiscreteParameter(
+			PARAMETER_ID_BUFFER_FRAMES, B_MEDIA_RAW_AUDIO,
+			B_TRANSLATE("Buffer size:"), RENGA_BUFFER_FRAMES_KIND);
+		frames->AddItem(0, B_TRANSLATE("Automatic"));
+		float rate = fOutputPreferredFormat.u.raw_audio.frame_rate;
+		if (rate <= 0)
+			rate = 48000;
+		for (size_t i = 0; i < B_COUNT_OF(kBufferFrameChoices); i++) {
+			BString name;
+			name.SetToFormat(B_TRANSLATE("%" B_PRId32 " frames (%.1f ms)"),
+				kBufferFrameChoices[i], kBufferFrameChoices[i] * 1000.0 / rate);
+			frames->AddItem(kBufferFrameChoices[i], name);
+		}
+		BDiscreteParameter* request = outputGroup->MakeDiscreteParameter(
+			PARAMETER_ID_PERIOD_REQUEST, B_MEDIA_RAW_AUDIO,
+			"Period request", RENGA_PERIOD_REQUEST_KIND);
+		request->AddItem(0, "None");
+		request->AddItem(BPrivate::kLowLatencyPeriodFrames, "Low latency");
+		request->SetFlags(B_HIDDEN_PARAMETER);
 	}
 
 	if (description.input_channel_count > 0) {
@@ -1864,7 +1927,7 @@ MultiAudioNode::_ProcessMux(BDiscreteParameter* parameter, int32 index)
 }
 
 
-void
+BParameterGroup*
 MultiAudioNode::_CreateFrequencyParameterGroup(BParameterGroup* parentGroup,
 	const char* name, int32 parameterID, uint32 rateMask)
 {
@@ -1881,6 +1944,7 @@ MultiAudioNode::_CreateFrequencyParameterGroup(BParameterGroup* parentGroup,
 				BString(info.name) << " Hz");
 		}
 	}
+	return group;
 }
 
 
@@ -2288,6 +2352,12 @@ MultiAudioNode::_FillNextBuffer(multi_buffer_info& info, node_output& output)
 		& media_raw_audio_format::B_AUDIO_SIZE_MASK;
 
 	uint32 bufferSize = fDevice->BufferList().return_record_buffer_size;
+	// Renga: the device's buffers can be set up again with another length
+	// (low-latency mode) while this output keeps its connection's buffers;
+	// never write past them.
+	size_t frameSize = channelCount * outputSampleSize;
+	if (frameSize > 0 && bufferSize * frameSize > buffer->SizeAvailable())
+		bufferSize = buffer->SizeAvailable() / frameSize;
 
 	if (output.fResampler != NULL) {
 		size_t dstStride = channelCount * outputSampleSize;
@@ -2312,7 +2382,8 @@ MultiAudioNode::_FillNextBuffer(multi_buffer_info& info, node_output& output)
 	// fill in the buffer header
 	media_header* header = buffer->Header();
 	header->type = B_MEDIA_RAW_AUDIO;
-	header->size_used = output.fOutput.format.u.raw_audio.buffer_size;
+	header->size_used = min_c(output.fOutput.format.u.raw_audio.buffer_size,
+		bufferSize * frameSize);
 	header->time_source = TimeSource()->ID();
 	header->start_time = PerformanceTimeFor(info.recorded_real_time);
 
@@ -2336,6 +2407,9 @@ MultiAudioNode::GetConfigurationFor(BMessage* message)
 		BParameter* parameter = fWeb->ParameterAt(i);
 		if (parameter->Type() != BParameter::B_CONTINUOUS_PARAMETER
 			&& parameter->Type() != BParameter::B_DISCRETE_PARAMETER)
+			continue;
+		// Renga: the mixer's period request lasts while it runs.
+		if (parameter->ID() == PARAMETER_ID_PERIOD_REQUEST)
 			continue;
 
 		PRINT(("getting parameter %" B_PRIi32 "\n", parameter->ID()));
@@ -2532,6 +2606,96 @@ MultiAudioNode::_SetNodeOutputFrameRate(float frameRate)
 	// update internal latency
 	_UpdateInternalLatency(fInputPreferredFormat);
 
+	return B_OK;
+}
+
+
+/*!	Renga (roadmap F-31, low-latency mode): sets the device's playback
+	period to what the user chose, or, on "Automatic", to the period the
+	system mixer asks for while a low-latency stream plays (the driver's
+	default when it asks for none), the way PipeWire runs a device at the
+	smallest quantum its clients need. The device's buffers are set up
+	again (as after a frame rate change), the time base continues, and the
+	connected producer (the mixer) is asked to change its buffer size;
+	until it has, buffers of the old size are replaced by silence
+	(_FillNextBuffer()), so a switch costs at most a buffer or two.
+*/
+status_t
+MultiAudioNode::_ApplyBufferFrames()
+{
+	int32 frames = fBufferFramesSetting != 0
+		? fBufferFramesSetting : fPeriodRequest;
+	if (fDevice == NULL || fDevice->Description().output_channel_count <= 0)
+		return B_NO_INIT;
+
+	{
+		BAutolock locker(fBufferLock);
+		if ((uint32)frames == fDevice->PlaybackBufferFrames())
+			return B_OK;
+
+		uint32 oldPlayback = fDevice->BufferList().return_playback_buffer_size;
+		uint32 oldRecord = fDevice->BufferList().return_record_buffer_size;
+		status_t status = fDevice->SetPlaybackBufferFrames(frames);
+		if (status != B_OK) {
+			fprintf(stderr, "multi_audio: %s: no %" B_PRId32 "-frame buffers: "
+				"%s\n", Name(), frames, strerror(status));
+			return status;
+		}
+		uint32 playback = fDevice->BufferList().return_playback_buffer_size;
+		uint32 record = fDevice->BufferList().return_record_buffer_size;
+		fprintf(stderr, "multi_audio: %s: playback buffers of %" B_PRIu32
+			" frames (%" B_PRIu32 " before), %" B_PRId32 " of them\n", Name(),
+			playback, oldPlayback,
+			fDevice->BufferList().return_playback_buffers);
+
+		fOutputPreferredFormat.u.raw_audio.buffer_size = playback
+			* (fOutputPreferredFormat.u.raw_audio.format
+				& media_raw_audio_format::B_AUDIO_SIZE_MASK)
+			* fOutputPreferredFormat.u.raw_audio.channel_count;
+		for (int32 i = 0; node_input* channel
+				= (node_input*)fInputs.ItemAt(i); i++) {
+			channel->fPreferredFormat.u.raw_audio.buffer_size
+				= fOutputPreferredFormat.u.raw_audio.buffer_size;
+			channel->fFormat.u.raw_audio.buffer_size
+				= fOutputPreferredFormat.u.raw_audio.buffer_size;
+			channel->fInput.format.u.raw_audio.buffer_size
+				= fOutputPreferredFormat.u.raw_audio.buffer_size;
+		}
+		if (record != oldRecord
+			&& fInputPreferredFormat.u.raw_audio.channel_count > 0) {
+			// Connected recorders keep their buffers; _FillNextBuffer()
+			// fills what fits.
+			fInputPreferredFormat.u.raw_audio.buffer_size = record
+				* (fInputPreferredFormat.u.raw_audio.format
+					& media_raw_audio_format::B_AUDIO_SIZE_MASK)
+				* fInputPreferredFormat.u.raw_audio.channel_count;
+			for (int32 i = 0; node_output* channel
+					= (node_output*)fOutputs.ItemAt(i); i++) {
+				channel->fPreferredFormat.u.raw_audio.buffer_size
+					= fInputPreferredFormat.u.raw_audio.buffer_size;
+			}
+		}
+
+		// The driver counts frames from zero again.
+		fTimeComputer.ResetTimeBase();
+		_UpdateInternalLatency(fOutputPreferredFormat);
+	}
+
+	for (int32 i = 0; i < fInputs.CountItems(); i++) {
+		node_input* channel = (node_input*)fInputs.ItemAt(i);
+		if (channel->fInput.source == media_source::null)
+			continue;
+		channel->Flush();
+
+		media_format newFormat = channel->fInput.format;
+		int32 changeTag = 0;
+		status_t error = RequestFormatChange(channel->fInput.source,
+			channel->fInput.destination, newFormat, NULL, &changeTag);
+		if (error != B_OK) {
+			fprintf(stderr, "multi_audio: %s: buffer size change refused: "
+				"%s\n", Name(), strerror(error));
+		}
+	}
 	return B_OK;
 }
 

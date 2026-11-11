@@ -16,10 +16,14 @@
 #include <Autolock.h>
 #include <MediaRoster.h>
 #include <ParameterWeb.h>
+#include <Roster.h>
+#include <String.h>
+#include <stdlib.h>
 #include <Sound.h>
 #include <TimeSource.h>
 
 #include "SoundPlayNode.h"
+#include <LowLatencyAudio.h>
 
 #include "MediaDebug.h"
 
@@ -723,6 +727,53 @@ status_t BSoundPlayer::_Reserved_SoundPlayer_6(void*, ...) { return B_ERROR; }
 status_t BSoundPlayer::_Reserved_SoundPlayer_7(void*, ...) { return B_ERROR; }
 
 
+/*!	Renga: whether this application plays in the low-latency mode: the
+	environment asks for it, or the system mixer lists its signature (its
+	"Low latency" switch in the audio settings). Only for the system mixer.
+*/
+static bool
+wants_low_latency(const media_node& mixer, bool systemMixer)
+{
+	const char* environment = getenv(RENGA_LOW_LATENCY_ENVIRONMENT);
+	if (environment != NULL)
+		return strcmp(environment, "1") == 0;
+	if (!systemMixer)
+		return false;
+
+	app_info info;
+	thread_info thread;
+	if (get_thread_info(find_thread(NULL), &thread) != B_OK
+		|| be_roster->GetRunningAppInfo(thread.team, &info) != B_OK
+		|| info.signature[0] == '\0') {
+		return false;
+	}
+
+	BParameterWeb* web = NULL;
+	if (BMediaRoster::Roster()->GetParameterWebFor(mixer, &web) != B_OK)
+		return false;
+	bool found = false;
+	for (int32 i = 0; i < web->CountParameters(); i++) {
+		BParameter* parameter = web->ParameterAt(i);
+		if (strcmp(parameter->Kind(), RENGA_LOW_LATENCY_APPS_KIND) != 0)
+			continue;
+		char list[4096];
+		size_t size = sizeof(list) - 1;
+		bigtime_t when;
+		if (parameter->GetValue(list, &size, &when) == B_OK) {
+			list[min_c(size, sizeof(list) - 1)] = '\0';
+			BString needle;
+			needle << "\n" << info.signature << "\n";
+			BString haystack;
+			haystack << "\n" << list;
+			found = haystack.IFindFirst(needle) >= 0;
+		}
+		break;
+	}
+	delete web;
+	return found;
+}
+
+
 void
 BSoundPlayer::_Init(const media_node* node,
 	const media_multi_audio_format* format, const char* name,
@@ -844,6 +895,18 @@ BSoundPlayer::_Init(const media_node* node,
 		return;
 	}
 
+	// Renga: low-latency mode (LowLatencyAudio.h). Applications switched to
+	// it in the audio settings, or run with RENGA_AUDIO_LOW_LATENCY=1, get
+	// buffers of one low-latency period unless they chose a buffer size.
+	bool lowLatency = wants_low_latency(inputNode,
+		(fFlags & F_MUST_RELEASE_MIXER) != 0);
+	if (lowLatency && format->buffer_size
+			== media_multi_audio_format::wildcard.buffer_size) {
+		fPlayerNode->SetPreferredBufferDuration(
+			(bigtime_t)(BPrivate::kLowLatencyPeriodFrames * 1000000LL
+				/ BPrivate::kLowLatencyPeriodRate));
+	}
+
 	// setup our requested format (can still have many wildcards)
 	tryFormat.type = B_MEDIA_RAW_AUDIO;
 	tryFormat.u.raw_audio = *format;
@@ -866,6 +929,25 @@ BSoundPlayer::_Init(const media_node* node,
 	fFlags |= F_NODES_CONNECTED;
 
 	_GetVolumeSlider();
+
+	if (lowLatency && node == NULL) {
+		// Asked for by the environment: switch the mixer stream too, so
+		// that the sound card runs with short periods.
+		const char* environment = getenv(RENGA_LOW_LATENCY_ENVIRONMENT);
+		if (environment != NULL && strcmp(environment, "1") == 0
+			&& fParameterWeb != NULL) {
+			for (int32 i = 0; i < fParameterWeb->CountParameters(); i++) {
+				BParameter* parameter = fParameterWeb->ParameterAt(i);
+				if ((parameter->ID() >> 16) == fMediaInput.destination.id
+					&& strcmp(parameter->Kind(), RENGA_LOW_LATENCY_KIND)
+						== 0) {
+					int32 on = 1;
+					parameter->SetValue(&on, sizeof(on), 0);
+					break;
+				}
+			}
+		}
+	}
 
 	TRACE("BSoundPlayer node %" B_PRId32 " has timesource %" B_PRId32 "\n",
 		fPlayerNode->Node().node, fPlayerNode->TimeSource()->Node().node);

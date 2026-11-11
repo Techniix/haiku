@@ -836,5 +836,42 @@ results = installer_checks(GOOD_SETUP, GOOD_BOOTS, "")
 expect("installer: no state chosen fails",
 	not results["installer.old_state_chosen"])
 
+
+# The low-latency mode's tone on the default output (sound_latency_test).
+def latency_check(frames):
+	directory = tempfile.mkdtemp()
+	write_wav(os.path.join(directory, "audio.wav"), frames)
+	report = {}
+	ce_test.analyze_latency_audio(directory, report)
+	return [c for c in report["host_checks"]
+		if c["name"] == "media_latency.device_continuous"][0]
+
+
+def gapped(frames, positions, length):
+	frames = list(frames)
+	for position in positions:
+		frames[position:position + length] = [(0, 0)] * length
+	return frames
+
+
+latency_tone = tone(3100, 3300, 6.0)
+check = latency_check(silence(0.5) + latency_tone + silence(0.5))
+expect("latency: a clean low-latency tone passes", check["pass"],
+	check["detail"])
+check = latency_check(silence(0.5) + gapped(latency_tone, [96000], 256)
+	+ silence(0.5))
+expect("latency: one dropped period is tolerated", check["pass"],
+	check["detail"])
+check = latency_check(silence(0.5) + gapped(latency_tone, [48000, 144000],
+	256) + silence(0.5))
+expect("latency: two dropped periods fail", not check["pass"],
+	check["detail"])
+check = latency_check(silence(0.5) + gapped(latency_tone, [96000], 2048)
+	+ silence(0.5))
+expect("latency: a long dropout fails", not check["pass"], check["detail"])
+check = latency_check(silence(0.5) + tone(3100, 3300, 3.0) + silence(0.5))
+expect("latency: a tone too short (cut off) fails", not check["pass"],
+	check["detail"])
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

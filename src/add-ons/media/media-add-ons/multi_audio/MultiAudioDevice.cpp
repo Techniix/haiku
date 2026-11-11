@@ -22,6 +22,7 @@ MultiAudioDevice::MultiAudioDevice(const char* name, const char* path)
 {
 	CALLED();
 
+	fRequestedPlaybackFrames = 0;
 	strlcpy(fPath, path, B_PATH_NAME_LENGTH);
 	PRINT(("name: %s, path: %s\n", name, fPath));
 
@@ -111,6 +112,27 @@ MultiAudioDevice::SetOutputFrameRate(uint32 multiAudioRate)
 	}
 
 	return _GetBuffers();
+}
+
+
+/*!	Renga (roadmap F-31, low-latency mode): asks the driver for playback
+	buffers (periods) of \a frames frames, or its default for 0, and sets
+	the buffers up again. Drivers may round or refuse the request; what
+	they chose is in BufferList().return_playback_buffer_size. The record
+	buffers keep the driver's default length (some drivers, virtio_sound,
+	give them the playback length anyway).
+*/
+status_t
+MultiAudioDevice::SetPlaybackBufferFrames(uint32 frames)
+{
+	uint32 old = fRequestedPlaybackFrames;
+	fRequestedPlaybackFrames = frames;
+	status_t status = _GetBuffers();
+	if (status != B_OK) {
+		fRequestedPlaybackFrames = old;
+		_GetBuffers();
+	}
+	return status;
 }
 
 
@@ -260,8 +282,8 @@ MultiAudioDevice::_GetBuffers()
 		fRecordBuffers[i] = &fRecordBufferList[i * MAX_CHANNELS];
 	}
 	fBufferList.info_size = sizeof(multi_buffer_list);
-	fBufferList.request_playback_buffer_size = 0;
-		// use the default...
+	fBufferList.request_playback_buffer_size = fRequestedPlaybackFrames;
+		// 0: use the default...
 	fBufferList.request_playback_buffers = MAX_BUFFERS;
 	fBufferList.request_playback_channels = fDescription.output_channel_count;
 	fBufferList.playback_buffers = (buffer_desc **) fPlayBuffers;

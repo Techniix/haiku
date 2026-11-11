@@ -157,6 +157,17 @@ CODYCAM_SCREENSHOTS = ["codycam_preview", "codycam_switched"]
 # and Screenshot while it records.
 CAPTURE_SCREENSHOTS = ["capture_prompt", "capture_indicator",
 	"capture_settings", "screenshot_recording"]
+# The low-latency mode (F-31): the audio settings with a game's "Low
+# latency" switch on, and the default output's page with "Buffer size".
+LATENCY_SCREENSHOTS = ["media_low_latency", "media_buffer_size"]
+# sound_latency_test's tone in low-latency mode (left, right Hz), at least
+# this long on the default output.
+LATENCY_TONE = (3100, 3300)
+LATENCY_TONE_SECONDS = 5.0
+# Runs of zero samples longer than this inside it are gaps (a period the
+# card did not get in time shows as hundreds); see analyze_latency_audio().
+LATENCY_MAX_ZERO_RUN = 16
+LATENCY_MAX_GAP = 4 * 256
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 # The Installer with a destination that has an installation (F-23).
@@ -180,6 +191,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"video_producer_demo.media_addon", "media_video_test",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
+	"sound_latency_test", "libmedia.so",
 	"SoundRecorder", "media_addon_server"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
@@ -3058,6 +3070,81 @@ def analyze_media_usb_audio(results_dir, report):
 					if segment else "not found", seconds)})
 
 
+def zero_runs(samples, start, end, minimum):
+	"""Runs of more than \a minimum zero samples in samples[start:end]:
+	(count, longest)."""
+	count = longest = run = 0
+	for x in samples[start:end]:
+		if x == 0:
+			run += 1
+			if run == minimum + 1:
+				count += 1
+			longest = max(longest, run)
+		else:
+			run = 0
+	return count, longest
+
+
+def analyze_latency_audio(results_dir, report):
+	"""sound_latency_test's tone in low-latency mode (LATENCY_TONE) on the
+	default output (whichever card that is at the end of the Media Kit
+	tests): every piece of it at least LATENCY_TONE_SECONDS long may have
+	at most one gap (a run of more than LATENCY_MAX_ZERO_RUN zero samples:
+	a period the card did not get in time is played as silence), of at
+	most LATENCY_MAX_GAP samples. QEMU without KVM runs the guest slowly
+	and its audio timer ticks every 10 ms, hence one gap is tolerated; the
+	guest test applies the same rule to the mix."""
+	files = [os.path.join(results_dir, "audio.wav"),
+		os.path.join(results_dir, "sdl-out.raw")] + sorted(
+		glob.glob(os.path.join(results_dir, "usb-*.wav")))
+	found = []
+	for path in files:
+		if not os.path.exists(path):
+			continue
+		reader = read_raw_audio if path.endswith(".raw") else read_wav
+		try:
+			rate, samples, segments = media_segments(path, reader,
+				list(LATENCY_TONE) + [2000])
+		except (OSError, ValueError, struct.error):
+			continue
+		# Pieces of the tone a window or two apart are one: a dropped
+		# period makes its 100 ms window look like something else.
+		spans = []
+		for segment in segments:
+			if segment["key"] != LATENCY_TONE:
+				continue
+			first = segment["start"]
+			last = segment["start"] + len(segment["windows"])
+			if spans and first - spans[-1][1] <= 2:
+				spans[-1][1] = last
+			else:
+				spans.append([first, last])
+		window = rate // 10
+		for first, last in spans:
+			seconds = (last - first) / 10.0
+			if seconds < LATENCY_TONE_SECONDS:
+				continue
+			# the interior: the first and last window can be partial
+			gaps, longest = zero_runs(samples[0], (first + 1) * window,
+				(last - 1) * window, LATENCY_MAX_ZERO_RUN)
+			found.append((os.path.basename(path), seconds, gaps, longest))
+	if not found:
+		passed = False
+		detail = "no %d/%d Hz tone of %.1f s or more on any card" % (
+			LATENCY_TONE + (LATENCY_TONE_SECONDS,))
+	else:
+		passed = all(gaps <= 1 and longest <= LATENCY_MAX_GAP
+			for _, _, gaps, longest in found)
+		detail = "; ".join("%s: %.1f s of the %d/%d Hz tone, %d gap(s), " \
+			"longest run of zeros %d samples" % ((name, seconds)
+				+ LATENCY_TONE + (gaps, longest))
+			for name, seconds, gaps, longest in found) \
+			+ " (at most one gap of %d)" % LATENCY_MAX_GAP
+	report.setdefault("host_checks", []).append({
+		"name": "media_latency.device_continuous", "pass": passed,
+		"detail": detail})
+
+
 # Screenshots media_ui_test asks for (CE-HOST screenshot): the
 # per-application audio controls (F-31/F-32).
 MEDIA_UI_SCREENSHOTS = ["volume_popup", "media_preferences",
@@ -3440,6 +3527,10 @@ def main():
 		if "screen_capture_test" in (args.only or available):
 			check_screenshots(results_dir, report, CAPTURE_SCREENSHOTS,
 				"capture.screenshots")
+		if "sound_latency_test" in (args.only or available):
+			analyze_latency_audio(results_dir, report)
+			check_screenshots(results_dir, report, LATENCY_SCREENSHOTS,
+				"media_latency.screenshots")
 		if "installer_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, INSTALLER_SCREENSHOTS,
 				"installer_ui.screenshots")

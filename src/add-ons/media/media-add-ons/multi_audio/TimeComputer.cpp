@@ -48,6 +48,22 @@ TimeComputer::SetFrameRate(float frameRate)
 }
 
 
+/*!	Renga: the device's buffers were set up again (a new period length),
+	so its frame counter starts from zero. The performance time goes on
+	from where it is, as after a frame rate change.
+*/
+static const bigtime_t kMinDriftSpan = 100000;
+
+
+void
+TimeComputer::ResetTimeBase()
+{
+	fResetTimeBase = true;
+	fFirstEntry = 0;
+	fLastEntry = 0;
+}
+
+
 void
 TimeComputer::AddTimeStamp(bigtime_t realTime, uint64 frames)
 {
@@ -55,6 +71,13 @@ TimeComputer::AddTimeStamp(bigtime_t realTime, uint64 frames)
 		+ bigtime_t((realTime - fRealTime) * fDrift);
 
 	fRealTime = realTime;
+
+	// Renga: the device's frame counter went back (its buffers were set up
+	// again, see ResetTimeBase()); the first exchanges after that can still
+	// report the old count. Start a new base instead of computing with a
+	// negative frame difference.
+	if (frames < fFrameBase)
+		fResetTimeBase = true;
 
 	if (fResetTimeBase) {
 		// use the extrapolated performance time at the given real time
@@ -77,9 +100,20 @@ TimeComputer::AddTimeStamp(bigtime_t realTime, uint64 frames)
 	// performance time.
 	fPerformanceTime = (performanceTime + estimatedPerformanceTime) / 2;
 
+	// Renga: the drift only from at least kMinDriftSpan of history. Right
+	// after a (re)start a device can hand back its first buffers almost at
+	// once; the drift over such a short span came out at many times 1, and
+	// the estimate above then moved the performance time by seconds (seen
+	// in the harness when the low-latency mode set the buffers up again:
+	// steps of 9 to 51 s). A sound card's clock is within a percent of the
+	// system's, so anything outside 0.9 to 1.1 is a measurement error too.
 	Entry& entry = fEntries[fFirstEntry];
-	fDrift = double(fPerformanceTime - entry.performanceTime)
-		/ double(fRealTime - entry.realTime);
+	if (fRealTime - entry.realTime >= kMinDriftSpan) {
+		double drift = double(fPerformanceTime - entry.performanceTime)
+			/ double(fRealTime - entry.realTime);
+		if (drift >= 0.9 && drift <= 1.1)
+			fDrift = drift;
+	}
 }
 
 

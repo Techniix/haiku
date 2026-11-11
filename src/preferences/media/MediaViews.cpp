@@ -334,6 +334,8 @@ AudioSettingsView::AudioSettingsView()
 	applicationsBox->SetLabel(B_TRANSLATE("Applications"));
 	fApplications = new ApplicationVolumesView("applicationVolumes",
 		gShowAdvancedAudio);
+	// Low-latency mode per application (F-31): for games and emulators.
+	fApplications->SetShowLowLatency(true);
 	fRoutingCheckBox = new BCheckBox("routing",
 		B_TRANSLATE("Choose the output for each application (advanced)"),
 		new BMessage(ML_SHOW_AUDIO_ROUTING));

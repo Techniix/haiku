@@ -554,6 +554,30 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   (the preview built again in the same window, the old node released),
   quit. Screenshots `codycam_preview` and `codycam_switched`, checked by
   the harness (`codycam.screenshots`).
+- **media_latency** (`sound_latency_test`, renga-* images, last of the
+  Media Kit tests): the low-latency audio mode (roadmap F-31,
+  `headers/private/media/LowLatencyAudio.h`). A child process plays
+  through `BSoundPlayer` with the buffer size left open, logs every
+  callback and five 2 kHz bursts, each with `system_time()` at the start
+  of its callback; the test records the mix through the loopback and
+  converts each burst's performance time to real time with the mixer's
+  time source as the buffer arrives: the latency from the callback to the
+  card's playout as the Media Kit schedules it (the card's clock, not an
+  acoustic measurement). Phases: normal mode (10 ms callbacks); the
+  "Low latency" switch set through the mixer (the default output asked
+  for 256-frame periods, the mixer's buffers following, the output's
+  clock without steps); low-latency mode (callbacks of exactly 256 frames,
+  steady, at most half the normal latency and 30 ms, a 6 s tone at
+  3100/3300 Hz in the mix with at most one gap); the switch off (the card
+  back to its default period after the game); `RENGA_AUDIO_LOW_LATENCY=1`;
+  the device's "Buffer size" fixed at 512 frames and back; the Media
+  preferences with the switch on and the device page (screenshots
+  `media_low_latency`, `media_buffer_size`). On the host,
+  `media_latency.device_continuous` looks for the tone on every card's
+  recording: each piece of 5 s or more may have at most one gap (QEMU
+  without KVM runs the guest slowly and ticks its audio every 10 ms), and
+  `media_latency.screenshots` checks the two screenshots. Measured in the
+  harness (TCG): about 50-80 ms normally, 16-25 ms in low-latency mode.
 - **hda_eld**: the hda driver's ELD parser (HDMI/DisplayPort sinks:
   monitor name, connection type, LPCM channels, rates and sizes, other
   formats, speaker allocation, the output name and the multi_audio

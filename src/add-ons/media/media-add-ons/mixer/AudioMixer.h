@@ -154,6 +154,9 @@ private:
 									media_node_id primaryNode);
 			void				_RemoveSink(MixerTap* tap);
 			void				_ScanOutputDevices(BStringList& names);
+			void				_UpdatePeriodRequest(media_node_id primaryNode);
+			status_t			_SetPeriodRequest(media_node_id nodeID,
+									int32 frames);
 
 			BMediaAddOn*		fAddOn;
 			MixerCore*			fCore;
@@ -177,6 +180,12 @@ private:
 			// when: not reclaimed for a while (the default output may be
 			// switching to it).
 			BMessage			fLostDevices;	// name: int64 time
+			// Low-latency mode: the device asked for short periods, the
+			// period asked for, and when a low-latency stream was last
+			// connected (router thread only).
+			media_node_id		fPeriodNode;
+			int32				fPeriodRequested;
+			bigtime_t			fLowLatencySeen;
 
 	static	AudioMixer*			sSystemMixer;
 	static	BLocker				sSystemMixerLock;

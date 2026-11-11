@@ -27,6 +27,8 @@
 #include <Roster.h>
 #include <TimeSource.h>
 
+#include <LowLatencyAudio.h>
+
 #include "MixerCore.h"
 #include "MixerInput.h"
 #include "MixerOutput.h"
@@ -77,6 +79,15 @@
 #define PARAM_APP(id)						(((id) << 16) | 0xb)
 #define PARAM_OUTPUT(id)					(((id) << 16) | 0xc)
 #define PARAM_IS_OUTPUT(id)					(((id) & 0xf) == 0xc)
+// Renga: a stream's low-latency switch (LowLatencyAudio.h)
+#define PARAM_LOW_LATENCY(id)				(((id) << 16) | 0xd)
+#define PARAM_IS_LOW_LATENCY(id)			(((id) & 0xf) == 0xd)
+// Renga: the signatures in low-latency mode (hidden text, read only)
+#define PARAM_ETC_LOW_LATENCY_APPS			100
+// How long the default output keeps short periods after the last
+// low-latency stream went (a program that closes and opens its player again
+// does not make the device switch back and forth).
+static const bigtime_t kLowLatencyHold = 1500000;
 
 // How often the router looks at routes, sinks and output devices when
 // nothing wakes it, and how long a device whose sink someone else
@@ -135,7 +146,10 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 	fIsSystemMixer(isSystemMixer),
 	fRouterThread(-1),
 	fRouterSem(-1),
-	fRouterQuit(false)
+	fRouterQuit(false),
+	fPeriodNode(-1),
+	fPeriodRequested(0),
+	fLowLatencySeen(0)
 {
 	BMediaNode::AddNodeKind(B_SYSTEM_MIXER);
 
@@ -1494,6 +1508,16 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 				*ioSize = sizeof(int32);
 				static_cast<int32 *>(value)[0] = fCore->Settings()->RefuseInputFormatChange();
 				break;
+			case PARAM_ETC_LOW_LATENCY_APPS:
+			{
+				// Renga: the signatures in low-latency mode, one per line
+				BString list = fCore->Settings()->LowLatencySignatures();
+				if (*ioSize < (size_t)list.Length() + 1)
+					goto err;
+				memcpy(value, list.String(), list.Length() + 1);
+				*ioSize = list.Length() + 1;
+				break;
+			}
 			default:
 				ERROR("unhandled ETC 0x%08lx\n", id);
 				break;
@@ -1573,7 +1597,7 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 		for (int i = 0; (input = fCore->Input(i)); i++)
 			if (input->ID() == param)
 				break;
-		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id) && !PARAM_IS_OUTPUT(id)))
+		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id) && !PARAM_IS_OUTPUT(id) && !PARAM_IS_LOW_LATENCY(id)))
 			goto err;
 		if (PARAM_IS_MUTE(id)) {
 			// input mute control
@@ -1581,6 +1605,12 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 				goto err;
 			*ioSize = sizeof(int32);
 			static_cast<int32 *>(value)[0] = !input->IsEnabled();
+		}
+		if (PARAM_IS_LOW_LATENCY(id)) {
+			if (*ioSize < sizeof(int32))
+				goto err;
+			*ioSize = sizeof(int32);
+			static_cast<int32 *>(value)[0] = input->LowLatency() ? 1 : 0;
 		}
 		if (PARAM_IS_OUTPUT(id)) {
 			// output device: 0 default, n the n-th device of the web's list,
@@ -1813,13 +1843,19 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 		for (int i = 0; (input = fCore->Input(i)); i++)
 			if (input->ID() == param)
 				break;
-		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id) && !PARAM_IS_OUTPUT(id)))
+		if (!input || (!PARAM_IS_MUTE(id) && !PARAM_IS_GAIN(id) && !PARAM_IS_DST_ENABLE(id) && !PARAM_IS_BALANCE(id) && !PARAM_IS_OUTPUT(id) && !PARAM_IS_LOW_LATENCY(id)))
 			goto err;
 		if (PARAM_IS_MUTE(id)) {
 			// input mute control
 			if (size != sizeof(int32))
 				goto err;
 			input->SetEnabled(!static_cast<const int32 *>(value)[0]);
+		}
+		if (PARAM_IS_LOW_LATENCY(id)) {
+			if (size != sizeof(int32))
+				goto err;
+			input->SetLowLatency(static_cast<const int32 *>(value)[0] != 0);
+			wakeRouter = true;
 		}
 		if (PARAM_IS_OUTPUT(id)) {
 			// output device, see GetParameterValue()
@@ -2053,6 +2089,11 @@ AudioMixer::UpdateParameterWeb()
 			dp->AddItem(fOutputDevices.CountStrings() + 1,
 				unavailable.String());
 		}
+		dp = group->MakeDiscreteParameter(PARAM_LOW_LATENCY(in->ID()),
+			B_MEDIA_RAW_AUDIO, B_TRANSLATE("Low latency"),
+			RENGA_LOW_LATENCY_KIND);
+		dp->AddItem(0, B_TRANSLATE("Off"));
+		dp->AddItem(1, B_TRANSLATE("On"));
 		group->MakeNullParameter(PARAM_STR3(in->ID()), B_MEDIA_RAW_AUDIO,
 			B_TRANSLATE("To master"), B_WEB_BUFFER_OUTPUT);
 	}
@@ -2134,6 +2175,10 @@ AudioMixer::UpdateParameterWeb()
 		B_TRANSLATE("Input gain controls represent:"), B_INPUT_MUX);
 	dp->AddItem(0, B_TRANSLATE("Physical input channels"));
 	dp->AddItem(1, B_TRANSLATE("Virtual output channels"));
+
+	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_LOW_LATENCY_APPS),
+		B_MEDIA_RAW_AUDIO, "Low-latency applications",
+		RENGA_LOW_LATENCY_APPS_KIND, 4096)->SetFlags(B_HIDDEN_PARAMETER);
 
 	dp = group->MakeDiscreteParameter(PARAM_ETC(70), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Resampling algorithm:"), B_INPUT_MUX);
@@ -2413,8 +2458,80 @@ AudioMixer::_RouteOnce()
 		_CreateSink(name, primaryNode);
 	}
 
+	_UpdatePeriodRequest(primaryNode);
+
 	if (webChanged)
 		UpdateParameterWeb();
+}
+
+
+/*!	The low-latency mode (LowLatencyAudio.h): while a stream switched to
+	low latency is connected (and kLowLatencyHold after the last one went),
+	the default output is asked for short periods; otherwise for none. A
+	new default output gets the request, the old one is released. Streams
+	routed to other devices through sinks do not change those devices.
+*/
+void
+AudioMixer::_UpdatePeriodRequest(media_node_id primaryNode)
+{
+	if (!fIsSystemMixer)
+		return;
+
+	bool lowLatency = false;
+	fCore->Lock();
+	for (int32 i = 0; MixerInput* input = fCore->Input(i); i++) {
+		if (input->LowLatency())
+			lowLatency = true;
+	}
+	fCore->Unlock();
+
+	bigtime_t now = system_time();
+	if (lowLatency)
+		fLowLatencySeen = now;
+	int32 frames = lowLatency || (fPeriodRequested != 0
+			&& now - fLowLatencySeen < kLowLatencyHold)
+		? BPrivate::kLowLatencyPeriodFrames : 0;
+
+	if (primaryNode != fPeriodNode) {
+		if (fPeriodNode >= 0 && fPeriodRequested != 0)
+			_SetPeriodRequest(fPeriodNode, 0);
+		fPeriodNode = primaryNode;
+		fPeriodRequested = 0;
+	}
+	if (fPeriodNode < 0 || frames == fPeriodRequested)
+		return;
+	if (_SetPeriodRequest(fPeriodNode, frames) == B_OK) {
+		fPeriodRequested = frames;
+		printf("AudioMixer: asked the default output for %s periods\n",
+			frames != 0 ? "low-latency" : "its default");
+	}
+	// While held, the router's periodic run (kRouterInterval) releases it.
+}
+
+
+status_t
+AudioMixer::_SetPeriodRequest(media_node_id nodeID, int32 frames)
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_node node;
+	status_t status = roster->GetNodeFor(nodeID, &node);
+	if (status != B_OK)
+		return status;
+	BParameterWeb* web = NULL;
+	status = roster->GetParameterWebFor(node, &web);
+	if (status == B_OK) {
+		status = B_NOT_SUPPORTED;
+		for (int32 i = 0; i < web->CountParameters(); i++) {
+			BParameter* parameter = web->ParameterAt(i);
+			if (strcmp(parameter->Kind(), RENGA_PERIOD_REQUEST_KIND) == 0) {
+				status = parameter->SetValue(&frames, sizeof(frames), 0);
+				break;
+			}
+		}
+		delete web;
+	}
+	roster->ReleaseNode(node);
+	return status;
 }
 
 

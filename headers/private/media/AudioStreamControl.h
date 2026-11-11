@@ -19,7 +19,9 @@
 	- a B_MUTE discrete parameter, a B_GAIN continuous parameter (one value
 	  per channel, in dB, or one value plus a B_BALANCE parameter),
 	- a B_OUTPUT_MUX discrete parameter "Output": 0 the default output, n
-	  the n-th output device (Renga mixers only).
+	  the n-th output device (Renga mixers only),
+	- a discrete parameter of kind "renga:low_latency" "Low latency": 0 off,
+	  1 on (Renga mixers only; LowLatencyAudio.h).
 	The stream's mixer input id is the parameters' id >> 16, as the mixer
 	encodes them. The loopback ("What you hear") is a flavor of the mixer
 	add-on; StartLoopback() instantiates one and selects whose streams it
@@ -56,6 +58,8 @@ struct AudioStream {
 	bool		muted;
 	int32		output;			// index into AudioStreamControl::Outputs()
 	bool		hasOutput;		// the mixer offers routing
+	bool		lowLatency;		// low-latency mode switched on
+	bool		hasLowLatency;	// the mixer offers the low-latency mode
 };
 
 
@@ -153,6 +157,16 @@ public:
 		if (parameter == NULL)
 			return B_ENTRY_NOT_FOUND;
 		int32 value = muted ? 1 : 0;
+		return parameter->SetValue(&value, sizeof(value), system_time());
+	}
+
+	//!	Switches the low-latency mode of a stream's application.
+	status_t SetLowLatency(int32 id, bool on)
+	{
+		BParameter* parameter = _Find(id, "renga:low_latency", true);
+		if (parameter == NULL)
+			return B_ENTRY_NOT_FOUND;
+		int32 value = on ? 1 : 0;
 		return parameter->SetValue(&value, sizeof(value), system_time());
 	}
 
@@ -256,6 +270,8 @@ private:
 		stream.muted = false;
 		stream.output = 0;
 		stream.hasOutput = false;
+		stream.lowLatency = false;
+		stream.hasLowLatency = false;
 		bool isStream = false;
 
 		for (int32 i = 0; i < group->CountParameters(); i++) {
@@ -269,7 +285,13 @@ private:
 				isStream = true;
 			} else if (strcmp(kind, RENGA_APP_SIGNATURE_KIND) == 0)
 				stream.signature = parameter->Name();
-			else if (strcmp(kind, B_MUTE) == 0) {
+			else if (strcmp(kind, "renga:low_latency") == 0
+				&& parameter->Type() == BParameter::B_DISCRETE_PARAMETER) {
+				int32 value = 0;
+				stream.hasLowLatency = true;
+				if (_Value(parameter, &value, sizeof(value)))
+					stream.lowLatency = value != 0;
+			} else if (strcmp(kind, B_MUTE) == 0) {
 				int32 value = 0;
 				if (_Value(parameter, &value, sizeof(value)))
 					stream.muted = value != 0;

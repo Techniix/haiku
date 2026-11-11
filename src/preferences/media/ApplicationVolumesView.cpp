@@ -30,6 +30,7 @@ static const uint32 kMsgRefresh = 'avRf';
 static const uint32 kMsgVolume = 'avVl';
 static const uint32 kMsgMute = 'avMt';
 static const uint32 kMsgOutput = 'avOt';
+static const uint32 kMsgLowLatency = 'avLL';
 
 // The mixer's gain range (its slider scale, see PORTING.md), in tenths.
 static const int32 kMinGain = -600;
@@ -68,6 +69,7 @@ struct ApplicationVolumesView::Row {
 	BSlider*		volume;
 	BCheckBox*		mute;
 	BMenuField*		output;
+	BCheckBox*		lowLatency;
 	bigtime_t		changed;
 };
 
@@ -80,7 +82,8 @@ ApplicationVolumesView::ApplicationVolumesView(const char* name,
 	fEmptyLabel(new BStringView("empty",
 		B_TRANSLATE("No application is playing sound."))),
 	fRunner(NULL),
-	fShowOutputs(showOutputs)
+	fShowOutputs(showOutputs),
+	fShowLowLatency(false)
 {
 	fEmptyLabel->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
 	BLayoutBuilder::Group<>(this)
@@ -134,6 +137,18 @@ ApplicationVolumesView::SetShowOutputs(bool show)
 
 
 void
+ApplicationVolumesView::SetShowLowLatency(bool show)
+{
+	if (show == fShowLowLatency)
+		return;
+	fShowLowLatency = show;
+	fLayoutKey = "";
+	if (Window() != NULL)
+		_Refresh();
+}
+
+
+void
 ApplicationVolumesView::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
@@ -168,6 +183,17 @@ ApplicationVolumesView::MessageReceived(BMessage* message)
 				break;
 			row->changed = system_time();
 			fControl.SetOutput(row->id, message->GetInt32("index", 0));
+			break;
+		}
+
+		case kMsgLowLatency:
+		{
+			Row* row = _FindRow(message->GetInt32("id", -1));
+			if (row == NULL || row->lowLatency == NULL)
+				break;
+			row->changed = system_time();
+			fControl.SetLowLatency(row->id,
+				row->lowLatency->Value() == B_CONTROL_ON);
 			break;
 		}
 
@@ -278,6 +304,18 @@ ApplicationVolumesView::_Rebuild()
 				B_TRANSLATE("Where this application plays"));
 		}
 
+		row->lowLatency = NULL;
+		if (fShowLowLatency && stream->hasLowLatency) {
+			BMessage* lowLatency = new BMessage(kMsgLowLatency);
+			lowLatency->AddInt32("id", stream->id);
+			row->lowLatency = new BCheckBox("lowLatency",
+				B_TRANSLATE("Low latency"), lowLatency);
+			row->lowLatency->SetTarget(this);
+			row->lowLatency->SetToolTip(B_TRANSLATE("Short sound card "
+				"buffers for games and emulators while this application "
+				"plays; takes effect when it starts playing again"));
+		}
+
 		int32 line = fRows.CountItems();
 		layout->AddView(row->name, 0, line);
 		layout->AddView(row->volume, 1, line);
@@ -287,6 +325,8 @@ ApplicationVolumesView::_Rebuild()
 			if (!fShowOutputs)
 				row->output->Hide();
 		}
+		if (row->lowLatency != NULL)
+			layout->AddView(row->lowLatency, 4, line);
 		fRows.AddItem(row);
 	}
 
@@ -312,6 +352,10 @@ ApplicationVolumesView::_UpdateValues()
 		if (row->volume->Value() != value)
 			row->volume->SetValue(value);
 		row->mute->SetValue(stream->muted ? B_CONTROL_ON : B_CONTROL_OFF);
+		if (row->lowLatency != NULL) {
+			row->lowLatency->SetValue(stream->lowLatency
+				? B_CONTROL_ON : B_CONTROL_OFF);
+		}
 		if (row->output != NULL) {
 			BMenuItem* item = row->output->Menu()->ItemAt(stream->output);
 			if (item != NULL && !item->IsMarked())

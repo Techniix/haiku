@@ -84,6 +84,10 @@ public:
 			const char*			Route() const { return fRoute.String(); }
 			void				SetRoute(const char* deviceName);
 			MixerTap*			Sink() const { return fSink; }
+	// Low-latency mode (LowLatencyAudio.h): the default output runs with
+	// short periods while such a stream is connected.
+			bool				LowLatency() const { return fLowLatency; }
+			void				SetLowLatency(bool on) { fLowLatency = on; }
 			void				SetSink(MixerTap* sink) { fSink = sink; }
 	// Gain ramps: the gain each mixer channel had in the last mixed buffer,
 	// so that a change is spread over the next buffer instead of a step.
@@ -154,6 +158,7 @@ private:
 			team_id				fTeam;
 			BString				fRoute;
 			MixerTap*			fSink;
+			bool				fLowLatency;
 			MixerTap*			fPreviousSink;
 			float				fLastGain[MAX_CHANNEL_TYPES];
 			float				fCycleGain[MAX_CHANNEL_TYPES];

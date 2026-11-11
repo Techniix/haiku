@@ -14,6 +14,8 @@ struct TimeComputer {
 
 			void				Init(float frameRate, bigtime_t realBaseTime);
 			void				SetFrameRate(float frameRate);
+			void				ResetTimeBase();
+					// Renga: the device's frame counter starts again
 
 			void				AddTimeStamp(bigtime_t realTime, uint64 frames);
 

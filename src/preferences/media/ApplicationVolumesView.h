@@ -39,6 +39,8 @@ public:
 
 			void				SetShowOutputs(bool show);
 			bool				ShowOutputs() const { return fShowOutputs; }
+			// A "Low latency" switch per application (Media preferences)
+			void				SetShowLowLatency(bool show);
 			int32				CountStreams() const
 									{ return fRows.CountItems(); }
 
@@ -56,6 +58,7 @@ private:
 			BObjectList<Row, true> fRows;
 			BMessageRunner*		fRunner;
 			bool				fShowOutputs;
+			bool				fShowLowLatency;
 			BString				fLayoutKey;
 };
 

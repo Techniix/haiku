@@ -33,6 +33,11 @@ public:
 
 	status_t			SetInputFrameRate(uint32 multiAudioRate);
 	status_t			SetOutputFrameRate(uint32 multiAudioRate);
+			// Renga: playback period in frames (0: the driver's default);
+			// sets the buffers up again (B_MULTI_GET_BUFFERS).
+	status_t			SetPlaybackBufferFrames(uint32 frames);
+			uint32				PlaybackBufferFrames() const
+									{ return fRequestedPlaybackFrames; }
 
 	status_t			ForceStop();
 
@@ -42,6 +47,7 @@ private:
 
 private:
 	status_t 			fInitStatus;
+	uint32				fRequestedPlaybackFrames;
 	int					fDevice;
 	char				fPath[B_PATH_NAME_LENGTH];
 

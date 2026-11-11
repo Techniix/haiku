@@ -27,6 +27,10 @@ public:
 	virtual						~SoundPlayNode();
 
 			bool				IsPlaying();
+			// Renga: the buffer length used when the format leaves the
+			// buffer size open (0: BMediaRoster::AudioBufferSizeFor()).
+			void				SetPreferredBufferDuration(bigtime_t duration)
+									{ fPreferredBufferDuration = duration; }
 			bigtime_t			CurrentTime();
 
 	// BMediaNode methods
@@ -143,6 +147,7 @@ private:
 			bigtime_t 			fStartTime;
 			uint64 				fFramesSent;
 			int32				fTooEarlyCount;
+			bigtime_t			fPreferredBufferDuration;
 };
 
 
