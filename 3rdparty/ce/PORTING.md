@@ -28,8 +28,12 @@ updates this file in the same commit.
 | Screen, window or region capture (damage-based, timestamped, with the user's permission and an indicator); a capture session with system audio, one application's audio and the microphone, writing a file or feeding the port | `<ScreenCapture.h>`, `<CaptureSession.h>` (private headers) | libbe, libmedia (nothing extra) | Only `BScreen::ReadBitmap()` (whole frames, no damage, no consent) | Available |
 | HDMI/DisplayPort audio | (driver `hda`) | | Missing | Stereo playback on the monitor's connector, named after it (not yet tried on hardware) |
 | Low-latency audio: small, fixed `BSoundPlayer` buffers and short sound card periods per application | `<SoundPlayer.h>`; `RENGA_AUDIO_LOW_LATENCY=1` | libmedia (nothing extra) | Missing (10 ms player buffers, 21-43 ms card periods) | Available |
-| Encoding and decoding audio and video by codec name (`MediaWriter`, `MediaReader`); VP8, VP9, Opus encoders | `<MediaCodec.h>` (private header) | libmedia (nothing extra) | Only `BMediaFile`; no VP8/VP9/Opus encoders; no codec headers in Matroska/WebM/Ogg | Available |
-| Streaming: HLS/DASH playback, UDP/RTP/SRT/RTMP output through FFmpeg's protocols | (`BMediaFile(BUrl)`, `<MediaCodec.h>`, `<CaptureSession.h>`) | libmedia (nothing extra) | HTTP files only | Available (HLS, UDP, RTP tested; RTMP output not working yet) |
+| Encoding and decoding audio and video by codec name (`MediaWriter`, `MediaReader`); VP8, VP9, Opus, Vorbis, AAC, MP3, FLAC encoders; seeking | `<MediaCodec.h>` (private header) | libmedia (nothing extra) | Only `BMediaFile`; no VP8/VP9/Opus encoders; AAC/MP3/Vorbis and float FLAC failed; no codec headers in Matroska/WebM/Ogg; audio seeking wrong | Available |
+| Streaming: HLS/DASH playback, UDP/RTP/SRT/RTMP output through FFmpeg's protocols | (`BMediaFile(BUrl)`, `<MediaCodec.h>`, `<CaptureSession.h>`) | libmedia (nothing extra) | HTTP files only | Available (HLS, UDP, RTP, RTMP tested; RTMP only against FFmpeg's own server) |
+| Hardware video acceleration interface (VA-API-shaped, inside the Media Kit) | `<VideoAcceleration.h>` (private header) | libmedia (nothing extra) | Missing | Plumbing only: no GPU back end yet. **Not libva**: no `libva` for ports, FFmpeg's `*_vaapi` codecs are not available |
+| Sample-rate conversion in the mixer (windowed sinc) and clock-drift correction for a second card | (behaviour) | | Linear interpolation; second cards drift | Available (nothing to do in ports) |
+| `pthread_rwlock_t` and other user-level rw locks interrupted by a signal | (behaviour) | | Lost hand-over in `rw_lock`, spinning in `pthread_rwlock` | Fixed |
+| `BNetworkAddress` / `getaddrinfo` users resolving a numeric address (`127.0.0.1`) without a network | (behaviour) | | 56 s, then failure | Fixed (in libbnetapi; plain `getaddrinfo()` with `AI_ADDRCONFIG` behaves as before) |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
 | `signalfd()` | `<sys/signalfd.h>` | `-lgnu` | Missing | Available |
@@ -963,17 +967,20 @@ names them (`MediaWriter::ListCodecs()` lists them):
     reader.ReadAudio(reader.FindTrack(B_MEDIA_RAW_AUDIO), floats, max,
         &frames, &time);                     // interleaved float
 
-- Tested: WebM with VP9 or VP8 and Opus, Ogg Opus, Matroska with MPEG-4
-  and FLAC (16-bit input); AV1, HEVC, H.264 and the rest decode as before
-  (dav1d and FFmpeg's decoders). Not working yet: FLAC, Vorbis, AAC and
-  MP3 from float input (use 16-bit samples for FLAC), MP4 with AAC, MP3
-  files, seeking audio in WebM and Ogg; no H.264/HEVC/AV1 encoders in the
-  build's FFmpeg 6.1.5 (no libx264, libx265, libaom).
+- Tested, each decoded again and with a seek to 1 s: WebM with VP9 or VP8
+  and Opus, Ogg Opus and Vorbis, Matroska with MPEG-4 and FLAC (16-bit
+  and float input), MP4 with MPEG-4 and AAC, MP3, FLV with Sorenson Spark
+  (`flv1`) and AAC; AV1, HEVC, H.264 and the rest decode as before (dav1d
+  and FFmpeg's decoders). No H.264/HEVC/AV1 encoders in the build's FFmpeg
+  6.1.5 (no libx264, libx265, libaom).
 - Encoders get real-time settings (libvpx: realtime, no look-ahead), so
   they suit recorders and streams; they are not tuned for offline quality.
-- Hardware encoders and decoders come behind the same API with phase 5.
+- Hardware encoders and decoders come behind the same API (see "Video
+  acceleration" below); nothing changes for callers.
 
-Since: the commit that added `headers/private/media/MediaCodec.h`.
+Since: the commit that added `headers/private/media/MediaCodec.h`; float
+input for FLAC/Vorbis/AAC/MP3, MP4/MP3 files and audio seeking since
+`96463230`.
 Tests: `media_codec_test.cpp`, and Screenshot's WebM recording in
 `screen_capture_test.cpp`.
 
@@ -990,15 +997,72 @@ The FFmpeg plug-in opens some URLs with FFmpeg's own protocols (roadmap
   plug-in opens one connection per track).
 - **Sending:** `MediaWriter::Open(url, container)` and
   `CaptureOptions::streamURL` write MPEG-TS to `udp://`, `rtp://` (RTP
-  payload type 33) or `srt://`. RTMP takes FLV, whose video codecs (H.264,
-  Sorenson H.263, VP6) the plug-in cannot encode yet, so RTMP output does
-  not work.
+  payload type 33) or `srt://`, and FLV to `rtmp://` (container `flv`,
+  video `flv1` (Sorenson Spark), audio `aac`; since `96463230`, tested
+  against FFmpeg's RTMP protocol in listen mode, not yet against real
+  servers).
 - Screenshot's recorder has "Stream to:" (MPEG-TS with MPEG-4 video and
   Opus audio) and `--stream <url>`.
 
+- Plain http(s) files (the HTTP streamer) work without a network too:
+  `BNetworkAddress` resolves numeric hosts at once since `9731ba84`. An MP4
+  with its index at the end does not open over HTTP (the streamer reads
+  front to back); serve "faststart" MP4s.
+- WebPositive plays `<video>`/`<audio>` through the same path (HaikuWebKit
+  uses `BMediaFile(BUrl)`), so pages get these codecs; its own sound
+  output has gaps in HaikuWebKit 1.10.0 (roadmap `F-57`).
+
 Since: the commit that added `FFmpegURLIO.h`. Tests:
 `media_stream_test.cpp` (HLS from a local HTTP server, UDP and RTP to a
-local socket, Screenshot streaming, MediaPlayer).
+local socket, RTMP to an in-guest FFmpeg server, Screenshot streaming,
+MediaPlayer), `media_html5_test.cpp` (HTTP files, WebPositive).
+
+### Video acceleration
+
+`headers/private/media/VideoAcceleration.h` (libmedia; roadmap `F-31`
+phase 5, `446221a6`) is the interface hardware video back ends implement
+for the Media Kit. It is shaped after VA-API (devices with profile and
+entry-point capabilities, decoder and encoder contexts, NV12/P010
+surfaces) so that GPU drivers map onto it, but it is **internal to the
+Media Kit and not libva**:
+
+- Ports get no `libva`; FFmpeg's `*_vaapi` encoders and VA-API hwaccels
+  are not available to them, and a port's own VA-API code finds nothing.
+  Use `MediaWriter`/`MediaReader` or `BMediaFile`: acceleration, when a
+  back end exists, happens inside the FFmpeg plug-in.
+- There is no GPU back end yet (NVDEC/NVENC and Mesa video come with the
+  GPU stage). The only back end, "software", implements the interface with
+  FFmpeg in software and is carried by harness images only.
+- Choice: `~/config/settings/system/video_acceleration` (`backend <name>`
+  or `backend off`), overridden by `RENGA_VIDEO_ACCELERATION`; by default
+  only hardware back ends are used. `BMediaTrack::GetCodecInfo()` ends in
+  "(accelerated: <name>)" when one is.
+
+Tests: `media_hwvideo_test.cpp`.
+
+### Mixer resampling and clock drift
+
+Nothing to do in ports; for reference when measuring audio:
+
+- Streams whose rate differs from the card's are converted with a
+  windowed-sinc resampler by default (`99463e1f`; about -75 dB THD+N at
+  1.1 kHz from 44.1 to 48 kHz, against -35 dB with the old linear
+  interpolation). Equal rates are copied unchanged. The choice is in the
+  Audio preferences (Output, advanced, "Resampling").
+- A stream routed to a card other than the default output is resampled to
+  that card's own clock (`0d10d162`), so two cards from separate crystals
+  neither run dry nor build up delay. In QEMU the second virtio card runs
+  0.5-0.8 % slow, so recordings of it show tones that much higher.
+
+### User-level rw locks and signals
+
+Since `c3afd0b7`, a thread waiting in `pthread_rwlock_rdlock()`/`_wrlock()`
+(or in libroot's internal `rw_lock`, or `RWLockManager`) that is
+interrupted by a signal, including an ignored SIGCHLD, keeps waiting and
+gets the lock when it is handed over. Before, `rw_lock` could lose the
+hand-over (the lock stayed held for ever; app_server hung this way) and
+`pthread_rwlock` spun until it got the lock. No change for callers.
+Tests: `user_locks_test.cpp`.
 
 ### Ctrl is the shortcut key
 
@@ -1034,6 +1098,10 @@ workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
 - `TFD_TIMER_CANCEL_ON_SET`.
+- VA-API for ports (a Haiku `libva` with drivers, so FFmpeg's `*_vaapi`
+  codecs and Chromium's VA-API code work): with the GPU stage (roadmap
+  `F-31` phase 5, `F-35`). Until then build ports without VA-API and use
+  software codecs or the Media Kit.
 - A cubeb back end for the Media Kit: in RengaPorts (`media-libs/cubeb`,
   output only), not yet built or tried; until it is published, use SDL's
   or `BSoundPlayer` directly.
