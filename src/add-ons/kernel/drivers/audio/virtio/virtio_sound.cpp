@@ -137,8 +137,15 @@ static const uint32 kMaxBufferFrames = 16384;
 
 static const uint32 kChannels = 2;
 
-// How long we wait for the device before giving up on a request.
-static const bigtime_t kControlTimeout = 1000000;
+// How long we wait for the device before giving up on a request. A device
+// that misses this is never used again (see "broken"), so the limit is for
+// a device that has stopped, not a slow one: QEMU carries out PCM_PREPARE
+// in its main loop, where its SDL back end (re)opens the host audio
+// device, and with two vCPUs on a busy two-core host one capture
+// PCM_PREPARE right after a stop took more than the 1 s this used to be
+// (one full --smp 2 run, 20261110-042330). Linux's virtio_snd waits 1 s by
+// default but retries the stream instead of giving up on the device.
+static const bigtime_t kControlTimeout = 5000000;
 static const bigtime_t kExchangeTimeout = 2000000;
 static const bigtime_t kDrainTimeout = 2000000;
 
