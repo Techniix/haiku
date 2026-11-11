@@ -26,7 +26,10 @@ updates this file in the same commit.
 | USB Audio Class 1 and 2 devices (headsets, DACs) | (driver `usb_audio`, hmulti) | | UAC1 only, broken at 44.1 kHz on xhci | Available (UAC2 not yet tried on hardware) |
 | UVC webcams (YUY2, MJPEG) as Media Kit video sources | (Media Kit, `usb_webcam` add-on) | libmedia (nothing extra) | Missing (UVC class not built) | Available (not yet tried on hardware) |
 | Screen, window or region capture (damage-based, timestamped, with the user's permission and an indicator); a capture session with system audio, one application's audio and the microphone, writing a file or feeding the port | `<ScreenCapture.h>`, `<CaptureSession.h>` (private headers) | libbe, libmedia (nothing extra) | Only `BScreen::ReadBitmap()` (whole frames, no damage, no consent) | Available |
-| HDMI/DisplayPort audio | (driver `hda`) | | Missing | Monitors detected and named in the syslog; no playback yet |
+| HDMI/DisplayPort audio | (driver `hda`) | | Missing | Stereo playback on the monitor's connector, named after it (not yet tried on hardware) |
+| Low-latency audio: small, fixed `BSoundPlayer` buffers and short sound card periods per application | `<SoundPlayer.h>`; `RENGA_AUDIO_LOW_LATENCY=1` | libmedia (nothing extra) | Missing (10 ms player buffers, 21-43 ms card periods) | Available |
+| Encoding and decoding audio and video by codec name (`MediaWriter`, `MediaReader`); VP8, VP9, Opus encoders | `<MediaCodec.h>` (private header) | libmedia (nothing extra) | Only `BMediaFile`; no VP8/VP9/Opus encoders; no codec headers in Matroska/WebM/Ogg | Available |
+| Streaming: HLS/DASH playback, UDP/RTP/SRT/RTMP output through FFmpeg's protocols | (`BMediaFile(BUrl)`, `<MediaCodec.h>`, `<CaptureSession.h>`) | libmedia (nothing extra) | HTTP files only | Available (HLS, UDP, RTP tested; RTMP output not working yet) |
 | `epoll_create()`/`_create1()`/`_ctl()`/`_wait()`/`_pwait()`/`_pwait2()` | `<sys/epoll.h>` | `-lgnu` | Missing | Available |
 | `inotify_init()`/`_init1()`/`_add_watch()`/`_rm_watch()` | `<sys/inotify.h>` | `-lgnu` | Missing | Available |
 | `signalfd()` | `<sys/signalfd.h>` | `-lgnu` | Missing | Available |
@@ -828,9 +831,13 @@ nothing to restart, and nothing changed in the public API:
   also has "Demo Video Producer" (`video_producer_demo`), a synthetic
   source useful for testing a port without a camera.
   `CodyCam --camera <name>` previews a given source.
-- **HDMI/DisplayPort audio** is not playable yet: connected monitors are
-  detected and named in the syslog (`hda: HDMI pin`), but no output plays
-  on them. Do not work around it.
+- **HDMI/DisplayPort audio**: a display audio codec (Intel, AMD, NVIDIA
+  graphics) is a sound card named after the monitor ("HDMI: <monitor>",
+  "DisplayPort: <monitor>"), playing stereo LPCM in the rates and sample
+  sizes the monitor's ELD lists. One monitor per codec at a time;
+  multichannel layouts later. Not yet tried on hardware (QEMU has no HDMI
+  codec); the syslog says which connector plays ("hda: display audio on
+  pin").
 
 Since: the commits that added the device watcher to the multi_audio
 add-on (hot-plug), UAC2 to `usb_audio`, and `UVCPayload.cpp` to
@@ -900,6 +907,99 @@ Since: the commits that added `ScreenCaptureManager` to app_server,
 `CaptureSession.cpp` to libmedia and recording to Screenshot. Tests:
 `screen_capture_test.cpp` (renga-* images).
 
+### Low-latency audio
+
+For games, emulators and music programs (roadmap `F-31`; the Eglantine
+port asked for it). The design is PipeWire's "quantum": the sound card
+runs with the smallest period a running low-latency stream needs.
+
+- **Per application, by the user:** Media preferences > Audio settings >
+  Applications, "Low latency" next to the program's volume (remembered by
+  signature, like volume and output). The card's period changes at once;
+  the program's buffer length when it next starts playing.
+- **From the program or its launcher:** `RENGA_AUDIO_LOW_LATENCY=1` in the
+  environment switches it on for that program (and saves it, as the
+  checkbox would).
+- **What it changes:** the default output plays 256-frame periods (5.3 ms
+  at 48 kHz) instead of its driver's default (1024 frames for
+  `virtio_sound`, 2048 for `hda`); `BSoundPlayer` with the buffer size left
+  open (`media_raw_audio_format::wildcard.buffer_size`) uses one such
+  period. A program that sets `buffer_size` (SDL does) keeps its own;
+  set it to 256 frames' worth for the lowest latency. Every callback has
+  the buffer's length, for the whole connection.
+- **Measured** in the QEMU harness from the callback to the card's
+  playout as the Media Kit schedules it: about 50-55 ms normally, 16-19 ms
+  in low-latency mode. Real hardware (hda, USB) is not measured yet.
+- A sound card's page in the Media preferences has "Buffer size"
+  (Automatic or 128 to 4096 frames); a fixed size wins over the requests.
+- Streams routed to another device than the default output do not change
+  that device's period.
+
+Since: the commit that added `headers/private/media/LowLatencyAudio.h`.
+Tests: `sound_latency_test.cpp` (renga-* images).
+
+### Encoding and decoding
+
+`BPrivate::MediaWriter` and `BPrivate::MediaReader`
+(`headers/private/media/MediaCodec.h`, libmedia; roadmap `F-31` phase 4)
+put `BMediaFile`, `BMediaTrack`, format negotiation and codec lookup
+behind a few calls. Codecs and containers are named as the FFmpeg plug-in
+names them (`MediaWriter::ListCodecs()` lists them):
+
+    BPrivate::MediaWriter writer;
+    writer.Open("/boot/home/clip.webm", "webm");
+    int32 video, audio;
+    writer.AddVideoTrack("vp9", 640, 480, 30, &video);
+    writer.AddAudioTrack("opus", 48000, 2, &audio, true);  // float samples
+    writer.Start();
+    writer.WriteVideoFrame(video, bitmap->Bits(), bitmap->BytesPerRow());
+    writer.WriteAudio(audio, samples, frames);
+    writer.Finish();
+
+    BPrivate::MediaReader reader;
+    reader.Open("/boot/home/clip.webm");     // or an http(s) URL
+    int32 track = reader.FindTrack(B_MEDIA_RAW_VIDEO);
+    reader.ReadVideoFrame(track, bits, bytesPerRow, &time);  // B_RGB32
+    reader.ReadAudio(reader.FindTrack(B_MEDIA_RAW_AUDIO), floats, max,
+        &frames, &time);                     // interleaved float
+
+- Tested: WebM with VP9 or VP8 and Opus, Ogg Opus, Matroska with MPEG-4
+  and FLAC (16-bit input); AV1, HEVC, H.264 and the rest decode as before
+  (dav1d and FFmpeg's decoders). Not working yet: FLAC, Vorbis, AAC and
+  MP3 from float input (use 16-bit samples for FLAC), MP4 with AAC, MP3
+  files, seeking audio in WebM and Ogg; no H.264/HEVC/AV1 encoders in the
+  build's FFmpeg 6.1.5 (no libx264, libx265, libaom).
+- Encoders get real-time settings (libvpx: realtime, no look-ahead), so
+  they suit recorders and streams; they are not tuned for offline quality.
+- Hardware encoders and decoders come behind the same API with phase 5.
+
+Since: the commit that added `headers/private/media/MediaCodec.h`.
+Tests: `media_codec_test.cpp`, and Screenshot's WebM recording in
+`screen_capture_test.cpp`.
+
+### Streaming
+
+The FFmpeg plug-in opens some URLs with FFmpeg's own protocols (roadmap
+`F-31` phase 4, `src/add-ons/media/plugins/ffmpeg/FFmpegURLIO.h`):
+
+- **Playing:** `BMediaFile(BUrl)`, `MediaReader::Open(url)`, MediaPlayer's
+  "Open URL" and command line take HLS and DASH playlists over http(s)
+  (`.m3u8`, `.mpd`), and `rtp://`, `udp://`, `srt://`, `rtmp://` sources.
+  Plain http(s) files still go through the HTTP streamer. A live UDP/RTP
+  source with several tracks does not work through `MediaReader` yet (the
+  plug-in opens one connection per track).
+- **Sending:** `MediaWriter::Open(url, container)` and
+  `CaptureOptions::streamURL` write MPEG-TS to `udp://`, `rtp://` (RTP
+  payload type 33) or `srt://`. RTMP takes FLV, whose video codecs (H.264,
+  Sorenson H.263, VP6) the plug-in cannot encode yet, so RTMP output does
+  not work.
+- Screenshot's recorder has "Stream to:" (MPEG-TS with MPEG-4 video and
+  Opus audio) and `--stream <url>`.
+
+Since: the commit that added `FFmpegURLIO.h`. Tests:
+`media_stream_test.cpp` (HLS from a local HTTP server, UDP and RTP to a
+local socket, Screenshot streaming, MediaPlayer).
+
 ### Ctrl is the shortcut key
 
 Renga uses the Windows/Linux convention: Ctrl+C copies, Ctrl+V pastes,
@@ -934,8 +1034,9 @@ workaround: they are on the roadmap and a workaround would have to be
 removed again.
 
 - `TFD_TIMER_CANCEL_ON_SET`.
-- HDMI/DisplayPort audio output (roadmap `F-31` phase 2): play on another
-  output until then.
+- A cubeb back end for the Media Kit: in RengaPorts (`media-libs/cubeb`,
+  output only), not yet built or tried; until it is published, use SDL's
+  or `BSoundPlayer` directly.
 - Releasing memory inside a memfd: `fallocate(fd, FALLOC_FL_PUNCH_HOLE |
   FALLOC_FL_KEEP_SIZE, ...)` and `madvise(MADV_REMOVE)` (roadmap `F-48`
   part a). Until then keep the `memset` fallback.
