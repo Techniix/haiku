@@ -312,7 +312,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-24 | Partition manager | Designed | None |
 | F-25 | Lumina shell | In Development (external repo) | Host unit tests only |
 | F-26 | LinuxKPI_HaikuOS | Not Started (in Renga) | None |
-| F-27 | Renguin | Not Started (in Renga) | None |
+| F-27 | Renguin | Designed (scheduled, work order item 13) | None |
 | F-28 | Control Panel suite | Not Started | None |
 | F-29 | Upstream bug fixes carried | QEMU Tested | See section 10.2 |
 | F-30 | Periodic NTP sync | Not Started | None |
@@ -569,7 +569,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 2 (audit Tier 1) |
 | Risk | Low |
 | Testing status | None |
-| Next milestone | Agreed work order item 12 |
+| Next milestone | Agreed work order item 14 |
 | Recommended next action | A conditional launch_daemon job; harness check that skews the guest clock and expects correction (QEMU user networking provides an NTP-reachable path only if configured; verify first) |
 | Links | Audit Tier 1 |
 
@@ -760,18 +760,29 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | E (one syscall dispatcher, no per-team ABI field, no `ptrace`) |
-| Renga maturity | No Renga-side support yet |
-| Status | **Not Started** (in Renga) |
-| Completed | Shared groundwork: the Linux-style FD objects `F-06` to `F-09` |
-| Remaining | Per-team syscall ABI hook (FreeBSD `sysentvec` model, new syscall numbers in a reserved fork range); full layer in the Renguin repository |
-| Known bugs/limitations | The state of the external Techniix/Renguin repository is not assessed in this document |
-| Dependencies | `F-15` (epoll), ABI hook |
-| Difficulty | ABI hook 7 (Tier 4); full layer 8-10 (Tier 5) |
-| Risk | Medium |
-| Testing status | None |
-| Next milestone | ABI hook design |
-| Recommended next action | Write the ABI-hook design (where the per-team table lives, how it is selected at exec) before `epoll` lands, since both touch syscall entry |
-| Links | Audit "Ranked ways to multiply available apps" |
+| Renga maturity | No Renga-side support yet. The Renguin repository (`Techniix/Renguin`, branch `stage5-libc-dynamic`, 10 commits ahead of `main`) has: kernel ABI-personality hooks as a patch; a Linux ELF loader (static, static-PIE, dynamic with `ld-linux`/`ld-musl`); about 185 syscalls (memory, TLS, files, descriptors, pipes, terminal ioctls, ids, clocks, limits); process creation (`fork`, `vfork`, `clone`, `execve` with `#!`, `wait4`); threads and futexes (`clone3`, robust lists); Linux signal frames and `rt_sigreturn`; a generated `/proc`; `poll`/`select`; a `/compat/linux` root; an ordered test series. Compiled against Haiku headers in kernel mode; **not yet linked with Haiku's toolchain or booted** |
+| Status | **Designed** (scheduled, work order item 13) |
+| Completed | Shared groundwork in Renga: Linux-style descriptor objects and APIs (`F-06`-`F-15`, `F-43` phase A) |
+| Remaining | Below |
+| Known bugs/limitations | Not yet run anywhere |
+| Dependencies | `F-15`, `F-49` (futex), `F-52` (API batch 2); for GUI programs `F-43` phase C (Wayland layer) and phase D (D-Bus, portals); for audio the Media Kit (`F-31`); for GPU programs `F-35`/`F-47` |
+| Difficulty | ABI hook 7; full layer 8-10 |
+| Risk | Medium-high (kernel syscall entry, signals) |
+| Testing status | None. Fully harness-testable in QEMU with Linux test programs and an Alpine/Debian root |
+| Next milestone | ABI hook in the Renga kernel; Renguin's test series passing in the harness |
+| Recommended next action | Start after gamepads (work order item 13) |
+| Links | Audit "Ranked ways to multiply available apps"; Renguin `docs/research-report.md`, `docs/TESTING.md` |
+
+**Plan (maintainer, 2026-11-11): integrate what exists and finish it as we go, with its GUI.**
+
+- [ ] **Integration:** the per-team ABI personality hook becomes a proper Renga kernel feature (FreeBSD `sysentvec` model: per-team syscall table and signal translation chosen at exec), not an external patch; Renguin builds in-tree as a kernel module plus tools, packaged with Renga; Renguin's test series runs in the harness against static and dynamic glibc and musl programs.
+- [ ] **Map onto Renga's own kernel facilities** instead of emulating them in the module: `epoll`, `eventfd`, `timerfd`, `signalfd`, `inotify`, `memfd` with sealing, `futex` (`F-49`, shared between native ports and Renguin), affinity, `getdents64`, pidfds, `close_range`, `copy_file_range`, `renameat2`, `statx`, `openat2`, `prctl`, abstract Unix sockets, `SCM_CREDENTIALS` (`F-52`), POSIX AIO.
+- [ ] **New Renga kernel APIs Renguin needs** (each added once, usable by native code too where it makes sense): per-team ABI personality and syscall dispatch; Linux signal numbering and frame layout per team; `ptrace` (for `gdb`, `strace` and Wine-style tools); process groups, sessions and controlling terminals with Linux semantics; `SCM_RIGHTS` across the boundary; minimal `netlink` (`NETLINK_ROUTE` for addresses, routes and links, which `ip`, glibc and many programs query); `seccomp` filters later for sandboxed programs (Chromium, Steam); `io_uring` only if the end-of-roadmap investigation (`F-52`) adds it.
+- [ ] **Finish the syscall coverage** in priority order from the research report's matrix: terminal programs (busybox, coreutils, bash, git), then networking (sockets, netlink, DNS), then graphical programs.
+- [ ] **Linux GUI programs:** through the Wayland compatibility layer (`F-43` phase C; Linux Wayland clients connect to the same server native Wayland ports use) and XWayland for X11 programs; D-Bus session bus and portals (`F-43` phase D); audio through a PipeWire/PulseAudio-protocol server on the Media Kit (`pipewire-pulse` compatible); GPU through the drivers' Linux-facing interfaces later (`F-35`, LinuxKPI DRM).
+- [ ] **Discord Rich Presence bridge** (maintainer's wish): native Haiku games publishing presence to the Linux Discord client under Renguin, and Linux games' presence visible natively, through Discord's IPC socket bridged both ways.
+- [ ] **GUI (Renguin Manager, Interface Kit):** set up and manage Linux roots (create from Alpine, Debian or Arch images, update, remove), list and launch Linux programs with their icons in Deskbar and Tracker, per-program settings, running Linux processes, logs and diagnostics (with System logs, `F-51`); a Control Panel page later (`F-28`).
+- [ ] **Harness:** the ordered test series, Alpine busybox, a glibc shell, `git`, a small Wayland client, and the Rich Presence bridge, each as automated checks.
 
 #### F-26 LinuxKPI_HaikuOS
 
@@ -1319,7 +1330,7 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Risk | Low to medium (backup and restore: medium, user data) |
 | Testing status | None. Each item gets a harness check where it can run headless (archive round trips, share mounts against QEMU's built-in SMB server, backup/restore round trips, package-state restore) plus screenshots for the GUIs |
 | Next milestone | Batch 1 (see section 5.1) |
-| Recommended next action | Start batch 1 after periodic NTP sync (work order item 13) |
+| Recommended next action | Start batch 1 after periodic NTP sync (work order item 15) |
 | Links | Gap review in the 2026-11-09 conversation; decisions log |
 
 Skipped for now by the maintainer: disk encryption, calendar and CalDAV/CardDAV, night light; later consideration: Mail, DeskCalc, ShowImage and remote desktop updates, a camera app.
@@ -1667,11 +1678,12 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 9. **Crash logs and system log viewer** (`F-51`), placed by the maintainer (2026-11-10): next after the current Media Kit stopping point, to support real-hardware testing. The remaining Media Kit phases continue after it. Status 2026-11-11: QEMU Tested ([`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1), [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192)); the real-hardware check is pending.
 10. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
 11. **Port-performance batch** (`F-48` part a, `F-49`, `F-50`) with the **Linux/POSIX API batch 2** (`F-52`, added 2026-11-10), placed by the maintainer (2026-11-09): hole punching in memfds, `futex()`, game mode with its Control Panel switch. Small, harness-testable, and useful to Chromium, Wine and Mesa as well as Eglantine.
-12. **Periodic NTP sync** (`F-30`).
-13. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
-14. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
-15. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
-16. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+12. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
+13. **Renguin** (`F-27`), placed by the maintainer (2026-11-11): integrate the Renguin repository into Renga and finish it as it goes, with its GUI (Renguin Manager) and the Renga APIs it needs (see `F-27`).
+14. **Periodic NTP sync** (`F-30`).
+15. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
+16. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
+17. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
 
@@ -1759,7 +1771,7 @@ Milestone count: 6 of 6 (100%).
 
 | # | Item | Done |
 | --- | --- | --- |
-| 1 | Periodic NTP sync | No (work order item 12) |
+| 1 | Periodic NTP sync | No (work order item 14) |
 | 2 | Finish and ship `virtio_sound` | Yes (playback) `658d1756`, `fbbb290a` |
 | 3 | `virtio_block` DISCARD/WRITE_ZEROES | Yes `5b068a5e` |
 | 4 | NVMe multi-namespace + teardown TODOs | Yes `0758b116` (one TODO remains) |
@@ -2265,6 +2277,7 @@ Upstream behaviours observed and **not** changed: the mixer's gain values are la
 | 2026-11-10 | Boot loader direction: graphical, no logo, Renga-style animation (light through shifting leaves, wind and drifting leaves, resolution-independent), detected systems with icons, background probing of removable media without hanging, lightweight with fallbacks | `F-22` |
 | 2026-11-10 | Additions: crash logs and a system log viewer soon (`F-51`, work order item 9); Linux/POSIX API batch 2 with the port-performance batch (`F-52`: pidfd, `close_range`, `copy_file_range`, `renameat2`, `statx`, `O_TMPFILE`, `openat2`, `prctl` subset, abstract Unix sockets, `SCM_CREDENTIALS`, `SO_REUSEPORT`, xattr if it keeps compatibility, better POSIX AIO; io_uring-style interface investigated at the end); Secure Boot later (`F-53`); printing and scanning (`F-54`) and colour emoji (`F-55`) low priority; profiling tools later (`F-56`). Held for now: firewall, VPN, signed packages priority | `F-51`-`F-56`, section 5.1 |
 | 2026-11-11 | Graphics drivers: Quasar (NVIDIA open kernel modules + NVK) for NVIDIA; LinuxKPI DRM (i915/xe, amdgpu, as FreeBSD's drm-kmod) for Intel and AMD; both behind the vendor-neutral accelerant extension | `F-35`, `F-26`, `F-47` |
+| 2026-11-11 | Work order: after the port-performance and API batch, gamepads, then Renguin (integrate and finish it, with its GUI and the Renga APIs it needs), then NTP sync and bundled applications | Section 5.1, `F-27`, `F-42` |
 | 2026-11-09 | A second, separate Claude instance works in parallel on branch `ce/wip-apps-ntp`: periodic NTP sync (`F-30`), then bundled applications batch 1 (`F-44`). It never pushes `ce/main`, master or tags, does not edit this file or the Media Kit areas, and reports in `3rdparty/ce/handoff/wip-apps-ntp.md`; the main session merges finished pieces with `--no-ff` after full harness runs and folds the handoff text into this roadmap | `F-30`, `F-44`, section 5.1 |
 | 2026-11-09 | Cancelled: the parallel session on `ce/wip-apps-ntp` (row above) will not run; its account cannot do this work. `F-30` and `F-44` batch 1 stay in the work order (section 5.1) for this session |  `F-30`, `F-44` |
 | 2026-11-09 | Media Kit phase 1 on the existing system mixer, in PipeWire/PulseAudio terms: streams are routed inside the mixer through sinks it connects to other devices, never by moving applications' connections; loopbacks are a flavor of the mixer add-on | `F-31`, `ef41c576` |
