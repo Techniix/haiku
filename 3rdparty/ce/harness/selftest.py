@@ -928,5 +928,22 @@ passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
 expect("crashlog: the same panic outside an announced entry is a problem",
 	len(problems) > 0 and kdl is not None, str(problems))
 
+
+def linuxkpi_clamp(serial):
+	directory = tempfile.mkdtemp()
+	with open(os.path.join(directory, "serial.log"), "w") as serialFile:
+		serialFile.write(serial)
+	report = {}
+	ce_test.check_linuxkpi(directory, report)
+	check = [c for c in report["host_checks"]
+		if c["name"] == "linuxkpi.edu_no_clamp"][0]
+	return check["pass"], check["detail"]
+
+passed, detail = linuxkpi_clamp("KERN: lkpi_pcitest: edu: done PASS\r\n")
+expect("linuxkpi: no clamped DMA address passes", passed, detail)
+passed, detail = linuxkpi_clamp("KERN: edu: dma_map_bounce PASS\r\n"
+	"EDU: clamping DMA 0x0000000035a1f000 to 0x0000000005a1f000!\r\n")
+expect("linuxkpi: a clamped DMA address fails", not passed, detail)
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

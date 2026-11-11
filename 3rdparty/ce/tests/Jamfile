@@ -7,6 +7,7 @@ SubInclude HAIKU_TOP 3rdparty ce tests bootmenu ;
 SubInclude HAIKU_TOP 3rdparty ce tests crashlog ;
 SubInclude HAIKU_TOP 3rdparty ce tests hda_eld ;
 SubInclude HAIKU_TOP 3rdparty ce tests installer ;
+SubInclude HAIKU_TOP 3rdparty ce tests linuxkpi ;
 SubInclude HAIKU_TOP 3rdparty ce tests media ;
 SubInclude HAIKU_TOP 3rdparty ce tests nvme ;
 SubInclude HAIKU_TOP 3rdparty ce tests package_priority ;

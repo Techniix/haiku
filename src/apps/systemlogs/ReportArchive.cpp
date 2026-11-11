@@ -300,6 +300,9 @@ save_report_archive(const char* path, BString* _summary)
 		{ "hardware/sysinfo.txt", "/bin/sysinfo 2>&1" },
 		{ "hardware/uname.txt", "/bin/uname -a 2>&1" },
 		{ "hardware/df.txt", "/bin/df 2>&1" },
+		// LinuxKPI drivers (F-26): installed and running drivers, matching
+		// hardware, status of the running ones, settings, log diagnosis
+		{ "hardware/linuxkpi.txt", "/bin/lkpictl report 2>&1" },
 		{ NULL, NULL }
 	};
 	for (int32 i = 0; kCommands[i].name != NULL; i++) {
@@ -312,7 +315,8 @@ save_report_archive(const char* path, BString* _summary)
 		"           kernel's log of the previous session (previous_syslog)\n"
 		"crash/     kernel crash reports (kernel-*.txt) and application crash\n"
 		"           reports (app-*.txt) from /boot/system/var/log/crash\n"
-		"hardware/  the output of listdev, listusb -v, sysinfo, uname -a, df\n";
+		"hardware/  the output of listdev, listusb -v, sysinfo, uname -a, df\n"
+		"           and lkpictl report (LinuxKPI drivers)\n";
 	zip.Add("README.txt", readme);
 
 	status = zip.Close();

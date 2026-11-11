@@ -517,6 +517,37 @@ limit of at least 240 s (they are slow in QEMU without KVM).
 `data/ce-harness/no-final-tests` into their image copy, so these programs
 do not run there.
 
+## LinuxKPI
+
+LinuxKPI (`src/libs/compat/linuxkpi`, from LinuxKPI_HaikuOS) runs Linux
+drivers on Renga; its first driver, `mt7921e`, needs a MediaTek card, and
+QEMU has no Wi-Fi device. To test the core anyway, every run attaches QEMU's
+educational PCI device, `-device edu,dma_mask=0xffffff` (MMIO registers,
+MSI, a DMA engine, a computation that interrupts when done; QEMU
+`hw/misc/edu.c`), and harness images carry `lkpi_pcitest`, LinuxKPI_HaikuOS'
+test driver written against the Linux API only (it would match MediaTek
+cards too, so it is never in release images). Matched against edu, its
+probe runs a functional test through LinuxKPI and prints `edu: <check>
+PASS|FAIL` lines: MMIO, an MSI interrupt raised on request and one at the
+end of a computation, a coherent DMA buffer to the device and back,
+`dma_map_single()` of buffers above the device's DMA mask in each direction
+(bounced by the DMA API) with `dma_sync_single_for_cpu()`, `timer_list`,
+delayed work and an `hrtimer` (each fired, and each cancelled before it
+fired). Then it declines the device, so Haiku unloads it again.
+
+`linuxkpi_test` loads it four times by changing the binary's modification
+time (devfs reloads updated drivers none of whose devices is open, once a
+second; writing a driver name to `/dev` as `src/bin/rescan.c` does is
+refused by today's devfs), reads the driver's lines back from the syslog
+and reports the edu checks, LinuxKPI's own load-time self-test
+(`selftest_*`), that every load ran and the later ones passed too, that the
+kernel's area count stays put from the second load on, and that the system
+package has `mt7921e`, its firmware and the Manager's data. The host check
+`linuxkpi.edu_no_clamp` fails if the device printed `EDU: clamping DMA`
+(an address above its mask reached it). At 24 bits every streaming buffer
+is above the mask; at edu's default 28 bits none of 64 `kmalloc()` buffers
+of a 1 GiB guest was, so the bounce path went untested.
+
 ## Current suites
 
 - **installer** (`installer_test`): see "Installing over an existing
@@ -556,6 +587,16 @@ do not run there.
   read back: members, CRC of an inflated entry), and screenshots
   `crash_notification`, `systemlogs_crash`, `systemlogs_live`,
   `systemlogs_previous` (`crashlog.screenshots`).
+
+- **linuxkpi** (every image, `linuxkpi_test`): the LinuxKPI core
+  (roadmap F-26), see "LinuxKPI" below. **linuxkpi_ui** (renga-* images,
+  `linuxkpi_ui_test`): `lkpictl` (drivers, hardware, status of a driver
+  that is not running, coverage, report), LinuxKPI Manager (window, the
+  overview's text read through scripting, `--tab` to three tabs on the
+  running instance), System logs (FreeBSD/LinuxKPI driver lines filed
+  under their driver, `hardware/linuxkpi.txt` in "Save a report");
+  screenshots `linuxkpi_overview`, `linuxkpi_drivers`, `linuxkpi_hardware`,
+  `linuxkpi_compatibility` (`linuxkpi_ui.screenshots`).
 
 - **media** (renga-* images): see "Media Kit tests". In the guest it checks
   recording from the fed card through the Media Kit and its recording gain,

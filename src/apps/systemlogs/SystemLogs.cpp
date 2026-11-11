@@ -163,7 +163,8 @@ guess_level(const std::string& text)
 
 /*!	syslog_daemon writes "<FACILITY>[ '<ident>'][[<pid>]]: <message>". The
 	component is the ident; for kernel lines ("KERN: ") the driver or module
-	name most kernel messages start with ("usb_hid: ..."), or "kernel".
+	name most kernel messages start with ("usb_hid: ...", or "[mt7921e] ..."
+	from FreeBSD and LinuxKPI drivers), or "kernel".
 */
 static std::string
 component_of(const std::string& line)
@@ -180,6 +181,25 @@ component_of(const std::string& line)
 	}
 	if (header == "KERN") {
 		std::string rest = line.substr(colon + 2);
+		// FreeBSD-derived drivers, LinuxKPI ones included, print through
+		// freebsd_network's device_printf(): "[<driver>] (<bus>) ...".
+		if (rest.size() > 2 && rest[0] == '[') {
+			size_t close = rest.find(']');
+			if (close != std::string::npos && close > 1 && close <= 33) {
+				std::string word = rest.substr(1, close - 1);
+				bool plain = true;
+				for (size_t i = 0; i < word.size(); i++) {
+					char c = word[i];
+					if (!isalnum((unsigned char)c) && c != '_' && c != '-'
+						&& c != '.') {
+						plain = false;
+						break;
+					}
+				}
+				if (plain)
+					return word;
+			}
+		}
 		size_t inner = rest.find(':');
 		if (inner != std::string::npos && inner > 0 && inner <= 32) {
 			std::string word = rest.substr(0, inner);

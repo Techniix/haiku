@@ -172,6 +172,8 @@ LATENCY_MAX_GAP = 4 * 256
 STREAM_SCREENSHOTS = ["mediaplayer_hls"]
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
+LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
+	"linuxkpi_hardware", "linuxkpi_compatibility"]
 # The Installer with a destination that has an installation (F-23).
 INSTALLER_SCREENSHOTS = ["installer_modes"]
 
@@ -188,7 +190,9 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"package_priority_test", "libpackage.so", "shortcut_keys_test",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
 	"virtio_input", "<input>tablet", "<input>virtio",
-	"usb_audio", "usb", "<usb>xhci", "usb_audio_test", "hda", "hda_eld_test",
+	"usb_audio", "usb", "<usb>xhci", "usb_audio_test",
+	"lkpi_pcitest", "linuxkpi_test", "mt7921e", "lkpictl",
+	"LinuxKPIManager", "linuxkpi_ui_test", "hda", "hda_eld_test",
 	"usb_webcam.media_addon", "uvc_test", "CodyCam",
 	"video_producer_demo.media_addon", "media_video_test",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
@@ -2213,6 +2217,11 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 			"out.channels=2,out.format=s16"
 			% (n, os.path.join(results_dir, "usb-%d.wav" % n)))] + [
 		"-nic", "none",
+		# QEMU's educational PCI device (MMIO, MSI, DMA): lkpi_pcitest
+		# tests the LinuxKPI core against it (linuxkpi suite, F-26;
+		# check_linuxkpi()). A 24-bit DMA mask instead of 28 puts nearly
+		# all guest memory above it, so the DMA API must bounce.
+		"-device", "edu,dma_mask=0xffffff",
 		# Device models report malformed guest requests as guest errors.
 		"-d", "guest_errors,unimp",
 		"-D", os.path.join(results_dir, "qemu.log"),
@@ -2577,6 +2586,29 @@ def parse_qemu_log(results_dir, report):
 		"pass": len(invalid) == 0,
 		"detail": "%d rejected access(es)%s" % (len(invalid),
 			": " + invalid[0] if invalid else "")})
+
+
+def check_linuxkpi(results_dir, report):
+	"""QEMU's edu device masks DMA addresses to its DMA mask and prints
+	"EDU: clamping DMA <address> to <address>!" on its standard output (the
+	serial pipe, so serial.log) when an address does not fit (the harness sets it to 24
+	bits). lkpi_pcitest maps buffers above that mask on purpose (linuxkpi_test): LinuxKPI's DMA
+	API has to bounce them, and a clamp means it handed the device an
+	address it cannot reach. The guest-side check that the data arrived
+	intact is linuxkpi.edu_dma_streaming_roundtrip."""
+	clamps = []
+	try:
+		with open(os.path.join(results_dir, "serial.log"),
+				errors="replace") as serial:
+			clamps = [line.strip() for line in serial
+				if "EDU: clamping" in line]
+	except OSError:
+		pass
+	report.setdefault("host_checks", []).append({
+		"name": "linuxkpi.edu_no_clamp",
+		"pass": len(clamps) == 0,
+		"detail": "%d DMA address(es) clamped by the device%s" % (len(clamps),
+			": " + clamps[0] if clamps else "")})
 
 
 def read_wav(path):
@@ -3707,6 +3739,8 @@ def main():
 		check_branding(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
 		check_installer_boots(args, results_dir, report)
+		if "linuxkpi_test" in (args.only or available):
+			check_linuxkpi(results_dir, report)
 		if "crashlog_test" in (args.only or available) \
 				and not args.installer_upgrade:
 			check_crashlog(results_dir, report)
@@ -3749,6 +3783,9 @@ def main():
 		if "bootmenu_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
 				"bootmenu.screenshots")
+		if "linuxkpi_ui_test" in (args.only or available):
+			check_screenshots(results_dir, report, LINUXKPI_SCREENSHOTS,
+				"linuxkpi_ui.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)
