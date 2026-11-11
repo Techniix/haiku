@@ -124,7 +124,11 @@ AVCodecDecoder::AVCodecDecoder()
 	fBufferSinkContext(NULL),
 	fBufferSourceContext(NULL),
 	fFilterGraph(NULL),
-	fFilterFrame(NULL)
+	fFilterFrame(NULL),
+	fAccelDecoder(NULL),
+	fHaveAccelSurface(false),
+	fAccelFlushing(false),
+	fAccelSurfaces(0)
 {
 	TRACE("AVCodecDecoder::AVCodecDecoder()\n");
 }
@@ -141,6 +145,9 @@ AVCodecDecoder::~AVCodecDecoder()
 			conversionTime / profileCounter, fFrame);
 	}
 #endif
+
+	_ReleaseAcceleratedSurface();
+	delete fAccelDecoder;
 
 	swr_free(&fResampleContext);
 	free(fChunkBuffer);
@@ -174,7 +181,12 @@ void
 AVCodecDecoder::GetCodecInfo(media_codec_info* mci)
 {
 	snprintf(mci->short_name, 32, "%s", fCodec->name);
-	snprintf(mci->pretty_name, 96, "%s", fCodec->long_name);
+	if (fAccelDecoder != NULL) {
+		// Renga (F-31 phase 5): say who decodes
+		snprintf(mci->pretty_name, 96, "%s (accelerated: %s)",
+			fCodec->long_name, fAccelName.String());
+	} else
+		snprintf(mci->pretty_name, 96, "%s", fCodec->long_name);
 	mci->id = 0;
 	mci->sub_id = fCodec->id;
 }
@@ -270,6 +282,11 @@ AVCodecDecoder::SeekedTo(int64 frame, bigtime_t time)
 	if (fCodecInitDone) {
 		avcodec_flush_buffers(fCodecContext);
 		_ResetTempPacket();
+	}
+	if (fAccelDecoder != NULL) {
+		_ReleaseAcceleratedSurface();
+		fAccelDecoder->Reset();
+		fAccelFlushing = false;
 	}
 
 	// Flush internal buffers as well.
@@ -509,6 +526,8 @@ AVCodecDecoder::_NegotiateVideoOutputFormat(media_format* inOutFormat)
 	fChunkBufferSize = 0;
 
 	_ResetTempPacket();
+
+	_SetUpAcceleration();
 
 	status_t statusOfDecodingFirstFrame = _DecodeNextVideoFrame();
 	if (statusOfDecodingFirstFrame != B_OK) {
@@ -1249,6 +1268,9 @@ AVCodecDecoder::_UpdateMediaHeaderForAudioFrame()
 status_t
 AVCodecDecoder::_DecodeNextVideoFrame()
 {
+	if (fAccelDecoder != NULL)
+		return _DecodeNextAcceleratedVideoFrame();
+
 	int error;
 	int send_error;
 
@@ -1653,29 +1675,36 @@ AVCodecDecoder::_DeinterlaceAndColorConvertVideoFrame()
 		rawPicture.linesize[2] = fRawDecodedPicture->linesize[2];
 		rawPicture.linesize[3] = fRawDecodedPicture->linesize[3];
 
+		AVPixelFormat interlacedFormat = fAccelDecoder != NULL
+			? (AVPixelFormat)fRawDecodedPicture->format
+			: fCodecContext->pix_fmt;
 		if (av_image_alloc(deinterlacedPicture.data,
 				deinterlacedPicture.linesize, displayWidth, displayHeight,
-				fCodecContext->pix_fmt, 1) < 0)
+				interlacedFormat, 1) < 0)
 			return B_NO_MEMORY;
 
 		// deinterlace implemented using avfilter
 		_ProcessFilterGraph(&deinterlacedPicture, &rawPicture,
-			fCodecContext->pix_fmt, displayWidth, displayHeight);
+			interlacedFormat, displayWidth, displayHeight);
 		useDeinterlacedPicture = true;
 	}
 
-	// Some decoders do not set pix_fmt until they have decoded 1 frame
+	// Some decoders do not set pix_fmt until they have decoded 1 frame.
+	// Renga: frames from a video acceleration back end are NV12, whatever
+	// the codec context says.
+	AVPixelFormat pixelFormat = fAccelDecoder != NULL
+		? (AVPixelFormat)fRawDecodedPicture->format : fCodecContext->pix_fmt;
 #if USE_SWS_FOR_COLOR_SPACE_CONVERSION
 	if (fSwsContext == NULL) {
 		fSwsContext = sws_getContext(displayWidth, displayHeight,
-			fCodecContext->pix_fmt, displayWidth, displayHeight,
+			pixelFormat, displayWidth, displayHeight,
 			colorspace_to_pixfmt(fOutputColorSpace),
 			SWS_FAST_BILINEAR, NULL, NULL, NULL);
 	}
 #else
 	if (fFormatConversionFunc == NULL) {
 		fFormatConversionFunc = resolve_colorspace(fOutputColorSpace,
-			fCodecContext->pix_fmt, displayWidth, displayHeight);
+			pixelFormat, displayWidth, displayHeight);
 	}
 #endif
 
@@ -1835,4 +1864,197 @@ AVCodecDecoder::_ProcessFilterGraph(AVFrame *dst, const AVFrame *src,
 		fFilterFrame->linesize, pixfmt, width, height);
 	av_frame_unref(fFilterFrame);
 	return B_OK;
+}
+
+
+// #pragma mark - video acceleration (Renga, F-31 phase 5)
+
+
+/*!	The VA-API-style profile for the codec being decoded. Before the first
+	frame the stream's exact profile is not known everywhere, so the
+	superset profile of each codec is asked for (H.264 High, Advanced
+	Simple, ...); a back end that cannot decode the stream after all is
+	dropped at the first packet it refuses (_StopAcceleration()).
+*/
+static BPrivate::VideoAccelProfile
+accel_profile_for(const AVCodecContext* context)
+{
+	using namespace BPrivate;
+	switch (context->codec_id) {
+		case AV_CODEC_ID_MPEG2VIDEO:
+			return B_VIDEO_ACCEL_MPEG2_MAIN;
+		case AV_CODEC_ID_MPEG4:
+			return context->profile == FF_PROFILE_MPEG4_SIMPLE
+				? B_VIDEO_ACCEL_MPEG4_SIMPLE
+				: B_VIDEO_ACCEL_MPEG4_ADVANCED_SIMPLE;
+		case AV_CODEC_ID_H264:
+			if (context->profile == FF_PROFILE_H264_CONSTRAINED_BASELINE)
+				return B_VIDEO_ACCEL_H264_CONSTRAINED_BASELINE;
+			if (context->profile == FF_PROFILE_H264_MAIN)
+				return B_VIDEO_ACCEL_H264_MAIN;
+			return B_VIDEO_ACCEL_H264_HIGH;
+		case AV_CODEC_ID_HEVC:
+			return context->profile == FF_PROFILE_HEVC_MAIN_10
+				? B_VIDEO_ACCEL_HEVC_MAIN10 : B_VIDEO_ACCEL_HEVC_MAIN;
+		case AV_CODEC_ID_VP8:
+			return B_VIDEO_ACCEL_VP8;
+		case AV_CODEC_ID_VP9:
+			return context->profile == FF_PROFILE_VP9_2
+				? B_VIDEO_ACCEL_VP9_PROFILE2 : B_VIDEO_ACCEL_VP9_PROFILE0;
+		case AV_CODEC_ID_AV1:
+			return B_VIDEO_ACCEL_AV1_MAIN;
+		default:
+			return B_VIDEO_ACCEL_PROFILE_NONE;
+	}
+}
+
+
+/*!	Asks the video acceleration roster for a back end that decodes this
+	stream (the choice: VideoAcceleration.h). The software decoder stays
+	open next to it, so that a back end that gives up hands over to it.
+*/
+void
+AVCodecDecoder::_SetUpAcceleration()
+{
+	using namespace BPrivate;
+	if (fIsAudio || fAccelDecoder != NULL)
+		return;
+	VideoAccelProfile profile = accel_profile_for(fCodecContext);
+	if (profile == B_VIDEO_ACCEL_PROFILE_NONE)
+		return;
+	VideoAcceleratorRoster* roster = VideoAcceleratorRoster::Default();
+	VideoAccelerator* accelerator = roster != NULL ? roster->Find(profile,
+		B_VIDEO_ACCEL_DECODE, fCodecContext->width, fCodecContext->height)
+		: NULL;
+	if (accelerator == NULL)
+		return;
+
+	VideoAccelDecoderSetup setup;
+	setup.profile = profile;
+	setup.width = fCodecContext->width;
+	setup.height = fCodecContext->height;
+	setup.extradata = fCodecContext->extradata;
+	setup.extradataSize = fCodecContext->extradata_size;
+	setup.surfaces = 0;
+	status_t status = accelerator->CreateDecoder(setup, &fAccelDecoder);
+	if (status != B_OK) {
+		fAccelDecoder = NULL;
+		fprintf(stderr, "ffmpeg: %s: the %s video accelerator cannot decode "
+			"%s: %s\n", fCodec->name, accelerator->Name(),
+			VideoAcceleratorRoster::ProfileName(profile), strerror(status));
+		return;
+	}
+	fAccelName = accelerator->Name();
+	fAccelFlushing = false;
+	fAccelSurfaces = 0;
+	// the conversion context is made for the first frame's format
+#if USE_SWS_FOR_COLOR_SPACE_CONVERSION
+	if (fSwsContext != NULL)
+		sws_freeContext(fSwsContext);
+	fSwsContext = NULL;
+#else
+	fFormatConversionFunc = NULL;
+#endif
+	fprintf(stderr, "ffmpeg: %s decoding through the %s video accelerator "
+		"(%s)\n", fCodec->name, fAccelName.String(),
+		VideoAcceleratorRoster::ProfileName(profile));
+}
+
+
+void
+AVCodecDecoder::_ReleaseAcceleratedSurface()
+{
+	if (fAccelDecoder != NULL && fHaveAccelSurface)
+		fAccelDecoder->ReleaseSurface(&fAccelSurface);
+	fHaveAccelSurface = false;
+}
+
+
+void
+AVCodecDecoder::_StopAcceleration(const char* reason)
+{
+	fprintf(stderr, "ffmpeg: %s: leaving the %s video accelerator (%s), "
+		"decoding in software\n", fCodec->name, fAccelName.String(), reason);
+	_ReleaseAcceleratedSurface();
+	delete fAccelDecoder;
+	fAccelDecoder = NULL;
+	fAccelName = "";
+#if USE_SWS_FOR_COLOR_SPACE_CONVERSION
+	if (fSwsContext != NULL)
+		sws_freeContext(fSwsContext);
+	fSwsContext = NULL;
+#else
+	fFormatConversionFunc = NULL;
+#endif
+}
+
+
+/*!	_DecodeNextVideoFrame() through the back end: packets go to it, its
+	NV12 surfaces come back and go through the same header update and
+	colour conversion as FFmpeg's own frames (fRawDecodedPicture points into
+	the surface until the next frame).
+*/
+status_t
+AVCodecDecoder::_DecodeNextAcceleratedVideoFrame()
+{
+	_ReleaseAcceleratedSurface();
+
+	while (true) {
+		status_t status = fAccelDecoder->ReceiveSurface(&fAccelSurface);
+		if (status == B_OK)
+			break;
+		if (status == B_LAST_BUFFER_ERROR)
+			return B_LAST_BUFFER_ERROR;
+		if (status != B_WOULD_BLOCK) {
+			_StopAcceleration(strerror(status));
+			return _DecodeNextVideoFrame();
+		}
+		if (fAccelFlushing)
+			return B_LAST_BUFFER_ERROR;
+
+		status = _LoadNextChunkIfNeededAndAssignStartTime();
+		if (status == B_LAST_BUFFER_ERROR) {
+			fAccelDecoder->SendPacket(NULL, 0, 0, false);
+			fAccelFlushing = true;
+			continue;
+		}
+		if (status != B_OK)
+			return status;
+
+		bigtime_t timestamp = fTempPacket->pts != AV_NOPTS_VALUE
+			? fTempPacket->pts : fTempPacket->dts;
+		status = fAccelDecoder->SendPacket(fTempPacket->data,
+			fTempPacket->size, timestamp,
+			(fTempPacket->flags & AV_PKT_FLAG_KEY) != 0);
+		if (status == B_WOULD_BLOCK)
+			continue;
+		if (status != B_OK && fAccelSurfaces == 0) {
+			// The back end refuses this stream (a profile it lacks, which
+			// the container did not tell): the software decoder, open
+			// next to it, takes over with this very packet.
+			_StopAcceleration(strerror(status));
+			return _DecodeNextVideoFrame();
+		}
+		// the packet is consumed
+		fTempPacket->data = NULL;
+		fTempPacket->size = 0;
+	}
+
+	fHaveAccelSurface = true;
+	fAccelSurfaces++;
+	av_frame_unref(fRawDecodedPicture);
+	fRawDecodedPicture->format = fAccelSurface.format
+		== BPrivate::B_VIDEO_ACCEL_P010 ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+	fRawDecodedPicture->width = fAccelSurface.width;
+	fRawDecodedPicture->height = fAccelSurface.height;
+	fRawDecodedPicture->data[0] = fAccelSurface.planes[0];
+	fRawDecodedPicture->data[1] = fAccelSurface.planes[1];
+	fRawDecodedPicture->linesize[0] = fAccelSurface.bytesPerRow[0];
+	fRawDecodedPicture->linesize[1] = fAccelSurface.bytesPerRow[1];
+	fRawDecodedPicture->pts = fAccelSurface.timestamp;
+	fRawDecodedPicture->best_effort_timestamp = fAccelSurface.timestamp;
+	if (fAccelSurface.keyFrame)
+		fRawDecodedPicture->flags |= AV_FRAME_FLAG_KEY;
+
+	return _HandleNewVideoFrameAndUpdateSystemState();
 }

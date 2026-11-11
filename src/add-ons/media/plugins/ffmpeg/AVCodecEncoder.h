@@ -16,6 +16,9 @@ extern "C" {
 
 #include "EncoderPlugin.h"
 
+#include <String.h>
+#include <VideoAcceleration.h>
+
 
 typedef AVCodecID CodecID;
 
@@ -68,6 +71,15 @@ private:
 									AVPacket* pkt,
 									media_encode_info* info);
 
+			// Renga (F-31 phase 5): encoding through a video acceleration
+			// back end (VideoAcceleration.h)
+			void				_SetUpAcceleration();
+			status_t			_EncodeAcceleratedVideo(const void* buffer,
+									int64 frameCount,
+									media_encode_info* info);
+			status_t			_WriteAcceleratedPackets(
+									media_encode_info* info);
+
 private:
 			media_format		fInputFormat;
 			encode_parameters	fEncodeParameters;
@@ -78,6 +90,10 @@ private:
 			CodecID				fCodecID;
 			const AVCodec*		fCodec;
 			AVCodecContext*		fCodecContext;
+
+			BPrivate::VideoAccelEncoder* fAccelEncoder;
+			SwsContext*			fAccelSwsContext;
+			BString				fAccelName;
 			
 			enum {
 				CODEC_INIT_NEEDED = 0,

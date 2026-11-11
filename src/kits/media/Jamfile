@@ -25,6 +25,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			BufferProducer.cpp
 			CaptureSession.cpp
 			MediaCodec.cpp
+			VideoAcceleration.cpp
 			Controllable.cpp
 			FileInterface.cpp
 			MediaAddOn.cpp

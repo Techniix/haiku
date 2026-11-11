@@ -48,6 +48,8 @@ AVCodecEncoder::AVCodecEncoder(uint32 codecID, int bitRateScale)
 	fCodecID((CodecID)codecID),
 	fCodec(NULL),
 	fCodecContext(NULL),
+	fAccelEncoder(NULL),
+	fAccelSwsContext(NULL),
 	fCodecInitStatus(CODEC_INIT_NEEDED),
 	fFrame(av_frame_alloc()),
 	fSwsContext(NULL),
@@ -85,6 +87,9 @@ AVCodecEncoder::~AVCodecEncoder()
 {
 	TRACE("AVCodecEncoder::~AVCodecEncoder()\n");
 
+	delete fAccelEncoder;
+	if (fAccelSwsContext != NULL)
+		sws_freeContext(fAccelSwsContext);
 	if (fSwsContext != NULL)
 		sws_freeContext(fSwsContext);
 
@@ -150,8 +155,10 @@ AVCodecEncoder::SetUp(const media_format* inputFormat)
 	fFramesWritten = 0;
 
 	status_t status = _Setup();
-	if (status == B_OK)
+	if (status == B_OK) {
+		_SetUpAcceleration();
 		_PublishExtradata();
+	}
 	return status;
 }
 
@@ -165,6 +172,13 @@ AVCodecEncoder::SetUp(const media_format* inputFormat)
 void
 AVCodecEncoder::_PublishExtradata()
 {
+	if (fAccelEncoder != NULL) {
+		const void* data;
+		size_t size;
+		if (fAccelEncoder->GetExtradata(&data, &size) == B_OK && size > 0)
+			AddTrackInfo(B_CODEC_TYPE_INFO, data, size, 0);
+		return;
+	}
 	if (!_OpenCodecIfNeeded())
 		return;
 	if (fCodecContext->extradata != NULL && fCodecContext->extradata_size > 0) {
@@ -250,8 +264,10 @@ AVCodecEncoder::SetEncodeParameters(encode_parameters* parameters)
 //	}
 
 	status_t status = _Setup();
-	if (status == B_OK)
+	if (status == B_OK) {
+		_SetUpAcceleration();
 		_PublishExtradata();
+	}
 	return status;
 }
 
@@ -261,6 +277,9 @@ AVCodecEncoder::Encode(const void* buffer, int64 frameCount,
 	media_encode_info* info)
 {
 	TRACE("AVCodecEncoder::Encode(%p, %" B_PRId64 ", %p)\n", buffer, frameCount, info);
+
+	if (fAccelEncoder != NULL)
+		return _EncodeAcceleratedVideo(buffer, frameCount, info);
 
 	if (!_OpenCodecIfNeeded())
 		return B_NO_INIT;
@@ -939,3 +958,152 @@ AVCodecEncoder::_EncodeVideoFrame(AVFrame* frame, AVPacket* pkt, media_encode_in
 	return B_ERROR;
 }
 
+
+
+// #pragma mark - video acceleration (Renga, F-31 phase 5)
+
+
+static BPrivate::VideoAccelProfile
+accel_encode_profile_for(AVCodecID codec)
+{
+	using namespace BPrivate;
+	switch (codec) {
+		case AV_CODEC_ID_MPEG2VIDEO:
+			return B_VIDEO_ACCEL_MPEG2_MAIN;
+		case AV_CODEC_ID_MPEG4:
+			return B_VIDEO_ACCEL_MPEG4_SIMPLE;
+		case AV_CODEC_ID_H264:
+			return B_VIDEO_ACCEL_H264_HIGH;
+		case AV_CODEC_ID_HEVC:
+			return B_VIDEO_ACCEL_HEVC_MAIN;
+		case AV_CODEC_ID_VP8:
+			return B_VIDEO_ACCEL_VP8;
+		case AV_CODEC_ID_VP9:
+			return B_VIDEO_ACCEL_VP9_PROFILE0;
+		case AV_CODEC_ID_AV1:
+			return B_VIDEO_ACCEL_AV1_MAIN;
+		default:
+			return B_VIDEO_ACCEL_PROFILE_NONE;
+	}
+}
+
+
+/*!	Video only: asks the roster for a back end that encodes this codec
+	(see VideoAcceleration.h for the choice). With one, the software codec
+	is never opened; frames are converted to the back end's NV12 surfaces
+	and its packets are written as the codec's.
+*/
+void
+AVCodecEncoder::_SetUpAcceleration()
+{
+	using namespace BPrivate;
+	delete fAccelEncoder;
+	fAccelEncoder = NULL;
+	if (fInputFormat.type != B_MEDIA_RAW_VIDEO)
+		return;
+	VideoAccelProfile profile = accel_encode_profile_for(fCodecID);
+	if (profile == B_VIDEO_ACCEL_PROFILE_NONE)
+		return;
+	VideoAcceleratorRoster* roster = VideoAcceleratorRoster::Default();
+	VideoAccelerator* accelerator = roster != NULL ? roster->Find(profile,
+		B_VIDEO_ACCEL_ENCODE, fCodecContext->width, fCodecContext->height)
+		: NULL;
+	if (accelerator == NULL)
+		return;
+
+	VideoAccelEncoderSetup setup;
+	setup.profile = profile;
+	setup.width = fCodecContext->width;
+	setup.height = fCodecContext->height;
+	setup.frameRate = fInputFormat.u.raw_video.field_rate;
+	setup.bitRate = (int32)fCodecContext->bit_rate;
+	setup.quality = fEncodeParameters.quality;
+	setup.keyFrameInterval = fCodecContext->gop_size;
+	setup.format = B_VIDEO_ACCEL_NV12;
+	status_t status = accelerator->CreateEncoder(setup, &fAccelEncoder);
+	if (status != B_OK) {
+		fAccelEncoder = NULL;
+		fprintf(stderr, "ffmpeg: %s: the %s video accelerator cannot encode "
+			"%s: %s\n", fCodec->name, accelerator->Name(),
+			VideoAcceleratorRoster::ProfileName(profile), strerror(status));
+		return;
+	}
+	fAccelName = accelerator->Name();
+	if (fAccelSwsContext != NULL)
+		sws_freeContext(fAccelSwsContext);
+	fAccelSwsContext = sws_getContext(fCodecContext->width,
+		fCodecContext->height,
+		colorspace_to_pixfmt(fInputFormat.u.raw_video.display.format),
+		fCodecContext->width, fCodecContext->height, AV_PIX_FMT_NV12,
+		SWS_FAST_BILINEAR, NULL, NULL, NULL);
+	fprintf(stderr, "ffmpeg: %s encoding through the %s video accelerator "
+		"(%s)\n", fCodec->name, fAccelName.String(),
+		VideoAcceleratorRoster::ProfileName(profile));
+}
+
+
+status_t
+AVCodecEncoder::_EncodeAcceleratedVideo(const void* buffer, int64 frameCount,
+	media_encode_info* info)
+{
+	if (fChunkBuffer == NULL || fAccelSwsContext == NULL)
+		return B_NO_MEMORY;
+
+	int bytesPerRow = fInputFormat.u.raw_video.display.bytes_per_row;
+	int lines = fInputFormat.u.raw_video.display.line_count;
+	const uint8* frame = (const uint8*)buffer;
+	for (int64 i = 0; i < frameCount; i++) {
+		BPrivate::VideoAccelSurface surface;
+		status_t status = fAccelEncoder->AcquireSurface(&surface);
+		if (status == B_WOULD_BLOCK) {
+			// every surface is in flight: take packets out first
+			status = _WriteAcceleratedPackets(info);
+			if (status == B_OK)
+				status = fAccelEncoder->AcquireSurface(&surface);
+		}
+		if (status != B_OK)
+			return status;
+
+		uint8_t* planes[4] = { surface.planes[0], surface.planes[1], NULL,
+			NULL };
+		int strides[4] = { surface.bytesPerRow[0], surface.bytesPerRow[1], 0,
+			0 };
+		const uint8_t* source = frame;
+		sws_scale(fAccelSwsContext, &source, &bytesPerRow, 0, lines, planes,
+			strides);
+		surface.timestamp = (bigtime_t)(fFramesWritten * 1000000LL
+			/ fInputFormat.u.raw_video.field_rate);
+		status = fAccelEncoder->SendSurface(&surface,
+			(info->flags & B_MEDIA_KEY_FRAME) != 0);
+		if (status != B_OK)
+			return status;
+		status = _WriteAcceleratedPackets(info);
+		if (status != B_OK)
+			return status;
+		fFramesWritten++;
+		frame += (size_t)bytesPerRow * lines;
+	}
+	return B_OK;
+}
+
+
+status_t
+AVCodecEncoder::_WriteAcceleratedPackets(media_encode_info* info)
+{
+	while (true) {
+		size_t size = kDefaultChunkBufferSize;
+		bigtime_t timestamp;
+		bool keyFrame;
+		status_t status = fAccelEncoder->ReceivePacket(fChunkBuffer, &size,
+			&timestamp, &keyFrame);
+		if (status == B_WOULD_BLOCK || status == B_LAST_BUFFER_ERROR)
+			return B_OK;
+		if (status != B_OK)
+			return status;
+		info->start_time = timestamp;
+		info->flags = keyFrame ? B_MEDIA_KEY_FRAME : 0;
+		status = WriteChunk(fChunkBuffer, size, info);
+		if (status != B_OK)
+			return status;
+	}
+}

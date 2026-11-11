@@ -1,0 +1,7 @@
+SubDir HAIKU_TOP src add-ons media video_accelerators ;
+
+# Back ends of the video acceleration interface (roadmap F-31 phase 5,
+# headers/private/media/VideoAcceleration.h), loaded by libmedia's
+# VideoAcceleratorRoster from add-ons/media/video_accelerators.
+
+SubInclude HAIKU_TOP src add-ons media video_accelerators software ;

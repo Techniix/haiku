@@ -685,6 +685,21 @@ of a 1 GiB guest was, so the bounce path went untested.
   with MPEG-4 + AAC, MP3, and FLV with Sorenson Spark (`flv1`) + AAC, each
   with a seek to 1 s that must land between 0.5 and 1.1 s;
   `ListCodecs("webm")` must list vp8, vp9, opus and vorbis.
+- **video_accel** (`media_hwvideo_test`, renga-* images): the hardware
+  video plumbing (roadmap F-31 phase 5,
+  `headers/private/media/VideoAcceleration.h`) with the "software"
+  reference back end (`software_video_accelerator`, in the harness
+  images' non-packaged `add-ons/media/video_accelerators`), which
+  implements the interface with FFmpeg in software. The roster loads it
+  but does not choose it by itself (it is no hardware), chooses it by
+  name (`RENGA_VIDEO_ACCELERATION=software`) and nothing with `off`; its
+  capabilities; VP9 encoding through the interface (NV12 surfaces in
+  areas, one colour per second, key frames asked for once a second) and
+  decoding of those packets back to NV12 surfaces in order and in their
+  colours; then the FFmpeg plug-in: `MediaWriter` encodes VP9 through the
+  back end (the plug-in says so on stderr) and `MediaReader` decodes the
+  file through it (the codec name ends in "(accelerated: software)",
+  every frame in its colour) and, with `off`, in software.
 - **media_stream** (`media_stream_test`, renga-* images): streaming through
   the FFmpeg plug-in's protocols (`FFmpegURLIO.h`, roadmap F-31 phase 4)
   on the guest's loopback interface (the harness attaches no network

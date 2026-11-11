@@ -114,6 +114,17 @@ BMediaTrack::GetCodecInfo(media_codec_info* _codecInfo) const
 	strlcpy(_codecInfo->pretty_name, fCodecInfo.pretty_name,
 		sizeof(_codecInfo->pretty_name));
 
+	// Renga (F-31 phase 5): the decoder's name as it is now; it says when
+	// a video acceleration back end decodes, which it only knows once the
+	// output format was negotiated.
+	media_codec_info current;
+	memset(&current, 0, sizeof(current));
+	fDecoder->GetCodecInfo(&current);
+	if (current.pretty_name[0] != '\0') {
+		strlcpy(_codecInfo->pretty_name, current.pretty_name,
+			sizeof(_codecInfo->pretty_name));
+	}
+
 	return B_OK;
 }
 

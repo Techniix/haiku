@@ -35,6 +35,9 @@ extern "C" {
 #include "CodecTable.h"
 #include "gfx_util.h"
 
+#include <String.h>
+#include <VideoAcceleration.h>
+
 
 #if 1
 #define USE_SWS_FOR_COLOR_SPACE_CONVERSION 1
@@ -99,6 +102,13 @@ private:
 			status_t	_FlushOneVideoFrameFromDecoderBuffer();
 			void		_UpdateMediaHeaderForVideoFrame();
 			status_t	_DeinterlaceAndColorConvertVideoFrame();
+
+			// Renga (F-31 phase 5): decoding through a video acceleration
+			// back end (VideoAcceleration.h)
+			void		_SetUpAcceleration();
+			void		_ReleaseAcceleratedSurface();
+			status_t	_DecodeNextAcceleratedVideoFrame();
+			void		_StopAcceleration(const char* reason);
 
 			// video deinterlace filter graph
 			status_t	_InitFilterGraph(enum AVPixelFormat pixfmt,
@@ -165,6 +175,13 @@ private:
 			int32				fLastWidth;
 			int32				fLastHeight;
 			enum AVPixelFormat	fLastPixfmt;
+
+			BPrivate::VideoAccelDecoder* fAccelDecoder;
+			BPrivate::VideoAccelSurface fAccelSurface;
+			bool				fHaveAccelSurface;
+			bool				fAccelFlushing;
+			int32				fAccelSurfaces;
+			BString				fAccelName;
 };
 
 #endif // AVCODEC_DECODER_H

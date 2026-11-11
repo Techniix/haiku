@@ -1,0 +1,32 @@
+SubDir HAIKU_TOP src add-ons media video_accelerators software ;
+
+# The reference back end: the interface implemented with FFmpeg in software,
+# never chosen by itself (it is no hardware). Harness images carry it in the
+# non-packaged add-ons, to test the plumbing; real back ends (NVDEC/NVENC,
+# Mesa through LinuxKPI DRM) follow its shape.
+
+UsePrivateHeaders media ;
+
+SubDirC++Flags -D__STDC_CONSTANT_MACROS ;
+
+local architectureObject ;
+for architectureObject in [ MultiArchSubDirSetup ] {
+	on $(architectureObject) {
+		UseBuildFeatureHeaders ffmpeg ;
+		Includes [ FGristFiles SoftwareAccelerator.cpp ]
+			: [ BuildFeatureAttribute ffmpeg : headers ] ;
+
+		Addon [ MultiArchDefaultGristFiles software_video_accelerator ] :
+			SoftwareAccelerator.cpp
+			:
+			[ BuildFeatureAttribute ffmpeg : libraries ]
+			be
+			[ TargetLibsupc++ ]
+		;
+	}
+}
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged add-ons media video_accelerators
+		: software_video_accelerator ;
+}

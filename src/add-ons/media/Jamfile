@@ -2,3 +2,5 @@ SubDir HAIKU_TOP src add-ons media ;
 
 SubInclude HAIKU_TOP src add-ons media media-add-ons ;
 SubInclude HAIKU_TOP src add-ons media plugins ;
+# Renga (F-31 phase 5): video acceleration back ends
+SubInclude HAIKU_TOP src add-ons media video_accelerators ;
