@@ -32,7 +32,10 @@ Encoder::~Encoder()
 status_t
 Encoder::AddTrackInfo(uint32 code, const void* data, size_t size, uint32 flags)
 {
-	return B_NOT_SUPPORTED;
+	// Renga: on to the writer (ChunkWriter::AddTrackInfo())
+	if (fChunkWriter == NULL)
+		return B_NOT_SUPPORTED;
+	return fChunkWriter->AddTrackInfo(code, data, size, flags);
 }
 
 

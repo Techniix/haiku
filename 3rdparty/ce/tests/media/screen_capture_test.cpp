@@ -77,6 +77,10 @@ static int sFailures = 0;
 static const double kToneHertz = 1370.0;
 
 
+// Prepended to check names (the WebM recording repeats the recording checks).
+static const char* sPrefix = "";
+
+
 static void
 report(const char* name, bool pass, const char* format, ...)
 {
@@ -85,8 +89,8 @@ report(const char* name, bool pass, const char* format, ...)
 	va_start(args, format);
 	vsnprintf(detail, sizeof(detail), format, args);
 	va_end(args);
-	printf("CE-TEST " SUITE ".%s %s %s\n", name, pass ? "PASS" : "FAIL",
-		detail);
+	printf("CE-TEST " SUITE ".%s%s %s %s\n", sPrefix, name,
+		pass ? "PASS" : "FAIL", detail);
 	fflush(stdout);
 	if (!pass)
 		sFailures++;
@@ -624,10 +628,11 @@ check_recording(const char* path, BRect region, float frameRate,
 
 
 static void
-test_screenshot_recording(PatternWindow* window, BRect region)
+test_screenshot_recording(PatternWindow* window, BRect region,
+	const char* format = NULL)
 {
 	// What the Media Kit can write today (the FFmpeg plug-in).
-	{
+	if (format == NULL) {
 		BString formats;
 		media_file_format format;
 		int32 cookie = 0;
@@ -643,9 +648,12 @@ test_screenshot_recording(PatternWindow* window, BRect region)
 	}
 
 	// Screenshot asks too; allow it beforehand, as the user would once.
-	int result = run_agent("--set application/x-vnd.haiku-screenshot allow");
-	report("screenshot_permission", result == 0, "ScreenRecording --set ... "
-		"allow: exit %d", result);
+	if (format == NULL) {
+		int result = run_agent(
+			"--set application/x-vnd.haiku-screenshot allow");
+		report("screenshot_permission", result == 0, "ScreenRecording --set "
+			"... allow: exit %d", result);
+	}
 
 	double phase = 0;
 	BSoundPlayer player("capture test tone", play_tone, NULL, &phase);
@@ -655,15 +663,18 @@ test_screenshot_recording(PatternWindow* window, BRect region)
 
 	const double kSeconds = 4.0;
 	const float kFrameRate = 10;
-	const char* kFile = "/tmp/capture_test.mkv";
+	BString file("/tmp/capture_test.");
+	file << (format != NULL ? format : "mkv");
+	const char* kFile = file.String();
 	unlink(kFile);
 	ScreenshotRun run;
 	run.exitStatus = -1;
 	run.command.SetToFormat("/boot/system/apps/Screenshot --record %.1f "
 		"--region %d,%d,%d,%d --file %s --system-audio --frame-rate %.0f "
-		"--quit 2>&1", kSeconds, (int)region.left, (int)region.top,
+		"%s%s --quit 2>&1", kSeconds, (int)region.left, (int)region.top,
 		(int)region.IntegerWidth() + 1, (int)region.IntegerHeight() + 1, kFile,
-		kFrameRate);
+		kFrameRate, format != NULL ? "--format " : "",
+		format != NULL ? format : "");
 	thread_id thread = spawn_thread(run_screenshot, "screenshot", 10, &run);
 	resume_thread(thread);
 
@@ -698,7 +709,7 @@ test_screenshot_recording(PatternWindow* window, BRect region)
 			window->View()->Sync();
 			window->Unlock();
 		}
-		if (i == 1) {
+		if (i == 1 && format == NULL) {
 			// Screenshot's window shows "Recording ...", the indicator is
 			// up.
 			printf("CE-HOST screenshot screenshot_recording\n");
@@ -892,6 +903,11 @@ run_tests(PatternWindow* window)
 
 	// Screenshot.
 	test_screenshot_recording(window, region);
+	// The same in WebM (VP9, Opus), Screenshot's other format (F-31
+	// phase 4: --format, the Format menu).
+	sPrefix = "webm_";
+	test_screenshot_recording(window, region, "webm");
+	sPrefix = "";
 }
 
 

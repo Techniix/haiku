@@ -371,6 +371,21 @@ AVFormatWriter::StreamCookie::AddTrackInfo(uint32 code,
 
 	BAutolock _(fStreamLock);
 
+	// Renga (F-31 phase 4): the encoder's extradata (Opus and Vorbis
+	// headers, FLAC STREAMINFO, AAC configuration), which most containers
+	// store in the header.
+	if (code == B_CODEC_TYPE_INFO && data != NULL && size > 0) {
+		av_freep(&fStream->codecpar->extradata);
+		fStream->codecpar->extradata_size = 0;
+		fStream->codecpar->extradata = (uint8_t*)av_mallocz(size
+			+ AV_INPUT_BUFFER_PADDING_SIZE);
+		if (fStream->codecpar->extradata == NULL)
+			return B_NO_MEMORY;
+		memcpy(fStream->codecpar->extradata, data, size);
+		fStream->codecpar->extradata_size = size;
+		return B_OK;
+	}
+
 	return B_NOT_SUPPORTED;
 }
 
@@ -587,8 +602,10 @@ AVFormatWriter::AddTrackInfo(void* _cookie, uint32 code,
 	TRACE("AVFormatWriter::AddTrackInfo(%" B_PRIu32 ", %p, %ld, %" B_PRIu32 ")\n",
 		code, data, size, flags);
 
-	if (fHeaderError != 0)
-		return B_ERROR;
+	// Renga: track info goes into the header, so before it (fCodecOpened
+	// is set when CommitHeader() writes it).
+	if (fCodecOpened)
+		return B_NOT_ALLOWED;
 
 	StreamCookie* cookie = reinterpret_cast<StreamCookie*>(_cookie);
 	return cookie->AddTrackInfo(code, data, size, flags);

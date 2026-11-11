@@ -191,7 +191,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"video_producer_demo.media_addon", "media_video_test",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
-	"sound_latency_test", "libmedia.so",
+	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
 	"SoundRecorder", "media_addon_server"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices

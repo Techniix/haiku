@@ -73,7 +73,22 @@ enum {
 	kRecord,
 	kRecordTick,
 	kRecordOptionChanged,
-	kFrameRate
+	kFrameRate,
+	kRecordFormat
+};
+
+
+// Renga (F-31 phase 4): the formats recordings can be written in, through
+// the encode/decode API's codecs (the FFmpeg plug-in).
+static const struct {
+	const char*	label;
+	const char*	container;
+	const char*	extension;
+	const char*	video;
+	const char*	audio;
+} kRecordFormats[] = {
+	{ "Matroska (MPEG-4, PCM)", "mkv", "mkv", "mpeg4", "pcm" },
+	{ "WebM (VP9, Opus)", "webm", "webm", "vp9", "opus" }
 };
 
 
@@ -146,7 +161,8 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 	fQuitAfterRecording(false),
 	fRecordSystemAudioSetting(true),
 	fRecordMicrophoneSetting(false),
-	fFrameRate(30)
+	fFrameRate(30),
+	fRecordFormat(0)
 {
 	// _ReadSettings() needs a valid fOutputPathMenu
 	fOutputPathMenu = new BMenu(B_TRANSLATE("Please select"));
@@ -257,6 +273,19 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 	}
 	BMenuField* frameRateField = new BMenuField(B_TRANSLATE("Video:"),
 		fFrameRateMenu);
+	BPopUpMenu* formatMenu = new BPopUpMenu(B_TRANSLATE_NOCOLLECT(
+		kRecordFormats[fRecordFormat].label));
+	for (int32 i = 0; i < (int32)B_COUNT_OF(kRecordFormats); i++) {
+		BMessage* message = new BMessage(kRecordFormat);
+		message->AddInt32("format", i);
+		BMenuItem* item = new BMenuItem(B_TRANSLATE_NOCOLLECT(
+			kRecordFormats[i].label), message);
+		formatMenu->AddItem(item);
+		if (i == fRecordFormat)
+			item->SetMarked(true);
+	}
+	BMenuField* formatField = new BMenuField(B_TRANSLATE("Format:"),
+		formatMenu);
 	fRecordSystemAudio->SetValue(fRecordSystemAudioSetting);
 	fRecordMicrophone->SetValue(fRecordMicrophoneSetting);
 
@@ -302,6 +331,10 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 				.AddGroup(B_HORIZONTAL, kLabelSpacing)
 					.Add(frameRateField->CreateLabelLayoutItem())
 					.Add(frameRateField->CreateMenuBarLayoutItem())
+				.End()
+				.AddGroup(B_HORIZONTAL, kLabelSpacing)
+					.Add(formatField->CreateLabelLayoutItem())
+					.Add(formatField->CreateMenuBarLayoutItem())
 				.End()
 				.Add(fRecordStatus)
 				.AddGlue()
@@ -493,6 +526,12 @@ ScreenshotWindow::MessageReceived(BMessage* message)
 			break;
 		case kFrameRate:
 			message->FindFloat("rate", &fFrameRate);
+			break;
+		case kRecordFormat:
+			fRecordFormat = message->GetInt32("format", 0);
+			if (fRecordFormat < 0
+				|| fRecordFormat >= (int32)B_COUNT_OF(kRecordFormats))
+				fRecordFormat = 0;
 			break;
 		case kRecorderStarted:
 			_RecordingStarted(message);
@@ -1082,7 +1121,17 @@ ScreenshotWindow::_StartRecording(const BMessage* options)
 			capture.microphone);
 		capture.frameRate = options->GetFloat("frame rate",
 			capture.frameRate);
+		const char* format;
+		if (options->FindString("format", &format) == B_OK) {
+			for (int32 i = 0; i < (int32)B_COUNT_OF(kRecordFormats); i++) {
+				if (strcmp(format, kRecordFormats[i].container) == 0)
+					fRecordFormat = i;
+			}
+		}
 	}
+	capture.fileFormat = kRecordFormats[fRecordFormat].container;
+	capture.videoCodec = kRecordFormats[fRecordFormat].video;
+	capture.audioCodec = kRecordFormats[fRecordFormat].audio;
 
 	BPath path;
 	const char* file;
@@ -1093,7 +1142,7 @@ ScreenshotWindow::_StartRecording(const BMessage* options)
 		int32 dot = name.FindLast('.');
 		if (dot > 0)
 			name.Truncate(dot);
-		name << ".mkv";
+		name << "." << kRecordFormats[fRecordFormat].extension;
 		path = _GetDirectory();
 		path.Append(name.String());
 	}

@@ -50,6 +50,9 @@ private:
 			status_t			_Setup();
 
 			bool				_OpenCodecIfNeeded();
+			void				_PublishExtradata();
+			status_t			_ConvertAudio(const uint8* buffer,
+									int64 frameCount);
 
 			status_t			_EncodeAudio(const void* buffer,
 									int64 frameCount,
@@ -95,6 +98,9 @@ private:
 #endif
 
 			int64				fFramesWritten;
+			// Renga: the codec takes another sample format than the input
+			// (planar float for AAC and Vorbis, ...): converted per frame
+			bool				fConvertAudio;
 
 			uint8*				fChunkBuffer;
 };

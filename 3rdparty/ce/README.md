@@ -554,6 +554,19 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   (the preview built again in the same window, the old node released),
   quit. Screenshots `codycam_preview` and `codycam_switched`, checked by
   the harness (`codycam.screenshots`).
+- **media_codec** (`media_codec_test`, renga-* images): the encode/decode
+  API (`headers/private/media/MediaCodec.h`, roadmap F-31 phase 4) and the
+  FFmpeg plug-in's encoders behind it. `MediaWriter` writes two seconds of
+  160x120 video at 15 fps (red, green, blue, white quarters) and audio
+  (440 Hz left, 660 Hz right); `MediaReader` decodes the file again: the
+  tracks with their codecs and sizes, every frame in the right colour,
+  the audio's length and tones (Goertzel), and seeking where it works.
+  Checked: WebM with VP9 + Opus and VP8 + Opus (float samples), Ogg Opus,
+  Matroska with MPEG-4 + FLAC (16-bit samples); `ListCodecs("webm")` must
+  list vp8, vp9, opus and vorbis. Combinations that do not work yet run
+  and print `CE-INFO media_codec known limit: ...` lines instead of
+  checks (FLAC from float samples, Ogg Vorbis, MP4 with AAC, MP3; seeking
+  audio in WebM and Ogg files); see the roadmap's F-31.
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
   Media Kit tests): the low-latency audio mode (roadmap F-31,
   `headers/private/media/LowLatencyAudio.h`). A child process plays

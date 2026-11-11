@@ -88,7 +88,75 @@ const EncoderDescription gEncoderTable[] = {
 		5
 	},
 
+	// Renga (F-31 phase 4): the encoders of the build's FFmpeg (libvpx,
+	// libopus, libvorbis, LAME), which WebM, Ogg and MP3 files need.
+	{
+		{
+			"VP8 video",
+			"vp8",
+			0,
+			AV_CODEC_ID_VP8,
+			{ 0 }
+		},
+		B_ANY_FORMAT_FAMILY,
+		B_MEDIA_RAW_VIDEO,
+		B_MEDIA_ENCODED_VIDEO,
+		60
+	},
+	{
+		{
+			"VP9 video",
+			"vp9",
+			0,
+			AV_CODEC_ID_VP9,
+			{ 0 }
+		},
+		B_ANY_FORMAT_FAMILY,
+		B_MEDIA_RAW_VIDEO,
+		B_MEDIA_ENCODED_VIDEO,
+		90
+	},
+
 	// Audio codecs
+	{
+		{
+			"Opus audio",
+			"opus",
+			0,
+			AV_CODEC_ID_OPUS,
+			{ 0 }
+		},
+		B_ANY_FORMAT_FAMILY,
+		B_MEDIA_RAW_AUDIO,
+		B_MEDIA_ENCODED_AUDIO,
+		12
+	},
+	{
+		{
+			"Vorbis audio",
+			"vorbis",
+			0,
+			AV_CODEC_ID_VORBIS,
+			{ 0 }
+		},
+		B_ANY_FORMAT_FAMILY,
+		B_MEDIA_RAW_AUDIO,
+		B_MEDIA_ENCODED_AUDIO,
+		10
+	},
+	{
+		{
+			"MPEG Layer III (MP3)",
+			"mp3",
+			0,
+			AV_CODEC_ID_MP3,
+			{ 0 }
+		},
+		B_ANY_FORMAT_FAMILY,
+		B_MEDIA_RAW_AUDIO,
+		B_MEDIA_ENCODED_AUDIO,
+		10
+	},
 	{
 		{
 			"Free Lossless Audio Codec (FLAC)",

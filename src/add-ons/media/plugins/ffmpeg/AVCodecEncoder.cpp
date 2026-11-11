@@ -20,6 +20,10 @@ extern "C" {
 }
 
 #include "EncoderTable.h"
+
+extern "C" {
+	#include <libavutil/opt.h>
+}
 #include "gfx_util.h"
 
 
@@ -47,7 +51,8 @@ AVCodecEncoder::AVCodecEncoder(uint32 codecID, int bitRateScale)
 	fCodecInitStatus(CODEC_INIT_NEEDED),
 	fFrame(av_frame_alloc()),
 	fSwsContext(NULL),
-	fFramesWritten(0)
+	fFramesWritten(0),
+	fConvertAudio(false)
 {
 	TRACE("AVCodecEncoder::AVCodecEncoder()\n");
 	_Init();
@@ -136,13 +141,36 @@ AVCodecEncoder::SetUp(const media_format* inputFormat)
 	}
 	if (fCodec == NULL) {
 		TRACE("  encoder not found!\n");
+		fprintf(stderr, "ffmpeg: no FFmpeg encoder for codec %s\n",
+			avcodec_get_name(fCodecID));
 		return B_NO_INIT;
 	}
 
 	fInputFormat = *inputFormat;
 	fFramesWritten = 0;
 
-	return _Setup();
+	status_t status = _Setup();
+	if (status == B_OK)
+		_PublishExtradata();
+	return status;
+}
+
+
+/*!	Renga (F-31 phase 4): opens the codec now and hands its extradata (the
+	Opus and Vorbis headers, FLAC's STREAMINFO, AAC's AudioSpecificConfig)
+	to the writer, which needs it in the file header; that header is
+	written before the first frame is encoded. A codec that does not open
+	yet is opened again at the first frame, as before.
+*/
+void
+AVCodecEncoder::_PublishExtradata()
+{
+	if (!_OpenCodecIfNeeded())
+		return;
+	if (fCodecContext->extradata != NULL && fCodecContext->extradata_size > 0) {
+		AddTrackInfo(B_CODEC_TYPE_INFO, fCodecContext->extradata,
+			fCodecContext->extradata_size, 0);
+	}
 }
 
 
@@ -221,7 +249,10 @@ AVCodecEncoder::SetEncodeParameters(encode_parameters* parameters)
 //		fBitRateControlledByUser = true;
 //	}
 
-	return _Setup();
+	status_t status = _Setup();
+	if (status == B_OK)
+		_PublishExtradata();
+	return status;
 }
 
 
@@ -283,6 +314,10 @@ AVCodecEncoder::_Setup()
 	fCodecContext = avcodec_alloc_context3(fCodec);
 	if (fCodecContext == NULL)
 		return B_NO_INIT;
+	// Renga: a new context is not open yet (parameters changed after an
+	// earlier open, see _PublishExtradata()).
+	fCodecInitStatus = CODEC_INIT_NEEDED;
+	fConvertAudio = false;
 
 	if (fInputFormat.type == B_MEDIA_RAW_VIDEO) {
 		TRACE("  B_MEDIA_RAW_VIDEO\n");
@@ -311,6 +346,21 @@ AVCodecEncoder::_Setup()
 				// one with the best quality.
 				fCodecContext->pix_fmt = fCodec->pix_fmts[i];
 			}
+		}
+		if (fCodecContext->codec_id == AV_CODEC_ID_VP8
+			|| fCodecContext->codec_id == AV_CODEC_ID_VP9) {
+			// Renga: libvpx lists high bit depth 4:4:4 last, a profile few
+			// players decode; 8-bit 4:2:0 is what WebM players expect. And
+			// the plug-in does not drain the encoder at the end, so no
+			// look-ahead (lag-in-frames 0), and the real-time speed setting:
+			// recorders and streams feed it live.
+			fCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+			av_opt_set(fCodecContext->priv_data, "deadline", "realtime", 0);
+			av_opt_set_int(fCodecContext->priv_data, "cpu-used",
+				fCodecContext->codec_id == AV_CODEC_ID_VP9 ? 8 : 16, 0);
+			av_opt_set_int(fCodecContext->priv_data, "lag-in-frames", 0, 0);
+			if (fCodecContext->codec_id == AV_CODEC_ID_VP9)
+				av_opt_set_int(fCodecContext->priv_data, "row-mt", 1, 0);
 		}
 
 		// TODO: Setup rate control:
@@ -378,6 +428,30 @@ AVCodecEncoder::_Setup()
 			default:
 				return B_MEDIA_BAD_FORMAT;
 				break;
+		}
+		// Renga (F-31 phase 4): codecs that take another sample format
+		// (planar float for AAC, Vorbis and MP3) get the input converted.
+		if (fCodec->sample_fmts != NULL) {
+			bool supported = false;
+			for (int i = 0; fCodec->sample_fmts[i] != AV_SAMPLE_FMT_NONE; i++) {
+				if (fCodec->sample_fmts[i] == fCodecContext->sample_fmt)
+					supported = true;
+			}
+			if (!supported) {
+				fCodecContext->sample_fmt = fCodec->sample_fmts[0];
+				fConvertAudio = true;
+			}
+		}
+		if (fCodec->supported_samplerates != NULL) {
+			bool supported = false;
+			for (int i = 0; fCodec->supported_samplerates[i] != 0; i++) {
+				if (fCodec->supported_samplerates[i]
+						== fCodecContext->sample_rate) {
+					supported = true;
+				}
+			}
+			if (!supported)
+				return B_MEDIA_BAD_FORMAT;
 		}
 #if LIBAVCODEC_VERSION_MAJOR >= 60
 		if (fInputFormat.u.raw_audio.channel_mask == 0) {
@@ -498,8 +572,14 @@ AVCodecEncoder::_OpenCodecIfNeeded()
 	int result = avcodec_open2(fCodecContext, fCodec, NULL);
 	if (result >= 0)
 		fCodecInitStatus = CODEC_INIT_DONE;
-	else
+	else {
 		fCodecInitStatus = CODEC_INIT_FAILED;
+		// Renga: say why, the plug-in keeps FFmpeg's own log quiet
+		char error[AV_ERROR_MAX_STRING_SIZE];
+		av_strerror(result, error, sizeof(error));
+		fprintf(stderr, "ffmpeg: cannot open the %s encoder: %s\n",
+			fCodec->name, error);
+	}
 
 	TRACE("  avcodec_open(%p, %p): %d\n", fCodecContext, fCodec, result);
 
@@ -611,11 +691,23 @@ AVCodecEncoder::_EncodeAudio(const uint8* buffer, size_t bufferSize,
 		fFrame->channels = fCodecContext->channels;
 #endif
 
-		int count = avcodec_fill_audio_frame(fFrame, get_channel_count(fCodecContext),
-			fCodecContext->sample_fmt, (const uint8_t*)buffer, bufferSize, 1);
+		int count;
+		if (fConvertAudio) {
+			// Renga: into a frame of the codec's sample format
+			fFrame->nb_samples = frameCount;
+			count = av_frame_get_buffer(fFrame, 0);
+			if (count == 0 && _ConvertAudio(buffer, frameCount) != B_OK)
+				count = -1;
+		} else {
+			count = avcodec_fill_audio_frame(fFrame,
+				get_channel_count(fCodecContext), fCodecContext->sample_fmt,
+				(const uint8_t*)buffer, bufferSize, 1);
+		}
 
 		if (count < 0) {
 			TRACE("  avcodec_encode_audio() failed filling data: %d\n", count);
+			fprintf(stderr, "ffmpeg: %s: cannot fill an audio frame of %"
+				B_PRId64 " samples: %d\n", fCodec->name, frameCount, count);
 			av_packet_free(&packet);
 			return B_ERROR;
 		}
@@ -626,6 +718,12 @@ AVCodecEncoder::_EncodeAudio(const uint8* buffer, size_t bufferSize,
 		fFramesWritten += fFrame->nb_samples;
 
 		result = avcodec_send_frame(fCodecContext, fFrame);
+		if (result < 0) {
+			char error[AV_ERROR_MAX_STRING_SIZE];
+			av_strerror(result, error, sizeof(error));
+			fprintf(stderr, "ffmpeg: %s: audio frame refused: %s\n",
+				fCodec->name, error);
+		}
 		gotPacket = avcodec_receive_packet(fCodecContext, packet) == 0;
 	} else {
 		// If called with NULL, ask the encoder to flush any buffers it may
@@ -639,6 +737,10 @@ AVCodecEncoder::_EncodeAudio(const uint8* buffer, size_t bufferSize,
 
 	if (result != 0) {
 		TRACE("  avcodec_encode_audio() failed: %d\n", result);
+		if (result != AVERROR(EAGAIN)) {
+			fprintf(stderr, "ffmpeg: %s: encoding audio failed: %d\n",
+				fCodec->name, result);
+		}
 		av_packet_free(&packet);
 		return B_ERROR;
 	}
@@ -662,6 +764,70 @@ AVCodecEncoder::_EncodeAudio(const uint8* buffer, size_t bufferSize,
 	}
 
 	av_packet_free(&packet);
+	return B_OK;
+}
+
+
+/*!	Renga: converts \a frameCount interleaved input frames into fFrame,
+	whose buffers have the codec's sample format (planar or interleaved,
+	float, 16 or 32-bit).
+*/
+status_t
+AVCodecEncoder::_ConvertAudio(const uint8* buffer, int64 frameCount)
+{
+	int channels = get_channel_count(fCodecContext);
+	uint32 inputFormat = fInputFormat.u.raw_audio.format;
+	AVSampleFormat format = fCodecContext->sample_fmt;
+	bool planar = av_sample_fmt_is_planar(format) != 0;
+	AVSampleFormat packed = av_get_packed_sample_fmt(format);
+	for (int64 i = 0; i < frameCount; i++) {
+		for (int c = 0; c < channels; c++) {
+			int64 index = i * channels + c;
+			float value;
+			switch (inputFormat) {
+				case media_raw_audio_format::B_AUDIO_FLOAT:
+					value = ((const float*)buffer)[index];
+					break;
+				case media_raw_audio_format::B_AUDIO_DOUBLE:
+					value = ((const double*)buffer)[index];
+					break;
+				case media_raw_audio_format::B_AUDIO_INT:
+					value = ((const int32*)buffer)[index] / 2147483648.0f;
+					break;
+				case media_raw_audio_format::B_AUDIO_SHORT:
+					value = ((const int16*)buffer)[index] / 32768.0f;
+					break;
+				case media_raw_audio_format::B_AUDIO_UCHAR:
+					value = (((const uint8*)buffer)[index] - 128) / 128.0f;
+					break;
+				default:
+					return B_MEDIA_BAD_FORMAT;
+			}
+			uint8* plane = fFrame->extended_data[planar ? c : 0];
+			int64 slot = planar ? i : index;
+			float clipped = value < -1.0f ? -1.0f : value > 1.0f ? 1.0f
+				: value;
+			switch (packed) {
+				case AV_SAMPLE_FMT_FLT:
+					((float*)plane)[slot] = value;
+					break;
+				case AV_SAMPLE_FMT_DBL:
+					((double*)plane)[slot] = value;
+					break;
+				case AV_SAMPLE_FMT_S16:
+					((int16*)plane)[slot] = (int16)(clipped * 32767.0f);
+					break;
+				case AV_SAMPLE_FMT_S32:
+					((int32*)plane)[slot] = (int32)(clipped * 2147483647.0);
+					break;
+				case AV_SAMPLE_FMT_U8:
+					((uint8*)plane)[slot] = (uint8)(clipped * 127.0f + 128);
+					break;
+				default:
+					return B_MEDIA_BAD_FORMAT;
+			}
+		}
+	}
 	return B_OK;
 }
 

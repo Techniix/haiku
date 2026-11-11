@@ -35,6 +35,12 @@ public:
 			encodeInfo);
 	}
 
+	virtual status_t AddTrackInfo(uint32 code, const void* data, size_t size,
+		uint32 flags)
+	{
+		return fWriter->AddTrackInfo(fStreamIndex, code, data, size, flags);
+	}
+
 private:
 	MediaWriter*	fWriter;
 	int32			fStreamIndex;

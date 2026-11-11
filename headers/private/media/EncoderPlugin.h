@@ -22,6 +22,11 @@ public:
 	virtual	status_t			WriteChunk(const void* chunkBuffer,
 									size_t chunkSize,
 									media_encode_info* encodeInfo) = 0;
+	// Renga: passes an encoder's track info (B_CODEC_TYPE_INFO: the codec's
+	// extradata) on to the writer, before the file header is written.
+	virtual	status_t			AddTrackInfo(uint32 code, const void* data,
+									size_t size, uint32 flags)
+										{ return B_NOT_SUPPORTED; }
 };
 
 
