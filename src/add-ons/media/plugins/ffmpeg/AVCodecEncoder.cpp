@@ -597,6 +597,19 @@ AVCodecEncoder::_EncodeAudio(const uint8* buffer, size_t bufferSize,
 	if (buffer != NULL) {
 		av_frame_unref(fFrame);
 		fFrame->nb_samples = frameCount;
+		// Renga: describe the frame completely. FFmpeg 6 checks that an
+		// audio frame's sample format, rate and channel layout match the
+		// encoder's (avcodec_send_frame() returns EINVAL otherwise), and
+		// av_frame_unref() above has just cleared them; without this every
+		// audio encode failed, e.g. PCM or FLAC in a Matroska file.
+		fFrame->format = fCodecContext->sample_fmt;
+		fFrame->sample_rate = fCodecContext->sample_rate;
+#if LIBAVCODEC_VERSION_MAJOR >= 60
+		av_channel_layout_copy(&fFrame->ch_layout, &fCodecContext->ch_layout);
+#else
+		fFrame->channel_layout = fCodecContext->channel_layout;
+		fFrame->channels = fCodecContext->channels;
+#endif
 
 		int count = avcodec_fill_audio_frame(fFrame, get_channel_count(fCodecContext),
 			fCodecContext->sample_fmt, (const uint8_t*)buffer, bufferSize, 1);
