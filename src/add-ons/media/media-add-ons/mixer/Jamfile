@@ -19,6 +19,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			MixerTap.cpp
 			MixerUtils.cpp
 			Resampler.cpp
+	SincResampler.cpp
 			: be media [ TargetLibsupc++ ] localestub
 		;
 	}

@@ -2184,6 +2184,8 @@ AudioMixer::UpdateParameterWeb()
 		B_TRANSLATE("Resampling algorithm:"), B_INPUT_MUX);
 	dp->AddItem(0, B_TRANSLATE("Low quality (drop/repeat samples)"));
 	dp->AddItem(2, B_TRANSLATE("High quality (linear interpolation)"));
+	// Renga (F-31): band-limited resampling, the default
+	dp->AddItem(3, B_TRANSLATE("Best quality (windowed sinc)"));
 
 	// Note: The following code is outcommented on purpose
 	// and is about to be modified at a later point

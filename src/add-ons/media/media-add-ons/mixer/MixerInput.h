@@ -116,6 +116,7 @@ protected:
 									int32 frames);
 
 private:
+			void				_UpdateResamplerRates();
 			void				_UpdateInputChannelDestinationMask();
 			void				_UpdateInputChannelDestinations();
 

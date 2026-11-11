@@ -13,6 +13,8 @@ class Resampler {
 public:
 								Resampler(uint32 sourceFormat,
 									uint32 destFormat);
+	virtual						~Resampler();
+									// virtual: subclasses own buffers
 
 			status_t			InitCheck() const;
 

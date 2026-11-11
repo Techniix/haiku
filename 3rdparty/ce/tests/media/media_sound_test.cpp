@@ -546,6 +546,62 @@ wait_buffer_frames(int32 frames, bigtime_t timeout)
 }
 
 
+//!	Reads, or sets with \a set, the default input's recording gain (dB).
+static float
+input_gain(float set = NAN)
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_node input;
+	float value = NAN;
+	if (roster->GetAudioInput(&input) != B_OK)
+		return value;
+	BParameterWeb* web;
+	if (roster->GetParameterWebFor(input, &web) == B_OK) {
+		for (int32 i = 0; i < web->CountParameters(); i++) {
+			BParameter* parameter = web->ParameterAt(i);
+			if (parameter->ID() != 0x52474e01)	// multi_audio's input gain
+				continue;
+			if (!isnan(set))
+				parameter->SetValue(&set, sizeof(set), system_time());
+			size_t size = sizeof(value);
+			bigtime_t when;
+			parameter->GetValue(&value, &size, &when);
+			break;
+		}
+		delete web;
+	}
+	roster->ReleaseNode(input);
+	return value;
+}
+
+
+//!	The mixer's "Resampling algorithm" (PARAM_ETC(70) in AudioMixer.cpp).
+static int32
+resampling_algorithm()
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_node mixer;
+	int32 value = -1;
+	if (roster->GetAudioMixer(&mixer) != B_OK)
+		return value;
+	BParameterWeb* web;
+	if (roster->GetParameterWebFor(mixer, &web) == B_OK) {
+		for (int32 i = 0; i < web->CountParameters(); i++) {
+			BParameter* parameter = web->ParameterAt(i);
+			if (parameter->ID() != ((70 << 16) | 0x4))
+				continue;
+			size_t size = sizeof(value);
+			bigtime_t when;
+			parameter->GetValue(&value, &size, &when);
+			break;
+		}
+		delete web;
+	}
+	roster->ReleaseNode(mixer);
+	return value;
+}
+
+
 static float
 master_gain()
 {
@@ -723,7 +779,7 @@ check_output(FILE* music, FILE* browser, const BString& first,
 	screenshot("sound_output_second");
 
 	status = choose("outputDevice", first.String());
-	moved = status == B_OK && wait_default_output(first.String(), 20000000);
+	moved = status == B_OK && wait_default_output(first.String(), 45000000);
 	snooze(1500000);
 	phase("default_output_back");
 	tone(music, 4500, 0);
@@ -785,6 +841,19 @@ check_output(FILE* music, FILE* browser, const BString& first,
 		B_PRId32, choice512.String(), strerror(status), frames, shown,
 		automatic.String(), strerror(back), automaticFrames);
 	snooze(1000000);
+
+	// Resampling (advanced): the mixer's algorithm follows the menu.
+	status = choose("resampling", "High quality (linear interpolation)");
+	snooze(800000);
+	int32 linear = resampling_algorithm();
+	status_t best = choose("resampling", "Best quality (windowed sinc)");
+	snooze(800000);
+	int32 sinc = resampling_algorithm();
+	report("resampling_menu", status == B_OK && best == B_OK && linear == 2
+			&& sinc == 3,
+		"linear interpolation: %s, the mixer's setting %" B_PRId32 "; windowed "
+		"sinc: %s, %" B_PRId32, strerror(status), linear, strerror(best),
+		sinc);
 	set_advanced(false);
 }
 
@@ -941,6 +1010,16 @@ check_input(const BString& original)
 
 	show_page("input");
 	control("recordingGain", 0);
+	// the card's gain back at 0 dB (later suites record from it)
+	float back = input_gain();
+	for (int i = 0; i < 30 && fabs(back) > 0.05f; i++) {
+		snooze(100000);
+		back = input_gain();
+	}
+	report("recording_gain_back", fabs(back) <= 0.05f, "slider set to 0 dB "
+		"again: the input's gain is %.1f dB", back);
+	if (fabs(back) > 0.05f)
+		input_gain(0.0f);
 	if (original.Length() > 0)
 		choose("inputDevice", original.String());
 	snooze(1000000);

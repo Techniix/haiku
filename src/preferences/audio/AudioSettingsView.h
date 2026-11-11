@@ -79,6 +79,7 @@ public:
 private:
 			void				_ConnectVolume();
 			void				_PlayTestSound();
+			void				_UpdateResampling();
 
 			AudioDeviceList&	fDevices;
 			OutputMenuField*	fDevice;
@@ -88,6 +89,7 @@ private:
 			BButton*			fTestSound;
 			BMenuField*			fBufferSize;
 			BStringView*		fBufferNote;
+			BMenuField*			fResampling;
 			BView*				fAdvancedBox;
 			MixerControl*		fMixer;
 			bigtime_t			fVolumeChanged;

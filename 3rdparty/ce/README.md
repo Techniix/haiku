@@ -638,11 +638,13 @@ of a 1 GiB guest was, so the bounce path went untested.
   output and the card the mixer plays on, there and back), "Play a test
   sound" (1250 Hz at 0.25 in a loopback recording of the Audio
   preferences' own stream), the buffer size menu (the card's parameter),
+  the resampling menu (advanced; the mixer's algorithm, windowed sinc by
+  default),
   an application's volume (loopback level ratio on the mixer's scale) and
   mute, its output menu and "Low latency" switch (advanced), the input
   device menu with the level meter (it must show the fed tone's peak on
   the fed card and nothing on the other), the recording gain (-6 dB halves
-  what the input records), the device list (both cards; QEMU's
+  what the input records, and the card back at 0 dB afterwards), the device list (both cards; QEMU's
   `usb-audio` plugged in through `CE-HOST usb_audio add` must appear and,
   after `remove`, leave), the search ("microphone" leads to Input,
   "low latency" to Applications with the advanced settings shown) and the
@@ -721,6 +723,18 @@ of a 1 GiB guest was, so the bounce path went untested.
   of FLV (Sorenson Spark + AAC), the server must receive both streams and
   every video packet, and what it received must decode to the frames sent.
   SRT is not tested.
+- **media_resample** (`media_resample_test`, renga-* images): the mixer's
+  resampling quality (roadmap F-31). A 44.1 kHz stream of a pure tone
+  (1.1 kHz, then 15 kHz) plays into the 48 kHz mix with each algorithm set
+  through the mixer's parameter; the test records the stream's loopback
+  and measures THD+N (everything but the tone, against the tone, over 16
+  windows). The windowed sinc (32 taps, Kaiser window, 256 phases, the
+  new default) must stay under -70 dB at 1.1 kHz and -50 dB at 15 kHz
+  (the image at 18.9 kHz included) and beat linear interpolation by
+  20 dB. Measured: drop/repeat -26.3 / -2.5 dB, linear interpolation
+  -34.7 / -8.8 dB, windowed sinc -74.0 / -52.4 dB. New settings must
+  default to the windowed sinc. (Not 1 kHz: the host looks for
+  `virtio_sound_test`'s 1 kHz phase on the first card.)
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
   Media Kit tests): the low-latency audio mode (roadmap F-31,
   `headers/private/media/LowLatencyAudio.h`). A child process plays

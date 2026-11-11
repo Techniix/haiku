@@ -15,6 +15,7 @@
 
 #include "ByteSwap.h"
 #include "Interpolate.h"
+#include "SincResampler.h"
 #include "MixerInput.h"
 #include "MixerUtils.h"
 #include "Resampler.h"
@@ -330,6 +331,12 @@ MixerInput::UpdateResamplingAlgorithm()
 	fResampler = new Resampler*[fInputChannelCount];
 	for (int i = 0; i < fInputChannelCount; i++) {
 		switch (fCore->Settings()->ResamplingAlgorithm()) {
+			case 3:
+				// Renga (F-31): band-limited, the default
+				fResampler[i] = new SincResampler(
+					fInput.format.u.raw_audio.format,
+					media_raw_audio_format::B_AUDIO_FLOAT);
+				break;
 			case 2:
 				fResampler[i] = new Interpolate(
 					fInput.format.u.raw_audio.format,
@@ -339,6 +346,25 @@ MixerInput::UpdateResamplingAlgorithm()
 				fResampler[i] = new Resampler(
 					fInput.format.u.raw_audio.format,
 					media_raw_audio_format::B_AUDIO_FLOAT);
+		}
+	}
+	_UpdateResamplerRates();
+}
+
+
+/*!	The sinc resampler keeps its phase across buffers and needs the nominal
+	rates for that (the per-buffer frame counts are rounded).
+*/
+void
+MixerInput::_UpdateResamplerRates()
+{
+	if (fResampler == NULL)
+		return;
+	for (int i = 0; i < fInputChannelCount; i++) {
+		SincResampler* sinc = dynamic_cast<SincResampler*>(fResampler[i]);
+		if (sinc != NULL) {
+			sinc->SetRates(fInput.format.u.raw_audio.frame_rate,
+				fMixBufferFrameRate);
 		}
 	}
 }
@@ -685,6 +711,7 @@ MixerInput::SetMixBufferFormat(int32 framerate, int32 frames)
 
 	fMixBufferFrameRate = framerate;
 	fDebugMixBufferFrames = frames;
+	_UpdateResamplerRates();
 
 	// frames and/or framerate can be 0 (if no output is connected)
 	if (framerate == 0 || frames == 0) {

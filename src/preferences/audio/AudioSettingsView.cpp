@@ -61,6 +61,7 @@ enum {
 	kMsgTestSound			= 'auTs',
 	kMsgTestSoundDone		= 'auTd',
 	kMsgOutputBuffer		= 'auOB',
+	kMsgResampling			= 'auRq',
 
 	kMsgInputDevice			= 'auIn',
 	kMsgGain				= 'auGn',
@@ -125,6 +126,57 @@ recording_gain_parameter(BParameterWeb** _web)
 			return web->ParameterAt(i);
 	}
 	return NULL;
+}
+
+
+// The mixer's "Resampling algorithm" (AudioMixer.cpp: PARAM_ETC(70)).
+static const int32 kResamplingParameter = (70 << 16) | 0x4;
+
+
+/*!	Reads (or, with \a set, sets) the mixer's resampling choice; fills
+	\a field's menu with its choices when given.
+*/
+static status_t
+mixer_resampling(int32* value, bool set, BMenuField* field, BHandler* target)
+{
+	BMediaRoster* roster = BMediaRoster::CurrentRoster();
+	media_node mixer;
+	if (roster == NULL || roster->GetAudioMixer(&mixer) != B_OK)
+		return B_NO_INIT;
+	BParameterWeb* web = NULL;
+	status_t status = roster->GetParameterWebFor(mixer, &web);
+	roster->ReleaseNode(mixer);
+	if (status != B_OK)
+		return status;
+	status = B_ENTRY_NOT_FOUND;
+	for (int32 i = 0; i < web->CountParameters(); i++) {
+		BParameter* parameter = web->ParameterAt(i);
+		if (parameter->ID() != kResamplingParameter
+			|| parameter->Type() != BParameter::B_DISCRETE_PARAMETER) {
+			continue;
+		}
+		BDiscreteParameter* discrete = (BDiscreteParameter*)parameter;
+		if (set) {
+			status = discrete->SetValue(value, sizeof(int32), system_time());
+			break;
+		}
+		size_t size = sizeof(int32);
+		bigtime_t when;
+		status = discrete->GetValue(value, &size, &when);
+		if (field != NULL && field->Menu()->CountItems() == 0) {
+			for (int32 j = 0; j < discrete->CountItems(); j++) {
+				BMessage* message = new BMessage(kMsgResampling);
+				message->AddInt32("value", discrete->ItemValueAt(j));
+				BMenuItem* item = new BMenuItem(discrete->ItemNameAt(j),
+					message);
+				item->SetTarget(target);
+				field->Menu()->AddItem(item);
+			}
+		}
+		break;
+	}
+	delete web;
+	return status;
 }
 
 
@@ -392,7 +444,8 @@ OutputPage::OutputPage(AudioDeviceList& devices)
 		"master volume, mute, loudness, play, hdmi, displayport, monitor, "
 		"test sound, default output, sound card",
 		"Search words for the Output page, comma separated"), false);
-	AddKeywords(B_TRANSLATE_COMMENT("buffer size, period, latency",
+	AddKeywords(B_TRANSLATE_COMMENT("buffer size, period, latency, "
+		"resampling, sample rate conversion, quality",
 		"Search words for the Output page's advanced settings"), true);
 
 	fDevice = new OutputMenuField("outputDevice", B_TRANSLATE("Play sound on:"));
@@ -414,6 +467,10 @@ OutputPage::OutputPage(AudioDeviceList& devices)
 	fBufferSize->SetToolTip(B_TRANSLATE("Shorter buffers lower the delay "
 		"before sound is heard, but need more processor time. Automatic "
 		"uses short buffers only while a low-latency application plays."));
+	fResampling = new BMenuField("resampling", B_TRANSLATE("Resampling:"),
+		new BPopUpMenu(B_TRANSLATE("None")));
+	fResampling->SetToolTip(B_TRANSLATE("How the mixer converts sound "
+		"recorded at another frame rate (44.1 kHz music on a 48 kHz card)"));
 	fBufferNote = new BStringView("bufferNote",
 		B_TRANSLATE("Applications set to \"Low latency\" get short buffers "
 			"automatically."));
@@ -452,7 +509,8 @@ OutputPage::OutputPage(AudioDeviceList& devices)
 		.SetInsets(B_USE_DEFAULT_SPACING, B_USE_SMALL_SPACING,
 			B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING)
 		.Add(fBufferSize)
-		.Add(fBufferNote);
+		.Add(fBufferNote)
+		.Add(fResampling);
 	advancedBox->AddChild(advancedGroup);
 	fAdvancedBox = advancedBox;
 
@@ -479,6 +537,24 @@ OutputPage::AttachedToWindow()
 	fMute->SetTarget(this);
 	fTestSound->SetTarget(this);
 	_ConnectVolume();
+	_UpdateResampling();
+}
+
+
+void
+OutputPage::_UpdateResampling()
+{
+	int32 value = -1;
+	bool available = mixer_resampling(&value, false, fResampling, this)
+		== B_OK;
+	fResampling->SetEnabled(available);
+	for (int32 i = 0; i < fResampling->Menu()->CountItems(); i++) {
+		BMenuItem* item = fResampling->Menu()->ItemAt(i);
+		if (item->Message()->GetInt32("value", -2) == value
+			&& !item->IsMarked()) {
+			item->SetMarked(true);
+		}
+	}
 }
 
 
@@ -504,16 +580,23 @@ void
 OutputPage::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
+		// The value the control had when it sent the message ("be:value"):
+		// a refresh from the device queued before this message may have
+		// moved the control back in between.
 		case kMsgVolume:
 			fVolumeChanged = system_time();
-			if (fMixer != NULL && fMixer->IsConnected())
-				fMixer->SetVolume(fVolume->Value() / 10.0f);
+			if (fMixer != NULL && fMixer->IsConnected()) {
+				fMixer->SetVolume(message->GetInt32("be:value",
+					fVolume->Value()) / 10.0f);
+			}
 			break;
 
 		case kMsgMute:
 			fVolumeChanged = system_time();
-			if (fMixer != NULL && fMixer->IsConnected())
-				fMixer->SetMuted(fMute->Value() == B_CONTROL_ON);
+			if (fMixer != NULL && fMixer->IsConnected()) {
+				fMixer->SetMuted(message->GetInt32("be:value",
+					fMute->Value()) == B_CONTROL_ON);
+			}
 			break;
 
 		case kMsgTestSound:
@@ -529,6 +612,13 @@ OutputPage::MessageReceived(BMessage* message)
 			}
 			fTestSound->SetEnabled(true);
 			break;
+
+		case kMsgResampling:
+		{
+			int32 value = message->GetInt32("value", 3);
+			mixer_resampling(&value, true, NULL, NULL);
+			break;
+		}
 
 		case kMsgOutputBuffer:
 		{
@@ -739,7 +829,9 @@ InputPage::MessageReceived(BMessage* message)
 			BParameterWeb* web;
 			BParameter* parameter = recording_gain_parameter(&web);
 			if (parameter != NULL) {
-				float gain = fGain->Value() / 10.0f;
+				// as sent (see kMsgVolume)
+				float gain = message->GetInt32("be:value", fGain->Value())
+					/ 10.0f;
 				parameter->SetValue(&gain, sizeof(gain), system_time());
 			}
 			delete web;

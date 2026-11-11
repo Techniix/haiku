@@ -68,6 +68,13 @@ Application media_hwvideo_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# Resampling quality (F-31): THD+N of 44.1 kHz tones mixed at 48 kHz for
+# each of the mixer's resampling algorithms.
+Application media_resample_test :
+	media_resample_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 # The low-latency audio mode (F-31): BSoundPlayer buffers, the mixer's
 # switch, the default output's period, latency and steadiness.
 Application sound_latency_test :
@@ -80,5 +87,5 @@ if $(CE_HARNESS) {
 		: media_test media_sound_test media_ui_test media_usb_test
 		media_video_test
 		screen_capture_test sound_latency_test media_codec_test
-		media_stream_test media_hwvideo_test ;
+		media_stream_test media_hwvideo_test media_resample_test ;
 }

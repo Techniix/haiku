@@ -412,7 +412,9 @@ MixerSettings::Load()
 	fSettings.AllowOutputChannelRemapping = false;
 	fSettings.AllowInputChannelRemapping = false;
 	fSettings.InputGainControls = 0;
-	fSettings.ResamplingAlgorithm = 2;
+	// Renga (F-31): the windowed-sinc resampler (3) by default; a saved
+	// choice is kept.
+	fSettings.ResamplingAlgorithm = 3;
 	fSettings.RefuseOutputFormatChange = false;
 	fSettings.RefuseInputFormatChange = true;
 
