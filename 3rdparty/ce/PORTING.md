@@ -951,6 +951,13 @@ removed again.
   `gamemode_query_status()`), backed by a native Renga service and switched
   in the Control Panel (`F-50`). Keep the existing gamemode calls of Linux
   code paths; they will work unchanged once the library ships.
+- Linux/POSIX API batch 2 (roadmap `F-52`): `pidfd_open()` and pidfds in
+  `waitid()`/poll/epoll, `close_range()`, `copy_file_range()`,
+  `renameat2()` (`RENAME_NOREPLACE`, `RENAME_EXCHANGE`), `statx()`,
+  `O_TMPFILE`, `openat2()` with `RESOLVE_*`, the common `prctl()` subset,
+  abstract Unix socket names, `SCM_CREDENTIALS`/`SO_PASSCRED`,
+  `SO_REUSEPORT`, complete POSIX AIO, and possibly a Linux-style xattr API
+  over BFS attributes. Until then keep the existing fallbacks.
 - Zero-copy GPU presentation and a Haiku Vulkan surface that takes a
   `BWindow`/`BView` (`F-47`, needs the NVIDIA driver work): keep the
   current VideoStreamsWsi presentation until then.

@@ -334,6 +334,12 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-48 | Guest-memory and VM performance (hole punching, huge pages, many small mappings) | Designed | None |
 | F-49 | Futex-style waiting (`futex()` wait/wake) | Designed | None |
 | F-50 | Game mode (gamemode-compatible API, native service, Control Panel switch) | Designed | None |
+| F-51 | Crash logs and system log viewer | Designed | None |
+| F-52 | Linux/POSIX API batch 2 (pidfd, file operations, prctl, sockets, xattr, POSIX AIO) | Designed | None |
+| F-53 | Secure Boot (shim, Renga key) | Not Started | None |
+| F-54 | Driverless printing and scanning (IPP Everywhere, eSCL) | Not Started | None |
+| F-55 | Colour emoji in app_server | Not Started | None |
+| F-56 | Profiling and tracing tools | Not Started | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -562,7 +568,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Difficulty | 2 (audit Tier 1) |
 | Risk | Low |
 | Testing status | None |
-| Next milestone | Agreed work order item 11 |
+| Next milestone | Agreed work order item 12 |
 | Recommended next action | A conditional launch_daemon job; harness check that skews the guest clock and expects correction (QEMU user networking provides an NTP-reachable path only if configured; verify first) |
 | Links | Audit Tier 1 |
 
@@ -1188,6 +1194,114 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Recommended next action | Implement with `F-48` (a) and `F-49` |
 | Links | Motivation: the maintainer's Eglantine port (Eden-based Nintendo Switch 2 emulator, Djihads80/Eglantine 0.1.0-rc3, RengaPorts), requirements of 2026-11-09. Useful to every game and emulator port. Port-visible: PORTING.md "Planned" |
 
+#### F-51 Crash logs and system log viewer
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Kernel debugger (KDL) output goes to the screen and serial port only; `syslog` is a text file; no viewer beyond a terminal |
+| Renga maturity | None |
+| Status | **Designed** |
+| Completed | None |
+| Remaining | (1) Crash logs: when the kernel enters KDL or panics, write the panic message, a backtrace of every CPU's thread, the tail of the syslog and the boot information to persistent storage (a reserved area on the boot volume or a file on the ESP, written with the minimal, interrupt-free path the debugger already uses; like Linux's pstore and Windows minidumps), and on the next boot store it under `/boot/system/var/log/crash/` and show a notification offering to view or save it. Application crashes (debug_server reports) collected in the same place. (2) System log viewer in the Control Panel's System section (`F-28`; a standalone app until then): the syslog live with filters by component and level, search, the previous boot's log, the crash logs, and "Save a report" that packs logs, crash logs and hardware information into one archive for bug reports. Harness checks: a forced KDL entry in the guest, then a reboot that finds the crash log; viewer screenshots |
+| Known bugs/limitations | Not applicable |
+| Dependencies | None (Control Panel later moves the viewer) |
+| Difficulty | 4 |
+| Risk | Medium (writing to disk from the debugger must never corrupt the file system) |
+| Testing status | None; harness-testable; real-hardware value is the point |
+| Next milestone | Work order item 9 |
+| Recommended next action | Start right after the current Media Kit stopping point, before real-hardware testing goes further |
+| Links | Proposed by the main session and approved by the maintainer, 2026-11-10; requested sooner so real-hardware crashes on the maintainer's PC can be diagnosed |
+
+#### F-52 Linux/POSIX API batch 2
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | None of the calls below exist (POSIX AIO is minimal) |
+| Renga maturity | None |
+| Status | **Designed** |
+| Completed | None |
+| Remaining | Add-only, in libroot, libgnu or libbsd as PORTING.md describes, each with harness tests and a PORTING.md entry: process handles `pidfd_open()`, `pidfd_send_signal()`, waiting with `waitid(P_PIDFD, ...)` and pidfds in poll/epoll (Rust, GLib, Chromium, Electron); file operations `close_range()`, `copy_file_range()`, `renameat2()` with `RENAME_NOREPLACE` and `RENAME_EXCHANGE` (atomic swap needs VFS support), `statx()`, `O_TMPFILE`, `openat2()` with `RESOLVE_*` flags (Rust's standard library, GCC and LLVM tools, build systems); the common `prctl()` subset (`PR_SET_NAME`/`PR_GET_NAME`, `PR_SET_PDEATHSIG`, `PR_SET_DUMPABLE`, `PR_SET_NO_NEW_PRIVS` as accepted no-op until `F-43` phase G); sockets: abstract Unix socket names (leading NUL), `SCM_CREDENTIALS` and `SO_PASSCRED`, `SO_REUSEPORT` (D-Bus, Wayland, Chromium, servers); extended attributes: investigate first whether a Linux-style `getxattr`/`setxattr`/`listxattr`/`removexattr` mapping onto BFS attributes (in a `user.` namespace) can be added without changing Haiku's own attribute behaviour or existing files, then add it only if it can (decision recorded here); POSIX AIO: complete `aio_read`/`aio_write`/`aio_suspend`/`aio_cancel`/`lio_listio` with real asynchronous completion and signal or thread notification |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-15` (epoll for pidfds) |
+| Difficulty | 2-4 per call; `RENAME_EXCHANGE` and `O_TMPFILE` 5 (VFS) |
+| Risk | Low; backwards compatibility is a hard requirement (section 1.2, `F-46`) |
+| Testing status | None; fully harness-testable |
+| Next milestone | Work order item 11, with the port-performance batch |
+| Recommended next action | Implement together with `F-48` (a), `F-49`, `F-50` |
+| Links | Proposed by the main session and approved by the maintainer, 2026-11-10. An io_uring-style asynchronous I/O interface is to be investigated towards the end of the roadmap (not scheduled) |
+
+#### F-53 Secure Boot
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Unsigned EFI loader; does not start with Secure Boot on |
+| Renga maturity | None |
+| Status | **Not Started** |
+| Completed | None |
+| Remaining | Boot through the signed shim loader with a Renga key enrolled through MOK (MokManager), the loader and kernel verified, tools to sign builds, installer support (`F-23`) |
+| Known bugs/limitations | Until then, Secure Boot must be off to start Renga (common on Windows 11 machines) |
+| Dependencies | `F-22` (full boot loader), `F-23` |
+| Difficulty | 6 |
+| Risk | Medium |
+| Testing status | None; QEMU with OVMF Secure Boot variables can test it |
+| Next milestone | After the full boot loader |
+| Recommended next action | Later (maintainer, 2026-11-10) |
+| Links | Proposed by the main session and approved by the maintainer, 2026-11-10 |
+
+#### F-54 Driverless printing and scanning
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Printing through Haiku's print kit with a few drivers; no network scanning |
+| Renga maturity | None |
+| Status | **Not Started** |
+| Completed | None |
+| Remaining | IPP Everywhere printing (discovery by DNS-SD, job submission, status) as a print kit transport and driver; eSCL network scanning with a simple scanning app; both reachable from the Control Panel |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-28` |
+| Difficulty | 5 |
+| Risk | Low |
+| Testing status | None; testable against ippeveprinter and an eSCL test server on the host |
+| Next milestone | Towards the end (low priority, maintainer 2026-11-10) |
+| Recommended next action | Later |
+| Links | Proposed by the main session and approved by the maintainer, 2026-11-10 |
+
+#### F-55 Colour emoji in app_server
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Monochrome glyph rendering only |
+| Renga maturity | None |
+| Status | **Not Started** |
+| Completed | None |
+| Remaining | Colour glyph rendering (COLR/CPAL and CBDT/sbix through FreeType) in app_server's font engine, a colour emoji font in the image, font fallback for emoji in text views and Tracker |
+| Known bugs/limitations | Not applicable |
+| Dependencies | None |
+| Difficulty | 5 |
+| Risk | Low |
+| Testing status | None; harness screenshots |
+| Next milestone | Low priority (maintainer 2026-11-10) |
+| Recommended next action | Later |
+| Links | Proposed by the main session and approved by the maintainer, 2026-11-10 |
+
+#### F-56 Profiling and tracing tools
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | `profile` (sampling) and `scheduling_recorder` command-line tools |
+| Renga maturity | None |
+| Status | **Not Started** |
+| Completed | None |
+| Remaining | A perf-style sampling profiler (per thread and kernel, call graphs, flame graph output), lightweight tracing of system calls and scheduling, a GUI viewer; used for the Eglantine and Chromium performance work |
+| Known bugs/limitations | Not applicable |
+| Dependencies | None |
+| Difficulty | 5 |
+| Risk | Low |
+| Testing status | None |
+| Next milestone | Later (maintainer 2026-11-10), before the GPU and performance stage |
+| Recommended next action | Later |
+| Links | Proposed by the main session and approved by the maintainer, 2026-11-10 |
+
 ### Bundled applications
 
 #### F-44 Bundled applications (gap review, 2026-11-09)
@@ -1205,7 +1319,7 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Risk | Low to medium (backup and restore: medium, user data) |
 | Testing status | None. Each item gets a harness check where it can run headless (archive round trips, share mounts against QEMU's built-in SMB server, backup/restore round trips, package-state restore) plus screenshots for the GUIs |
 | Next milestone | Batch 1 (see section 5.1) |
-| Recommended next action | Start batch 1 after periodic NTP sync (work order item 12) |
+| Recommended next action | Start batch 1 after periodic NTP sync (work order item 13) |
 | Links | Gap review in the 2026-11-09 conversation; decisions log |
 
 Skipped for now by the maintainer: disk encryption, calendar and CalDAV/CardDAV, night light; later consideration: Mail, DeskCalc, ShowImage and remote desktop updates, a camera app.
@@ -1540,17 +1654,18 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`). Phase 1 done 2026-11-09 with its controls (QEMU Tested, `4ca8c8b2`, `ef41c576`, `369f3e7d`), except the low-latency mode, the cubeb back end and resampling quality. Phase 2 (devices) worked on 2026-11-10 (`042cbb63` to `64f9fbad`): USB audio UAC1 and hot-plug QEMU Tested; UAC2, HDMI detection and UVC Implemented, needing hardware; HDMI playback open. Phase 3 (capture APIs, with screen recording in Screenshot) done 2026-11-10 (`4d383de9` to `30e05e0b`, QEMU Tested).
 7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09). Done 2026-11-10 (`170b3815`, QEMU Tested on BIOS and UEFI; Windows itself needs the maintainer's PC).
 8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Done 2026-11-11 (`7ce49272`, QEMU Tested on BIOS and UEFI). Next: the maintainer's real-hardware install (`REAL-HARDWARE-TEST.md` in the hand-over).
-9. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
-10. **Port-performance batch** (`F-48` part a, `F-49`, `F-50`), placed by the maintainer (2026-11-09): hole punching in memfds, `futex()`, game mode with its Control Panel switch. Small, harness-testable, and useful to Chromium, Wine and Mesa as well as Eglantine.
-11. **Periodic NTP sync** (`F-30`).
-12. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
-13. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
-14. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
-15. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
+9. **Crash logs and system log viewer** (`F-51`), placed by the maintainer (2026-11-10): next after the current Media Kit stopping point, to support real-hardware testing. The remaining Media Kit phases continue after it.
+10. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
+11. **Port-performance batch** (`F-48` part a, `F-49`, `F-50`) with the **Linux/POSIX API batch 2** (`F-52`, added 2026-11-10), placed by the maintainer (2026-11-09): hole punching in memfds, `futex()`, game mode with its Control Panel switch. Small, harness-testable, and useful to Chromium, Wine and Mesa as well as Eglantine.
+12. **Periodic NTP sync** (`F-30`).
+13. **Bundled applications, batch 1** (`F-44`): network shares, programmer's editor, archives in Expander and Tracker, document viewer.
+14. **Gamepad support** (`F-42`): full-featured USB gamepads, a gamepad configurator, and whatever SDL needs; the 8BitDo Ultimate 2C must work flawlessly.
+15. **Bundled applications, batch 2** (`F-44`): backup and restore on package states, on-screen keyboard, search launcher, task manager in ActivityMonitor; screen recording ships with Media Kit phase 3-4. Batch 3 (notification history, clipboard history and emoji picker, passwords app) goes with the Lumina and Control Panel phase.
+16. In parallel: **Lumina S1-S8 automated in QEMU** (`F-25`).
 
 Pending outside this list: NVMe real-hardware test by the maintainer (`F-04`).
 
-Later, with the GPU stage (needs the maintainer's NVIDIA hardware): zero-copy presentation and the Haiku Vulkan surface (`F-47`), NVK feature coverage (`F-35`). Later kernel VM work: huge pages and many small mappings (`F-48` parts b and c). With `F-42` and `F-31` as planned: raw HID and libusb for controllers, the cubeb back end, video decode for in-game video.
+Later, with the GPU stage (needs the maintainer's NVIDIA hardware): zero-copy presentation and the Haiku Vulkan surface (`F-47`), NVK feature coverage (`F-35`). Later (maintainer, 2026-11-10): Secure Boot (`F-53`), after the full boot loader; profiling and tracing tools (`F-56`), before the GPU and performance stage. Towards the end, low priority: driverless printing and scanning (`F-54`), colour emoji (`F-55`), an io_uring-style interface (investigation, `F-52`). Later kernel VM work: huge pages and many small mappings (`F-48` parts b and c). With `F-42` and `F-31` as planned: raw HID and libusb for controllers, the cubeb back end, video decode for in-game video.
 
 ### 5.2 Renga-specific projects (from the maintainer's goals)
 
@@ -1634,7 +1749,7 @@ Milestone count: 6 of 6 (100%).
 
 | # | Item | Done |
 | --- | --- | --- |
-| 1 | Periodic NTP sync | No (work order item 11) |
+| 1 | Periodic NTP sync | No (work order item 12) |
 | 2 | Finish and ship `virtio_sound` | Yes (playback) `658d1756`, `fbbb290a` |
 | 3 | `virtio_block` DISCARD/WRITE_ZEROES | Yes `5b068a5e` |
 | 4 | NVMe multi-namespace + teardown TODOs | Yes `0758b116` (one TODO remains) |
@@ -2125,6 +2240,7 @@ Upstream behaviours observed and **not** changed: the mixer's gain values are la
 | 2026-11-09 | BeOS programs: Renga stays 64-bit; running 32-bit Haiku and BeOS programs on 64-bit Renga comes last of everything, the lowest priority on the roadmap | `F-46` |
 | 2026-11-09 | Eglantine port requirements: zero-copy presentation by extending overlay bitmaps and fullscreen direct scanout on the accelerant extension, with a Haiku Vulkan surface named together with X547 (`F-47`); NVK coverage starting from `vulkaninfo` on real hardware (`F-35`); hole punching, huge pages, cheap small mappings (`F-48`); `futex()` (`F-49`); game mode compatible with Feral's gamemode client API (`F-50`); raw HID and libusb (`F-42`); low-latency audio and a cubeb back end (`F-31` phase 1); in-game video decode (`F-31` phase 5). The port-performance batch goes after LinuxKPI | `F-47`-`F-50`, `F-35`, `F-42`, `F-31`, section 5.1 |
 | 2026-11-10 | Boot loader direction: graphical, no logo, Renga-style animation (light through shifting leaves, wind and drifting leaves, resolution-independent), detected systems with icons, background probing of removable media without hanging, lightweight with fallbacks | `F-22` |
+| 2026-11-10 | Additions: crash logs and a system log viewer soon (`F-51`, work order item 9); Linux/POSIX API batch 2 with the port-performance batch (`F-52`: pidfd, `close_range`, `copy_file_range`, `renameat2`, `statx`, `O_TMPFILE`, `openat2`, `prctl` subset, abstract Unix sockets, `SCM_CREDENTIALS`, `SO_REUSEPORT`, xattr if it keeps compatibility, better POSIX AIO; io_uring-style interface investigated at the end); Secure Boot later (`F-53`); printing and scanning (`F-54`) and colour emoji (`F-55`) low priority; profiling tools later (`F-56`). Held for now: firewall, VPN, signed packages priority | `F-51`-`F-56`, section 5.1 |
 | 2026-11-09 | A second, separate Claude instance works in parallel on branch `ce/wip-apps-ntp`: periodic NTP sync (`F-30`), then bundled applications batch 1 (`F-44`). It never pushes `ce/main`, master or tags, does not edit this file or the Media Kit areas, and reports in `3rdparty/ce/handoff/wip-apps-ntp.md`; the main session merges finished pieces with `--no-ff` after full harness runs and folds the handoff text into this roadmap | `F-30`, `F-44`, section 5.1 |
 | 2026-11-09 | Cancelled: the parallel session on `ce/wip-apps-ntp` (row above) will not run; its account cannot do this work. `F-30` and `F-44` batch 1 stay in the work order (section 5.1) for this session |  `F-30`, `F-44` |
 | 2026-11-09 | Media Kit phase 1 on the existing system mixer, in PipeWire/PulseAudio terms: streams are routed inside the mixer through sinks it connects to other devices, never by moving applications' connections; loopbacks are a flavor of the mixer add-on | `F-31`, `ef41c576` |
