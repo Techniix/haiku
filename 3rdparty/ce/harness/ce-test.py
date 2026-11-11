@@ -157,6 +157,8 @@ CODYCAM_SCREENSHOTS = ["codycam_preview", "codycam_switched"]
 # and Screenshot while it records.
 CAPTURE_SCREENSHOTS = ["capture_prompt", "capture_indicator",
 	"capture_settings", "screenshot_recording"]
+# The Boot menu preferences (F-22) with the menu on and a default set.
+BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
@@ -401,6 +403,11 @@ def boot_drive(args, image, decoy=None):
 	if args.media == "cdrom":
 		return ["-drive",
 			"file=%s,format=raw,if=ide,media=cdrom,readonly=on" % image]
+	if args.other_systems and args.disk_bus == "ide":
+		# First in the boot order: the other systems' disks have boot
+		# indices too (other_systems_drives()).
+		return ["-drive", "file=%s,format=raw,if=none,id=boot" % image,
+			"-device", "ide-hd,drive=boot,bus=ide.0,unit=0,bootindex=0"]
 	if args.disk_bus == "virtio":
 		# bootindex makes the firmware boot this disk and not one of the
 		# (blank) virtio scratch disks.
@@ -558,14 +565,20 @@ def make_patched_image(args, image, copy):
 		return "bfs_shell not built (jam -q '<build>bfs_shell')"
 
 	files = []	# (host path, image path, text the copy must then contain)
-	if args.boot_menu_timeout:
+	timeout = args.boot_menu_timeout or (OTHER_SYSTEMS_TIMEOUT
+		if args.other_systems else 0)
+	if timeout:
 		with open(os.path.join(HAIKU_TOP, "data", "settings", "kernel",
 				"drivers", "kernel")) as original:
 			settings = original.read()
+		settings = settings.rstrip("\n") + "\n\nboot_menu_timeout %d\n" \
+			% timeout
+		if args.other_systems and args.firmware == "uefi":
+			# what the Boot menu preferences write for a default entry
+			settings += "boot_menu_default \"%s\"\n" \
+				% OTHER_SYSTEMS_EFI_DEFAULT
 		files.append((copy + ".kernel-settings", KERNEL_SETTINGS_FILE,
-			settings.rstrip("\n") + "\n\nboot_menu_timeout %d\n"
-				% args.boot_menu_timeout,
-			"boot_menu_timeout %d" % args.boot_menu_timeout))
+			settings, "boot_menu_timeout %d" % timeout))
 	if args.only:
 		files.append((copy + ".only", SELECTION_FILE,
 			"\n".join(args.only) + "\n", "\n".join(args.only)))
@@ -667,6 +680,494 @@ def check_two_installs(args, results_dir, report):
 			"\"%s\" from the disk enumerated first)" % (
 			'"%s"' % got if got is not None else "not reported", want,
 			DECOY_VOLUME_NAME)})
+
+
+# #pragma mark - other operating systems (--other-systems)
+
+
+OTHER_SYSTEMS_SOURCES = os.path.join(HAIKU_TOP, "3rdparty", "ce", "harness",
+	"otheros")
+OTHER_SYSTEMS_TIMEOUT = 3
+# The UEFI run's boot_menu_default: the countdown starts this entry.
+OTHER_SYSTEMS_EFI_DEFAULT = "Windows Boot Manager"
+# Layout of the "other systems" disk (512-byte sectors): an EFI system
+# partition, an active NTFS-like partition with a Windows-like boot record,
+# and an inactive one with the same record (a data volume, which must not
+# be listed). The MBR has boot code of its own.
+OTHER_DISK_SECTORS = 96 * 1024 * 2
+OTHER_ESP = (2048, 65536)			# start, sectors
+OTHER_WINDOWS = (2048 + 65536, 2048)
+OTHER_DATA = (2048 + 65536 + 2048, 2048)
+OTHER_USB_SECTORS = 24 * 1024 * 2
+# QEMU throttling of the removable media, so that reading them is slow the
+# way a real drive is: reads per second.
+OTHER_USB_IOPS = 20
+OTHER_FLOPPY_IOPS = 5
+# A slow, empty drive (QEMU's null-co driver, zeros after a delay per
+# request): floppy B: on BIOS, a second USB drive on UEFI.
+OTHER_SLOW_LATENCY_NS = 400 * 1000 * 1000
+# Limits of other_media.responsive: how long a key may wait for the menu,
+# and how long one step of the background search may take.
+OTHER_KEY_LATENCY = 1.5
+OTHER_PROBE_STEP_MS = 1000
+
+
+def nasm(source, output, defines):
+	subprocess.run(["nasm", "-f", "bin"] + defines + ["-o", output,
+		os.path.join(OTHER_SYSTEMS_SOURCES, source)], check=True,
+		stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+
+def efi_test_app(directory, marker):
+	path = os.path.join(directory, "app-%s.efi" % marker)
+	nasm("efi_test_app.asm", path, ["-DMARKER=\"%s\"" % marker])
+	return path
+
+
+def boot_record(directory, marker, kind=None):
+	path = os.path.join(directory, "record-%s.bin" % marker)
+	nasm("boot_record.asm", path, (["-D" + kind] if kind else [])
+		+ ["-DMARKER=\"%s\"" % marker])
+	with open(path, "rb") as recordFile:
+		return recordFile.read()
+
+
+def make_fat(path, sectors, files, label):
+	"""Writes a FAT file system of \\a sectors sectors to \\a path with
+	mtools; files: (path in the volume, host file). The boot sector code
+	mformat writes is replaced by a plain "not bootable" record, as
+	partitioning tools leave it, so that BIOS runs do not list it."""
+	with open(path, "wb") as image:
+		image.truncate(sectors * 512)
+	environment = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+	subprocess.run(["mformat", "-i", path, "-T", str(sectors), "-h", "64",
+		"-s", "32", "-v", label, "::"], check=True, env=environment,
+		stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+	made = set()
+	for target, host in files:
+		parts = target.strip("/").split("/")
+		for i in range(1, len(parts)):
+			directory = "/".join(parts[:i])
+			if directory not in made:
+				made.add(directory)
+				subprocess.run(["mmd", "-i", path, "::/" + directory],
+					check=True, env=environment, stdout=subprocess.PIPE,
+					stderr=subprocess.STDOUT)
+		subprocess.run(["mcopy", "-i", path, host, "::/" + target.strip("/")],
+			check=True, env=environment, stdout=subprocess.PIPE,
+			stderr=subprocess.STDOUT)
+	with open(path, "r+b") as image:
+		sector = bytearray(image.read(512))
+		# keep the jump and the BPB (to 0x5a), clear the code, and say so
+		message = b"not a bootable disk"
+		sector[0x5a:510] = b"\0" * (510 - 0x5a)
+		sector[0x5a:0x5a + len(message)] = message
+		image.seek(0)
+		image.write(bytes(sector))
+
+
+def mbr(code, partitions):
+	"""An MBR: \\a code (up to 440 bytes) and up to four (status, type,
+	start, sectors) entries."""
+	sector = bytearray(512)
+	sector[:len(code)] = code
+	for index, (status, kind, start, count) in enumerate(partitions):
+		entry = struct.pack("<B3sB3sII", status, b"\xfe\xff\xff", kind,
+			b"\xfe\xff\xff", start, count)
+		sector[446 + 16 * index:462 + 16 * index] = entry
+	sector[510:512] = b"\x55\xaa"
+	return bytes(sector)
+
+
+def make_other_systems_media(results_dir):
+	"""Builds the media of --other-systems in results_dir: other.img (a
+	fixed disk with other systems, BIOS and UEFI), usb.img (a USB drive with
+	a removable medium's EFI loader) and floppy.img (a bootable floppy).
+	Returns their paths, or raises on a missing tool."""
+	work = os.path.join(results_dir, "otheros")
+	os.makedirs(work, exist_ok=True)
+
+	esp = os.path.join(work, "esp.img")
+	make_fat(esp, OTHER_ESP[1], [
+		("EFI/Microsoft/Boot/bootmgfw.efi", efi_test_app(work, "windows-efi")),
+		("EFI/Microsoft/Boot/bootmgr.efi", efi_test_app(work, "windows-bootmgr")),
+		("EFI/ubuntu/shimx64.efi", efi_test_app(work, "ubuntu-shim")),
+		("EFI/ubuntu/grubx64.efi", efi_test_app(work, "ubuntu-grub")),
+		("EFI/ubuntu/mmx64.efi", efi_test_app(work, "ubuntu-mok")),
+		("EFI/BOOT/BOOTX64.EFI", efi_test_app(work, "esp-fallback")),
+	], "CEOTHER")
+
+	other = os.path.join(results_dir, "other.img")
+	windows = boot_record(work, "bios-windows", "KIND_NTFS")
+	with open(other, "wb") as disk:
+		disk.truncate(OTHER_DISK_SECTORS * 512)
+		disk.write(mbr(boot_record(work, "bios-mbr", "KIND_MBR"), [
+			(0x00, 0xef) + OTHER_ESP,
+			(0x80, 0x07) + OTHER_WINDOWS,
+			(0x00, 0x07) + OTHER_DATA]))
+		with open(esp, "rb") as espFile:
+			disk.seek(OTHER_ESP[0] * 512)
+			shutil.copyfileobj(espFile, disk)
+		for start, _ in (OTHER_WINDOWS, OTHER_DATA):
+			disk.seek(start * 512)
+			disk.write(windows)
+
+	usbFat = os.path.join(work, "usb-fat.img")
+	make_fat(usbFat, OTHER_USB_SECTORS - 2048, [
+		("EFI/BOOT/BOOTX64.EFI", efi_test_app(work, "removable-usb"))],
+		"CEUSB")
+	usb = os.path.join(results_dir, "usb.img")
+	with open(usb, "wb") as disk:
+		disk.truncate(OTHER_USB_SECTORS * 512)
+		disk.write(mbr(b"", [(0x00, 0x0e, 2048, OTHER_USB_SECTORS - 2048)]))
+		with open(usbFat, "rb") as fatFile:
+			disk.seek(2048 * 512)
+			shutil.copyfileobj(fatFile, disk)
+
+	floppy = os.path.join(results_dir, "floppy.img")
+	with open(floppy, "wb") as disk:
+		disk.truncate(1474560)
+		disk.write(boot_record(work, "bios-floppy"))
+
+	shutil.rmtree(work)
+	return {"other": other, "usb": usb, "floppy": floppy}
+
+
+def other_systems_drives(args, media):
+	"""QEMU options for --other-systems: the fixed disk with other systems
+	(BIOS drive 0x81), the USB drive (slow), an empty CD drive and, on BIOS,
+	the floppy (slow). Boot indices keep the BIOS drive numbers and the
+	firmware's boot order fixed: Renga's disk first."""
+	options = [
+		"-drive", "file=%s,format=raw,if=none,id=otheros" % media["other"],
+		"-device", "ide-hd,drive=otheros,bus=ide.1,unit=0,bootindex=1",
+		"-device", "qemu-xhci,id=otherusb",
+		"-drive", "file=%s,format=raw,if=none,id=otherusbdisk,"
+			"throttling.iops-total=%d" % (media["usb"], OTHER_USB_IOPS),
+		"-device", "usb-storage,bus=otherusb.0,drive=otherusbdisk,"
+			"removable=on,bootindex=2",
+		"-drive", "if=none,id=emptycd,media=cdrom",
+		"-device", "ide-cd,drive=emptycd,bus=ide.1,unit=1",
+	]
+	if args.firmware == "bios":
+		options += ["-drive", "file=%s,format=raw,if=floppy,index=0,"
+			"throttling.iops-total=%d" % (media["floppy"], OTHER_FLOPPY_IOPS),
+			# B: is a drive without a disk
+			"-drive", "if=floppy,index=1"]
+	else:
+		options += ["-blockdev", "driver=null-co,node-name=slowusb,"
+			"size=16777216,latency-ns=%d,read-zeroes=on"
+			% OTHER_SLOW_LATENCY_NS,
+			"-device", "usb-storage,bus=otherusb.0,drive=slowusb,"
+			"removable=on"]
+	return options
+
+
+# Keys as QEMU's sendkey names them, and as the boot menu logs them.
+MENU_KEY_LOG = {"down": "0x40000001", "up": "0x40000000"}
+
+
+def menu_key_logged(key):
+	return MENU_KEY_LOG.get(key, "'%s'" % key)
+
+
+class BootMenuDriver(threading.Thread):
+	"""Plays the user at the boot loader's menu for --other-systems: it
+	reads the menu's serial log ("boot menu: ..." lines, fed by the
+	SerialReader as they arrive) and presses keys through the QEMU monitor,
+	in a script per firmware:
+
+	UEFI (boot_menu_default starts Windows Boot Manager after the
+	countdown): wait until it returned, press down and up three times in
+	quick succession (while drivers are still being connected), press the
+	shortcut of "Ubuntu",
+	wait until it returned and the USB drive was found, press its shortcut,
+	wait until it returned, press down, down, up (timed), then "b"
+	(Continue booting).
+
+	BIOS (no default): at the first countdown press the shortcut of
+	"Windows"; the test boot record boots Renga's disk again, so at the
+	second countdown press "Hard disk 2"; at the third press "down" (which
+	stops the countdown), "up" while the slow, empty floppy B: is read,
+	"down", and the shortcut of the floppy in A:; at the fourth do nothing,
+	and Renga boots.
+
+	Every key is recorded with the host time it was sent and the time the
+	menu logged it ("boot menu: key ..."), for other_media.responsive. A
+	step that waits more than 40 s for its line gives up and presses "b".
+	"""
+
+	def __init__(self, firmware, monitor_path):
+		threading.Thread.__init__(self, daemon=True)
+		self.firmware = firmware
+		self.monitor_path = monitor_path
+		self.started = time.time()
+		self.lines = []
+		self.condition = threading.Condition()
+		self.keys = []		# {"key", "sent", "logged"}
+		self.notes = []
+		self.done = False
+
+	def feed(self, line):
+		if "boot menu:" not in line and "Welcome to the" not in line:
+			return
+		with self.condition:
+			self.lines.append((time.time() - self.started, line.strip()))
+			self.condition.notify_all()
+
+	def _wait_for(self, pattern, since, timeout=40):
+		"""Waits for a line matching \\a pattern from index \\a since on;
+		returns (index, match) or (None, None)."""
+		regex = re.compile(pattern)
+		deadline = time.time() + timeout
+		with self.condition:
+			while True:
+				for index in range(since, len(self.lines)):
+					match = regex.search(self.lines[index][1])
+					if match:
+						return index, match
+				left = deadline - time.time()
+				if left <= 0:
+					self.notes.append("gave up waiting for /%s/" % pattern)
+					return None, None
+				self.condition.wait(timeout=min(left, 1.0))
+
+	def _shortcut(self, label, since):
+		index, match = self._wait_for(r'boot menu: (?:other system|found '
+			r'other media) (\d): "%s"' % re.escape(label), since)
+		return match.group(1) if match else None
+
+	def _press(self, key):
+		import socket
+		try:
+			with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+				sock.settimeout(5)
+				sock.connect(self.monitor_path)
+				time.sleep(0.2)
+				sock.recv(4096)
+				with self.condition:
+					sent = time.time() - self.started
+					since = len(self.lines)
+				sock.sendall(("sendkey %s\n" % key).encode())
+				time.sleep(0.2)
+		except OSError as error:
+			self.notes.append("sendkey %s failed: %s" % (key, error))
+			return
+		entry = {"key": key, "sent": round(sent, 3), "logged": None}
+		self.keys.append(entry)
+		index, _ = self._wait_for(r"boot menu: key %s" % re.escape(
+			menu_key_logged(key)), since, timeout=10)
+		if index is not None:
+			entry["logged"] = round(self.lines[index][0], 3)
+
+	def _boots(self, since):
+		return self._wait_for(r'boot menu: "[^"]*" in %d s'
+			% OTHER_SYSTEMS_TIMEOUT, since)[0]
+
+	def run(self):
+		try:
+			if self.firmware == "uefi":
+				self._run_uefi()
+			else:
+				self._run_bios()
+		finally:
+			self.done = True
+
+	def _run_uefi(self):
+		index, _ = self._wait_for(r'boot menu: "%s" returned'
+			% re.escape(OTHER_SYSTEMS_EFI_DEFAULT), 0, timeout=120)
+		if index is None:
+			return self._press("b")
+		# The drivers are still being connected (slowly: the slow USB
+		# drive); keys in quick succession, some arrive during a step.
+		for key in ("down", "up") * 3:
+			self._press(key)
+			time.sleep(0.15)
+		key = self._shortcut("Ubuntu", 0)
+		if key is not None:
+			self._press(key)
+			self._wait_for(r'boot menu: "Ubuntu" returned', index)
+		key = self._shortcut("Boot other media: USB drive", 0)
+		if key is not None:
+			since = len(self.lines)
+			self._press(key)
+			self._wait_for(r'boot menu: "USB drive" returned', since)
+		for key in ("down", "down", "up"):
+			self._press(key)
+			time.sleep(0.4)
+		self._press("b")
+
+	def _run_bios(self):
+		since = 0
+		for step in ("Windows", "Hard disk 2", "floppy", None):
+			index = self._boots(since)
+			if index is None:
+				return
+			# the entries of this boot are logged before its countdown
+			start = max(i for i in range(index + 1) if "Welcome to the"
+				in self.lines[i][1]) if any("Welcome to the" in l[1]
+					for l in self.lines[:index + 1]) else 0
+			if step is None:
+				return
+			if step == "floppy":
+				# "down" stops the countdown. A: is read first; the next
+				# step reads the slow, empty B:, so "up" right after A's
+				# line arrives while that read runs (other_media.responsive
+				# times it with the host clock: the BIOS tick count the
+				# boot loader has does not advance during BIOS disk calls).
+				self._press("down")
+				self._wait_for(r"boot menu: floppy disk in A:", start)
+				self._press("up")
+				self._wait_for(r"boot menu: floppy (disk in|drive) B:", start)
+				self._press("down")
+				key = self._shortcut("Boot other media: Floppy disk A:",
+					start)
+				self._press(key if key is not None else "b")
+			else:
+				key = self._shortcut(step, start)
+				self._press(key if key is not None else "b")
+			since = index + 1
+
+	def summary(self):
+		return {"keys": self.keys, "notes": self.notes,
+			"lines": len(self.lines)}
+
+
+def other_systems_entries(text):
+	"""The menu entries the boot loader logged: (kind, shortcut, label,
+	location), in order, each once (a BIOS run starts the boot loader four
+	times; a system listed twice in one menu would have a numbered label,
+	"Windows (2)")."""
+	entries = []
+	for entry in re.findall(r'boot menu: (other system|found other media) '
+			r'(\S): "([^"]*)" \((.*)\)\r?$', text, re.MULTILINE):
+		if entry not in entries:
+			entries.append(entry)
+	return entries
+
+
+def other_systems_checks(firmware, text, menu, probe_limit_ms=None):
+	"""The checks of an --other-systems run, from the serial log \\a text and
+	the BootMenuDriver's summary \\a menu. Returns check dictionaries."""
+	checks = []
+
+	def check(name, passed, detail):
+		checks.append({"name": name, "pass": bool(passed), "detail": detail})
+
+	entries = other_systems_entries(text)
+	labels = ["%s=%s" % (label, location) for _, _, label, location
+		in entries]
+	listed = "listed: " + ("; ".join(labels) if labels else "nothing")
+
+	def entry(label):
+		return [e for e in entries if e[2] == label]
+
+	def after(first, second):
+		a = text.find(first)
+		return a >= 0 and text.find(second, a) >= 0
+
+	if firmware == "uefi":
+		windows = entry("Windows Boot Manager")
+		check("other_systems.detect_windows", len(windows) == 1
+			and windows[0][3].startswith("\\EFI\\Microsoft\\Boot\\bootmgfw.efi"),
+			listed)
+		ubuntu = entry("Ubuntu")
+		check("other_systems.detect_shim", len(ubuntu) == 1
+			and ubuntu[0][3].startswith("\\EFI\\ubuntu\\shimx64.efi"), listed)
+		check("other_systems.no_duplicates", not any(
+			"fallback" in label.lower() or "grub" in location.lower()
+			or "mmx64" in location.lower() or "bootmgr.efi" in location.lower()
+			for _, _, label, location in entries), listed)
+		check("other_systems.default_started", after('boot menu: "%s" in %d s'
+			% (OTHER_SYSTEMS_EFI_DEFAULT, OTHER_SYSTEMS_TIMEOUT),
+			'boot menu: timeout, choosing "%s"' % OTHER_SYSTEMS_EFI_DEFAULT)
+			and after('boot menu: timeout, choosing',
+				"CE-OTHEROS started windows-efi")
+			and "CE-OTHEROS windows-efi device handle: yes" in text,
+			"the countdown started the default, which got its device handle"
+			if "CE-OTHEROS windows-efi device handle: yes" in text
+			else "default not started, or without a device handle")
+		check("other_systems.returned", after("CE-OTHEROS windows-efi "
+			"returning", 'boot menu: "%s" returned: No error'
+			% OTHER_SYSTEMS_EFI_DEFAULT), "the menu came back after the "
+			"loader returned" if after("CE-OTHEROS windows-efi returning",
+				"returned: No error") else "no return to the menu")
+		check("other_systems.key_started", "CE-OTHEROS started ubuntu-shim"
+			in text and "CE-OTHEROS started ubuntu-grub" not in text,
+			"shim started by its shortcut" if "started ubuntu-shim" in text
+			else "shim not started")
+		usb = entry("Boot other media: USB drive")
+		check("other_media.found", len(usb) == 1
+			and "CE-OTHEROS started removable-usb" in text
+			and "CE-OTHEROS removable-usb device handle: yes" in text,
+			"USB drive found in the background and started" if usb
+			else "USB drive not found; " + listed)
+		empty = re.search(r"boot menu: CD/DVD: no media after (\d+) ms", text)
+		check("other_media.empty_drive", empty is not None
+			and int(empty.group(1)) < 3000,
+			"empty CD drive answered after %s ms" % empty.group(1) if empty
+			else "no answer from the empty CD drive logged")
+	else:
+		windows = entry("Windows")
+		check("other_systems.detect_windows", len(windows) == 1
+			and windows[0][3] == "partition 2 of BIOS drive 0x81", listed)
+		disk = entry("Hard disk 2")
+		check("other_systems.detect_mbr", len(disk) == 1
+			and disk[0][3] == "the master boot record of BIOS drive 0x81",
+			listed)
+		check("other_systems.no_duplicates", not any(
+			"partition 1 " in location or "partition 3 " in location
+			or "0x82" in location for _, _, _, location in entries), listed)
+		check("other_systems.chainload_partition",
+			"CE-OTHEROS started bios-windows dl=81 lba=%08x" % OTHER_WINDOWS[0]
+			in text, "boot record got DL and DS:SI" if "started bios-windows"
+			in text else "partition boot record not started")
+		check("other_systems.chainload_mbr",
+			"CE-OTHEROS started bios-mbr dl=81 lba=00000000" in text,
+			"MBR of the other disk started" if "started bios-mbr" in text
+			else "other disk's MBR not started")
+		floppy = entry("Boot other media: Floppy disk A:")
+		check("other_media.found", len(floppy) == 1
+			and "CE-OTHEROS started bios-floppy dl=00" in text,
+			"floppy found in the background and started" if floppy
+			else "floppy not found; " + listed)
+		welcomes = text.count("Welcome to the Renga boot loader!")
+		check("other_systems.returned", welcomes == 4,
+			"%d boot loader starts (want 4: three systems booted Renga's "
+			"disk again)" % welcomes)
+
+	keys = (menu or {}).get("keys", [])
+	late = [k for k in keys if k["logged"] is None
+		or k["logged"] - k["sent"] > OTHER_KEY_LATENCY]
+	steps = [int(ms) for ms in re.findall(r"boot menu: probe step took "
+		r"(\d+) ms", text)]
+	limit = OTHER_PROBE_STEP_MS if probe_limit_ms is None else probe_limit_ms
+	check("other_media.responsive", keys and not late
+		and all(ms <= limit for ms in steps),
+		"%d key(s), slowest %s s; %d slow probe step(s), longest %s ms%s" % (
+			len(keys), max((k["logged"] - k["sent"] for k in keys
+				if k["logged"] is not None), default="-"),
+			len(steps), max(steps, default=0),
+			"; not answered or late: " + ", ".join(k["key"] for k in late)
+				if late else ""))
+	check("other_systems.continued", "CE-HARNESS START" in text[
+		text.rfind("boot menu:"):] if "boot menu:" in text else False,
+		"Renga booted after the menu" if "CE-HARNESS START" in text
+		else "Renga did not boot")
+	return checks
+
+
+def check_other_systems(args, results_dir, report):
+	if not args.other_systems:
+		return
+	try:
+		with open(os.path.join(results_dir, "serial.log"),
+				errors="replace") as serial:
+			text = serial.read().replace("\r\n", "\n")
+	except OSError:
+		text = ""
+	report.setdefault("host_checks", []).extend(other_systems_checks(
+		args.firmware, text, report.get("boot", {}).get("boot_menu")))
 
 
 # #pragma mark - boot
@@ -804,6 +1305,7 @@ class SerialReader(threading.Thread):
 		self.screenshots = []	# saved on request, as PPM
 		self.line = b""		# incomplete last line, for CE-HOST requests
 		self.host_requests = []
+		self.menu_driver = None	# BootMenuDriver, with --other-systems
 		self.usb_audio_added = 0		# usb-audio devices plugged in so far
 		self.usb_audio_plugged = []		# their indices, still plugged in
 		self.done = threading.Event()
@@ -895,6 +1397,8 @@ class SerialReader(threading.Thread):
 		self.line = lines.pop()
 		for raw in lines:
 			line = raw.decode("latin-1").strip()
+			if self.menu_driver is not None:
+				self.menu_driver.feed(line)
 			if not line.startswith("CE-HOST "):
 				continue
 			words = line.split()[1:]
@@ -1174,7 +1678,7 @@ def boot(args, results_dir, report):
 			os.unlink(path)
 
 	patched = None
-	if args.boot_menu_timeout or args.only:
+	if args.boot_menu_timeout or args.only or args.other_systems:
 		patched = os.path.join(results_dir, "patched.img")
 		error = make_patched_image(args, image, patched)
 		if error is not None:
@@ -1183,6 +1687,17 @@ def boot(args, results_dir, report):
 			log(error)
 			return False
 		image = patched
+
+	otherMedia = None
+	if args.other_systems:
+		try:
+			otherMedia = make_other_systems_media(results_dir)
+		except (OSError, subprocess.CalledProcessError) as error:
+			report["boot"] = {"status": "image-setup-failed", "image": image,
+				"error": "other systems media: %s (needs nasm and mtools)"
+					% error}
+			log(report["boot"]["error"])
+			return False
 
 	decoy = None
 	if args.two_installs:
@@ -1271,6 +1786,8 @@ def boot(args, results_dir, report):
 		# BIOS boots a CD through the El Torito floppy image (the
 		# haiku-floppyboot.tgz boot archive), UEFI through the ESP image.
 		qemu += ["-boot", "d"]
+	if otherMedia is not None:
+		qemu += other_systems_drives(args, otherMedia)
 
 	report["boot"] = {"command": " ".join(qemu), "image": image}
 	if decoy is not None:
@@ -1291,6 +1808,11 @@ def boot(args, results_dir, report):
 	feeder.start()
 	reader = SerialReader(process, serial_log, monitor_path, qmp_path,
 		feeder)
+	menuDriver = None
+	if args.other_systems:
+		menuDriver = BootMenuDriver(args.firmware, monitor_path)
+		reader.menu_driver = menuDriver
+		menuDriver.start()
 	reader.start()
 
 	status = "exited"
@@ -1370,6 +1892,11 @@ def boot(args, results_dir, report):
 	report["boot"]["seconds"] = round(time.time() - started, 1)
 	report["boot"]["runner_finished"] = reader.finished.is_set()
 	report["boot"]["host_requests"] = reader.host_requests
+	if menuDriver is not None:
+		report["boot"]["boot_menu"] = menuDriver.summary()
+	if otherMedia is not None:
+		for path in otherMedia.values():
+			os.remove(path)
 	log("guest %s after %.0fs" % (status, time.time() - started))
 	return status == "exited" and reader.finished.is_set()
 
@@ -2292,6 +2819,10 @@ def write_report(results_dir, report):
 	if report.get("boot_menu_timeout"):
 		lines[-1] += " Its settings set a %d s boot menu timeout." \
 			% report["boot_menu_timeout"]
+	if report.get("other_systems"):
+		lines[-1] += (" Other systems' disk, a USB drive, an empty CD "
+			"drive%s were attached and started from the boot menu." % (
+			" and a floppy" if report.get("firmware") == "bios" else ""))
 	if report.get("two_installs"):
 		lines[-1] += (" A renamed second install (\"%s\") was attached in "
 			"front of it." % DECOY_VOLUME_NAME)
@@ -2419,6 +2950,13 @@ def main():
 		metavar="SECONDS",
 		help="boot a copy of the image with boot_menu_timeout SECONDS in its "
 			"kernel settings and check the boot loader's countdown")
+	parser.add_argument("--other-systems", action="store_true",
+		help="attach a disk with other systems' loaders and boot records, "
+			"a slow USB drive with a removable medium's EFI loader, an empty "
+			"CD drive and (BIOS) a slow bootable floppy; show the boot menu "
+			"(3 s timeout; on UEFI with Windows Boot Manager as the default), "
+			"start each system from it with the keyboard and check what "
+			"they report on the serial port (see README)")
 	parser.add_argument("--pointer-devices", default="usb,virtio",
 		type=lambda text: [t for t in text.split(",")
 			if t.strip() and t != "none"],
@@ -2471,6 +3009,10 @@ def main():
 			or args.firmware != "uefi"):
 		parser.error("--two-installs tests the EFI boot loader's choice "
 			"between hard disks; it needs --firmware uefi and --media disk")
+	if args.other_systems and (args.media != "disk" or args.disk_bus != "ide"
+			or args.two_installs or args.boot_menu_timeout):
+		parser.error("--other-systems boots from an IDE hard disk and sets "
+			"the boot menu timeout itself")
 	for device in args.pointer_devices:
 		if device not in POINTER_DEVICES:
 			parser.error("unknown pointer device %s (choose from %s)"
@@ -2494,6 +3036,7 @@ def main():
 		"profile": args.profile, "firmware": args.firmware,
 		"media": args.media, "disk_bus": args.disk_bus,
 		"two_installs": args.two_installs,
+		"other_systems": args.other_systems,
 		"boot_menu_timeout": args.boot_menu_timeout,
 		"pointer_devices": args.pointer_devices,
 		"usb_controller": args.usb_controller,
@@ -2514,7 +3057,10 @@ def main():
 		check_image_identity(args, results_dir, report)
 		check_branding(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
-		check_boot_menu(args, results_dir, report)
+		if args.other_systems:
+			check_other_systems(args, results_dir, report)
+		else:
+			check_boot_menu(args, results_dir, report)
 		if not args.only or "vsnd_test" in args.only:
 			analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
 		if "usb_audio_test" in (args.only or available):
@@ -2534,6 +3080,9 @@ def main():
 		if "screen_capture_test" in (args.only or available):
 			check_screenshots(results_dir, report, CAPTURE_SCREENSHOTS,
 				"capture.screenshots")
+		if "bootmenu_ui_test" in (args.only or available):
+			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
+				"bootmenu.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

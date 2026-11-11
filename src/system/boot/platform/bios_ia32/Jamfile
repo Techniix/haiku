@@ -6,6 +6,7 @@ UsePrivateHeaders [ FDirName kernel disk_device_manager ] ;
 UsePrivateHeaders [ FDirName graphics common ] ;
 UsePrivateHeaders [ FDirName graphics vesa ] ;
 UsePrivateHeaders [ FDirName interface ] ;
+UsePrivateHeaders shared ;
 UsePrivateHeaders [ FDirName storage ] ;
 
 {
@@ -27,11 +28,13 @@ for platform in [ MultiBootSubDirSetup bios_ia32 ] {
 			debug.cpp
 			bios.cpp
 			bios_asm.S
+			chainload.S
 			console.cpp
 			serial.cpp
 			devices.cpp
 			keyboard.cpp
 			menu.cpp
+			other_systems.cpp
 			mmu.cpp
 			multiboot.cpp
 			cpu.cpp

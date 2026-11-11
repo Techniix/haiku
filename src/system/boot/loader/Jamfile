@@ -110,6 +110,7 @@ for platform in [ MultiBootSubDirSetup ] {
 			loader.cpp
 			main.cpp
 			menu.cpp
+			other_systems.cpp
 			package_support.cpp
 			pager.cpp
 			partitions.cpp

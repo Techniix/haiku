@@ -37,6 +37,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --media cdrom    # anyboot as a CD (El Torito)
 3rdparty/ce/harness/ce-test.py --firmware uefi --two-installs   # pick the right disk
 3rdparty/ce/harness/ce-test.py --boot-menu-timeout 2   # boot menu countdown
+3rdparty/ce/harness/ce-test.py --other-systems  # boot other systems from the menu
 3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
 3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
 3rdparty/ce/harness/ce-test.py --only epoll,signalfd  # quick, PARTIAL run
@@ -105,6 +106,52 @@ Every run also checks the branding: `branding.boot_loader` wants "Welcome to
 the Renga boot loader!" on the serial console, and for anyboot images
 `branding.iso_volume_id` reads the ISO 9660 volume ID with `xorriso
 -pvd_info` on the host and wants `renga-<version>-<arch>`.
+
+### Other operating systems in the boot menu
+
+`--other-systems` (BIOS or `--firmware uefi`, hard disk only) tests the
+boot menu's other systems (roadmap F-22). The harness builds test media in
+the results directory (with `nasm` and mtools) and attaches them:
+
+- a second disk (BIOS drive 0x81) with an MBR whose boot code is a test
+  record, an EFI system partition holding `\EFI\Microsoft\Boot\bootmgfw.efi`,
+  `bootmgr.efi`, `\EFI\ubuntu\shimx64.efi`, `grubx64.efi`, `mmx64.efi` and
+  `\EFI\BOOT\BOOTX64.EFI`, an active partition whose boot record looks like
+  Windows' (NTFS OEM name, "BOOTMGR") and an inactive one with the same
+  record (a data volume);
+- a USB drive (throttled) with `\EFI\BOOT\BOOTX64.EFI` and an empty CD
+  drive; on UEFI a slow, empty second USB drive (QEMU's `null-co` with a
+  400 ms delay per read), on BIOS a bootable floppy in A: and a floppy
+  drive B: without a disk. (A delayed floppy B: was tried first: keys sent
+  while it was being read never reached the menu. QEMU's floppy controller
+  reads synchronously; the cause was not pinned down further, and real
+  hardware is untested.)
+
+The `.efi` files are `harness/otheros/efi_test_app.asm`, a 8 KiB PE32+
+application that writes `CE-OTHEROS started <marker>` to the serial port,
+says whether its Loaded Image protocol has a device handle, and returns.
+The boot records are `harness/otheros/boot_record.asm`: they write
+`CE-OTHEROS started <marker> dl=<DL> lba=<start of the DS:SI entry>` and
+boot BIOS drive 0x80 (Renga's disk) again, so one QEMU session sees several
+boot loader starts.
+
+The image's kernel settings get `boot_menu_timeout 3` (and on UEFI
+`boot_menu_default "Windows Boot Manager"`). A `BootMenuDriver` thread
+plays the user: it reads the menu's "boot menu:" serial lines and presses
+keys through the monitor (UEFI: let the countdown start Windows Boot
+Manager, then arrow keys while drivers are still being connected, the
+shortcuts of Ubuntu and the USB drive, then `b`; BIOS: the shortcuts of the
+Windows partition, the other disk's MBR and the floppy in three successive
+boot loader starts, an arrow key while the empty floppy drive B: is read,
+and the fourth start continues booting). Checks (`other_systems.*`,
+`other_media.*`): the right entries and names (shim over GRUB, no MOK
+manager, no fallback copy, no inactive NTFS volume, no EFI system partition
+on BIOS), the default started by the countdown, the started loader got its
+device handle, the menu came back after a loader returned, the boot records
+got DL and DS:SI, the removable media were found in the background and
+started, the empty CD drive answered within 3 s, every key was answered
+within 1.5 s and no search step took over a second, and Renga booted
+afterwards. They replace `boot.menu` in such a run.
 
 Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 `ce-test-results/latest` always points to the newest run:
@@ -404,6 +451,15 @@ itself makes. The mixer's gain values follow its bent "dB" scale
 (`mixer_gain()`).
 
 ## Current suites
+
+- **bootmenu** (renga-* images, `bootmenu_ui_test`): the Boot menu
+  preferences. From the command line: `--set-timeout 7` writes the line
+  and keeps every other line of the kernel settings file, `--set-default`
+  and `--show`, `--set-timeout 0` removes the boot menu lines, `--list`
+  runs. From the window (the messages its controls send, sent by the test):
+  the file gets timeout 4 and the default, and the checkbox and spinner
+  read back through scripting show it. Screenshot `bootmenu_preferences`
+  (`bootmenu.screenshots`). The settings file is put back afterwards.
 
 - **media** (renga-* images): see "Media Kit tests". In the guest it checks
   recording from the fed card through the Media Kit and its recording gain,

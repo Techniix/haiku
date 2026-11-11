@@ -21,6 +21,7 @@
 
 #include <AutoDeleter.h>
 #include <boot/menu.h>
+#include <boot/other_systems.h>
 #include <boot/PathBlocklist.h>
 #include <boot/stage2.h>
 #include <boot/vfs.h>
@@ -68,7 +69,8 @@ MenuItem::MenuItem(const char *label, Menu *subMenu)
 	fSubMenu(NULL),
 	fData(NULL),
 	fHelpText(NULL),
-	fShortcut(0)
+	fShortcut(0),
+	fKeepsMenuOpen(false)
 {
 	SetSubmenu(subMenu);
 }
@@ -226,7 +228,8 @@ Menu::Menu(menu_type type, const char* title)
 	fSuperItem(NULL),
 	fShortcuts(NULL),
 	fTimeout(0),
-	fDefaultItem(NULL)
+	fDefaultItem(NULL),
+	fIdleHook(NULL)
 {
 }
 
@@ -348,6 +351,23 @@ Menu::AddItem(MenuItem* item)
 {
 	item->fMenu = this;
 	fItems.Add(item);
+	fCount++;
+}
+
+
+/*!	Inserts \a item in front of \a before, or at the end if \a before is
+	NULL or not in this menu.
+*/
+void
+Menu::InsertItem(MenuItem* item, MenuItem* before)
+{
+	if (before == NULL || before->fMenu != this) {
+		AddItem(item);
+		return;
+	}
+
+	item->fMenu = this;
+	fItems.InsertBefore(before, item);
 	fCount++;
 }
 
@@ -1663,6 +1683,40 @@ boot_menu_timeout(BootVolume& volume)
 }
 
 
+/*!	Copies the "boot_menu_default" setting of \a volume's kernel settings
+	file (see boot_menu_timeout()) to \a name: the name of the operating
+	system the menu's countdown starts (an entry of the other systems the
+	menu lists, see other_systems.cpp). Returns false if there is none, or
+	if it names this system ("renga", "haiku" or empty), whose default entry
+	is "Continue booting". The Boot menu preferences write it.
+*/
+static bool
+boot_menu_default(BootVolume& volume, char* name, size_t size)
+{
+	if (!volume.IsValid())
+		return false;
+
+	int fd = open_from(volume.RootDirectory(),
+		"home/config/settings/kernel/drivers/kernel", O_RDONLY);
+	if (fd < 0)
+		return false;
+
+	void* settings = load_driver_settings_file(fd);
+	close(fd);
+	if (settings == NULL)
+		return false;
+
+	const char* value = get_driver_parameter(settings, "boot_menu_default",
+		NULL, NULL);
+	bool found = value != NULL && value[0] != '\0'
+		&& strcasecmp(value, "renga") != 0 && strcasecmp(value, "haiku") != 0;
+	if (found)
+		strlcpy(name, value, size);
+	unload_driver_settings(settings);
+	return found;
+}
+
+
 /*!	Shows the boot menu. With a \a timeout (in seconds, see
 	boot_menu_timeout()) the menu counts down and then continues booting
 	\a _bootVolume, unless a key is pressed first; without one it waits for
@@ -1701,6 +1755,16 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
 	platform_add_menus(menu);
 
 	menu->AddSeparatorItem();
+	MenuItem* separator = menu->ItemAt(menu->CountItems() - 1);
+
+	// Other operating systems (Renga, F-22), between the loader's own
+	// entries and "Reboot"; the countdown may start one of them.
+	char defaultName[BootOtherSystems::kMaxNameLength];
+	bool hasDefault = boot_menu_default(_bootVolume, defaultName,
+		sizeof(defaultName));
+	MenuItem* otherDefault = NULL;
+	other_systems_add_to_menu(menu, separator,
+		hasDefault ? defaultName : NULL, &otherDefault);
 
 	menu->AddItem(item = new(std::nothrow) MenuItem("Reboot"));
 	item->SetTarget(user_menu_reboot);
@@ -1717,8 +1781,9 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
 		if (timeout > 0) {
 			// Start on the default entry, so that the countdown shows what
 			// it will do and Return does the same right away.
-			item->Select(true);
-			menu->SetTimeout(timeout * 1000000LL, item);
+			MenuItem* defaultItem = otherDefault != NULL ? otherDefault : item;
+			defaultItem->Select(true);
+			menu->SetTimeout(timeout * 1000000LL, defaultItem);
 		}
 	}
 
@@ -1728,6 +1793,7 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
 	apply_safe_mode_options(debugMenu);
 	apply_safe_mode_path_blocklist();
 	add_safe_mode_settings(sSafeModeOptionsBuffer.String());
+	other_systems_cleanup();
 	delete menu;
 
 

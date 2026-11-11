@@ -1,0 +1,22 @@
+/*
+ * Copyright 2026, Renga contributors.
+ * Distributed under the terms of the MIT License.
+ */
+
+resource app_signature "application/x-vnd.Renga-BootMenu";
+
+resource app_flags B_SINGLE_LAUNCH;
+
+resource app_version {
+	major  = 1,
+	middle = 0,
+	minor  = 0,
+	variety = B_APPV_FINAL,
+	internal = 0,
+	short_info = "Boot menu",
+	long_info = "Boot menu preferences for Renga: show the menu at every start, its timeout and default entry"
+};
+
+resource file_types message {
+	"types" = "application/x-vnd.Be-elfexecutable"
+};

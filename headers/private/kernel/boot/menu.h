@@ -15,6 +15,9 @@ class MenuItem;
 
 typedef bool (*menu_item_hook)(Menu* menu, MenuItem* item);
 typedef void (*shortcut_hook)(char key);
+	// Called while a menu waits for a key; returns true if it changed the
+	// menu (added, removed or relabelled items), so that it is drawn again.
+typedef bool (*menu_idle_hook)(Menu* menu);
 
 
 enum menu_item_type {
@@ -64,6 +67,14 @@ public:
 
 			Menu*				Supermenu() const { return fMenu; }
 
+			// An item that keeps its menu open: invoking it runs its target
+			// and the menu stays, drawn again (an operating system started
+			// from the menu that returned, for example).
+			void				SetKeepsMenuOpen(bool keepsOpen)
+									{ fKeepsMenuOpen = keepsOpen; }
+			bool				KeepsMenuOpen() const
+									{ return fKeepsMenuOpen; }
+
 private:
 			friend class Menu;
 			void				SetMenu(Menu* menu);
@@ -80,6 +91,7 @@ private:
 			const void*			fData;
 			const char*			fHelpText;
 			char				fShortcut;
+			bool				fKeepsMenuOpen;
 };
 
 
@@ -119,6 +131,7 @@ public:
 			MenuItem*			FindSelected(int32* _index = NULL);
 
 			void				AddItem(MenuItem* item);
+			void				InsertItem(MenuItem* item, MenuItem* before);
 			status_t			AddSeparatorItem();
 
 			MenuItem*			RemoveItemAt(int32 index);
@@ -151,6 +164,11 @@ public:
 			bigtime_t			Timeout() const { return fTimeout; }
 			MenuItem*			DefaultItem() const { return fDefaultItem; }
 
+			// Work done while the menu waits for keys (see menu_idle_hook).
+			void				SetIdleHook(menu_idle_hook hook)
+									{ fIdleHook = hook; }
+			menu_idle_hook		IdleHook() const { return fIdleHook; }
+
 			void				Run();
 
 private:
@@ -174,6 +192,7 @@ private:
 			shortcut*			fShortcuts;
 			bigtime_t			fTimeout;
 			MenuItem*			fDefaultItem;
+			menu_idle_hook		fIdleHook;
 };
 
 

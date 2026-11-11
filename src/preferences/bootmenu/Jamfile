@@ -1,0 +1,15 @@
+SubDir HAIKU_TOP src preferences bootmenu ;
+
+UsePrivateHeaders interface shared storage ;
+
+Application BootMenu :
+	BootMenu.cpp
+	: be localestub [ TargetLibstdc++ ]
+	: BootMenu.rdef
+;
+
+DoCatalogs BootMenu :
+	x-vnd.Renga-BootMenu
+	:
+	BootMenu.cpp
+;

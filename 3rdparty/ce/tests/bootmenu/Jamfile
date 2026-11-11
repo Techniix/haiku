@@ -1,0 +1,17 @@
+SubDir HAIKU_TOP 3rdparty ce tests bootmenu ;
+
+UsePrivateHeaders app interface shared ;
+
+# The Boot menu preferences (F-22): the settings file they write, from the
+# command line and from the window's controls, and a screenshot. Needs the
+# preferences and a desktop, which only the renga-* images have, hence the
+# second phase's directory (with the other desktop tests).
+Application bootmenu_ui_test :
+	bootmenu_ui_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: bootmenu_ui_test ;
+}

@@ -80,6 +80,7 @@ DESKBAR_DESKTOP_APPLETS +=
 
 SYSTEM_PREFERENCES += [ FFilterByBuildFeatures
 	Bluetooth
+	BootMenu
 	DataTranslations
 	E-mail
 	Media

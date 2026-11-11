@@ -693,5 +693,107 @@ try:
 except ImportError:
 	print("skip screenshot checks (no Pillow)")
 
+
+# --other-systems: the checks of other_systems_checks(), from serial logs
+# like those of real runs (BIOS and UEFI), and broken variants of them.
+EFI_GOOD = """boot menu: other system 1: "Windows Boot Manager" (\\EFI\\Microsoft\\Boot\\bootmgfw.efi on EFI volume 2)
+boot menu: other system 2: "Ubuntu" (\\EFI\\ubuntu\\shimx64.efi on EFI volume 2)
+boot menu: "Windows Boot Manager" in 3 s unless a key is pressed
+boot menu: timeout, choosing "Windows Boot Manager"
+boot menu: starting "Windows Boot Manager" (x)
+CE-OTHEROS started windows-efi
+CE-OTHEROS windows-efi device handle: yes
+CE-OTHEROS windows-efi returning
+boot menu: "Windows Boot Manager" returned: No error
+boot menu: probe step took 600 ms
+boot menu: found other media 3: "Boot other media: USB drive" (\\EFI\\BOOT\\BOOTX64.EFI on the USB drive)
+boot menu: CD/DVD: no media after 0 ms
+CE-OTHEROS started ubuntu-shim
+CE-OTHEROS ubuntu-shim device handle: yes
+CE-OTHEROS started removable-usb
+CE-OTHEROS removable-usb device handle: yes
+boot menu: key 'b'
+CE-HARNESS START
+"""
+BIOS_GOOD = ("""Welcome to the Renga boot loader!
+boot menu: other system 1: "Windows" (partition 2 of BIOS drive 0x81)
+boot menu: other system 2: "Hard disk 2" (the master boot record of BIOS drive 0x81)
+boot menu: "Continue booting" in 3 s unless a key is pressed
+CE-OTHEROS started bios-windows dl=81 lba=%08x
+Welcome to the Renga boot loader!
+CE-OTHEROS started bios-mbr dl=81 lba=00000000
+Welcome to the Renga boot loader!
+boot menu: found other media 3: "Boot other media: Floppy disk A:" (the floppy disk in drive A:)
+CE-OTHEROS started bios-floppy dl=00 lba=00000000
+Welcome to the Renga boot loader!
+boot menu: timeout, choosing "Continue booting"
+CE-HARNESS START
+""" % ce_test.OTHER_WINDOWS[0])
+MENU_GOOD = {"keys": [{"key": "1", "sent": 1.0, "logged": 1.01},
+	{"key": "up", "sent": 2.0, "logged": 2.45}]}
+
+
+def other_systems(firmware, text, menu=MENU_GOOD):
+	checks = ce_test.other_systems_checks(firmware, text, menu)
+	return {c["name"]: c["pass"] for c in checks}
+
+
+for firmware, good in (("uefi", EFI_GOOD), ("bios", BIOS_GOOD)):
+	results = other_systems(firmware, good)
+	expect("other systems (%s): a good run passes" % firmware,
+		all(results.values()), str(results))
+	results = other_systems(firmware, good, {"keys": [{"key": "1",
+		"sent": 1.0, "logged": 3.0}]})
+	expect("other systems (%s): a key answered after 2 s fails" % firmware,
+		not results["other_media.responsive"])
+	results = other_systems(firmware, good, {"keys": [{"key": "1",
+		"sent": 1.0, "logged": None}]})
+	expect("other systems (%s): an unanswered key fails" % firmware,
+		not results["other_media.responsive"])
+	results = other_systems(firmware, good.replace("CE-HARNESS START", ""))
+	expect("other systems (%s): Renga not booted afterwards fails" % firmware,
+		not results["other_systems.continued"])
+
+results = other_systems("uefi", EFI_GOOD.replace("shimx64", "grubx64"))
+expect("other systems: GRUB chosen over shim fails",
+	not results["other_systems.detect_shim"])
+results = other_systems("uefi", EFI_GOOD.replace(
+	"boot menu: timeout, choosing \"Windows Boot Manager\"\n", ""))
+expect("other systems: default not started by the countdown fails",
+	not results["other_systems.default_started"])
+results = other_systems("uefi", EFI_GOOD.replace(
+	"windows-efi device handle: yes", "windows-efi device handle: no"))
+expect("other systems: a loader without its device handle fails",
+	not results["other_systems.default_started"])
+results = other_systems("uefi", EFI_GOOD.replace(
+	"boot menu: \"Windows Boot Manager\" returned: No error\n", ""))
+expect("other systems: no return to the menu fails",
+	not results["other_systems.returned"])
+results = other_systems("uefi", EFI_GOOD.replace(
+	"probe step took 600 ms", "probe step took 4000 ms"))
+expect("other systems: a 4 s probe step fails",
+	not results["other_media.responsive"])
+results = other_systems("uefi", EFI_GOOD + 'boot menu: other system 4: '
+	'"EFI fallback loader" (\\EFI\\BOOT\\BOOTX64.EFI on EFI volume 2)\n')
+expect("other systems: the fallback loader listed next to others fails",
+	not results["other_systems.no_duplicates"])
+results = other_systems("uefi", EFI_GOOD.replace(
+	"CD/DVD: no media after 0 ms", "CD/DVD: no answer, skipped for now"))
+expect("other systems: no answer from the empty CD drive fails",
+	not results["other_media.empty_drive"])
+results = other_systems("bios", BIOS_GOOD + 'boot menu: other system 4: '
+	'"Windows" (partition 3 of BIOS drive 0x81)\n')
+expect("other systems: the inactive NTFS volume listed fails",
+	not results["other_systems.no_duplicates"]
+	and not results["other_systems.detect_windows"])
+results = other_systems("bios", BIOS_GOOD.replace("bios-windows dl=81",
+	"bios-windows dl=80"))
+expect("other systems: a boot record started with the wrong DL fails",
+	not results["other_systems.chainload_partition"])
+results = other_systems("bios", BIOS_GOOD.replace(
+	"CE-OTHEROS started bios-floppy dl=00 lba=00000000\n", ""))
+expect("other systems: the floppy not started fails",
+	not results["other_media.found"])
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

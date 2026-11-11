@@ -437,10 +437,109 @@ invoke_item(Menu* menu, MenuItem* item, int32& selected, char key)
 
 		if (item->Target() != NULL)
 			(*item->Target())(menu, item);
+
+		if (item->KeepsMenuOpen()) {
+			// The target ran (an operating system that returned, for
+			// example) and may have used the screen; the menu stays.
+			menu->FindSelected(&selected);
+			draw_menu(menu);
+			return false;
+		}
 		return true;
 	}
 
 	return false;
+}
+
+
+/*!	Logs a key the menu got, so that what happened in the menu can be
+	followed on a serial console (and timed by the test harness).
+*/
+static void
+log_key(int key)
+{
+	if (key >= 0x20 && key < 0x7f)
+		dprintf("boot menu: key '%c'\n", key);
+	else
+		dprintf("boot menu: key 0x%x\n", key);
+}
+
+
+// wait_for_key() result: the idle hook changed the menu.
+static const int kMenuChanged = -3;
+// How long the menu waits for a key before it runs its idle hook again.
+static const bigtime_t kIdleStep = 100000;
+
+
+/*!	Waits for a key, at most \a timeout microseconds, or forever if
+	\a timeout is negative. A menu with an idle hook (the background search
+	for other operating systems' media) runs it every kIdleStep while it
+	waits, so that the work never keeps a key from being handled for longer
+	than one of its steps takes. Returns the key, TEXT_CONSOLE_NO_KEY when
+	the time is up, TEXT_CONSOLE_NO_TIMED_WAIT when the platform cannot wait
+	with a timeout, or kMenuChanged when the hook changed the menu; \a timeout
+	is then reduced by the time waited, so the caller can continue.
+*/
+static int
+wait_for_key(Menu* menu, bigtime_t& timeout)
+{
+	menu_idle_hook hook = menu->IdleHook();
+	if (hook == NULL) {
+		int key;
+		if (timeout < 0)
+			key = console_wait_for_key();
+		else {
+			key = console_wait_for_key_timeout(timeout);
+			timeout = 0;
+		}
+		if (key >= 0)
+			log_key(key);
+		return key;
+	}
+
+	while (true) {
+		bigtime_t step = timeout < 0 || timeout > kIdleStep
+			? kIdleStep : timeout;
+		int key = console_wait_for_key_timeout(step);
+		if (key == TEXT_CONSOLE_NO_TIMED_WAIT) {
+			// Without timed waits there is no time for idle work either.
+			dprintf("boot menu: no timed key input, idle work stopped\n");
+			menu->SetIdleHook(NULL);
+			return wait_for_key(menu, timeout);
+		}
+		if (key != TEXT_CONSOLE_NO_KEY) {
+			log_key(key);
+			return key;
+		}
+		if (timeout >= 0) {
+			timeout -= step;
+			if (timeout <= 0) {
+				timeout = 0;
+				return TEXT_CONSOLE_NO_KEY;
+			}
+		}
+		if (hook(menu))
+			return kMenuChanged;
+	}
+}
+
+
+/*!	Draws \a menu again after its idle hook changed it, keeping the
+	selection.
+*/
+static void
+redraw_changed_menu(Menu* menu, int32& selected)
+{
+	MenuItem* item = menu->FindSelected(&selected);
+	if (item == NULL || !item->IsEnabled()
+		|| item->Type() == MENU_ITEM_SEPARATOR) {
+		selected = select_next_valid_item(menu, selected < 0 ? 0 : selected);
+		item = menu->ItemAt(selected);
+		if (item != NULL)
+			item->Select(true);
+	}
+	draw_menu(menu);
+	make_item_visible(menu, selected);
 }
 
 
@@ -475,14 +574,23 @@ run_menu(Menu* menu)
 			"pressed\n", menu->DefaultItem()->Label(), secondsLeft);
 	}
 
+	bigtime_t secondLeft = 1000000;
+		// of the countdown's current second
 	while (true) {
 		int key;
 		if (secondsLeft > 0) {
 			print_countdown(menu, secondsLeft);
-			key = console_wait_for_key_timeout(1000000);
-			if (key == TEXT_CONSOLE_NO_KEY && --secondsLeft > 0) {
-				dprintf("boot menu: %" B_PRId32 " s\n", secondsLeft);
+			key = wait_for_key(menu, secondLeft);
+			if (key == kMenuChanged) {
+				redraw_changed_menu(menu, selected);
 				continue;
+			}
+			if (key == TEXT_CONSOLE_NO_KEY) {
+				secondLeft = 1000000;
+				if (--secondsLeft > 0) {
+					dprintf("boot menu: %" B_PRId32 " s\n", secondsLeft);
+					continue;
+				}
 			}
 
 			MenuItem* defaultItem = menu->DefaultItem();
@@ -508,8 +616,14 @@ run_menu(Menu* menu)
 			secondsLeft = 0;
 			print_countdown(menu, -1);
 			dprintf("boot menu: countdown stopped by a key\n");
-		} else
-			key = console_wait_for_key();
+		} else {
+			bigtime_t forever = -1;
+			key = wait_for_key(menu, forever);
+			if (key == kMenuChanged) {
+				redraw_changed_menu(menu, selected);
+				continue;
+			}
+		}
 
 		item = menu->ItemAt(selected);
 

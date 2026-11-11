@@ -2,6 +2,7 @@ SubDir HAIKU_TOP src system boot platform efi ;
 
 UsePrivateHeaders [ FDirName graphics common ] ;
 UsePrivateHeaders [ FDirName interface ] ;
+UsePrivateHeaders shared ;
 UsePrivateHeaders [ FDirName kernel boot ] ;
 UsePrivateHeaders [ FDirName kernel platform ] ;
 UsePrivateHeaders [ FDirName kernel boot platform efi ] ;
@@ -37,6 +38,7 @@ local platform_src =
 	acpi.cpp
 	timer.cpp
 	menu.cpp
+	other_systems.cpp
 	devices.cpp
 	quirks.cpp
 	smp.cpp
