@@ -1,6 +1,6 @@
 # Renga Master Roadmap
 
-**Last updated:** 2026-11-09
+**Last updated:** 2026-11-11
 **Branch of record:** `ce/main` of [Techniix/haiku](https://github.com/Techniix/haiku/tree/ce/main), head `23ca3768` (46 commits on top of upstream `4197d30f`, `hrev60381`)
 **Document owner:** Renga maintainer (GitHub: Techniix)
 
@@ -70,7 +70,7 @@ Upstream maturity uses the audit's classes: **A** complete/mature, **B** nearly 
 - Identity: live-animated Renga boot splash, Renga branding, `renga-raw`/`renga-anyboot`/`renga-vmware` build profiles, Techniix repository preferred over HaikuPorts, Ctrl as the default shortcut key with a switch back to Alt.
 - Upstream bugs found and fixed in the fork (10 written up for later reporting, plus 2 newer ones): see [Section 10.2](#102-upstream-haiku-bugs-found-and-fixed-in-renga).
 
-**What is being developed now?** The Media Kit (`F-31`). Phase 3, capture APIs, was done on 2026-11-10 (`4d383de9`, `3fd8fe19`, `30e05e0b`; QEMU Tested), with screen recording in Screenshot (`F-44`). Phase 2, devices, was worked on 2026-11-10 (`042cbb63`, `569433a9`, `b0c4cd43`, `7ba2f32e`, `64f9fbad`): USB audio, hot-plug, HDMI sink detection and UVC cameras, QEMU Tested where QEMU has the device and Implemented (needs hardware) where it does not; HDMI playback is the open item. Step 0, `virtio_sound` capture (`F-02`, `19369300`), and phase 1, mixing and routing with its controls (`F-32`; `4ca8c8b2`, `ef41c576`, `369f3e7d`), were finished on 2026-11-09 and are QEMU Tested. Left of phase 1: a low-latency mode, the cubeb back end and measured resampling quality (see `F-31`); hot-plug detection in the multi_audio add-on was done in phase 2 (`569433a9`). The small Chromium OS gaps (`F-43` phase A) were finished on 2026-11-09 (`82cd4654` to `575f9cc0`): `thread_local` destructors, CPU affinity in libroot, `getdents64`, `getpeereid`, `POLLRDHUP`, `memfd` sealing, the QUIC UDP options and `MADV_DONTNEED`, with ten upstream bugs fixed on the way (section 10.2, 14-23). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
+**What is being developed now?** The maintainer's first real-hardware install. Boot loader first part (`F-22`, `170b3815`, 2026-11-10/11): the boot menu lists and starts other operating systems (UEFI: EFI loaders on every EFI system partition through `LoadImage`/`StartImage`; BIOS: partition boot records and other disks' MBRs, chainloaded) and removable media found in the background, with a default entry and timeout set in the new Boot menu preferences; QEMU Tested on both firmwares (`--other-systems`). Installer in-place replacement (`F-23` early part, `7ce49272`): existing Haiku/Renga installations are detected and named; upgrade (keeps home, settings and installed packages, the old system kept as a bootable package state), replace (keeps files) and erase (second confirmation naming the volume), with a command-line mode; QEMU Tested on BIOS and UEFI (`--installer-upgrade`: upgrade, then boot the upgraded disk and its old state from the boot menu). Test steps for the maintainer are in the hand-over (`REAL-HARDWARE-TEST.md`). Before that: the Media Kit (`F-31`). Phase 3, capture APIs, was done on 2026-11-10 (`4d383de9`, `3fd8fe19`, `30e05e0b`; QEMU Tested), with screen recording in Screenshot (`F-44`). Phase 2, devices, was worked on 2026-11-10 (`042cbb63`, `569433a9`, `b0c4cd43`, `7ba2f32e`, `64f9fbad`): USB audio, hot-plug, HDMI sink detection and UVC cameras, QEMU Tested where QEMU has the device and Implemented (needs hardware) where it does not; HDMI playback is the open item. Step 0, `virtio_sound` capture (`F-02`, `19369300`), and phase 1, mixing and routing with its controls (`F-32`; `4ca8c8b2`, `ef41c576`, `369f3e7d`), were finished on 2026-11-09 and are QEMU Tested. Left of phase 1: a low-latency mode, the cubeb back end and measured resampling quality (see `F-31`); hot-plug detection in the multi_audio add-on was done in phase 2 (`569433a9`). The small Chromium OS gaps (`F-43` phase A) were finished on 2026-11-09 (`82cd4654` to `575f9cc0`): `thread_local` destructors, CPU affinity in libroot, `getdents64`, `getpeereid`, `POLLRDHUP`, `memfd` sealing, the QUIC UDP options and `MADV_DONTNEED`, with ten upstream bugs fixed on the way (section 10.2, 14-23). The harness gained quick partial runs and per-program timing on 2026-11-09 (`c36db227`). `epoll` (`71101ac5`), `inotify` (`b421d52a`) and `signalfd` (`e1638a07`), completing `F-15`, were finished and committed on 2026-11-09, as was VM mouse integration (`F-19`).
 
 **What is blocked?**
 - NVMe multi-namespace (`F-04`) cannot reach Hardware Tested until the maintainer runs it on his real NVMe PC (pending, by his choice).
@@ -304,10 +304,10 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-13 | Package repository priority | QEMU Tested | 4 + 1 checks |
 | F-14 | Shortcut keys (Ctrl default) | QEMU Tested | 7 checks |
 | F-19 | VM mouse integration | QEMU Tested | `pointer` suite, 321/321 |
-| F-20 | EFI loader and boot menu | QEMU Tested (2 of 8 build steps) | 1-2 checks per run |
+| F-20 | EFI loader and boot menu | QEMU Tested (steps 1, 4 and 7 in text form; 2 partly) | 1-2 checks per run; `--other-systems` |
 | F-21 | hrev tag workflow | Implemented | Dry run plus live tag |
-| F-22 | Graphical boot loader | Designed | None |
-| F-23 | Installer redesign | Designed | None |
+| F-22 | Graphical boot loader | First part QEMU Tested (other systems, removable media, default entry; text menu); graphical menu Designed | 10 `other_systems.*`/`other_media.*` (UEFI) and 9 (BIOS) with `--other-systems`; 9 `bootmenu.*` + screenshot (renga-raw) |
+| F-23 | Installer redesign | Early part (in-place replacement) QEMU Tested; wizard Designed | `installer.*` with `--installer-upgrade` (27 BIOS, 28 UEFI checks in the installer suite); 4 `installer_ui.*` + screenshot (renga-raw) |
 | F-24 | Partition manager | Designed | None |
 | F-25 | Lumina shell | In Development (external repo) | Host unit tests only |
 | F-26 | LinuxKPI_HaikuOS | Not Started (in Renga) | None |
@@ -874,7 +874,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Renga maturity | Boot-disk preference and optional countdown menu |
 | Status | **QEMU Tested** (boot loader build order: 1 of 8 steps complete, 1 partial) |
 | Completed | EFI loader moves the disk it was loaded from to the front, using Loaded Image and Device Path protocols, with a bounded path walk (`4b26e677`). `boot_menu_timeout <seconds>` in the kernel settings file; "Continue booting" is the default entry; countdown on EFI and BIOS; any key stops it (`2b728fa3`). |
-| Remaining | Build order from the audit: (2, rest) pin one of several Haiku installs by device path and label by volume name; (3) ESP config and state files, remember-last; (4) ESP scan + EFI chainloading; (5) graphical renderer (`F-22`); (6) EFI runtime variables + NVRAM entries; (7) BIOS chainload and BIOS graphical menu; (8) shim/MOK |
+| Remaining | Build order from the audit: (2, rest) pin one of several Haiku installs by device path and label by volume name; (3) ESP config and state files, remember-last; (4) ESP scan + EFI chainloading: **done** (`170b3815`, `F-22` first part); (5) graphical renderer (`F-22`); (6) EFI runtime variables + NVRAM entries; (7) BIOS chainload **done** (`170b3815`), BIOS graphical menu open; (8) shim/MOK |
 | Known bugs/limitations | Other platforms (u-boot, riscv, openfirmware, m68k) take the default immediately when a timeout is set |
 | Dependencies | `F-01` (OVMF runs) |
 | Difficulty | 3 for steps 1-2; 4 (step 3); 5 (step 4); 6 (step 5); 7 (steps 6-7) |
@@ -889,24 +889,24 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | E (menu text-only; no chainloading) |
-| Renga maturity | Design only |
-| Status | **Designed** |
-| Completed | Design (audit section 6): option 4 combination led by UEFI, inside `haiku_loader.efi`. ESP `\EFI\HAIKU\bootmenu.cfg` + state file; OS discovery of known `.efi` loaders; `LoadImage`/`StartImage` (inherits Secure Boot policy); framebuffer renderer with themes as raw or QOI images; recovery entries. Theme decided 2026-11-08: Renga look (Lato wordmark, green/orange/gold leaf palette, wind and dappled-light motifs), reusing the integer-only splash renderer. |
-| Remaining | All implementation (build-order steps 3-8 in `F-20`) |
-| Known bugs/limitations | No GPL code (GRUB, rEFInd) in the tree; Limine (BSD-2) only as an optional extra |
+| Renga maturity | First part: other systems and removable media in the text menu |
+| Status | **QEMU Tested** (first part, `170b3815`); graphical menu **Designed** |
+| Completed | First part (`170b3815`, 2026-11-10): other operating systems in the boot menu with shortcut keys 1-9 and help texts. UEFI: EFI loaders under `\EFI\<dir>\` on every volume the firmware reads (Windows Boot Manager, distributions with shim before GRUB, systemd-boot, rEFInd, FreeBSD, OpenCore; fallback loader only when alone; own loader never), started with `LoadImage`/`StartImage` and the file's full device path (Secure Boot checks by the firmware; the loader gets its device handle); a loader that returns brings the menu back with text and graphics modes restored. BIOS: primary partition boot records (Windows only on the active partition, data volumes skipped) and other disks' MBRs, chainloaded at 0x7c00 with DL and DS:SI like an MBR. Removable media: drivers connected to all controllers in 30 ms slices (fast-boot firmware connects only its boot order), then removable devices probed one step at a time (Block I/O 2 asynchronous reads where available, 3 s limit, retries every 3 s); BIOS floppies A:/B:; entries appear as found, "(Looking for other media...)" while searching. `boot_menu_default <name>` makes the countdown start another system. Boot menu preferences (GUI; `src/preferences/bootmenu`) set the menu, timeout and default, with a command line. Names shared by loader and preferences (`headers/private/shared/boot_other_systems.h`). Earlier design (audit section 6): option 4 combination led by UEFI, inside `haiku_loader.efi`. ESP `\EFI\HAIKU\bootmenu.cfg` + state file; OS discovery of known `.efi` loaders; `LoadImage`/`StartImage` (inherits Secure Boot policy); framebuffer renderer with themes as raw or QOI images; recovery entries. Theme decided 2026-11-08: Renga look (Lato wordmark, green/orange/gold leaf palette, wind and dappled-light motifs), reusing the integer-only splash renderer. |
+| Remaining | Graphical, animated menu with icons (design direction below); BIOS CD booting (only the BIOS can boot El Torito), GPT disks and logical partitions on BIOS, "boot next device", remember-last, NVRAM entries (`F-20` steps 3, 6, 8); Hardware Tested |
+| Known bugs/limitations | No GPL code (GRUB, rEFInd) in the tree; Limine (BSD-2) only as an optional extra. The countdown counts waiting time, not search steps, so it runs longer than set while slow devices are searched (3.2 s for 2 s on OVMF). In QEMU, keys sent while a delayed floppy (null-co) was read never reached the menu (cause not found; QEMU's floppy controller reads synchronously); keys between reads and during slow UEFI steps (up to 700 ms) were answered within 10 ms |
 | Dependencies | `F-20` steps 3-4 |
 | Difficulty | 6 (renderer, Tier 3); BIOS graphical 7 |
 | Risk | Medium |
-| Testing status | None |
-| Next milestone | Text menu with chainload entries |
-| Recommended next action | Chainloading first; renderer after |
-| Links | Audit section 6 |
+| Testing status | QEMU Tested: `--other-systems` (BIOS 776/776, UEFI 774/774, full runs) with test EFI applications and boot records written in NASM (`3rdparty/ce/harness/otheros`), started by keys and by the default setting; `bootmenu_ui_test` (renga-raw); selftest cases. Needs hardware: the maintainer's Windows (`REAL-HARDWARE-TEST.md`) |
+| Next milestone | Hardware Tested (Windows Boot Manager on the maintainer's PC); then the graphical menu |
+| Recommended next action | Maintainer: steps 3-4 of the real-hardware test; send the `boot menu:` syslog lines |
+| Links | Audit section 6; 3rdparty/ce/README.md "Other operating systems in the boot menu" |
 
 **Design direction (maintainer, 2026-11-10): Renga's simplicity with Chameleon's advanced features.**
 
 - [ ] Graphical menu with no logo, so it does not compete with Renga's boot animation.
-- [ ] Detected operating systems listed with matching icons (Renga/Haiku, Windows, Linux distributions, BSDs, macOS), plus all the features in the checklist above.
-- [ ] "Boot other media": CD/DVD, USB drives, floppies and similar appear in the menu when they become bootable. Probing runs in the background with time limits per device, so a slow or empty drive never hangs the menu.
+- [ ] Detected operating systems listed with matching icons (Renga/Haiku, Windows, Linux distributions, BSDs, macOS), plus all the features in the checklist above. Detection done (`170b3815`, text labels; macOS not: its loader is on HFS+/APFS, which the firmware usually cannot read); icons with the graphical menu.
+- [x] "Boot other media": CD/DVD, USB drives, floppies and similar appear in the menu when they become bootable. Probing runs in the background with time limits per device, so a slow or empty drive never hangs the menu. Done in the text menu (`170b3815`; UEFI: CD/DVD and USB; BIOS: floppies, USB drives as disks; BIOS CDs not possible from a loader).
 - [ ] Animated in the Renga style, without the logo: a dark screen with light playing over the items as if leaves and branches overhead were shifting, and the same wind and leaves drifting across the screen, drawn procedurally so they scale cleanly to any resolution.
 - [ ] Still lightweight: a small frame budget and fallbacks, with a static image when the firmware framebuffer is slow, a plain text menu where there is no graphics mode, and a setting to turn animation off.
 
@@ -918,28 +918,28 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | C (single window; BFS-only validation; no NVRAM entries; `InstallEFILoader` can overwrite another OS's fallback loader) |
-| Renga maturity | Branding only (`22bf89ca`) |
-| Status | **Designed** |
+| Renga maturity | Early part: in-place replacement of an existing installation (`7ce49272`) |
+| Status | Early part **QEMU Tested** (`7ce49272`); wizard **Designed** |
 | Completed | Design (audit section 7): keep the copy engine (`WorkerThread`, `CopyEngine`, `UnzipEngine`); new wizard with pages Welcome, Hardware check, Destination (erase / alongside / manual), Boot, Account and network, Software, Summary, Progress, Finish. Requirements set by the maintainer (2026-11-09), below |
-| Remaining | All implementation |
-| Known bugs/limitations | Not applicable |
-| Dependencies | `F-24` shared disk-management engine (required, see below); `F-20`/`F-22` for the Boot page |
+| Remaining | The wizard and the required capabilities below (except the early part); Hardware Tested |
+| Known bugs/limitations | Renga is told from Haiku by its system package containing the Screen recording or Boot menu preferences (regular and Renga images); a minimum Renga image shows as Haiku. User packages of the same name as a Renga package are replaced by Renga's (the old one stays in the old state). Existing `system/settings` files are kept as they are, so a repository configuration the old installation had keeps its own priority. Only ESPs on the destination's disk get Renga's loader (Tools > Install EFI loader for others). The GUI test cannot talk to the Installer through messengers or scripting (hung three times; it uses `--target ... --begin` and screenshots instead; not resolved) |
+| Dependencies | `F-24` shared disk-management engine (required for the wizard, not for the early part); `F-20`/`F-22` for the Boot page |
 | Difficulty | 5 (Tier 3); user name/network/packages page 4 |
 | Risk | Medium; High for destructive paths |
-| Testing status | None |
-| Next milestone | Early part: in-place replacement of an existing installation (work order item 8); then the wizard shell |
-| Recommended next action | Start after the shared disk engine's resize work; do not skip ahead (maintainer, 2026-11-09) |
+| Testing status | QEMU Tested: `--installer-upgrade` (BIOS 795/795, UEFI 793/793, full runs): upgrade, replace and erase on copies of the image made to look like an older stock Haiku, then the upgraded disk and its old state booted; `installer_ui_test` (renga-raw); selftest cases. Needs hardware: the maintainer's Haiku partition (`REAL-HARDWARE-TEST.md`) |
+| Next milestone | Hardware Tested (the maintainer's upgrade); then the wizard shell after the shared disk engine |
+| Recommended next action | Maintainer: back up home, then steps 5-8 of the real-hardware test |
 | Links | Audit section 7 |
 
 **Early part, brought forward by the maintainer (2026-11-09): replace an existing Haiku or Renga installation in place.** Needed so the maintainer can put Renga on his main machine after the boot loader work. Done in today's Installer (not the new wizard), and shaped so the wizard reuses it. Today, installing onto a non-empty volume deletes everything in `/system` except `settings` (all installed packages go) and copies the source's `home` over the existing one. The early part:
 
-- [ ] Detect the existing installation on each partition (Haiku `hrev` or Renga version, from the `haiku` package in `system/packages`) and show it in the destination menu.
-- [ ] When the destination has one, ask how to proceed (selectable, safe option first):
+- [x] Detect the existing installation on each partition (Haiku `hrev` or Renga version, from the `haiku` package in `system/packages`) and show it in the destination menu (`7ce49272`; also `Installer --list-targets`).
+- [x] When the destination has one, ask how to proceed (selectable, safe option first) (`7ce49272`, "Installation mode" window; `--mode` on the command line):
   - **Upgrade to Renga, keep my files and applications.** Home is left untouched (only missing default files are added); `system/settings` is kept; packages the user installed are kept, except where Renga ships its own version; Renga's system packages replace Haiku's. The old system's packages are kept as a **package state**, so "Select system state" in the boot menu can boot the old installation if anything goes wrong (same mechanism as `F-44` backup and restore).
   - **Replace the system, keep my files.** Today's behaviour, improved: system and installed packages removed, `home` and `system/settings` kept, the source's `home` not copied over existing files.
   - **Erase and install.** Everything on the volume removed, after a second confirmation naming the volume.
-- [ ] The boot loader on the disk (BIOS and EFI) updated to Renga's, keeping the existing EFI backup behaviour; other operating systems' loaders untouched (`F-22`).
-- [ ] Harness checks: an image with a Haiku installation, user files, a user-installed package and settings is upgraded by an automated run of the same code (a command-line mode of the Installer), then booted; files, settings and the package survive, the old state is listed and boots.
+- [x] The boot loader on the disk (BIOS and EFI) updated to Renga's, keeping the existing EFI backup behaviour; other operating systems' loaders untouched (`F-22`) (`7ce49272`: makebootable; Haiku/Renga loaders on the destination disk's ESPs renamed `*_old.EFI` and replaced; QEMU Tested on UEFI).
+- [x] Harness checks: an image with a Haiku installation, user files, a user-installed package and settings is upgraded by an automated run of the same code (a command-line mode of the Installer), then booted; files, settings and the package survive, the old state is listed and boots (`7ce49272`, `--installer-upgrade`, BIOS and UEFI).
 - [ ] Before the real-hardware install: the maintainer backs up his home folder (upgrade keeps it, but this is the first real run).
 
 Required capabilities (maintainer, 2026-11-09), with design notes:
@@ -1538,8 +1538,8 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 4. **Chromium OS gaps, phase A** (`F-43`), placed here by the maintainer (2026-11-09): small, harness-testable, and useful to other ports too. Done 2026-11-09 (QEMU Tested, `82cd4654` to `575f9cc0`); fontconfig turned out to need nothing in Renga.
 5. **`virtio_sound` capture** (`F-02`). Done first, as step 0 of the Media Kit (its loopback and recording tests need it). Done 2026-11-09 (QEMU Tested, `19369300`).
 6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`). Phase 1 done 2026-11-09 with its controls (QEMU Tested, `4ca8c8b2`, `ef41c576`, `369f3e7d`), except the low-latency mode, the cubeb back end and resampling quality. Phase 2 (devices) worked on 2026-11-10 (`042cbb63` to `64f9fbad`): USB audio UAC1 and hot-plug QEMU Tested; UAC2, HDMI detection and UVC Implemented, needing hardware; HDMI playback open. Phase 3 (capture APIs, with screen recording in Screenshot) done 2026-11-10 (`4d383de9` to `30e05e0b`, QEMU Tested).
-7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09).
-8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Then the maintainer's real-hardware install.
+7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09). Done 2026-11-10 (`170b3815`, QEMU Tested on BIOS and UEFI; Windows itself needs the maintainer's PC).
+8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Done 2026-11-11 (`7ce49272`, QEMU Tested on BIOS and UEFI). Next: the maintainer's real-hardware install (`REAL-HARDWARE-TEST.md` in the hand-over).
 9. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
 10. **Port-performance batch** (`F-48` part a, `F-49`, `F-50`), placed by the maintainer (2026-11-09): hole punching in memfds, `futex()`, game mode with its Control Panel switch. Small, harness-testable, and useful to Chromium, Wine and Mesa as well as Eglantine.
 11. **Periodic NTP sync** (`F-30`).
@@ -1556,8 +1556,8 @@ Later, with the GPU stage (needs the maintainer's NVIDIA hardware): zero-copy pr
 
 | Project | Register | Status | Design source |
 | --- | --- | --- | --- |
-| Graphical multiboot boot loader, Renga theme | F-22 | Designed | Audit section 6 |
-| Installer wizard | F-23 | Designed | Audit section 7 |
+| Graphical multiboot boot loader, Renga theme | F-22 | First part QEMU Tested; graphics Designed | Audit section 6 |
+| Installer wizard | F-23 | Early part QEMU Tested; wizard Designed | Audit section 7 |
 | Advanced partition manager | F-24 | Designed | Audit section 7 |
 | Lumina as core shell (after S1-S8) | F-25 | In Development | Audit section 5; Lumina docs |
 | Control Panel suite incl. LinuxKPI device manager | F-28 | Not Started | Maintainer notes; audit proposals |
@@ -1808,6 +1808,8 @@ Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratc
 | UEFI, two installs (decoy first) | `--two-installs` | `minimum-anyboot` | 272/272 at `2b728fa3` |
 | Boot menu countdown | `--boot-menu-timeout N` | either | 272/272 at `22bf89ca` (6 s) |
 | 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 655/655 (`--smp 2`) at `369f3e7d`; 548/548 (`--smp 4`) at `1bfb2665` |
+| Other systems in the boot menu | `--other-systems` | either | BIOS 776/776, UEFI 774/774 at `170b3815` |
+| Installer upgrade, then the upgraded disk and its old state | `--installer-upgrade` | either (1200 MB) | BIOS 795/795, UEFI 793/793 at `7ce49272` |
 | Full desktop image | `--profile renga-raw` | `renga-raw` | 694/694 at `369f3e7d` (622/622 before the Media Kit work, the first run since `epoll`) |
 
 Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; any real hardware.
@@ -1860,6 +1862,8 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 
 **Media Kit phase 3 and stability (`F-31`, `F-44`; committed `62b132b3` to `30e05e0b`):** `timerfd.stress_close_concurrent` (every image; 6 threads closing 15000 armed timers, reproduced the DPC panic in 1 of 3 `--smp 2` runs before the fix); `screen_capture_test` (renga-raw): 39 `capture.*` checks (permission prompt, remembered decision, indicator, frames equal to `BScreen::ReadBitmap()`, damage, timestamps, window capture, revocation, the Media Kit node, Screenshot recording decoded again: frame count, colours in order, tone, A/V length) and `capture.screenshots` (4). `route_click_free` now says where and what a step is. Baselines: 768/768 (BIOS, 1 and 2 CPUs), 765/765 (UEFI), 863/863 (`renga-raw`, twice); selftest 0 failures.
 
+**Boot loader first part and Installer in-place replacement (`F-22`, `F-23`; committed `170b3815`, `7ce49272`):** `--other-systems`: 10 checks on UEFI, 9 on BIOS (they replace `boot.menu`; see README "Other operating systems in the boot menu"); `bootmenu_ui_test` 9 checks + `bootmenu.screenshots` (renga-raw); `--installer-upgrade`: the `installer` suite in three boots plus 4 `installer.*` host checks; `installer_ui_test` 4 checks + `installer_ui.screenshots` (renga-raw); in other runs `installer_test` reports nothing. Baselines at `7ce49272`: **768/768** (BIOS, 1 and 2 CPUs), **765/765** (UEFI), **878/878** (`renga-raw`), `--other-systems` 776/776 (BIOS) and 774/774 (UEFI) at `170b3815`, `--installer-upgrade` 795/795 (BIOS) and 793/793 (UEFI); selftest 0 failures (18 + 6 new cases). Found on the way: OVMF (like fast-boot firmware) connects only the devices of its boot order, so the loader connects all controllers itself; an empty CD reports block size 0; the Installer's command line reported success for refusals that carry `B_OK` as their error.
+
 **`F-43` phase A (committed `82cd4654` to `575f9cc0`):** new `posix_compat` programs `thread_atexit` (9 checks), `affinity` (15), `getdents` (13), `socket_ext` (35: `getpeereid`, `POLLRDHUP`), `quic_udp` (32), `vm_semantics` (20), and 19 sealing checks added to `memfd` (now 41). Baseline 619/619 (BIOS) with 1 and 2 CPUs, 616/616 (UEFI); 548/548 with 4 CPUs at `1bfb2665`. Run against the old code first, the new tests failed as follows: `quic_udp` 24 of 32 (stalled until a receive timeout was added); `vm_semantics` 7 of 20; `affinity` panicked the kernel with 2 CPUs; `socket_ext` found the IPv6 receive loop that stopped loopback traffic.
 
 ### 8.4 QEMU-only versus hardware-tested
@@ -1872,6 +1876,8 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 | USB audio (UAC2) | Mock device only | No | No | Pending (a UAC2 device) |
 | HDMI/DP sink detection (`hda`) | Parser only | No | No | Pending (HDMI/DP monitor with speakers) |
 | UVC webcams | Payload code and synthetic source only | No | No | Pending (a UVC webcam) |
+| Boot menu: other systems, removable media | Yes (test loaders and boot records) | No | No | Pending (maintainer's Windows, `REAL-HARDWARE-TEST.md`) |
+| Installer upgrade over Haiku | Yes (copies of the image as old Haiku) | No | No | Pending (maintainer's Haiku partition) |
 | Boot splash | Yes (screenshots) | No | No | No |
 | VM mouse integration | In development | Planned (USB Tablet setting) | Not tested | Not applicable |
 | Lumina | No | Lumina docs describe a VirtualBox setup; never run | No | No |
@@ -1886,7 +1892,7 @@ Practices that keep QEMU results meaningful: new tests are run against the old c
 
 | Blocker | Affects | Owner | Unblock action |
 | --- | --- | --- | --- |
-| No real-hardware test of any Renga change | Every QEMU Tested entry | Maintainer | Start with NVMe (F-04) and boot splash (F-16) on the main x86-64 machine |
+| No real-hardware test of any Renga change | Every QEMU Tested entry | Maintainer | Install Renga over Haiku with the Installer's upgrade mode and test the boot menu with Windows (`F-22`, `F-23`; steps in `REAL-HARDWARE-TEST.md`); NVMe (F-04) and boot splash (F-16) come with it |
 | Lumina never run on Haiku | F-25, Stage 0 gate, Stage 3 | Agent (automation) | Script S1-S8 in the harness (key, pointer and screenshot injection now exist) |
 | `epoll` missing | Electron, Node, Chromium patches, Renguin | Agent | **Resolved** 2026-11-09 by `71101ac5` (row kept for history) |
 | Per-team syscall ABI hook missing | F-27 | Agent | Design after or with epoll |
@@ -2026,6 +2032,9 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-10 | [`3fd8fe19`](https://github.com/Techniix/haiku/commit/3fd8fe19) | Media Kit `CaptureSession` (video, system or application audio, microphone; file or listener) and `ScreenCaptureNode` (`F-31` phase 3) | Same tree |
 | 2026-11-10 | [`30e05e0b`](https://github.com/Techniix/haiku/commit/30e05e0b) | Screenshot screen recording (`F-44`); `screen_capture_test`; harness traces user-lock waiters first in KDL | 768/768 BIOS and `--smp 2`, 765/765 UEFI, `renga-raw` 863/863 (twice); selftest 0 failures |
 | 2026-11-10 | (this commit) | Roadmap: `F-31` phase 3, `F-44` screen recording, baselines, history, upstream bugs 43-44; PORTING.md "Screen capture and capture sessions" | Documentation only |
+| 2026-11-10 | [`170b3815`](https://github.com/Techniix/haiku/commit/170b3815) | Boot loader: other operating systems (UEFI `LoadImage`/`StartImage`, BIOS chainloading) and removable media found in the background in the boot menu, `boot_menu_default`; Boot menu preferences; `--other-systems`, `bootmenu_ui_test` (`F-22` first part) | 768/768 BIOS and `--smp 2`, 765/765 UEFI, `renga-raw` 873/873; `--other-systems` 776/776 (BIOS), 774/774 (UEFI); selftest 0 failures |
+| 2026-11-11 | [`7ce49272`](https://github.com/Techniix/haiku/commit/7ce49272) | Installer: existing installations detected; upgrade (old system kept as a package state), replace and erase modes; EFI loader update on the destination's disk; command line; `--installer-upgrade`, `installer_ui_test` (`F-23` early part) | 768/768 BIOS and `--smp 2`, 765/765 UEFI, `renga-raw` 878/878; `--installer-upgrade` 795/795 (BIOS), 793/793 (UEFI); selftest 0 failures |
+| 2026-11-11 | (this commit) | Roadmap: `F-20`, `F-22`, `F-23` statuses, work order items 7-8, baselines, boot paths, history | Documentation only |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
