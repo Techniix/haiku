@@ -3710,6 +3710,9 @@ def main():
 		if "crashlog_test" in (args.only or available) \
 				and not args.installer_upgrade:
 			check_crashlog(results_dir, report)
+			if args.profile.startswith("renga-"):
+				check_screenshots(results_dir, report, CRASHLOG_SCREENSHOTS,
+					"crashlog.screenshots")
 		if args.other_systems:
 			check_other_systems(args, results_dir, report)
 		else:

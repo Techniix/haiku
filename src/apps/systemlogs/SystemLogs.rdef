@@ -1,0 +1,22 @@
+/*
+ * Copyright 2026, Renga contributors.
+ * Distributed under the terms of the MIT License.
+ */
+
+resource app_signature "application/x-vnd.Renga-SystemLogs";
+
+resource app_flags B_SINGLE_LAUNCH;
+
+resource app_version {
+	major  = 1,
+	middle = 0,
+	minor  = 0,
+	variety = B_APPV_FINAL,
+	internal = 0,
+	short_info = "System logs",
+	long_info = "System logs for Renga: the system log live and of the previous boot, crash reports, and a report archive for bug reports"
+};
+
+resource file_types message {
+	"types" = "text/plain"
+};

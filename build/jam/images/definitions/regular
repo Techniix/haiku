@@ -53,6 +53,7 @@ SYSTEM_APPS += [ FFilterByBuildFeatures
 	SerialConnect
 	SoftwareUpdater
 	SoundRecorder
+	SystemLogs
 ] ;
 
 DESKBAR_APPLICATIONS +=
@@ -70,6 +71,7 @@ DESKBAR_APPLICATIONS +=
 	SerialConnect
 	SoftwareUpdater
 	SoundRecorder
+	SystemLogs
 ;
 
 DESKBAR_DESKTOP_APPLETS +=

@@ -1,0 +1,24 @@
+SubDir HAIKU_TOP src apps systemlogs ;
+
+# Renga (roadmap F-51): the system log viewer with the crash reports. It
+# moves into the Control Panel's System section later (F-28).
+
+UsePrivateHeaders shared ;
+UseBuildFeatureHeaders zlib ;
+
+Includes [ FGristFiles ReportArchive.cpp ]
+	: [ BuildFeatureAttribute zlib : headers ] ;
+
+Application SystemLogs :
+	SystemLogs.cpp
+	ReportArchive.cpp
+	: be localestub [ TargetLibstdc++ ]
+		[ BuildFeatureAttribute zlib : library ]
+	: SystemLogs.rdef
+;
+
+DoCatalogs SystemLogs :
+	x-vnd.Renga-SystemLogs
+	:
+	SystemLogs.cpp
+;

@@ -490,6 +490,33 @@ the second card left no step between two samples larger than the tone
 itself makes. The mixer's gain values follow its bent "dB" scale
 (`mixer_gain()`).
 
+## Crash reports and planned reboots
+
+Programs in `/boot/system/non-packaged/bin/ce-tests-final` (Jamfiles:
+`bin ce-tests-final :`) run last, after the media tests, on every image,
+with `--crash`: they may end the boot. `crashlog_test` does: it prints
+`CE-INFO crashlog: entering the kernel debugger on purpose` and
+`CE-HOST kdl_reboot`, then panics through upstream's `kdl` test driver
+(added to harness images only). The harness answers that one debugger
+entry instead of stopping the run: it waits for the prompt, lets QEMU
+reset the machine on a guest reboot (QMP `set-action reboot=reset`; the run
+uses `-no-reboot` otherwise), types `reboot`, and turns `-no-reboot` on
+again. The debugger output is saved as `kdl-expected-<n>.log`. The test
+keeps its phase in `data/ce-harness/crash-phase`; while it exists, the
+runner runs only `crashlog_test` (as `running`/`exited`, which
+`harness.tests_ran` counts) and powers off. The second boot checks the
+saved report and enters the debugger again with `kernel_debugger()`; the
+third checks that report.
+
+Between the marker line and the next `CE-HARNESS START`, only the expected
+panic and the debugger's welcome are not kernel problems; any other panic
+there still is. `crashlog.debugger_reboots` (host) wants both entries
+answered and three runner starts. Boots after such a reboot get a stall
+limit of at least 240 s (they are slow in QEMU without KVM).
+`--other-systems` and `--installer-upgrade` put
+`data/ce-harness/no-final-tests` into their image copy, so these programs
+do not run there.
+
 ## Current suites
 
 - **installer** (`installer_test`): see "Installing over an existing
@@ -514,6 +541,21 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   the file gets timeout 4 and the default, and the checkbox and spinner
   read back through scripting show it. Screenshot `bootmenu_preferences`
   (`bootmenu.screenshots`). The settings file is put back afterwards.
+
+- **crashlog** (every image, `crashlog_test`): crash reports and System
+  logs (roadmap F-51), over three boots of one QEMU session; see "Crash
+  reports and planned reboots". Collector on made-up syslogs, an
+  application crash (debug_server's report), the kernel report after a
+  panic (reason, message, revision, CPUs with backtraces, memory, kernel
+  images, syslog tail) and after `kernel_debugger()`, no report saved
+  twice. On renga-* images also: the Deskbar entry, the notification at
+  login (notification_server's window is shown), System logs opened on the
+  report as a click on the notification opens it, the live log (a line
+  logged now appears; component, level and search filters), the previous
+  boot, "Save a report" from the window and the command line (the ZIP is
+  read back: members, CRC of an inflated entry), and screenshots
+  `crash_notification`, `systemlogs_crash`, `systemlogs_live`,
+  `systemlogs_previous` (`crashlog.screenshots`).
 
 - **media** (renga-* images): see "Media Kit tests". In the guest it checks
   recording from the fed card through the Media Kit and its recording gain,
