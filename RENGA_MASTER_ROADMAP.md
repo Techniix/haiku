@@ -1334,14 +1334,14 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Renga maturity | Same as upstream |
 | Status | **Designed** |
 | Completed | None |
-| Remaining | One rebase of HaikuWebKit onto a recent WebKit release (security fixes, modern site support) shipped through RengaPorts; keep the `BWebView` API stable so existing Haiku programs that embed it keep working (F-46). Proposed quick improvements, pending the maintainer's pick: a current user agent string, `prefers-color-scheme` following the Appearance dark setting, HTML5 audio and video through the new Media Kit codecs, WebPositive crashes reported to the F-51 crash log |
+| Remaining | One rebase of HaikuWebKit onto a recent WebKit release (security fixes, modern site support) shipped through RengaPorts; keep the `BWebView` API stable so existing Haiku programs that embed it keep working (F-46). Quick improvements, all approved by the maintainer 2026-11-11, in this order: (1) a current user agent string, (2) `prefers-color-scheme` following the Appearance dark setting, (3) WebPositive crashes reported to the F-51 crash log, all three as a small batch right after the Media Kit; (4) HTML5 audio and video through the new Media Kit codecs as the last Media Kit piece. Speed pass with the batch (maintainer reported WebPositive as very slow): measure page loads first, then fix cheap causes found (cache sizes, connection limits, DNS caching, needless redraws) and record the larger ones (a faster network back end, GPU compositing via F-47) for the rebase |
 | Known bugs/limitations | Not a full engine project: Chromium (F-43) is the primary browser |
 | Dependencies | F-43 (scheduled after the Chromium phases), Media Kit (for HTML5 media) |
 | Difficulty | 7 (rebase); 2-4 (quick fixes) |
 | Risk | Medium (rebase); Low (quick fixes) |
 | Testing status | None |
-| Next milestone | After the Chromium phases (maintainer 2026-11-11) |
-| Recommended next action | Later |
+| Next milestone | Quick fixes and speed pass right after the Media Kit; rebase after the Chromium phases (maintainer 2026-11-11) |
+| Recommended next action | Quick-fix batch after the Media Kit |
 | Links | Decided by the maintainer, 2026-11-11: plan around Chromium, do one WebKit rebase, keep the API |
 
 ### Bundled applications
