@@ -28,6 +28,20 @@ HTTPStreamer::Sniff(const BUrl& url, BDataIO** source)
 {
 	CALLED();
 
+	// Renga (F-31 phase 4): only HTTP(S), and not HLS/DASH playlists, which
+	// the FFmpeg plug-in's streamer opens with FFmpeg's own protocols (the
+	// streamers are tried in turn; this one was taking every URL, also
+	// udp:// and rtp://, without being able to read or write them).
+	BString protocol = url.Protocol();
+	protocol.ToLower();
+	if (protocol != "http" && protocol != "https")
+		return B_NOT_SUPPORTED;
+	BString path = url.Path();
+	path.ToLower();
+	if (path.EndsWith(".m3u8") || path.EndsWith(".m3u")
+		|| path.EndsWith(".mpd"))
+		return B_NOT_SUPPORTED;
+
 	HTTPMediaIO* outSource = new HTTPMediaIO(url);
 
 	status_t ret = outSource->Open();

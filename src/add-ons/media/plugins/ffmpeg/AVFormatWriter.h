@@ -56,6 +56,7 @@ private:
 			int					fHeaderError;
 
 			AVIOContext*		fIOContext;
+			bool				fOwnsURLContext;
 
 			StreamCookie**		fStreams;
 			BLocker				fStreamLock;

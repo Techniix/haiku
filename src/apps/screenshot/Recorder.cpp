@@ -107,7 +107,9 @@ Recorder::_Thread()
 {
 	// Asks the user the first time (the Screen recording prompt), so this
 	// may take a while.
-	status_t status = fSession.Start(fOptions, &fFile);
+	// Renga (F-31 phase 4): with a stream URL, no file
+	bool stream = fOptions.streamURL.Length() > 0;
+	status_t status = fSession.Start(fOptions, stream ? NULL : &fFile);
 	BMessage started(kRecorderStarted);
 	started.AddInt32("status", status);
 	fTarget.SendMessage(&started);
@@ -128,7 +130,8 @@ Recorder::_Thread()
 	BPath path(&fFile);
 	BMessage stopped(kRecorderStopped);
 	stopped.AddInt32("status", status);
-	stopped.AddString("path", path.Path());
+	stopped.AddString("path", stream ? fOptions.streamURL.String()
+		: path.Path());
 	stopped.AddInt64("frames", fSession.FramesWritten());
 	stopped.AddInt64("audio frames", fSession.AudioFramesWritten());
 	stopped.AddInt64("duration", fSession.Duration());

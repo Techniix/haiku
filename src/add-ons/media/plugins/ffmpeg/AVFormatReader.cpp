@@ -12,6 +12,7 @@
 #include <stdlib.h>
 
 #include <new>
+#include <typeinfo>
 
 #include <AutoDeleter.h>
 #include <Autolock.h>
@@ -27,6 +28,7 @@ extern "C" {
 }
 
 #include "DemuxerTable.h"
+#include "FFmpegURLIO.h"
 #include "gfx_util.h"
 #include "Utilities.h"
 
@@ -230,6 +232,42 @@ status_t
 StreamBase::Open()
 {
 	BAutolock _(fStreamLock);
+
+	// Renga (F-31 phase 4): a URL FFmpeg opens itself (HLS, DASH, RTMP,
+	// RTP, UDP, SRT); its protocols do the I/O, there is no custom context.
+	BString url;
+	{
+		uint8 head[FFmpegURLIO::kSize];
+		ssize_t read = fSource->ReadAt(0, head, sizeof(head));
+		if (read > 0)
+			url = FFmpegURLIO::URLFrom(head, read);
+	}
+	if (url.Length() > 0) {
+		fContext = avformat_alloc_context();
+		if (fContext == NULL)
+			return B_NO_MEMORY;
+		AVDictionary* options = NULL;
+		// do not wait forever for a live source that never sends
+		av_dict_set(&options, "rw_timeout", "10000000", 0);
+		av_dict_set(&options, "timeout", "10000000", 0);
+		int result = avformat_open_input(&fContext, url.String(), NULL,
+			&options);
+		if (result < 0) {
+			char error[AV_ERROR_MAX_STRING_SIZE];
+			av_strerror(result, error, sizeof(error));
+			fprintf(stderr, "ffmpeg: cannot open %s: %s\n", url.String(),
+				error);
+			av_dict_free(&options);
+			fContext = NULL;
+			return B_NOT_SUPPORTED;
+		}
+		av_dict_free(&options);
+		if (avformat_find_stream_info(fContext, NULL) < 0)
+			return B_NOT_SUPPORTED;
+		fSeekByBytes = false;
+		fStreamBuildsIndexWhileReading = false;
+		return B_OK;
+	}
 
 	// Init probing data
 	size_t bufferSize = 32768;

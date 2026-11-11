@@ -567,6 +567,22 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   and print `CE-INFO media_codec known limit: ...` lines instead of
   checks (FLAC from float samples, Ogg Vorbis, MP4 with AAC, MP3; seeking
   audio in WebM and Ogg files); see the roadmap's F-31.
+- **media_stream** (`media_stream_test`, renga-* images): streaming through
+  the FFmpeg plug-in's protocols (`FFmpegURLIO.h`, roadmap F-31 phase 4)
+  on the guest's loopback interface (the harness attaches no network
+  card). HLS: three one-second MPEG-TS segments written with
+  `MediaWriter` and a playlist, served by an HTTP/1.0 server thread in the
+  test; `MediaReader` opens `http://127.0.0.1:8093/index.m3u8`, all 45
+  frames must decode in their segment's colour and the server must see
+  the playlist and segment requests. UDP and RTP output: `MediaWriter`
+  sends MPEG-TS to `udp://127.0.0.1:5004` and `rtp://127.0.0.1:5006`; a
+  socket receives whole TS packets (sync byte every 188 bytes), RTP
+  version 2 with payload type 33 and consecutive sequence numbers, and
+  what arrived decodes again to the frames sent. The capture session's
+  stream output: `Screenshot --record 3 --stream udp://... --system-audio`
+  must send MPEG-TS with video and audio that decodes. MediaPlayer opens
+  the HLS URL (screenshot `mediaplayer_hls`, `media_stream.screenshots`).
+  RTMP (needs a server) and SRT are not tested.
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
   Media Kit tests): the low-latency audio mode (roadmap F-31,
   `headers/private/media/LowLatencyAudio.h`). A child process plays

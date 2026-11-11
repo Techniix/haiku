@@ -65,6 +65,10 @@ struct CaptureOptions {
 	BString		videoCodec;		// short name, e.g. "mpeg4" (default)
 	BString		audioCodec;		// short name, e.g. "pcm" (default)
 	bigtime_t	permissionTimeout;
+	BString		streamURL;		// Renga (F-31 phase 4): with no file,
+								// stream to this URL instead (rtmp://
+								// with "flv", rtp://, udp://, srt:// with
+								// "mpegts"; the FFmpeg plug-in)
 
 				CaptureOptions();
 };

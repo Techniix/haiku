@@ -168,6 +168,8 @@ LATENCY_TONE_SECONDS = 5.0
 # card did not get in time shows as hundreds); see analyze_latency_audio().
 LATENCY_MAX_ZERO_RUN = 16
 LATENCY_MAX_GAP = 4 * 256
+# MediaPlayer playing an HLS stream from media_stream_test's server (F-31).
+STREAM_SCREENSHOTS = ["mediaplayer_hls"]
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 # The Installer with a destination that has an installation (F-23).
@@ -192,6 +194,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"mixer.media_addon", "hmulti_audio.media_addon", "media_server",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
+	"media_stream_test", "Screenshot",
 	"SoundRecorder", "media_addon_server"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
@@ -3531,6 +3534,9 @@ def main():
 			analyze_latency_audio(results_dir, report)
 			check_screenshots(results_dir, report, LATENCY_SCREENSHOTS,
 				"media_latency.screenshots")
+		if "media_stream_test" in (args.only or available):
+			check_screenshots(results_dir, report, STREAM_SCREENSHOTS,
+				"media_stream.screenshots")
 		if "installer_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, INSTALLER_SCREENSHOTS,
 				"installer_ui.screenshots")

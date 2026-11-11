@@ -11,6 +11,7 @@
 #include <stdlib.h>
 
 #include <new>
+#include <typeinfo>
 
 #include <Application.h>
 #include <AutoDeleter.h>
@@ -26,6 +27,7 @@ extern "C" {
 }
 
 #include "DemuxerTable.h"
+#include "FFmpegURLIO.h"
 #include "EncoderTable.h"
 #include "gfx_util.h"
 
@@ -399,6 +401,7 @@ AVFormatWriter::AVFormatWriter()
 	fCodecOpened(false),
 	fHeaderError(-1),
 	fIOContext(NULL),
+	fOwnsURLContext(false),
 	fStreamLock("stream lock")
 {
 	TRACE("AVFormatWriter::AVFormatWriter\n");
@@ -410,8 +413,11 @@ AVFormatWriter::~AVFormatWriter()
 	TRACE("AVFormatWriter::~AVFormatWriter\n");
 
 	// Free the streams and close the AVCodecContexts
-	if (fFormatContext != NULL)
+	if (fFormatContext != NULL) {
+		if (fOwnsURLContext && fFormatContext->pb != NULL)
+			avio_closep(&fFormatContext->pb);
 		avformat_free_context(fFormatContext);
+	}
 	if (fIOContext != NULL) {
 		// Frees the buffer pointer and sets it to NULL
 		av_freep(&fIOContext->buffer);
@@ -427,6 +433,36 @@ status_t
 AVFormatWriter::Init(const media_file_format* fileFormat)
 {
 	TRACE("AVFormatWriter::Init()\n");
+
+	// Renga (F-31 phase 4): streaming out (RTMP, RTP, UDP, SRT) through
+	// FFmpeg's protocols, see FFmpegURLIO.h. RTP carries MPEG-TS
+	// ("rtp_mpegts"), whatever container was asked for.
+	FFmpegURLIO* url = dynamic_cast<FFmpegURLIO*>(fTarget);
+	if (url != NULL && fFormatContext->pb == NULL) {
+		const char* name = fileFormat->short_name;
+		if (strncmp(url->URL(), "rtp:", 4) == 0)
+			name = "rtp_mpegts";
+		fFormatContext->oformat = av_guess_format(name, NULL, NULL);
+		if (fFormatContext->oformat == NULL)
+			return B_NOT_SUPPORTED;
+		if ((fFormatContext->oformat->flags & AVFMT_NOFILE) == 0) {
+			AVDictionary* options = NULL;
+			av_dict_set(&options, "rw_timeout", "10000000", 0);
+			int result = avio_open2(&fFormatContext->pb, url->URL(),
+				AVIO_FLAG_WRITE, NULL, &options);
+			av_dict_free(&options);
+			if (result < 0) {
+				char error[AV_ERROR_MAX_STRING_SIZE];
+				av_strerror(result, error, sizeof(error));
+				fprintf(stderr, "ffmpeg: cannot open %s: %s\n", url->URL(),
+					error);
+				return B_IO_ERROR;
+			}
+		}
+		fFormatContext->url = av_strdup(url->URL());
+		fOwnsURLContext = true;
+		return B_OK;
+	}
 
 	if (fIOContext == NULL) {
 		uint8* buffer = static_cast<uint8*>(av_malloc(kIOBufferSize));
@@ -534,6 +570,11 @@ AVFormatWriter::Close()
 		return B_ERROR;
 
 	int result = av_write_trailer(fFormatContext);
+	if (fOwnsURLContext && fFormatContext->pb != NULL) {
+		avio_flush(fFormatContext->pb);
+		fprintf(stderr, "ffmpeg: %s: %" PRId64 " bytes sent\n",
+			fFormatContext->url, avio_tell(fFormatContext->pb));
+	}
 	if (result < 0)
 		TRACE("  av_write_trailer(): %d\n", result);
 	return result == 0 ? B_OK : B_ERROR;

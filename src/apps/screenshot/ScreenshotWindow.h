@@ -119,6 +119,7 @@ private:
 			// Renga (F-31 phase 4): 0 Matroska (MPEG-4, PCM), 1 WebM
 			// (VP9, Opus)
 			int32			fRecordFormat;
+			BTextControl*	fStreamURL;
 };
 
 

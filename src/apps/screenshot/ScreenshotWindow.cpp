@@ -286,6 +286,10 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 	}
 	BMenuField* formatField = new BMenuField(B_TRANSLATE("Format:"),
 		formatMenu);
+	fStreamURL = new BTextControl("stream", B_TRANSLATE("Stream to:"), "",
+		NULL);
+	fStreamURL->SetToolTip(B_TRANSLATE("Instead of a file: udp://, rtp:// or "
+		"srt:// address (MPEG-TS with MPEG-4 video and Opus audio)"));
 	fRecordSystemAudio->SetValue(fRecordSystemAudioSetting);
 	fRecordMicrophone->SetValue(fRecordMicrophoneSetting);
 
@@ -335,6 +339,10 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 				.AddGroup(B_HORIZONTAL, kLabelSpacing)
 					.Add(formatField->CreateLabelLayoutItem())
 					.Add(formatField->CreateMenuBarLayoutItem())
+				.End()
+				.AddGroup(B_HORIZONTAL, kLabelSpacing)
+					.Add(fStreamURL->CreateLabelLayoutItem())
+					.Add(fStreamURL->CreateTextViewLayoutItem())
 				.End()
 				.Add(fRecordStatus)
 				.AddGlue()
@@ -1132,6 +1140,35 @@ ScreenshotWindow::_StartRecording(const BMessage* options)
 	capture.fileFormat = kRecordFormats[fRecordFormat].container;
 	capture.videoCodec = kRecordFormats[fRecordFormat].video;
 	capture.audioCodec = kRecordFormats[fRecordFormat].audio;
+
+	// Renga (F-31 phase 4): streaming instead of a file
+	BString stream = fStreamURL->Text();
+	const char* streamOption;
+	if (options != NULL
+		&& options->FindString("stream", &streamOption) == B_OK)
+		stream = streamOption;
+	stream.Trim();
+	if (stream.Length() > 0) {
+		capture.streamURL = stream;
+		capture.fileFormat = stream.StartsWith("rtmp") ? "flv" : "mpegts";
+		capture.videoCodec = "mpeg4";
+		capture.audioCodec = "opus";
+		status_t status = fRecorder->Start(capture, entry_ref());
+		if (status != B_OK) {
+			BString text;
+			text.SetToFormat(B_TRANSLATE("Could not stream: %s"),
+				strerror(status));
+			fRecordStatus->SetText(text.String());
+			return;
+		}
+		fRecordButton->SetLabel(B_TRANSLATE("Stop recording"));
+		fRecordStatus->SetText(B_TRANSLATE("Waiting for permission"
+			B_UTF8_ELLIPSIS));
+		delete fRecordTicker;
+		fRecordTicker = new BMessageRunner(BMessenger(this),
+			new BMessage(kRecordTick), 250000);
+		return;
+	}
 
 	BPath path;
 	const char* file;

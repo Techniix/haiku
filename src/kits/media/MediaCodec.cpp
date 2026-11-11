@@ -154,6 +154,38 @@ MediaWriter::Open(const char* path, const char* container)
 	if (status != B_OK)
 		return status;
 
+	if (strstr(path, "://") != NULL && strncmp(path, "file://", 7) != 0) {
+		// A stream: rtmp://, rtp://, udp://, srt:// (the FFmpeg plug-in's
+		// streamer, F-31 phase 4)
+		BUrl url(path, true);
+		if (!url.IsValid())
+			return B_BAD_VALUE;
+		fFile = new(std::nothrow) BMediaFile(url, &fileFormat);
+	} else {
+		if (strncmp(path, "file://", 7) == 0)
+			path += 7;
+		status = _CreateFile(path, &fileFormat);
+		if (status != B_OK)
+			return status;
+	}
+	if (fFile == NULL)
+		return B_NO_MEMORY;
+	status = fFile->InitCheck();
+	if (status != B_OK) {
+		delete fFile;
+		fFile = NULL;
+		return status;
+	}
+	fContainer = fileFormat.short_name;
+	fDescription = fileFormat.pretty_name;
+	return B_OK;
+}
+
+
+status_t
+MediaWriter::_CreateFile(const char* path, const media_file_format* format)
+{
+	status_t status;
 	// BMediaFile wants an existing entry for an entry_ref.
 	BFile file(path, B_CREATE_FILE | B_ERASE_FILE | B_WRITE_ONLY);
 	status = file.InitCheck();
@@ -165,17 +197,7 @@ MediaWriter::Open(const char* path, const char* container)
 	if (status != B_OK)
 		return status;
 
-	fFile = new(std::nothrow) BMediaFile(&ref, &fileFormat);
-	if (fFile == NULL)
-		return B_NO_MEMORY;
-	status = fFile->InitCheck();
-	if (status != B_OK) {
-		delete fFile;
-		fFile = NULL;
-		return status;
-	}
-	fContainer = fileFormat.short_name;
-	fDescription = fileFormat.pretty_name;
+	fFile = new(std::nothrow) BMediaFile(&ref, format);
 	return B_OK;
 }
 

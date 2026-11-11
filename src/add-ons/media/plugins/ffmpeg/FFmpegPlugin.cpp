@@ -25,6 +25,7 @@ extern "C" {
 #include "AVCodecEncoder.h"
 #include "AVFormatReader.h"
 #include "AVFormatWriter.h"
+#include "FFmpegURLIO.h"
 #include "CodecTable.h"
 #include "EncoderTable.h"
 #include "MuxerTable.h"
@@ -50,6 +51,13 @@ FFmpegPlugin::NewDecoder(uint index)
 //	if (index == 0)
 		return new(std::nothrow) AVCodecDecoder();
 //	return NULL;
+}
+
+
+Streamer*
+FFmpegPlugin::NewStreamer()
+{
+	return new(std::nothrow) FFmpegStreamer();
 }
 
 

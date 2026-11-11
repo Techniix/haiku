@@ -146,7 +146,8 @@ ScreenshotApp::ArgvReceived(int32 argc, char** argv)
 		// Renga: screen recording from the command line (F-44):
 		//   Screenshot --record <seconds> [--region <x>,<y>,<w>,<h>]
 		//     [--file <path>] [--system-audio] [--microphone]
-		//     [--frame-rate <n>] [--format mkv|webm] [--quit]
+		//     [--frame-rate <n>] [--format mkv|webm] [--stream <url>]
+		//     [--quit]
 		// records the screen (or the region) for that long into the file
 		// (default: the Screenshot folder) and prints what it wrote.
 		else if (strcmp(argv[i], "--record") == 0 && i + 1 < argc) {
@@ -166,6 +167,8 @@ ScreenshotApp::ArgvReceived(int32 argc, char** argv)
 			fRecordOptions.SetFloat("frame rate", atof(argv[++i]));
 		else if (strcmp(argv[i], "--format") == 0 && i + 1 < argc)
 			fRecordOptions.SetString("format", argv[++i]);
+		else if (strcmp(argv[i], "--stream") == 0 && i + 1 < argc)
+			fRecordOptions.SetString("stream", argv[++i]);
 		else if (strcmp(argv[i], "--quit") == 0)
 			fRecordOptions.SetBool("quit", true);
 	}

@@ -14,6 +14,7 @@ local sources =
 	DemuxerTable.cpp
 	EncoderTable.cpp
 	FFmpegPlugin.cpp
+	FFmpegURLIO.cpp
 	MuxerTable.cpp
 	CpuCapabilities.cpp
 

@@ -15,12 +15,17 @@
 #include "DecoderPlugin.h"
 #include "EncoderPlugin.h"
 #include "ReaderPlugin.h"
+#include "StreamerPlugin.h"
 #include "WriterPlugin.h"
 
 
 class FFmpegPlugin : public ReaderPlugin, public DecoderPlugin,
-	public WriterPlugin, public EncoderPlugin {
+	public WriterPlugin, public EncoderPlugin, public StreamerPlugin {
 public:
+	// Renga (F-31 phase 4): URLs FFmpeg opens with its own protocols
+	// (FFmpegURLIO.h)
+	virtual	Streamer*			NewStreamer();
+
 	virtual	Reader*				NewReader();
 
 	virtual	Decoder*			NewDecoder(uint index);

@@ -57,7 +57,10 @@ public:
 								~MediaWriter();
 									// finishes the file if needed
 
-	//!	\a container: a file format short name ("webm", "mkv", ...).
+	/*!	\a container: a file format short name ("webm", "mkv", ...).
+		\a path may also be a stream URL (rtmp://, rtp://, udp://, srt://;
+		RTMP takes "flv", the others "mpegts").
+	*/
 			status_t			Open(const char* path, const char* container);
 
 			status_t			AddVideoTrack(const char* codec, int32 width,
@@ -96,6 +99,8 @@ private:
 	struct Track;
 
 			Track*				_TrackAt(int32 index) const;
+			status_t			_CreateFile(const char* path,
+									const media_file_format* format);
 
 			BMediaFile*			fFile;
 			BList				fTracks;

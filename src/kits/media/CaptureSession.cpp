@@ -16,6 +16,7 @@
 #include <BufferGroup.h>
 #include <MediaDefs.h>
 #include <MediaFile.h>
+#include <Url.h>
 #include <MediaFormats.h>
 #include <MediaRecorder.h>
 #include <MediaRoster.h>
@@ -51,8 +52,8 @@ CaptureOptions::CaptureOptions()
 	fileFormat("mkv"),
 	videoCodec("mpeg4"),
 	audioCodec("pcm"),
-		// FLAC needs codec private data in Matroska, which the FFmpeg
-		// plug-in's writer does not pass on (avformat_write_header() fails)
+		// the default stays PCM; the writer passes codec private data on
+		// since F-31 phase 4 (FLAC, Opus)
 	permissionTimeout(120000000)
 {
 }
@@ -300,7 +301,7 @@ CaptureSession::Start(const CaptureOptions& options, const entry_ref* file,
 	}
 	memset(fBitmap->Bits(), 0, fBitmap->BitsLength());
 
-	if (file != NULL) {
+	if (file != NULL || fOptions.streamURL.Length() > 0) {
 		status = _OpenFile(file);
 		if (status != B_OK) {
 			fprintf(stderr, "CaptureSession: cannot open the file: %s\n",
@@ -347,7 +348,15 @@ CaptureSession::_OpenFile(const entry_ref* file)
 	if (status != B_OK)
 		return status;
 
-	fFile = new(std::nothrow) BMediaFile(file, &fileFormat);
+	if (file == NULL) {
+		// Renga (F-31 phase 4): a stream (FFmpeg's protocols, see
+		// src/add-ons/media/plugins/ffmpeg/FFmpegURLIO.h)
+		BUrl url(fOptions.streamURL.String(), true);
+		if (!url.IsValid())
+			return B_BAD_VALUE;
+		fFile = new(std::nothrow) BMediaFile(url, &fileFormat);
+	} else
+		fFile = new(std::nothrow) BMediaFile(file, &fileFormat);
 	if (fFile == NULL)
 		return B_NO_MEMORY;
 	status = fFile->InitCheck();

@@ -40,6 +40,13 @@ Application media_codec_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# Streaming through the FFmpeg plug-in's protocols (F-31 phase 4): HLS over
+# HTTP, UDP and RTP output, the capture session's stream output.
+Application media_stream_test :
+	media_stream_test.cpp
+	: be media network [ TargetLibstdc++ ]
+;
+
 # The low-latency audio mode (F-31): BSoundPlayer buffers, the mixer's
 # switch, the default output's period, latency and steadiness.
 Application sound_latency_test :
@@ -50,5 +57,6 @@ Application sound_latency_test :
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
 		: media_test media_ui_test media_usb_test media_video_test
-		screen_capture_test sound_latency_test media_codec_test ;
+		screen_capture_test sound_latency_test media_codec_test
+		media_stream_test ;
 }
