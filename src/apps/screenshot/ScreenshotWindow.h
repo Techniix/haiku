@@ -22,12 +22,16 @@
 
 
 class BBitmap;
+class BButton;
 class BCheckBox;
 class BFilePanel;
 class BMenu;
 class BPath;
 class BTextControl;
 class BTextView;
+class BMessageRunner;
+class BStringView;
+class Recorder;
 
 
 class ScreenshotWindow : public BWindow {
@@ -39,6 +43,9 @@ public:
 			void			MessageReceived(BMessage* message);
 			void			Quit();
 			void			SetSelectedArea(BRect frame);
+
+			// Renga: screen recording (F-44)
+			void			RecordFromCommandLine(const BMessage& options);
 
 private:
 			void			_NewScreenshot(bool silent = false,
@@ -60,6 +67,13 @@ private:
 			BPath			_GetDirectory();
 			void			_ReadSettings();
 			void			_WriteSettings();
+
+			// Renga: screen recording
+			void			_StartRecording(const BMessage* options = NULL);
+			void			_StopRecording();
+			void			_RecordingStarted(BMessage* message);
+			void			_RecordingStopped(BMessage* message);
+			void			_UpdateRecordingStatus();
 
 	const	Utility&		fUtility;
 
@@ -87,6 +101,21 @@ private:
 			BString			fExtension;
 			int32			fImageFileType;
 			BRect			fSelectedArea;
+
+			// Renga: screen recording
+			Recorder*		fRecorder;
+			BButton*		fRecordButton;
+			BStringView*	fRecordStatus;
+			BCheckBox*		fRecordSystemAudio;
+			BCheckBox*		fRecordMicrophone;
+			BMenu*			fFrameRateMenu;
+			BMessageRunner*	fRecordTicker;
+			bigtime_t		fRecordLimit;
+				// command line: stop after this long (0: when asked)
+			bool			fQuitAfterRecording;
+			bool			fRecordSystemAudioSetting;
+			bool			fRecordMicrophoneSetting;
+			float			fFrameRate;
 };
 
 

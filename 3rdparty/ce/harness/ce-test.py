@@ -152,6 +152,11 @@ MEDIA_USB_FREQUENCIES = sorted({hz for phase in MEDIA_USB_PHASES
 	for hz in phase[2:4] if hz} | {1170, 1290, 3230})
 MEDIA_USB_SCREENSHOTS = ["media_usb_device", "media_usb_unplugged"]
 CODYCAM_SCREENSHOTS = ["codycam_preview", "codycam_switched"]
+# Screen capture (F-31 phase 3) and recording in Screenshot (F-44):
+# the permission prompt, the indicator, the Screen recording preferences
+# and Screenshot while it records.
+CAPTURE_SCREENSHOTS = ["capture_prompt", "capture_indicator",
+	"capture_settings", "screenshot_recording"]
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
@@ -959,10 +964,24 @@ class SerialReader(threading.Thread):
 		try:
 			time.sleep(1)
 			self._send("bt", 2)
+			with self.lock:
+				before = len(self.kdl_text)
 			self._send("threads", 4)
+			# The list of a full desktop is long and the serial line slow:
+			# wait (up to 30 s) for the next prompt, so that every thread
+			# is in it before choosing whom to trace.
+			deadline = time.time() + 30
+			while time.time() < deadline:
+				with self.lock:
+					text = self.kdl_text[before:]
+				start = text.find("threads")
+				if start >= 0 and "\nkdebug>" in text[start:]:
+					break
+				time.sleep(0.5)
 			with self.lock:
 				listing = self.kdl_text
 			ids = []
+			userWaits = []
 			mutexes = []
 			for line in listing.splitlines():
 				fields = line.split()
@@ -970,7 +989,15 @@ class SerialReader(threading.Thread):
 				if len(fields) >= 3 and fields[0].startswith("0x") \
 						and fields[1].isdigit():
 					if fields[2] in ("waiting", "running", "ready"):
-						ids.append(fields[1])
+						# Threads blocked on user-level locks (pthread
+						# mutexes, rw_locks: "waiting user") and running
+						# ones are the usual suspects of a userland
+						# deadlock; trace them before the long tail.
+						if fields[2] == "running" or (len(fields) >= 4
+								and fields[3] == "user"):
+							userWaits.append(fields[1])
+						else:
+							ids.append(fields[1])
 					if len(fields) >= 5 and fields[3] == "mutex" \
 							and fields[4] not in mutexes:
 						mutexes.append(fields[4])
@@ -984,6 +1011,7 @@ class SerialReader(threading.Thread):
 			for holder in re.findall(r"holder:\s+(\d+)", infos):
 				if holder not in ids and holder != "-1":
 					ids.insert(0, holder)
+			ids = userWaits + ids
 			if ids:
 				# Threads created after the list broke off: probe the next
 				# ids, cheap and often where the culprit is.
@@ -2503,6 +2531,9 @@ def main():
 		if "media_video_test" in (args.only or available):
 			check_screenshots(results_dir, report, CODYCAM_SCREENSHOTS,
 				"codycam.screenshots")
+		if "screen_capture_test" in (args.only or available):
+			check_screenshots(results_dir, report, CAPTURE_SCREENSHOTS,
+				"capture.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

@@ -1,6 +1,6 @@
 SubDir HAIKU_TOP 3rdparty ce tests media ;
 
-UsePrivateHeaders media ;
+UsePrivateHeaders app interface media ;
 
 # Runs in the harness's second phase, with media_server started (see
 # harness/guest/runner.sh), hence its own directory.
@@ -28,7 +28,14 @@ Application media_video_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# Screen capture (F-31 phase 3) and screen recording in Screenshot (F-44).
+Application screen_capture_test :
+	screen_capture_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
-		: media_test media_ui_test media_usb_test media_video_test ;
+		: media_test media_ui_test media_usb_test media_video_test
+		screen_capture_test ;
 }

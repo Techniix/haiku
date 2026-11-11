@@ -10,6 +10,7 @@
 
 
 #include <Application.h>
+#include <Message.h>
 #include <Catalog.h>
 
 
@@ -32,6 +33,8 @@ private:
 			bool		fSilent;
 			bool		fClipboard;
 			bool		fLaunchWithAreaSelect;
+			BMessage	fRecordOptions;
+				// Renga: --record and its options
 };
 
 

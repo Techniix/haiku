@@ -2,14 +2,15 @@ SubDir HAIKU_TOP src apps screenshot ;
 
 HAIKU_MULTIPLE_LOCALIZED_TARGETS on $(SUBDIR) = 1 ;
 
-UsePrivateHeaders interface shared ;
+UsePrivateHeaders app interface media shared ;
 
 Application Screenshot :
 	ScreenshotApp.cpp
+	Recorder.cpp
 	ScreenshotWindow.cpp
 	SelectAreaView.cpp
 	Utility.cpp
-	: be localestub tracker translation [ TargetLibsupc++ ]
+	: be localestub media tracker translation [ TargetLibstdc++ ]
 	: ScreenshotApp.rdef
 ;
 

@@ -9,6 +9,8 @@
 
 #include "ScreenshotApp.h"
 
+#include <stdio.h>
+
 #include <stdlib.h>
 
 #include <Bitmap.h>
@@ -141,6 +143,29 @@ ScreenshotApp::ArgvReceived(int32 argc, char** argv)
 		else if (strcmp(argv[i], "-c") == 0
 			|| strcmp(argv[i], "--clipboard") == 0)
 			fClipboard = true;
+		// Renga: screen recording from the command line (F-44):
+		//   Screenshot --record <seconds> [--region <x>,<y>,<w>,<h>]
+		//     [--file <path>] [--system-audio] [--microphone]
+		//     [--frame-rate <n>] [--quit]
+		// records the screen (or the region) for that long into the file
+		// (default: the Screenshot folder) and prints what it wrote.
+		else if (strcmp(argv[i], "--record") == 0 && i + 1 < argc) {
+			fRecordOptions.what = 'reco';
+			fRecordOptions.SetFloat("seconds", atof(argv[++i]));
+		} else if (strcmp(argv[i], "--region") == 0 && i + 1 < argc) {
+			float x, y, w, h;
+			if (sscanf(argv[++i], "%f,%f,%f,%f", &x, &y, &w, &h) == 4)
+				fRecordOptions.SetRect("region", BRect(x, y, x + w - 1, y + h - 1));
+		} else if (strcmp(argv[i], "--file") == 0 && i + 1 < argc)
+			fRecordOptions.SetString("file", argv[++i]);
+		else if (strcmp(argv[i], "--system-audio") == 0)
+			fRecordOptions.SetBool("system audio", true);
+		else if (strcmp(argv[i], "--microphone") == 0)
+			fRecordOptions.SetBool("microphone", true);
+		else if (strcmp(argv[i], "--frame-rate") == 0 && i + 1 < argc)
+			fRecordOptions.SetFloat("frame rate", atof(argv[++i]));
+		else if (strcmp(argv[i], "--quit") == 0)
+			fRecordOptions.SetBool("quit", true);
 	}
 }
 
@@ -148,10 +173,21 @@ ScreenshotApp::ArgvReceived(int32 argc, char** argv)
 void
 ScreenshotApp::ReadyToRun()
 {
+	// Started directly (not by the screenshot command, which sends the
+	// screen first): take the screen here, for the preview.
+	if (fUtility->wholeScreen == NULL)
+		BScreen().GetBitmap(&fUtility->wholeScreen, false);
+
 	if (fLaunchWithAreaSelect)
 		be_app->PostMessage(new BMessage(SS_LAUNCH_AREA_SELECTOR));
 	else
 		fScreenshotWindow = new ScreenshotWindow(*fUtility, fSilent, fClipboard);
+
+	if (fRecordOptions.what == 'reco' && fScreenshotWindow != NULL
+		&& fScreenshotWindow->Lock()) {
+		fScreenshotWindow->RecordFromCommandLine(fRecordOptions);
+		fScreenshotWindow->Unlock();
+	}
 }
 
 

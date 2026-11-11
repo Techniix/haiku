@@ -44,8 +44,13 @@
 #include <TextControl.h>
 #include <TranslationUtils.h>
 #include <TranslatorRoster.h>
+#include <MessageRunner.h>
+#include <PopUpMenu.h>
+
+#include <stdio.h>
 
 #include "Control.h"
+#include "Recorder.h"
 #include "Utility.h"
 
 
@@ -63,7 +68,12 @@ enum {
 	kSaveScreenshot,
 	kSettings,
 	kCloseTranslatorSettings,
-	kSelectArea
+	kSelectArea,
+	// Renga: screen recording
+	kRecord,
+	kRecordTick,
+	kRecordOptionChanged,
+	kFrameRate
 };
 
 
@@ -129,7 +139,14 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 	fShotType(kWholeScreen),
 	fOutputFilename(NULL),
 	fExtension(""),
-	fImageFileType(B_PNG_FORMAT)
+	fImageFileType(B_PNG_FORMAT),
+	fRecorder(NULL),
+	fRecordTicker(NULL),
+	fRecordLimit(0),
+	fQuitAfterRecording(false),
+	fRecordSystemAudioSetting(true),
+	fRecordMicrophoneSetting(false),
+	fFrameRate(30)
 {
 	// _ReadSettings() needs a valid fOutputPathMenu
 	fOutputPathMenu = new BMenu(B_TRANSLATE("Please select"));
@@ -209,6 +226,40 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 	BButton* saveScreenshot  = new BButton("", B_TRANSLATE("Save"),
 		new BMessage(kSaveScreenshot));
 
+	// Renga: screen recording of the chosen screen, window or area, with
+	// optional system audio and microphone, through the Media Kit's
+	// capture session (F-31 phase 3, F-44).
+	fRecordButton = new BButton("record", B_TRANSLATE("Record video"),
+		new BMessage(kRecord));
+	fRecordStatus = new BStringView("record status", "");
+	fRecordSystemAudio = new BCheckBox("system audio",
+		B_TRANSLATE("Record system audio"),
+		new BMessage(kRecordOptionChanged));
+	fRecordMicrophone = new BCheckBox("microphone",
+		B_TRANSLATE("Record microphone"),
+		new BMessage(kRecordOptionChanged));
+	BString currentRate;
+	currentRate.SetToFormat(B_TRANSLATE("%" B_PRId32 " frames per second"),
+		(int32)fFrameRate);
+	fFrameRateMenu = new BPopUpMenu(currentRate.String());
+	const int32 kFrameRates[] = { 10, 15, 30, 60 };
+	for (uint32 i = 0; i < sizeof(kFrameRates) / sizeof(kFrameRates[0]);
+			i++) {
+		BString label;
+		label.SetToFormat(B_TRANSLATE("%" B_PRId32 " frames per second"),
+			kFrameRates[i]);
+		BMessage* message = new BMessage(kFrameRate);
+		message->AddFloat("rate", kFrameRates[i]);
+		BMenuItem* item = new BMenuItem(label.String(), message);
+		fFrameRateMenu->AddItem(item);
+		if (kFrameRates[i] == (int32)fFrameRate)
+			item->SetMarked(true);
+	}
+	BMenuField* frameRateField = new BMenuField(B_TRANSLATE("Video:"),
+		fFrameRateMenu);
+	fRecordSystemAudio->SetValue(fRecordSystemAudioSetting);
+	fRecordMicrophone->SetValue(fRecordMicrophoneSetting);
+
 	const float kSpacing = be_control_look->DefaultItemSpacing();
 	const float kLabelSpacing = be_control_look->DefaultLabelSpacing();
 
@@ -243,6 +294,16 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 				.End()
 				.AddStrut(kSpacing / 2)
 				.Add(showSettings)
+				.AddStrut(kSpacing)
+				.Add(new BSeparatorView(B_HORIZONTAL))
+				.AddStrut(kSpacing / 2)
+				.Add(fRecordSystemAudio)
+				.Add(fRecordMicrophone)
+				.AddGroup(B_HORIZONTAL, kLabelSpacing)
+					.Add(frameRateField->CreateLabelLayoutItem())
+					.Add(frameRateField->CreateMenuBarLayoutItem())
+				.End()
+				.Add(fRecordStatus)
 				.AddGlue()
 			.End()
 		.End()
@@ -257,6 +318,7 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 			.Add(new BButton("", B_TRANSLATE("Select area"),
 				new BMessage(kSelectArea)))
 			.AddGlue()
+			.Add(fRecordButton)
 			.Add(saveScreenshot);
 
 	saveScreenshot->MakeDefault(true);
@@ -271,6 +333,9 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 
 ScreenshotWindow::~ScreenshotWindow()
 {
+	delete fRecordTicker;
+	delete fRecorder;
+
 	if (fOutputPathPanel)
 		delete fOutputPathPanel->RefFilter();
 
@@ -412,6 +477,30 @@ ScreenshotWindow::MessageReceived(BMessage* message)
 			be_app->PostMessage(new BMessage(SS_LAUNCH_AREA_SELECTOR));
 			break;
 
+		// Renga: screen recording
+		case kRecord:
+			if (fRecorder != NULL && fRecorder->IsActive())
+				_StopRecording();
+			else
+				_StartRecording();
+			break;
+		case kRecordTick:
+			_UpdateRecordingStatus();
+			break;
+		case kRecordOptionChanged:
+			fRecordSystemAudioSetting = fRecordSystemAudio->Value() != 0;
+			fRecordMicrophoneSetting = fRecordMicrophone->Value() != 0;
+			break;
+		case kFrameRate:
+			message->FindFloat("rate", &fFrameRate);
+			break;
+		case kRecorderStarted:
+			_RecordingStarted(message);
+			break;
+		case kRecorderStopped:
+			_RecordingStopped(message);
+			break;
+
 		default:
 			BWindow::MessageReceived(message);
 			break;
@@ -422,6 +511,12 @@ ScreenshotWindow::MessageReceived(BMessage* message)
 void
 ScreenshotWindow::Quit()
 {
+	if (fRecorder != NULL && fRecorder->IsActive()) {
+		// Finish the file before going.
+		fRecorder->Stop();
+		delete fRecorder;
+		fRecorder = NULL;
+	}
 	if (fUtility.wholeScreen != NULL)
 		_WriteSettings();
 	BWindow::Quit();
@@ -868,6 +963,9 @@ ScreenshotWindow::_ReadSettings()
 	settings.FindBool("grabActiveWindow", &activeWindow);
 	settings.FindInt64("delay", &fDelay);
 	settings.FindString("outputFilename", &fOutputFilename);
+	settings.FindBool("recordSystemAudio", &fRecordSystemAudioSetting);
+	settings.FindBool("recordMicrophone", &fRecordMicrophoneSetting);
+	settings.FindFloat("recordFrameRate", &fFrameRate);
 	if (activeWindow)
 		fShotType = kActiveWindow;
 
@@ -889,6 +987,9 @@ ScreenshotWindow::_WriteSettings()
 	settings.AddBool("grabActiveWindow", fShotType == kActiveWindow);
 	settings.AddInt64("delay", fDelay);
 	settings.AddString("outputFilename", fOutputFilename);
+	settings.AddBool("recordSystemAudio", fRecordSystemAudioSetting);
+	settings.AddBool("recordMicrophone", fRecordMicrophoneSetting);
+	settings.AddFloat("recordFrameRate", fFrameRate);
 
 	BString path;
 	int32 count = fOutputPathMenu->CountItems();
@@ -920,4 +1021,186 @@ ScreenshotWindow::_WriteSettings()
 		ssize_t size;
 		settings.Flatten(&file, &size);
 	}
+}
+
+
+// #pragma mark - Renga: screen recording
+
+
+/*!	Records like Screenshot takes pictures, from the command line (the
+	options come from ScreenshotApp, see there): "seconds" (stop after that
+	long), "region" (BRect), "file" (path), "system audio", "microphone",
+	"frame rate", "quit" (quit when the file is written; the result goes to
+	standard output).
+*/
+void
+ScreenshotWindow::RecordFromCommandLine(const BMessage& options)
+{
+	BMessage message(options);
+	message.what = kRecord;
+	fRecordLimit = (bigtime_t)(options.GetFloat("seconds", 0) * 1000000);
+	fQuitAfterRecording = options.GetBool("quit", false);
+	_StartRecording(&message);
+}
+
+
+void
+ScreenshotWindow::_StartRecording(const BMessage* options)
+{
+	if (fRecorder != NULL && fRecorder->IsActive())
+		return;
+	if (fRecorder == NULL)
+		fRecorder = new Recorder(BMessenger(this));
+
+	BPrivate::CaptureOptions capture;
+	capture.frameRate = fFrameRate;
+	capture.systemAudio = fRecordSystemAudio->Value() != 0;
+	capture.microphone = fRecordMicrophone->Value() != 0;
+	if (fIncludeCursor)
+		capture.flags |= BPrivate::SCREEN_CAPTURE_INCLUDE_CURSOR;
+
+	BRect region;
+	if (options != NULL && options->FindRect("region", &region) == B_OK) {
+		capture.source = BPrivate::SCREEN_CAPTURE_REGION;
+		capture.region = region;
+	} else if (fShotType == kShowSelectedArea && fSelectedArea.IsValid()) {
+		capture.source = BPrivate::SCREEN_CAPTURE_REGION;
+		capture.region = fSelectedArea;
+	} else if (fShotType == kActiveWindow) {
+		capture.source = BPrivate::SCREEN_CAPTURE_WINDOW;
+		capture.windowToken
+			= Recorder::FindWindowToken(fUtility.activeWindowFrame);
+		if (fIncludeBorder)
+			capture.flags |= BPrivate::SCREEN_CAPTURE_WINDOW_BORDER;
+		if (capture.windowToken < 0)
+			capture.source = BPrivate::SCREEN_CAPTURE_SCREEN;
+	}
+	if (options != NULL) {
+		capture.systemAudio = options->GetBool("system audio",
+			capture.systemAudio);
+		capture.microphone = options->GetBool("microphone",
+			capture.microphone);
+		capture.frameRate = options->GetFloat("frame rate",
+			capture.frameRate);
+	}
+
+	BPath path;
+	const char* file;
+	if (options != NULL && options->FindString("file", &file) == B_OK)
+		path.SetTo(file);
+	else {
+		BString name = _FindValidFileName(fNameControl->Text());
+		int32 dot = name.FindLast('.');
+		if (dot > 0)
+			name.Truncate(dot);
+		name << ".mkv";
+		path = _GetDirectory();
+		path.Append(name.String());
+	}
+	// The file has to exist for an entry_ref of it only as a name; create
+	// it, BMediaFile writes it from the start.
+	BFile created(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+	entry_ref ref;
+	if (get_ref_for_path(path.Path(), &ref) != B_OK) {
+		_DisplaySaveError(path.Path());
+		return;
+	}
+
+	status_t status = fRecorder->Start(capture, ref);
+	if (status != B_OK) {
+		BString text;
+		text.SetToFormat(B_TRANSLATE("Could not record: %s"),
+			strerror(status));
+		fRecordStatus->SetText(text.String());
+		return;
+	}
+	fRecordButton->SetLabel(B_TRANSLATE("Stop recording"));
+	fRecordStatus->SetText(B_TRANSLATE("Waiting for permission" B_UTF8_ELLIPSIS));
+	delete fRecordTicker;
+	fRecordTicker = new BMessageRunner(BMessenger(this),
+		new BMessage(kRecordTick), 250000);
+}
+
+
+void
+ScreenshotWindow::_StopRecording()
+{
+	if (fRecorder == NULL || !fRecorder->IsActive())
+		return;
+	fRecorder->Stop();
+	fRecordStatus->SetText(B_TRANSLATE("Saving" B_UTF8_ELLIPSIS));
+}
+
+
+void
+ScreenshotWindow::_RecordingStarted(BMessage* message)
+{
+	status_t status = message->GetInt32("status", B_ERROR);
+	if (status == B_OK) {
+		_UpdateRecordingStatus();
+		return;
+	}
+	BString text;
+	if (status == B_NOT_ALLOWED)
+		text = B_TRANSLATE("Screen recording was not allowed.");
+	else
+		text.SetToFormat(B_TRANSLATE("Could not record: %s"),
+			strerror(status));
+	fRecordStatus->SetText(text.String());
+}
+
+
+void
+ScreenshotWindow::_RecordingStopped(BMessage* message)
+{
+	delete fRecordTicker;
+	fRecordTicker = NULL;
+	fRecordButton->SetLabel(B_TRANSLATE("Record video"));
+
+	status_t status = message->GetInt32("status", B_ERROR);
+	const char* path = message->GetString("path", "");
+	int64 frames = message->GetInt64("frames", 0);
+	int64 audioFrames = message->GetInt64("audio frames", 0);
+	bigtime_t duration = message->GetInt64("duration", 0);
+	BString text;
+	if (status == B_OK) {
+		BPath file(path);
+		text.SetToFormat(B_TRANSLATE("Saved %s (%.1f s)"), file.Leaf(),
+			duration / 1000000.0);
+	} else {
+		text.SetToFormat(B_TRANSLATE("Recording failed: %s"),
+			strerror(status));
+	}
+	fRecordStatus->SetText(text.String());
+
+	// For scripts (and the harness): what was written.
+	printf("Screenshot: recording %s: %s, %" B_PRId64 " video frames, %"
+		B_PRId64 " audio frames, %.2f s (%s)\n",
+		status == B_OK ? "saved" : "failed", path, frames, audioFrames,
+		duration / 1000000.0, strerror(status));
+	fflush(stdout);
+
+	if (fQuitAfterRecording)
+		be_app->PostMessage(B_QUIT_REQUESTED);
+}
+
+
+void
+ScreenshotWindow::_UpdateRecordingStatus()
+{
+	if (fRecorder == NULL || !fRecorder->IsRecording())
+		return;
+	bigtime_t duration = fRecorder->Duration();
+	if (fRecordLimit > 0 && duration >= fRecordLimit) {
+		fRecordLimit = 0;
+		_StopRecording();
+		return;
+	}
+	BRect frame = fRecorder->Frame();
+	int32 seconds = (int32)(duration / 1000000);
+	BString text;
+	text.SetToFormat(B_TRANSLATE("Recording %" B_PRId32 ":%02" B_PRId32
+		", %" B_PRId32 " x %" B_PRId32), seconds / 60, seconds % 60,
+		frame.IntegerWidth() + 1, frame.IntegerHeight() + 1);
+	fRecordStatus->SetText(text.String());
 }
