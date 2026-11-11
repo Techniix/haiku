@@ -408,19 +408,25 @@ main()
 		&& codecs.FindFirst("vorbis ") >= 0;
 	report("list_codecs", listed, "WebM: %s", codecs.String());
 
+	// Since the writer stopped rewriting the caller's sample format (F-31
+	// phase 4), float samples reach every encoder, and the encoders of
+	// planar formats (AAC, Vorbis, MP3) are created; seeking audio reads
+	// forward from where the demuxer could go back to.
 	static const Case kCases[] = {
-		{ "webm_vp9_opus", "webm", "webm", "vp9", "opus", false, false,
+		{ "webm_vp9_opus", "webm", "webm", "vp9", "opus", true, false,
 			false },
-		{ "webm_vp8_opus", "webm", "webm", "vp8", "opus", false, false,
+		{ "webm_vp8_opus", "webm", "webm", "vp8", "opus", true, false,
 			false },
-		{ "ogg_opus", "ogg", "opus", NULL, "opus", false, false, false },
+		{ "ogg_opus", "ogg", "opus", NULL, "opus", true, false, false },
 		{ "mkv_mpeg4_flac", "mkv", "mkv", "mpeg4", "flac", true, false,
 			true },
-		{ "mkv_mpeg4_flac_float", "mkv", "mkv", "mpeg4", "flac", true, true,
+		{ "mkv_mpeg4_flac_float", "mkv", "mkv", "mpeg4", "flac", true, false,
 			false },
-		{ "ogg_vorbis", "ogg", "ogg", NULL, "vorbis", false, true, false },
-		{ "mp4_mpeg4_aac", "mp4", "mp4", "mpeg4", "aac", true, true, false },
-		{ "mp3", "mp3", "mp3", NULL, "mp3", true, true, false },
+		{ "ogg_vorbis", "ogg", "ogg", NULL, "vorbis", true, false, false },
+		{ "mp4_mpeg4_aac", "mp4", "mp4", "mpeg4", "aac", true, false, false },
+		{ "mp3", "mp3", "mp3", NULL, "mp3", true, false, false },
+		// FLV, what RTMP carries: Sorenson Spark video and AAC audio
+		{ "flv_flv1_aac", "flv", "flv", "flv1", "aac", true, false, false },
 	};
 	for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
 		sKnownFailure = kCases[i].known;

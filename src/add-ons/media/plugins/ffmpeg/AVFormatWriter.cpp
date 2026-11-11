@@ -201,51 +201,27 @@ AVFormatWriter::StreamCookie::Init(media_format* format,
 				break;
 		}
 
-		// Now negociate the actual format with the encoder
-		// First check if the requested format is acceptable
+		// Renga (F-31 phase 4): the stream gets the sample format the
+		// encoder will produce, but the caller's format is left alone.
+		// Upstream rewrote it to the codec's first sample format, and
+		// BMediaTrack then set the encoder up with that rewritten format:
+		// float samples handed to a FLAC encoder were taken for 16-bit
+		// ones (wrong data), and codecs whose first format is planar
+		// (AAC, Vorbis, MP3: FLTP, S16P, S32P) had no media format to
+		// rewrite to, so the stream was refused and no encoder was created
+		// at all. AVCodecEncoder converts the samples itself since
+		// eb769e72.
 		const AVCodec* codec = avcodec_find_encoder(fStream->codecpar->codec_id);
-
 		if (codec == NULL)
 			return B_MEDIA_BAD_FORMAT;
-
-		const enum AVSampleFormat *p = codec->sample_fmts;
-		for (; *p != -1; p++) {
+		bool accepted = codec->sample_fmts == NULL;
+		for (const enum AVSampleFormat* p = codec->sample_fmts;
+				p != NULL && *p != AV_SAMPLE_FMT_NONE; p++) {
 			if (*p == fStream->codecpar->format)
-				break;
+				accepted = true;
 		}
-		// If not, force one of the acceptable ones
-		if (*p == -1) {
+		if (!accepted)
 			fStream->codecpar->format = codec->sample_fmts[0];
-
-			// And finally set the format struct to the accepted format. It is
-			// then up to the caller to make sure we get data matching that
-			// format.
-			switch (fStream->codecpar->format) {
-				case AV_SAMPLE_FMT_FLT:
-					format->u.raw_audio.format
-						= media_raw_audio_format::B_AUDIO_FLOAT;
-					break;
-				case AV_SAMPLE_FMT_DBL:
-					format->u.raw_audio.format
-						= media_raw_audio_format::B_AUDIO_DOUBLE;
-					break;
-				case AV_SAMPLE_FMT_S32:
-					format->u.raw_audio.format
-						= media_raw_audio_format::B_AUDIO_INT;
-					break;
-				case AV_SAMPLE_FMT_S16:
-					format->u.raw_audio.format
-						= media_raw_audio_format::B_AUDIO_SHORT;
-					break;
-				case AV_SAMPLE_FMT_U8:
-					format->u.raw_audio.format
-						= media_raw_audio_format::B_AUDIO_UCHAR;
-					break;
-				default:
-					return B_MEDIA_BAD_FORMAT;
-					break;
-			}
-		}
 
 #if LIBAVCODEC_VERSION_MAJOR >= 60
 		if (format->u.raw_audio.channel_mask == 0) {
@@ -574,6 +550,10 @@ AVFormatWriter::Close()
 		avio_flush(fFormatContext->pb);
 		fprintf(stderr, "ffmpeg: %s: %" PRId64 " bytes sent\n",
 			fFormatContext->url, avio_tell(fFormatContext->pb));
+		// Renga: end the connection with the file (BMediaFile::CloseFile()),
+		// not when the BMediaFile is deleted: an RTMP server only finishes
+		// the stream when the publisher closes it.
+		avio_closep(&fFormatContext->pb);
 	}
 	if (result < 0)
 		TRACE("  av_write_trailer(): %d\n", result);

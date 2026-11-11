@@ -117,6 +117,23 @@ const EncoderDescription gEncoderTable[] = {
 		90
 	},
 
+	// Renga (F-31 phase 4): Sorenson Spark, FFmpeg's native "flv" encoder
+	// (an H.263 variant), the video codec the FLV container and therefore
+	// RTMP take without an H.264 encoder (the build's FFmpeg has none).
+	{
+		{
+			"Sorenson Spark video (FLV1)",
+			"flv1",
+			0,
+			AV_CODEC_ID_FLV1,
+			{ 0 }
+		},
+		B_QUICKTIME_FORMAT_FAMILY,
+		B_MEDIA_RAW_VIDEO,
+		B_MEDIA_ENCODED_VIDEO,
+		25
+	},
+
 	// Audio codecs
 	{
 		{

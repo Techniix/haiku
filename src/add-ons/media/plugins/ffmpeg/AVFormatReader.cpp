@@ -334,6 +334,13 @@ StreamBase::Open()
 	}
 
 	fSeekByBytes = (fContext->iformat->flags & AVFMT_TS_DISCONT) != 0;
+	// Renga (F-31 phase 4): Ogg is flagged for timestamp discontinuities
+	// but its demuxer cannot seek by bytes (avformat_seek_file() with
+	// AVSEEK_FLAG_BYTE fails: "General system error"); it seeks by time
+	// through its pages' granule positions. Audio is then read forward to
+	// the time asked for (Seek()).
+	if (fSeekByBytes && strcmp(fContext->iformat->name, "ogg") == 0)
+		fSeekByBytes = false;
 	fStreamBuildsIndexWhileReading
 		= (fContext->iformat->flags & AVFMT_GENERIC_INDEX) != 0
 			|| fSeekByBytes;
@@ -517,6 +524,7 @@ StreamBase::Seek(uint32 flags, int64* frame, bigtime_t* time)
 	}
 
 	int64_t timeStamp = *time;
+	const bigtime_t requestedTime = *time;
 
 	int searchFlags = AVSEEK_FLAG_BACKWARD;
 	if ((flags & B_MEDIA_SEEK_CLOSEST_FORWARD) != 0)
@@ -696,6 +704,38 @@ StreamBase::Seek(uint32 flags, int64* frame, bigtime_t* time)
 				foundTime = _ConvertFromStreamTimeBase(fPacket.pts);
 			else
 				TRACE_SEEK("  no PTS in packet after seeking\n");
+
+			// Renga (F-31 phase 4): an audio stream that the demuxer could
+			// only take back to an earlier point (Matroska and WebM files
+			// whose cues index only the video track, Ogg pages found by
+			// bisection) is read forward to the packet that holds the time
+			// asked for. Every audio packet is a sync point, so this is
+			// exact. Upstream reported the earlier time (often 0: seeking
+			// audio in a WebM file went back to its start).
+			if (fStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO
+				&& fPacket.pts != AV_NOPTS_VALUE
+				&& requestedTime - foundTime > 20000) {
+				while (true) {
+					// The packet that holds the time asked for: the one it
+					// ends after; without a duration (Matroska blocks often
+					// have none), the first that starts at or after it, at
+					// most one packet late.
+					bigtime_t end = fPacket.duration > 0
+						? _ConvertFromStreamTimeBase(fPacket.pts
+							+ fPacket.duration)
+						: _ConvertFromStreamTimeBase(fPacket.pts) + 1;
+					if (end > requestedTime)
+						break;
+					fReusePacket = false;
+					if (_NextPacket(true) != B_OK
+						|| fPacket.pts == AV_NOPTS_VALUE) {
+						break;
+					}
+					foundTime = _ConvertFromStreamTimeBase(fPacket.pts);
+				}
+				TRACE_SEEK("  read forward to %.3fs\n",
+					foundTime / 1000000.0);
+			}
 		} else
 			TRACE_SEEK("  _NextPacket() failed!\n");
 

@@ -49,9 +49,16 @@ Application media_codec_test :
 
 # Streaming through the FFmpeg plug-in's protocols (F-31 phase 4): HLS over
 # HTTP, UDP and RTP output, the capture session's stream output.
+# Its RTMP check runs FFmpeg's RTMP protocol as the server (listen mode),
+# hence libavformat.
+UseBuildFeatureHeaders ffmpeg ;
+Includes [ FGristFiles media_stream_test.cpp ]
+	: [ BuildFeatureAttribute ffmpeg : headers ] ;
+SubDirC++Flags -D__STDC_CONSTANT_MACROS ;
 Application media_stream_test :
 	media_stream_test.cpp
-	: be media network [ TargetLibstdc++ ]
+	: be media network [ BuildFeatureAttribute ffmpeg : libraries ]
+		[ TargetLibstdc++ ]
 ;
 
 # The low-latency audio mode (F-31): BSoundPlayer buffers, the mixer's

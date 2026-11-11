@@ -681,11 +681,10 @@ of a 1 GiB guest was, so the bounce path went untested.
   tracks with their codecs and sizes, every frame in the right colour,
   the audio's length and tones (Goertzel), and seeking where it works.
   Checked: WebM with VP9 + Opus and VP8 + Opus (float samples), Ogg Opus,
-  Matroska with MPEG-4 + FLAC (16-bit samples); `ListCodecs("webm")` must
-  list vp8, vp9, opus and vorbis. Combinations that do not work yet run
-  and print `CE-INFO media_codec known limit: ...` lines instead of
-  checks (FLAC from float samples, Ogg Vorbis, MP4 with AAC, MP3; seeking
-  audio in WebM and Ogg files); see the roadmap's F-31.
+  Matroska with MPEG-4 + FLAC (16-bit and float samples), Ogg Vorbis, MP4
+  with MPEG-4 + AAC, MP3, and FLV with Sorenson Spark (`flv1`) + AAC, each
+  with a seek to 1 s that must land between 0.5 and 1.1 s;
+  `ListCodecs("webm")` must list vp8, vp9, opus and vorbis.
 - **media_stream** (`media_stream_test`, renga-* images): streaming through
   the FFmpeg plug-in's protocols (`FFmpegURLIO.h`, roadmap F-31 phase 4)
   on the guest's loopback interface (the harness attaches no network
@@ -701,7 +700,12 @@ of a 1 GiB guest was, so the bounce path went untested.
   stream output: `Screenshot --record 3 --stream udp://... --system-audio`
   must send MPEG-TS with video and audio that decodes. MediaPlayer opens
   the HLS URL (screenshot `mediaplayer_hls`, `media_stream.screenshots`).
-  RTMP (needs a server) and SRT are not tested.
+  RTMP: the guest has no network card, so the test runs FFmpeg's RTMP
+  protocol in listen mode as the server (through libavformat, on
+  `rtmp://127.0.0.1:19350/live/ce`); `MediaWriter` publishes three seconds
+  of FLV (Sorenson Spark + AAC), the server must receive both streams and
+  every video packet, and what it received must decode to the frames sent.
+  SRT is not tested.
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
   Media Kit tests): the low-latency audio mode (roadmap F-31,
   `headers/private/media/LowLatencyAudio.h`). A child process plays

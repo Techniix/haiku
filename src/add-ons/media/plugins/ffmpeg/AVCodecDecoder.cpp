@@ -1421,6 +1421,15 @@ AVCodecDecoder::_LoadNextChunkIfNeededAndAssignStartTime()
 		fTempPacket->flags = data->flags;
 		fTempPacket->duration = data->duration;
 		fTempPacket->pos = data->pos;
+		// Renga (F-31 phase 4): the audio path keeps its times in
+		// microseconds (it adds frame durations in microseconds to
+		// fTempPacket->dts and reports pkt_dts as the buffer's start time),
+		// but the packet's dts is in the stream's time base: in a WebM or
+		// FLV file (1/1000) audio after a seek to 1 s was reported at
+		// 0.001 s, in MP4 (1/48000) at 0.047 s, in MP3 (1/14112000) at
+		// 14.1 s. The reader's start_time is the same time in microseconds.
+		if (fIsAudio)
+			fTempPacket->dts = chunkMediaHeader.start_time;
 	}
 
 #ifdef LOG_STREAM_TO_FILE

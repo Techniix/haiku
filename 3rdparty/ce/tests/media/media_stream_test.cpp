@@ -18,8 +18,13 @@
 	  every 188 bytes), RTP version 2 with consecutive sequence numbers,
 	  and the received TS decodes again to the frames sent.
 	- MediaPlayer opens the HLS URL (screenshot mediaplayer_hls).
-
-	RTMP needs a server the guest does not have: not tested here.
+	- RTMP output: MediaWriter publishes FLV (Sorenson Spark video, AAC
+	  audio) to rtmp://127.0.0.1:<port>/live/ce; the server is FFmpeg's own
+	  RTMP protocol in listen mode, run by the test through libavformat
+	  (the guest has no network card, so no server on the host), which
+	  must receive the publish, both streams with their codecs, and the
+	  packets sent; what it received is written to an FLV file that must
+	  decode to the frames sent.
 */
 
 
@@ -33,6 +38,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -46,6 +52,11 @@
 #include <unistd.h>
 
 #include <vector>
+
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+}
 
 
 #define SUITE "media_stream"
@@ -62,6 +73,7 @@ static const char* kDirectory = "/tmp/media_stream_hls";
 static const uint16 kHttpPort = 8093;
 static const uint16 kUdpPort = 5004;
 static const uint16 kRtpPort = 5006;
+static const uint16 kRtmpPort = 19350;
 
 static int sFailures = 0;
 
@@ -502,6 +514,194 @@ test_output(const char* name, bool rtp, uint16 port)
 }
 
 
+// #pragma mark - RTMP
+
+
+struct RtmpServer {
+	BString		url;
+	status_t	status;
+	BString		error;
+	int32		videoPackets;
+	int32		audioPackets;
+	BString		codecs;
+	BString		file;
+	int32		ready;
+};
+
+
+/*!	FFmpeg's RTMP protocol as a server: accepts one publisher, reads its
+	FLV stream and remuxes it into a file.
+*/
+static status_t
+rtmp_server(void* data)
+{
+	RtmpServer* server = (RtmpServer*)data;
+	AVDictionary* options = NULL;
+	av_dict_set(&options, "listen", "1", 0);
+	av_dict_set(&options, "timeout", "30", 0);
+	AVFormatContext* input = NULL;
+	atomic_set(&server->ready, 1);
+	int result = avformat_open_input(&input, server->url.String(), NULL,
+		&options);
+	av_dict_free(&options);
+	if (result < 0) {
+		char error[AV_ERROR_MAX_STRING_SIZE];
+		av_strerror(result, error, sizeof(error));
+		server->error = error;
+		server->status = B_ERROR;
+		return B_ERROR;
+	}
+	avformat_find_stream_info(input, NULL);
+
+	AVFormatContext* output = NULL;
+	avformat_alloc_output_context2(&output, NULL, "flv",
+		server->file.String());
+	std::vector<int> map(input->nb_streams, -1);
+	for (unsigned i = 0; output != NULL && i < input->nb_streams; i++) {
+		AVCodecParameters* parameters = input->streams[i]->codecpar;
+		server->codecs << (i > 0 ? " + " : "")
+			<< avcodec_get_name(parameters->codec_id);
+		AVStream* stream = avformat_new_stream(output, NULL);
+		if (stream == NULL)
+			continue;
+		avcodec_parameters_copy(stream->codecpar, parameters);
+		stream->codecpar->codec_tag = 0;
+		map[i] = stream->index;
+	}
+	bool writing = output != NULL
+		&& avio_open(&output->pb, server->file.String(), AVIO_FLAG_WRITE)
+			>= 0
+		&& avformat_write_header(output, NULL) >= 0;
+
+	AVPacket* packet = av_packet_alloc();
+	while (av_read_frame(input, packet) >= 0) {
+		AVMediaType type
+			= input->streams[packet->stream_index]->codecpar->codec_type;
+		if (type == AVMEDIA_TYPE_VIDEO)
+			server->videoPackets++;
+		else if (type == AVMEDIA_TYPE_AUDIO)
+			server->audioPackets++;
+		int index = map[packet->stream_index];
+		if (writing && index >= 0) {
+			av_packet_rescale_ts(packet,
+				input->streams[packet->stream_index]->time_base,
+				output->streams[index]->time_base);
+			packet->stream_index = index;
+			av_interleaved_write_frame(output, packet);
+		}
+		av_packet_unref(packet);
+	}
+	av_packet_free(&packet);
+	if (writing)
+		av_write_trailer(output);
+	if (output != NULL) {
+		avio_closep(&output->pb);
+		avformat_free_context(output);
+	}
+	avformat_close_input(&input);
+	server->status = B_OK;
+	return B_OK;
+}
+
+
+static void
+test_rtmp()
+{
+	RtmpServer server;
+	server.url.SetToFormat("rtmp://127.0.0.1:%u/live/ce", kRtmpPort);
+	server.status = B_ERROR;
+	server.videoPackets = server.audioPackets = 0;
+	server.file = "/tmp/media_stream_rtmp.flv";
+	server.ready = 0;
+	unlink(server.file.String());
+	thread_id thread = spawn_thread(rtmp_server, "rtmp server",
+		B_NORMAL_PRIORITY, &server);
+	resume_thread(thread);
+	while (atomic_get(&server.ready) == 0)
+		snooze(10000);
+	snooze(1000000);
+
+	// Publish three seconds of FLV: one colour per second, a tone.
+	MediaWriter writer;
+	status_t status = writer.Open(server.url.String(), "flv");
+	const char* step = "open";
+	int32 video = -1, audio = -1;
+	if (status == B_OK) {
+		step = "video track";
+		status = writer.AddVideoTrack("flv1", kWidth, kHeight, kFrameRate,
+			&video);
+	}
+	if (status == B_OK) {
+		step = "audio track";
+		status = writer.AddAudioTrack("aac", 44100, 2, &audio, true);
+	}
+	if (status == B_OK) {
+		step = "header";
+		status = writer.Start();
+	}
+	std::vector<uint32> bits(kWidth * kHeight);
+	std::vector<float> samples(44100 / (int32)kFrameRate * 2);
+	int64 sample = 0;
+	for (int32 s = 0; status == B_OK && s < kSegments; s++) {
+		step = "frames";
+		for (int32 i = 0; i < kWidth * kHeight; i++)
+			bits[i] = segment_color(s);
+		for (int32 f = 0; status == B_OK && f < (int32)kFrameRate; f++) {
+			status = writer.WriteVideoFrame(video, bits.data(), kWidth * 4,
+				f == 0);
+			for (size_t i = 0; i < samples.size() / 2; i++, sample++) {
+				float value = 0.25f * sinf(2 * M_PI * 440 * sample / 44100.0);
+				samples[i * 2] = samples[i * 2 + 1] = value;
+			}
+			if (status == B_OK) {
+				status = writer.WriteAudio(audio, samples.data(),
+					samples.size() / 2);
+			}
+		}
+		// paced like a live source
+		snooze(300000);
+	}
+	status_t finish = writer.Finish();
+	if (status == B_OK)
+		status = finish;
+	BString description = writer.Description();
+
+	bigtime_t deadline = system_time() + 15000000;
+	while (system_time() < deadline) {
+		thread_info info;
+		if (get_thread_info(thread, &info) != B_OK)
+			break;
+		snooze(100000);
+	}
+	status_t result;
+	if (system_time() >= deadline)
+		kill_thread(thread);
+	wait_for_thread(thread, &result);
+
+	report("rtmp_publish", status == B_OK && server.status == B_OK
+			&& server.videoPackets >= kSegments * (int32)kFrameRate - 2
+			&& server.audioPackets > 0,
+		"%s (%s): %s at %s; the RTMP server (FFmpeg, listen mode): %s, "
+		"streams %s, %" B_PRId32 " video packets (sent %" B_PRId32 "), %"
+		B_PRId32 " audio packets", server.url.String(), description.String(),
+		strerror(status), step, server.status == B_OK ? "received"
+			: server.error.String(), server.codecs.String(),
+		server.videoPackets, kSegments * (int32)kFrameRate,
+		server.audioPackets);
+
+	int32 right;
+	BString codec;
+	int32 frames = decode_colors(server.file.String(), 0, &right, &status,
+		&codec);
+	report("rtmp_received_decodes",
+		frames >= kSegments * (int32)kFrameRate - 2 && right >= frames - 1,
+		"what the server received: %s, %s, %" B_PRId32 " frames (sent %"
+		B_PRId32 "), %" B_PRId32 " in the right colour", strerror(status),
+		codec.String(), frames, kSegments * (int32)kFrameRate, right);
+	unlink(server.file.String());
+}
+
+
 // #pragma mark -
 
 
@@ -596,6 +796,7 @@ main()
 	test_hls();
 	test_output("udp", false, kUdpPort);
 	test_output("rtp", true, kRtpPort);
+	test_rtmp();
 	test_capture_stream();
 	test_mediaplayer();
 
