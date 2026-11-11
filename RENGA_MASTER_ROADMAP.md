@@ -335,7 +335,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-48 | Guest-memory and VM performance (hole punching, huge pages, many small mappings) | Designed | None |
 | F-49 | Futex-style waiting (`futex()` wait/wake) | Designed | None |
 | F-50 | Game mode (gamemode-compatible API, native service, Control Panel switch) | Designed | None |
-| F-51 | Crash logs and system log viewer | Designed | None |
+| F-51 | Crash logs and system log viewer | QEMU Tested (needs real hardware) | `crashlog` suite: 21 checks on every image, 32 on renga-raw (GUI) plus `crashlog.screenshots`; host check `crashlog.debugger_reboots` |
 | F-52 | Linux/POSIX API batch 2 (pidfd, file operations, prctl, sockets, xattr, POSIX AIO) | Designed | None |
 | F-53 | Secure Boot (shim, Renga key) | Not Started | None |
 | F-54 | Driverless printing and scanning (IPP Everywhere, eSCL) | Not Started | None |
@@ -1199,19 +1199,18 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 
 | Field | Value |
 | --- | --- |
-| Upstream maturity | Kernel debugger (KDL) output goes to the screen and serial port only; `syslog` is a text file; no viewer beyond a terminal |
-| Renga maturity | None |
-| Status | **Designed** |
-| Completed | None |
-| Remaining | (1) Crash logs: when the kernel enters KDL or panics, write the panic message, a backtrace of every CPU's thread, the tail of the syslog and the boot information to persistent storage (a reserved area on the boot volume or a file on the ESP, written with the minimal, interrupt-free path the debugger already uses; like Linux's pstore and Windows minidumps), and on the next boot store it under `/boot/system/var/log/crash/` and show a notification offering to view or save it. Application crashes (debug_server reports) collected in the same place. (2) System log viewer in the Control Panel's System section (`F-28`; a standalone app until then): the syslog live with filters by component and level, search, the previous boot's log, the crash logs, and "Save a report" that packs logs, crash logs and hardware information into one archive for bug reports. Harness checks: a forced KDL entry in the guest, then a reboot that finds the crash log; viewer screenshots |
-| Known bugs/limitations | Not applicable |
+| Upstream maturity | Kernel debugger (KDL) output goes to the screen and serial port; the BIOS boot loader keeps a 1 MiB "debug syslog" at a fixed address across warm reboots and the kernel saves it as `/var/log/previous_syslog` (the EFI loader did not); `syslog` is a text file; no viewer beyond a terminal |
+| Renga maturity | Crash reports kept in memory across a warm reboot and saved on the next boot; application crash reports; System logs application |
+| Status | **QEMU Tested** (crash reports and viewer); real hardware not tested |
+| Completed | (1) Crash reports, [`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1): on every kernel debugger entry (panic, double fault, Alt+SysRq+D, `kernel_debugger()`) the debugger writes a report (reason, message, revision, time, uptime, CPU count and model, memory, a backtrace of every CPU's thread, loaded kernel images) into the syslog ring only (no locks, interrupts, allocation or disk I/O; ramoops design, chosen over a polled disk path or EFI variables, see the commit). The EFI loader now keeps the ring at the same fixed address as the BIOS loader (63 MiB, `AllocatePages(AllocateAddress)`) and recovers it. `crash_collector` (launch job, every boot) saves each report as `/boot/system/var/log/crash/kernel-<date>.txt` with the last 64 KiB of the syslog before it, once. debug_server writes `app-<program>-<date>.txt` (reason, stack trace) for every crashing program. (2) System logs (`SystemLogs`, Applications menu), [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192): this boot's syslog live with component, level and search filters, the previous boot (from `syslog.1` + `syslog`, or `previous_syslog`), the crash reports with a viewer, "Save a report" (ZIP on the Desktop: logs, crash reports, `listdev`, `listusb -v`, `sysinfo`, `uname -a`, `df`); a notification at login for each new kernel crash report, which opens it in System logs |
+| Known bugs/limitations | Reports survive a warm reboot only (not a power cycle) and only if the firmware leaves the 63 MiB region alone during POST; if the firmware uses those pages on UEFI the loader logs it and nothing is kept. A machine that hangs without entering the debugger leaves no report (the emergency key Alt+SysRq+D works if interrupts are on). syslog_daemon does not store priorities, so the level filter guesses from the words in a line. A boot that rotated `syslog` past 512 KiB may lose the previous boot from the syslog; the viewer then shows the kernel part (`previous_syslog`). In QEMU without KVM the boots after a debugger reboot are slow (up to ~2 minutes to the runner, quiet stretches of ~50 s in the EFI loader and before the registrar); not investigated, first boots are unaffected. The viewer moves into the Control Panel later (`F-28`) |
 | Dependencies | None (Control Panel later moves the viewer) |
 | Difficulty | 4 |
-| Risk | Medium (writing to disk from the debugger must never corrupt the file system) |
-| Testing status | None; harness-testable; real-hardware value is the point |
-| Next milestone | Work order item 9 |
-| Recommended next action | Start right after the current Media Kit stopping point, before real-hardware testing goes further |
-| Links | Proposed by the main session and approved by the maintainer, 2026-11-10; requested sooner so real-hardware crashes on the maintainer's PC can be diagnosed |
+| Risk | Low (nothing is written to disk from the debugger) |
+| Testing status | QEMU Tested: `crashlog_test` over three boots of one QEMU session (the harness answers announced debugger entries with `reboot`, `CE-HOST kdl_reboot`): collector cases, application crash, panic report (2 of 2 CPUs backtraced with `--smp 2`), syslog tail, user entry, no duplicates; renga-raw: Deskbar entry, notification shown, viewer on the report, live log and filters, previous boot, "Save a report" archive read back, screenshots. 799/799 BIOS and `--smp 2`, 796/796 UEFI at [`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1); renga-raw 975/975 at [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192). Needs real hardware: whether the region survives the maintainer's PC's reset (UEFI POST, memory training), the debugger's `reboot` and the reset button there. The storage path (AHCI, NVMe) is not involved: the debugger does no disk I/O, and the report is written to disk by `crash_collector` after the next boot through the normal drivers |
+| Next milestone | Real-hardware check on the maintainer's PC (`REAL-HARDWARE-TEST.md` style: force `kernel_debugger` with Alt+SysRq+D, type `reboot`, look for the notification) |
+| Recommended next action | Real-hardware check; if firmware clears the region, add a second channel (an EFI variable with a short summary, or a polled write to a reserved file) |
+| Links | Proposed by the main session and approved by the maintainer, 2026-11-10; [harness README, "Crash reports and planned reboots"](https://github.com/Techniix/haiku/blob/ce/main/3rdparty/ce/README.md) |
 
 #### F-52 Linux/POSIX API batch 2
 
@@ -1663,7 +1662,7 @@ The audit's inventory lists about 70 gaps. Items closed in Renga are marked.
 6. **Media Kit** (`F-31`), with the **audio settings GUI** reworked alongside it (`F-32`). Phase 1 done 2026-11-09 with its controls (QEMU Tested, `4ca8c8b2`, `ef41c576`, `369f3e7d`), except the low-latency mode, the cubeb back end and resampling quality. Phase 2 (devices) worked on 2026-11-10 (`042cbb63` to `64f9fbad`): USB audio UAC1 and hot-plug QEMU Tested; UAC2, HDMI detection and UVC Implemented, needing hardware; HDMI playback open. Phase 3 (capture APIs, with screen recording in Screenshot) done 2026-11-10 (`4d383de9` to `30e05e0b`, QEMU Tested). 2026-11-11: low-latency mode (`b97b48c7`), HDMI playback (`2af2370d`, needs hardware), phase 4 encode/decode API and WebM codecs (`eb769e72`), streaming (`2756f347`), cubeb recipe in RengaPorts (not built).
 7. **Boot loader, first part** (`F-22`): boot other operating systems from the Renga boot menu, Windows first (maintainer, 2026-11-09). Done 2026-11-10 (`170b3815`, QEMU Tested on BIOS and UEFI; Windows itself needs the maintainer's PC).
 8. **Installer: replace an existing installation** (`F-23`, early part), so the maintainer can install Renga over his Haiku installation on real hardware, with a selectable mode that keeps his files and applications (maintainer, 2026-11-09). Done 2026-11-11 (`7ce49272`, QEMU Tested on BIOS and UEFI). Next: the maintainer's real-hardware install (`REAL-HARDWARE-TEST.md` in the hand-over).
-9. **Crash logs and system log viewer** (`F-51`), placed by the maintainer (2026-11-10): next after the current Media Kit stopping point, to support real-hardware testing. The remaining Media Kit phases continue after it.
+9. **Crash logs and system log viewer** (`F-51`), placed by the maintainer (2026-11-10): next after the current Media Kit stopping point, to support real-hardware testing. The remaining Media Kit phases continue after it. Status 2026-11-11: QEMU Tested ([`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1), [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192)); the real-hardware check is pending.
 10. **LinuxKPI integration** (`F-26`) soon after the Media Kit, so the maintainer has Wi-Fi (`F-34`, MediaTek MT7921/MT7922) for real-hardware testing; it is incomplete but works well enough today (maintainer, 2026-11-09).
 11. **Port-performance batch** (`F-48` part a, `F-49`, `F-50`) with the **Linux/POSIX API batch 2** (`F-52`, added 2026-11-10), placed by the maintainer (2026-11-09): hole punching in memfds, `futex()`, game mode with its Control Panel switch. Small, harness-testable, and useful to Chromium, Wine and Mesa as well as Eglantine.
 12. **Periodic NTP sync** (`F-30`).
@@ -1918,23 +1917,23 @@ graph LR
 
 `3rdparty/ce/harness/ce-test.py` builds the test targets and an image with `CE_HARNESS=1`, boots it headless in QEMU with a snapshot disk, and runs every program installed in `/boot/system/non-packaged/bin/ce-tests` from a launch_daemon job, with no desktop needed. It then judges the run. A run fails if any check fails, a watched driver (`virtio_sound`, `virtio_block`, `nvme_disk`) prints an error, QEMU logs a device guest error or rejected memory access, or the kernel panics. Results go to `generated.x86_64/ce-test-results/<timestamp>/` (`summary.md`, `results.json`, `serial.log`, `serial.timed.log`, `qemu.log`, `build.log`, `audio.wav`, `kdl.log` on a stall, screenshots). A full run takes about 2.5 minutes: about 46 s to build the image and about 92 s in the guest (BIOS, minimum image). `--only <tests>` runs only the named test programs on a copy of the image for quick checks; such a run is labelled **PARTIAL**, exits with 2, and never counts. Every run checks `harness.tests_ran` (each program that should run ran to the end) and lists each program's time in `summary.md` (`c36db227`). Two virtio sound cards are attached: one records into `audio.wav`, the other (QEMU's SDL backend) writes `sdl-out.raw` and records a tone the harness feeds (`19369300`). After the driver tests, the runner starts media_server and runs the Media Kit tests in `ce-tests-media/`; only the `renga-*` images have the Media Kit, so those run with `--profile renga-raw` (`ef41c576`). Details: [README](https://github.com/Techniix/haiku/blob/ce/main/3rdparty/ce/README.md).
 
-Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratch disks only), `CE-HOST sendkey` (at most two modifiers plus a letter, digit, ret, tab or esc; never sysrq or delete), `CE-HOST pointer`/`pointer_rel` (the attached tablets and the PS/2 mouse), `CE-HOST screenshot <name>`, and `CE-HOST audio_in <left Hz> <right Hz> <amplitude>` (the tone fed into the second sound card).
+Host-side interaction from tests is allow-listed: `CE-HOST block_resize` (scratch disks only), `CE-HOST sendkey` (at most two modifiers plus a letter, digit, ret, tab or esc; never sysrq or delete), `CE-HOST pointer`/`pointer_rel` (the attached tablets and the PS/2 mouse), `CE-HOST screenshot <name>`, `CE-HOST audio_in <left Hz> <right Hz> <amplitude>` (the tone fed into the second sound card), and `CE-HOST kdl_reboot` (the next kernel debugger entry is expected: the harness answers it with `reboot` and the run continues in the next boot, `F-51`).
 
 ### 8.2 Boot paths covered
 
 | Path | Option | Image | Last recorded result |
 | --- | --- | --- | --- |
-| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 655/655 at `369f3e7d` |
-| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 652/652 at `369f3e7d` |
+| BIOS, IDE hard disk (MBR) | default | `minimum-raw` | 799/799 at `50f5bdb1` |
+| UEFI (OVMF), IDE hard disk | `--firmware uefi` | `minimum-anyboot` | 796/796 at `50f5bdb1` |
 | BIOS, CD-ROM (El Torito floppy) | `--media cdrom` | `minimum-anyboot` | 270/270 at `7b4a14df` |
 | UEFI, CD-ROM | `--firmware uefi --media cdrom` | `minimum-anyboot` | 273/273 at `22bf89ca` |
 | BIOS / UEFI, virtio-blk boot disk | `--disk-bus virtio` | either | BIOS 270/270 at `7b4a14df`; UEFI 271/271 at `2b728fa3` |
 | UEFI, two installs (decoy first) | `--two-installs` | `minimum-anyboot` | 272/272 at `2b728fa3` |
 | Boot menu countdown | `--boot-menu-timeout N` | either | 272/272 at `22bf89ca` (6 s) |
-| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 655/655 (`--smp 2`) at `369f3e7d`; 548/548 (`--smp 4`) at `1bfb2665` |
+| 2 and 4 CPUs | `--smp 2`, `--smp 4` | any | 799/799 (`--smp 2`) at `50f5bdb1`; 548/548 (`--smp 4`) at `1bfb2665` |
 | Other systems in the boot menu | `--other-systems` | either | BIOS 776/776, UEFI 774/774 at `170b3815` |
 | Installer upgrade, then the upgraded disk and its old state | `--installer-upgrade` | either (1200 MB) | BIOS 795/795, UEFI 793/793 at `7ce49272` |
-| Full desktop image | `--profile renga-raw` | `renga-raw` | 694/694 at `369f3e7d` (622/622 before the Media Kit work, the first run since `epoll`) |
+| Full desktop image | `--profile renga-raw` | `renga-raw` | 975/975 at `b33d6192` |
 
 Not covered: `renga-anyboot` and `renga-vmware` images; VirtualBox and VMware; any real hardware.
 
@@ -1992,6 +1991,8 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 
 **`F-43` phase A (committed `82cd4654` to `575f9cc0`):** new `posix_compat` programs `thread_atexit` (9 checks), `affinity` (15), `getdents` (13), `socket_ext` (35: `getpeereid`, `POLLRDHUP`), `quic_udp` (32), `vm_semantics` (20), and 19 sealing checks added to `memfd` (now 41). Baseline 619/619 (BIOS) with 1 and 2 CPUs, 616/616 (UEFI); 548/548 with 4 CPUs at `1bfb2665`. Run against the old code first, the new tests failed as follows: `quic_udp` 24 of 32 (stalled until a receive timeout was added); `vm_semantics` 7 of 20; `affinity` panicked the kernel with 2 CPUs; `socket_ext` found the IPv6 receive loop that stopped loopback traffic.
 
+**Crash reports and System logs (`F-51`; committed [`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1), [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192), 2026-11-11):** every image: `crashlog` 21 checks over three boots of one QEMU session (collector 7, application crash 2, panic report 9, user-entry report and no duplicates 3) and the host check `crashlog.debugger_reboots`; on renga-raw 32 (the attribute check gives way to 12 GUI checks: Deskbar entry, notification, viewer, live log and filters, previous boot, archive) and `crashlog.screenshots`. Baselines: 799/799 BIOS and `--smp 2`, 796/796 UEFI, renga-raw 975/975. `selftest.py`: 6 new cases, 0 failures. `--other-systems` and `--installer-upgrade` skip the suite (their image copies get `no-final-tests`); those two modes were not run again after this change.
+
 ### 8.4 QEMU-only versus hardware-tested
 
 | Component | QEMU | VirtualBox | VMware | Real hardware |
@@ -2005,6 +2006,7 @@ Extra checks by run type: UEFI anyboot adds `branding.iso_volume_id` (284). `ren
 | Boot menu: other systems, removable media | Yes (test loaders and boot records) | No | No | Pending (maintainer's Windows, `REAL-HARDWARE-TEST.md`) |
 | Installer upgrade over Haiku | Yes (copies of the image as old Haiku) | No | No | Pending (maintainer's Haiku partition) |
 | Boot splash | Yes (screenshots) | No | No | No |
+| Crash reports across a reboot (`F-51`) | Yes (warm reboot from the debugger, BIOS and OVMF) | No | No | Pending (maintainer's PC: does the 63 MiB region survive POST) |
 | VM mouse integration | In development | Planned (USB Tablet setting) | Not tested | Not applicable |
 | Lumina | No | Lumina docs describe a VirtualBox setup; never run | No | No |
 
@@ -2166,6 +2168,9 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-11 | [`eb769e72`](https://github.com/Techniix/haiku/commit/eb769e72) | Encode/decode API (`MediaWriter`, `MediaReader`); VP8/VP9/Opus/Vorbis/MP3 encoder entries, extradata to the writer, sample-format conversion, libvpx settings; WebM in Screenshot; `media_codec` suite (`F-31` phase 4) | 777/777 BIOS and `--smp 2`, 774/774 UEFI, `renga-raw` 931/931; selftest 0 failures |
 | 2026-11-11 | [`2756f347`](https://github.com/Techniix/haiku/commit/2756f347) | Streaming through FFmpeg's protocols (HLS/DASH playback; UDP/RTP/SRT output; `FFmpegURLIO`), `MediaWriter` URLs, `CaptureOptions::streamURL`, Screenshot "Stream to:", `http_streamer` limited to HTTP files; `media_stream` suite (`F-31` phase 4) | 777/777 BIOS and `--smp 2`, 774/774 UEFI, `renga-raw` 941/941; selftest 0 failures |
 | 2026-11-11 | (this commit) | Roadmap: `F-31` low-latency mode, HDMI playback and phase 4, `F-32` controls, baselines, history; PORTING.md "Low-latency audio", "Encoding and decoding", "Streaming" | Documentation only |
+| 2026-11-11 | [`50f5bdb1`](https://github.com/Techniix/haiku/commit/50f5bdb1) | Kernel crash reports in the syslog ring on every debugger entry (ramoops design), EFI loader keeps the ring at 63 MiB across reboots, `crash_collector`, debug_server application crash reports, `crashlog_test` over three boots, harness `CE-HOST kdl_reboot` (`F-51`) | 799/799 BIOS and `--smp 2`, 796/796 UEFI |
+| 2026-11-11 | [`b33d6192`](https://github.com/Techniix/haiku/commit/b33d6192) | System logs application (live syslog with filters, previous boot, crash reports, "Save a report"), crash notification at login, Deskbar entry; harness README (`F-51`) | renga-raw 975/975 |
+| 2026-11-11 | (this commit) | Roadmap: `F-51` QEMU Tested, baselines, history | Documentation only |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
