@@ -342,6 +342,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-55 | Colour emoji in app_server | Not Started | None |
 | F-56 | Profiling and tracing tools | Not Started | None |
 | F-57 | WebKit keep-up (HaikuWebKit rebase, WebPositive quick fixes) | Designed | None |
+| F-58 | Partner requests, batch 1 (OBS Studio and Quasar requests to Renga) | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -1344,6 +1345,37 @@ Not settings and therefore not in the Control Panel: the `lumina` command (scrip
 | Recommended next action | Quick-fix batch after the Media Kit |
 | Links | Decided by the maintainer, 2026-11-11: plan around Chromium, do one WebKit rebase, keep the API |
 
+#### F-58 Partner requests, batch 1 (OBS Studio and Quasar)
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Not applicable |
+| Renga maturity | None |
+| Status | **Designed** |
+| Completed | None |
+| Remaining | The Renga-side requests from the maintainer's OBS Studio port (`Techniix/OBS-Studio_HaikuOS`, branch `renga`, `docs/haiku/RENGA-REQUESTS.md`) and the Quasar NVIDIA driver (`Techniix/nvidia-haiku`, branch `renga`, `docs/RENGA-REQUESTS.md`) that can be done and tested in QEMU. Checklist below |
+| Known bugs/limitations | Requests that need the RTX 5070 to verify go to the GPU stage instead (F-47 checklist): Quasar R-1 app_server side, R-2, R-5 |
+| Dependencies | Media Kit (F-31) phases 1-6 |
+| Difficulty | 4 |
+| Risk | Low to medium (mixer, BScreenCapture, app_server link) |
+| Testing status | None |
+| Next milestone | Right after the Media Kit, before the F-57 quick-fix batch (maintainer 2026-11-11) |
+| Recommended next action | Start after the Media Kit's final commit |
+| Links | Requests read 2026-11-11; each item is marked Landed in the requesting file by that project's session, with the Renga commit |
+
+Checklist (request IDs from the requesting files):
+
+- [ ] O-1: exclude applications from a loopback (`renga:loopback_exclude`), so OBS's monitoring is not recorded twice.
+- [ ] O-6 and O-7: screen capture permission without holding the `AppServerLink` lock while waiting; `B_TIMED_OUT` for an unanswered prompt; an asynchronous `BScreenCapture::RequestPermission(BMessenger, uint32)`.
+- [ ] O-4: per-stream route to a device by name (`renga:route`), kept while the device is absent and applied when it appears.
+- [ ] O-2 and O-3: a "None (loopback only)" output choice, and loopback selection by team (`renga:loopback_team`).
+- [ ] O-5: camera mode lists (sizes, frame intervals, encodings) from the UVC producer, and `field_rate` honoured.
+- [ ] O-8 and O-9: frame notification for a capture session; a window-visible flag in capture frames.
+- [ ] O-12: a virtual camera producer fed by one client through memfd shared memory.
+- [ ] O-13: `SOCK_SEQPACKET` socketpair tests with `SCM_RIGHTS`.
+- [ ] Quasar R-1 prerequisite: passing a file descriptor from an application to app_server (`SCM_RIGHTS` on a local socket alongside the app_server link), and a decision on the header's home and names (`<add-ons/graphics/GpuPresent.h>` proposed). The app_server flip queue itself is in F-47.
+- [ ] O-11: tell OBS the Media Kit video acceleration interface exists (`446221a6`); its hardware back ends come with Quasar (Q-3) and the GPU stage.
+
 ### Bundled applications
 
 #### F-44 Bundled applications (gap review, 2026-11-09)
@@ -1538,6 +1570,7 @@ Checklist:
 - [ ] A Haiku Vulkan surface that takes a `BWindow`/`BView` (today applications create a headless surface and cast its handle to the layer's C++ object). Vulkan extension names must be registered with Khronos, so the name and structure are decided together with X547 (VideoStreamsWsi's author); a clearly provisional vendor-prefixed name is used until then. Decision pending.
 - [ ] Present modes FIFO, MAILBOX and IMMEDIATE, synchronised with semaphores and fences instead of CPU waits; VRR later.
 - [ ] VideoStreamsWsi fixes: `GetFormats` element size; queue use from the present thread.
+- [ ] Quasar requests (`Techniix/nvidia-haiku` `renga`, `docs/RENGA-REQUESTS.md`), needing the RTX 5070: R-1 app_server side (GPU buffers in overlay bitmaps, flip queue, events on epoll; Quasar's driver half is in `bc9e512`), R-2 scanout and window buffer export for capture (OBS O-10, Sunshine), R-5 long-term pinning of user pages (`vm_pin_user_pages`/`vm_unpin_user_pages`, for `VK_EXT_external_memory_host`). R-4 (game mode notifications for drivers) comes with F-50.
 - [ ] Measurements on the maintainer's machine: frame time breakdown before and after, compared with Windows and Linux on the same hardware.
 
 #### F-35 GPU and graphics
