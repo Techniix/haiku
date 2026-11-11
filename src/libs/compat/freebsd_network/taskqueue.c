@@ -136,7 +136,7 @@ taskqueue_drain(struct taskqueue *taskQueue, struct task *task)
 		return;
 
 	TQ_LOCK(taskQueue);
-	while (task->ta_pending != 0 || task_is_running(taskQueue, task)) {
+	while (task->ta_pending != 0 || task_get_busy(taskQueue, task) != NULL) {
 		TQ_UNLOCK(taskQueue);
 		snooze(0);
 		TQ_LOCK(taskQueue);

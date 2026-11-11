@@ -73,7 +73,13 @@ struct taskqueue *taskqueue_create(const char *name, int mflags,
 					void *context);
 int	taskqueue_start_threads(struct taskqueue **tqp, int count, int pri,
 				const char *name, ...) __printflike(4, 5);
+#define	TASKQUEUE_FAIL_IF_PENDING	(1 << 0)
+#define	TASKQUEUE_FAIL_IF_CANCELING	(1 << 1)
+
 int	taskqueue_enqueue(struct taskqueue *queue, struct task *task);
+int	taskqueue_enqueue_flags(struct taskqueue *queue, struct task *task,
+	    int flags);
+int	taskqueue_poll_is_busy(struct taskqueue *queue, struct task *task);
 int	taskqueue_enqueue_timeout(struct taskqueue *queue,
 		struct timeout_task *timeout_task, int _ticks);
 int	taskqueue_cancel(struct taskqueue *queue, struct task *task,
