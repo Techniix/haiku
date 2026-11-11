@@ -159,6 +159,8 @@ CAPTURE_SCREENSHOTS = ["capture_prompt", "capture_indicator",
 	"capture_settings", "screenshot_recording"]
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
+# The Installer with a destination that has an installation (F-23).
+INSTALLER_SCREENSHOTS = ["installer_modes"]
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
@@ -337,6 +339,9 @@ def build(args, results_dir, report):
 		jam.append("-sHAIKU_REVISION=" + revision)
 		report["revision_fallback"] = revision
 
+	if args.installer_upgrade:
+		# room for an upgrade that keeps the old system as a state
+		jam.append("-sHAIKU_IMAGE_SIZE=%d" % INSTALLER_IMAGE_SIZE)
 	if args.verbose:
 		# Trace output is a compile-time switch (see the drivers' Jamfiles).
 		# jam does not notice changed defines, so force the recompile.
@@ -620,6 +625,10 @@ def check_boot_menu(args, results_dir, report):
 		with open(os.path.join(results_dir, "serial.timed.log"),
 				errors="replace") as serial:
 			for line in serial:
+				if line.startswith("[ce-test] --- boot "):
+					# further boots of an --installer-upgrade run follow;
+					# they have menus of their own
+					break
 				match = re.match(r"\[\s*([0-9.]+)\] (.*)", line)
 				if match is None:
 					continue
@@ -864,7 +873,8 @@ def other_systems_drives(args, media):
 
 
 # Keys as QEMU's sendkey names them, and as the boot menu logs them.
-MENU_KEY_LOG = {"down": "0x40000001", "up": "0x40000000"}
+MENU_KEY_LOG = {"down": "0x40000001", "up": "0x40000000",
+	"home": "0x40000006", "ret": "0xd", "esc": "0x1b"}
 
 
 def menu_key_logged(key):
@@ -968,10 +978,23 @@ class BootMenuDriver(threading.Thread):
 		try:
 			if self.firmware == "uefi":
 				self._run_uefi()
+			elif self.firmware == "old_state":
+				self._run_old_state()
 			else:
 				self._run_bios()
 		finally:
 			self.done = True
+
+	def _run_old_state(self):
+		"""--installer-upgrade, phase C: choose the newest older package
+		state of the boot volume ("Select boot volume/state", the volume,
+		one down from "Latest state"), back to the main menu, continue."""
+		if self._wait_for(r'boot menu: "Continue booting" in \d+ s', 0,
+				timeout=120)[0] is None:
+			return
+		for key in ("home", "ret", "ret", "down", "ret", "esc", "b"):
+			self._press(key)
+			time.sleep(0.3)
 
 	def _run_uefi(self):
 		index, _ = self._wait_for(r'boot menu: "%s" returned'
@@ -1168,6 +1191,295 @@ def check_other_systems(args, results_dir, report):
 		text = ""
 	report.setdefault("host_checks", []).extend(other_systems_checks(
 		args.firmware, text, report.get("boot", {}).get("boot_menu")))
+
+
+# #pragma mark - installer (--installer-upgrade)
+
+
+# The older, stock-Haiku-like installation the Installer upgrades: the
+# image's own packages, its system package re-packed with this version, a
+# user-installed package, an activated-packages file and an older state.
+INSTALLER_OLD_VERSION = "r1~beta5_hrev57937-1"
+INSTALLER_OLD_PACKAGE = "haiku-%s-x86_64.hpkg" % INSTALLER_OLD_VERSION
+INSTALLER_USER_PACKAGE = "ce_userapp-1.0-1-any.hpkg"
+INSTALLER_OLDER_STATE = "state_2025-01-01_12:00:00"
+# Big enough for an upgrade that keeps the old system as a state.
+INSTALLER_IMAGE_SIZE = 1200
+INSTALLER_USER_PACKAGE_INFO = """name			ce_userapp
+version			1.0-1
+architecture	any
+summary			"Renga harness: a package the user installed"
+description		"Stands in for software the user installed, for the Installer's upgrade test."
+packager		"Renga harness <harness@localhost>"
+vendor			"Renga harness"
+copyrights		"2026 Renga contributors"
+licenses		"MIT"
+provides {
+	ce_userapp = 1.0
+}
+"""
+
+
+def host_package_tool(args):
+	tool = os.path.join(args.output, "objects", "linux", "x86_64", "release",
+		"tools", "package", "package")
+	environment = dict(os.environ, LD_LIBRARY_PATH=os.path.join(args.output,
+		"objects", "linux", "lib"))
+	return tool, environment
+
+
+def bfs_shell_run(args, image, commands):
+	"""Runs bfs_shell \a commands on the BFS volume of \a image; returns
+	(exit status, output)."""
+	offset = bfs_volume_offset(image)
+	shells = glob.glob(os.path.join(args.output, "objects", "*", "*", "*",
+		"tools", "bfs_shell", "bfs_shell"))
+	if offset is None or not shells:
+		return 1, "no BFS volume or no bfs_shell"
+	result = subprocess.run([shells[0], "--start-offset", str(offset), image],
+		input=(commands + "sync\nquit\n").encode(), stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT, timeout=300)
+	return result.returncode, result.stdout.decode("utf-8", "replace")
+
+
+def rename_bfs_volume(image, name):
+	offset = bfs_volume_offset(image)
+	with open(image, "r+b") as disk:
+		disk.seek(offset + 512)
+		disk.write(name.encode().ljust(32, b"\0"))
+
+
+def old_system_package(args, work):
+	"""The image's system package, re-packed as INSTALLER_OLD_VERSION with
+	the build's host package tool (cached per build of it)."""
+	source = os.path.join(args.output, "objects", "haiku", "x86_64",
+		"packaging", "packages", "haiku.hpkg")
+	cache = os.path.join(args.output, "ce-installer-cache")
+	os.makedirs(cache, exist_ok=True)
+	cached = os.path.join(cache, "old-haiku-%d.hpkg"
+		% int(os.path.getmtime(source)))
+	if os.path.exists(cached):
+		return cached
+	for old in glob.glob(os.path.join(cache, "old-haiku-*.hpkg")):
+		os.remove(old)
+	tool, environment = host_package_tool(args)
+	tree = os.path.join(work, "haiku-tree")
+	os.makedirs(tree)
+	subprocess.run([tool, "extract", "-C", tree, source], check=True,
+		env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+	info = os.path.join(tree, ".PackageInfo")
+	with open(info) as infoFile:
+		text = infoFile.read()
+	text = re.sub(r"(?m)^version\s.*$", "version\t\t\t%s"
+		% INSTALLER_OLD_VERSION, text)
+	with open(info, "w") as infoFile:
+		infoFile.write(text)
+	subprocess.run([tool, "create", "-1", "-C", tree, "-i", info, cached],
+		check=True, env=environment, stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT)
+	shutil.rmtree(tree)
+	return cached
+
+
+def user_package(args, work):
+	tool, environment = host_package_tool(args)
+	tree = os.path.join(work, "user-tree")
+	os.makedirs(os.path.join(tree, "data", "ce_userapp"))
+	with open(os.path.join(tree, "data", "ce_userapp", "README"), "w") as f:
+		f.write("A package the user installed.\n")
+	info = os.path.join(work, "user.PackageInfo")
+	with open(info, "w") as infoFile:
+		infoFile.write(INSTALLER_USER_PACKAGE_INFO)
+	path = os.path.join(work, INSTALLER_USER_PACKAGE)
+	subprocess.run([tool, "create", "-C", tree, "-i", info, path],
+		check=True, env=environment, stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT)
+	return path
+
+
+def make_installer_disks(args, results_dir, report):
+	"""--installer-upgrade: two copies of the (larger) test image made to
+	look like an older stock Haiku installation, "OldHaiku" and
+	"OldHaiku2" (see INSTALLER_*). Returns their paths, or None (with the
+	reason in the report)."""
+	image = image_path(args)
+	work = os.path.join(results_dir, "installer-work")
+	os.makedirs(work, exist_ok=True)
+	try:
+		oldSystem = old_system_package(args, work)
+		userPackage = user_package(args, work)
+	except (OSError, subprocess.CalledProcessError) as error:
+		report["installer_setup"] = "packages: %s" % error
+		return None
+
+	status, listing = bfs_shell_run(args, image, "ls /myfs/system/packages\n")
+	packages = sorted(set(re.findall(r"(\S+\.hpkg)", listing)))
+	current = [p for p in packages if p.startswith("haiku-")]
+	if status != 0 or len(current) != 1:
+		report["installer_setup"] = "cannot list the image's packages: " \
+			+ listing[-300:]
+		return None
+	installed = sorted([p for p in packages if p != current[0]]
+		+ [INSTALLER_OLD_PACKAGE, INSTALLER_USER_PACKAGE])
+	older = [p for p in installed if p != INSTALLER_USER_PACKAGE]
+	activated = os.path.join(work, "activated")
+	with open(activated, "w") as listFile:
+		listFile.write("\n".join(installed) + "\n")
+	olderList = os.path.join(work, "older")
+	with open(olderList, "w") as listFile:
+		listFile.write("\n".join(older) + "\n")
+
+	disks = {}
+	for key, name in (("old", "OldHaiku"), ("old2", "OldHaiku2")):
+		path = os.path.join(results_dir, name.lower() + ".img")
+		subprocess.run(["cp", "--sparse=always", image, path], check=True)
+		packagesDir = "/myfs/system/packages"
+		admin = packagesDir + "/administrative"
+		commands = "\n".join([
+			"rm %s/%s" % (packagesDir, current[0]),
+			"cp :%s %s/%s" % (oldSystem, packagesDir, INSTALLER_OLD_PACKAGE),
+			"cp :%s %s/%s" % (userPackage, packagesDir,
+				INSTALLER_USER_PACKAGE),
+			"mkdir %s" % admin,
+			"mkdir %s/%s" % (admin, INSTALLER_OLDER_STATE),
+			"cp :%s %s/activated-packages" % (activated, admin),
+			"cp :%s %s/%s/activated-packages" % (olderList, admin,
+				INSTALLER_OLDER_STATE),
+			"ls %s" % packagesDir, ""])
+		status, output = bfs_shell_run(args, path, commands)
+		if status != 0 or INSTALLER_OLD_PACKAGE not in output \
+				or INSTALLER_USER_PACKAGE not in output:
+			report["installer_setup"] = "bfs_shell: " + output[-400:]
+			return None
+		rename_bfs_volume(path, name)
+		disks[key] = path
+	shutil.rmtree(work)
+	report["installer_setup"] = "OldHaiku and OldHaiku2: %d packages, " \
+		"%s, %s, older state %s" % (len(installed), INSTALLER_OLD_PACKAGE,
+			INSTALLER_USER_PACKAGE, INSTALLER_OLDER_STATE)
+	return disks
+
+
+def installer_drives(disks):
+	return ["-drive", "file=%s,format=raw,if=none,id=oldhaiku,snapshot=off"
+			% disks["old"],
+		"-device", "ide-hd,drive=oldhaiku,bus=ide.1,unit=0",
+		"-drive", "file=%s,format=raw,if=none,id=oldhaiku2,snapshot=off"
+			% disks["old2"],
+		"-device", "ide-hd,drive=oldhaiku2,bus=ide.1,unit=1"]
+
+
+def run_installer_boots(args, results_dir, report, disks):
+	"""After the first boot upgraded OldHaiku: boot it (phase B, the new
+	system), then set its boot menu timeout and boot it again choosing the
+	old package state in the menu (phase C). Each boot's serial log is
+	appended to serial.log, so its checks count like the others."""
+	if not boot(args, results_dir, report, image=disks["old"],
+			tag="upgraded"):
+		log("booting the upgraded disk failed")
+
+	status, phase = bfs_shell_run(args, disks["old"],
+		"cat /myfs/home/ce-installer-phase\n")
+	match = re.search(r"upgraded\n(new=.*\nold=.*\nstate=.*\n)", phase)
+	work = os.path.join(results_dir, "installer-work")
+	os.makedirs(work, exist_ok=True)
+	if match is not None:
+		phaseFile = os.path.join(work, "phase")
+		with open(phaseFile, "w") as f:
+			f.write("oldstate\n" + match.group(1))
+		# (installer_test set the boot menu timeout in phase A)
+		bfs_shell_run(args, disks["old"], "cp -f :%s /myfs/home/"
+			"ce-installer-phase\n" % phaseFile)
+	else:
+		report["installer_setup"] += "; no phase B file: " + phase[-200:]
+	shutil.rmtree(work)
+	if not boot(args, results_dir, report, image=disks["old"],
+			tag="oldstate", menu_script="old_state"):
+		log("booting the old state failed")
+
+	for tag in ("upgraded", "oldstate"):
+		for name in ("serial.log", "serial.timed.log"):
+			try:
+				with open(os.path.join(results_dir, tag, name), "rb") as part:
+					data = part.read()
+			except OSError:
+				continue
+			with open(os.path.join(results_dir, name), "ab") as whole:
+				whole.write(("\n[ce-test] --- boot %s ---\n" % tag).encode())
+				whole.write(data)
+	for path in disks.values():
+		os.remove(path)
+
+
+def check_installer_boots(args, results_dir, report):
+	if not args.installer_upgrade:
+		return
+	checks = report.setdefault("host_checks", [])
+	checks.append({"name": "installer.setup",
+		"pass": "OldHaiku and OldHaiku2" in report.get("installer_setup", ""),
+		"detail": report.get("installer_setup", "not prepared")})
+	for tag, what in (("upgraded", "the upgraded disk"),
+			("oldstate", "the old package state")):
+		boot = report.get("boots", {}).get(tag, {})
+		checks.append({"name": "installer.boot_" + tag,
+			"pass": boot.get("status") == "exited"
+				and boot.get("runner_finished", False),
+			"detail": "%s: %s, runner finished: %s" % (what,
+				boot.get("status", "not booted"),
+				boot.get("runner_finished"))})
+	try:
+		with open(os.path.join(results_dir, "oldstate", "serial.log"),
+				errors="replace") as serial:
+			text = serial.read()
+	except OSError:
+		text = ""
+	chosen = re.search(r'boot menu: package state "([^"]*)" chosen', text)
+	checks.append({"name": "installer.old_state_chosen",
+		"pass": chosen is not None and chosen.group(1) != "Latest state",
+		"detail": "boot menu: state \"%s\" chosen" % chosen.group(1)
+			if chosen else "no package state chosen in the boot menu"})
+
+
+# installer_ui_test (renga-* images): a small BFS disk "CETarget" with what
+# looks like a Haiku installation, for the Installer's window. Made on the
+# host (registering a file as a disk and mkfs in the guest refused to
+# initialize it), attached as an IDE disk; the guest's writes go to the
+# snapshot.
+INSTALLER_UI_TARGET_SIZE = 64 * 1024 * 1024
+
+
+def make_installer_ui_target(args, results_dir):
+	path = os.path.join(results_dir, "cetarget.img")
+	shells = glob.glob(os.path.join(args.output, "objects", "*", "*", "*",
+		"tools", "bfs_shell", "bfs_shell"))
+	if not shells:
+		return None
+	with open(path, "wb") as image:
+		image.truncate(INSTALLER_UI_TARGET_SIZE)
+	result = subprocess.run([shells[0], "--initialize", path, "CETarget"],
+		stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+	if result.returncode != 0:
+		log("cetarget: " + result.stdout.decode("utf-8", "replace")[-200:])
+		return None
+	files = os.path.join(results_dir, "cetarget-files")
+	os.makedirs(files, exist_ok=True)
+	with open(os.path.join(files, "package"), "w") as f:
+		f.write("not a real package\n")
+	with open(os.path.join(files, "letter"), "w") as f:
+		f.write("letter\n")
+	status, output = bfs_shell_run(args, path, "\n".join([
+		"mkdir /myfs/system", "mkdir /myfs/system/packages",
+		"mkdir /myfs/home", "mkdir /myfs/home/Documents",
+		"cp :%s /myfs/system/packages/%s" % (os.path.join(files, "package"),
+			INSTALLER_OLD_PACKAGE),
+		"cp :%s /myfs/home/Documents/letter.txt" % os.path.join(files,
+			"letter"),
+		"ls /myfs/system/packages", ""]))
+	shutil.rmtree(files)
+	if status != 0 or INSTALLER_OLD_PACKAGE not in output:
+		log("cetarget: " + output[-200:])
+		return None
+	return path
 
 
 # #pragma mark - boot
@@ -1662,10 +1974,27 @@ def convert_screenshots(paths):
 	return names
 
 
-def boot(args, results_dir, report):
-	image = image_path(args)
+def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
+		menu_script=None):
+	"""Boots the test image (or \a image: another disk, booted as it is)
+	and collects its serial output. A \a tag names a further boot of the
+	same run (--installer-upgrade): its logs are serial-<tag>.log, its
+	report is report["boots"][tag]. \a extra_drives are QEMU options for
+	more drives; \a menu_script makes a BootMenuDriver play the boot
+	menu."""
+	bootReport = {}
+	if tag:
+		report.setdefault("boots", {})[tag] = bootReport
+		# its own directory: recordings and scratch disks are per boot
+		results_dir = os.path.join(results_dir, tag)
+		os.makedirs(results_dir, exist_ok=True)
+	else:
+		report["boot"] = bootReport
+	plainImage = image is not None
+	if image is None:
+		image = image_path(args)
 	if not os.path.exists(image):
-		report["boot"] = {"status": "no-image", "image": image}
+		bootReport.update({"status": "no-image", "image": image})
 		return False
 
 	serial_log = os.path.join(results_dir, "serial.log")
@@ -1678,32 +2007,34 @@ def boot(args, results_dir, report):
 			os.unlink(path)
 
 	patched = None
-	if args.boot_menu_timeout or args.only or args.other_systems:
+	if not plainImage and (args.boot_menu_timeout or args.only
+			or args.other_systems):
 		patched = os.path.join(results_dir, "patched.img")
 		error = make_patched_image(args, image, patched)
 		if error is not None:
-			report["boot"] = {"status": "image-setup-failed", "image": image,
-				"error": error}
+			bootReport.update({"status": "image-setup-failed",
+				"image": image, "error": error})
 			log(error)
 			return False
 		image = patched
 
 	otherMedia = None
-	if args.other_systems:
+	if args.other_systems and not tag:
 		try:
 			otherMedia = make_other_systems_media(results_dir)
 		except (OSError, subprocess.CalledProcessError) as error:
-			report["boot"] = {"status": "image-setup-failed", "image": image,
+			bootReport.update({"status": "image-setup-failed",
+				"image": image,
 				"error": "other systems media: %s (needs nasm and mtools)"
-					% error}
-			log(report["boot"]["error"])
+					% error})
+			log(bootReport["error"])
 			return False
 
 	decoy = None
 	if args.two_installs:
 		decoy = os.path.join(results_dir, "decoy.img")
 		if not make_decoy(image, decoy):
-			report["boot"] = {"status": "no-bfs-volume", "image": image}
+			bootReport.update({"status": "no-bfs-volume", "image": image})
 			return False
 
 	qemu = [
@@ -1788,10 +2119,11 @@ def boot(args, results_dir, report):
 		qemu += ["-boot", "d"]
 	if otherMedia is not None:
 		qemu += other_systems_drives(args, otherMedia)
+	qemu += list(extra_drives)
 
-	report["boot"] = {"command": " ".join(qemu), "image": image}
+	bootReport.update({"command": " ".join(qemu), "image": image})
 	if decoy is not None:
-		report["boot"]["volume_name"] = bfs_volume_name(image)
+		bootReport["volume_name"] = bfs_volume_name(image)
 	log("booting: " + " ".join(qemu))
 
 	feed = os.path.join(results_dir, "capture-in.raw")
@@ -1809,8 +2141,9 @@ def boot(args, results_dir, report):
 	reader = SerialReader(process, serial_log, monitor_path, qmp_path,
 		feeder)
 	menuDriver = None
-	if args.other_systems:
-		menuDriver = BootMenuDriver(args.firmware, monitor_path)
+	if menu_script is not None or (args.other_systems and not tag):
+		menuDriver = BootMenuDriver(menu_script or args.firmware,
+			monitor_path)
 		reader.menu_driver = menuDriver
 		menuDriver.start()
 	reader.start()
@@ -1842,7 +2175,7 @@ def boot(args, results_dir, report):
 			stalled_at = elapsed
 			log("no serial output for %.0fs: entering the kernel debugger"
 				% silent)
-			report["boot"]["stall_after_seconds"] = round(elapsed - silent, 1)
+			bootReport["stall_after_seconds"] = round(elapsed - silent, 1)
 			if not monitor_command(monitor_path, "sendkey alt-sysrq-d"):
 				status = "stall"
 				break
@@ -1870,30 +2203,30 @@ def boot(args, results_dir, report):
 	qemu_stderr.close()
 	feeder.stop()
 	os.remove(feed)
-	report["boot"]["capture_feed"] = {
+	bootReport["capture_feed"] = {
 		"most_read_seconds": round(feeder.most_read / (CAPTURE_RATE * 4), 1),
 		"tones_written": feeder.changes, "error": feeder.error}
 	for copy in (decoy, patched):
 		# Full copies of the image, only needed while the guest runs.
 		if copy is not None:
 			os.remove(copy)
-	report["boot"]["screenshots"] = convert_screenshots(shots
+	bootReport["screenshots"] = convert_screenshots(shots
 		+ reader.screenshots)
 	if reader.kdl.is_set():
 		# The whole debugger session (every backtrace); summary.md only
 		# shows the start of it.
 		with open(os.path.join(results_dir, "kdl.log"), "w") as kdlFile:
 			kdlFile.write(reader.kdl_text.replace("\r", ""))
-		report["boot"]["kdl_log"] = "kdl.log"
+		bootReport["kdl_log"] = "kdl.log"
 	for path in (monitor_path, qmp_path):
 		if os.path.exists(path):
 			os.unlink(path)
-	report["boot"]["status"] = status
-	report["boot"]["seconds"] = round(time.time() - started, 1)
-	report["boot"]["runner_finished"] = reader.finished.is_set()
-	report["boot"]["host_requests"] = reader.host_requests
+	bootReport["status"] = status
+	bootReport["seconds"] = round(time.time() - started, 1)
+	bootReport["runner_finished"] = reader.finished.is_set()
+	bootReport["host_requests"] = reader.host_requests
 	if menuDriver is not None:
-		report["boot"]["boot_menu"] = menuDriver.summary()
+		bootReport["boot_menu"] = menuDriver.summary()
 	if otherMedia is not None:
 		for path in otherMedia.values():
 			os.remove(path)
@@ -2957,6 +3290,13 @@ def main():
 			"(3 s timeout; on UEFI with Windows Boot Manager as the default), "
 			"start each system from it with the keyboard and check what "
 			"they report on the serial port (see README)")
+	parser.add_argument("--installer-upgrade", action="store_true",
+		help="build a %d MB image, attach two copies of it made to look like "
+			"an older Haiku installation (older system package, a user "
+			"package, an older state), let installer_test upgrade, replace "
+			"and erase them with the Installer's command line, then boot the "
+			"upgraded copy and, through the boot menu, its old package state "
+			"(hard disk, BIOS or UEFI; see README)" % INSTALLER_IMAGE_SIZE)
 	parser.add_argument("--pointer-devices", default="usb,virtio",
 		type=lambda text: [t for t in text.split(",")
 			if t.strip() and t != "none"],
@@ -3009,6 +3349,10 @@ def main():
 			or args.firmware != "uefi"):
 		parser.error("--two-installs tests the EFI boot loader's choice "
 			"between hard disks; it needs --firmware uefi and --media disk")
+	if args.installer_upgrade and (args.media != "disk"
+			or args.disk_bus != "ide" or args.other_systems
+			or args.two_installs):
+		parser.error("--installer-upgrade boots from an IDE hard disk")
 	if args.other_systems and (args.media != "disk" or args.disk_bus != "ide"
 			or args.two_installs or args.boot_menu_timeout):
 		parser.error("--other-systems boots from an IDE hard disk and sets "
@@ -3037,6 +3381,7 @@ def main():
 		"media": args.media, "disk_bus": args.disk_bus,
 		"two_installs": args.two_installs,
 		"other_systems": args.other_systems,
+		"installer_upgrade": args.installer_upgrade,
 		"boot_menu_timeout": args.boot_menu_timeout,
 		"pointer_devices": args.pointer_devices,
 		"usb_controller": args.usb_controller,
@@ -3048,7 +3393,21 @@ def main():
 	if not args.no_build:
 		ok = build(args, results_dir, report)
 	if ok and not args.compile_only:
-		boot(args, results_dir, report)
+		disks = None
+		if args.installer_upgrade:
+			disks = make_installer_disks(args, results_dir, report)
+		extra = installer_drives(disks) if disks else []
+		if args.profile.startswith("renga-") and not disks \
+				and not args.other_systems \
+				and "installer_ui_test" in (args.only or available):
+			target = make_installer_ui_target(args, results_dir)
+			if target is not None:
+				extra += ["-drive", "file=%s,format=raw,if=none,id=cetarget"
+					% target, "-device", "ide-hd,drive=cetarget,bus=ide.1,"
+					"unit=0"]
+		boot(args, results_dir, report, extra_drives=extra)
+		if disks:
+			run_installer_boots(args, results_dir, report, disks)
 		parse_serial(results_dir, report)
 		parse_qemu_log(results_dir, report)
 		check_scratch_disks(results_dir, report)
@@ -3057,6 +3416,7 @@ def main():
 		check_image_identity(args, results_dir, report)
 		check_branding(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
+		check_installer_boots(args, results_dir, report)
 		if args.other_systems:
 			check_other_systems(args, results_dir, report)
 		else:
@@ -3080,6 +3440,9 @@ def main():
 		if "screen_capture_test" in (args.only or available):
 			check_screenshots(results_dir, report, CAPTURE_SCREENSHOTS,
 				"capture.screenshots")
+		if "installer_ui_test" in (args.only or available):
+			check_screenshots(results_dir, report, INSTALLER_SCREENSHOTS,
+				"installer_ui.screenshots")
 		if "bootmenu_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
 				"bootmenu.screenshots")

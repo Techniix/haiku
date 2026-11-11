@@ -1027,6 +1027,10 @@ user_menu_boot_volume_state(Menu* menu, MenuItem* _item)
 		return true;
 	}
 
+	// Logged so that a choice can be followed on a serial console (Renga:
+	// the Installer's upgrade test boots the old state this way).
+	dprintf("boot menu: package state \"%s\" chosen\n", item->Label());
+
 	BootVolumeMenuItem* volumeItem = static_cast<BootVolumeMenuItem*>(
 		item->Supermenu()->Superitem());
 	volumeItem->SetMarked(true);
@@ -1273,6 +1277,8 @@ add_boot_volume_item(Menu* menu, Directory* volume, const char* name)
 			PackageVolumeStateMenuItem* stateItem
 				= new(nothrow) PackageVolumeStateMenuItem(state->DisplayName(),
 					volumeInfo, state);
+			dprintf("boot menu: volume \"%s\": package state \"%s\"\n",
+				name, state->DisplayName());
 			subMenu->AddItem(stateItem);
 			stateItem->SetTarget(user_menu_boot_volume_state);
 			stateItem->SetData(volume);

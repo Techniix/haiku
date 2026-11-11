@@ -100,10 +100,22 @@ private:
 
 class WorkerThread::EntryFilter : public CopyEngine::EntryFilter {
 public:
-	EntryFilter(const char* sourceDirectory)
+	/*!	With \a keepExisting (Renga's upgrade and replace modes), nothing in
+		\a targetDirectory is overwritten: an entry the target has already
+		is skipped (folders are entered, their attributes kept), so only
+		what is missing is added. With \a skipPackages (upgrade),
+		system/packages is left out; the upgrade has dealt with it.
+	*/
+	EntryFilter(const char* sourceDirectory,
+		const char* targetDirectory = NULL, bool keepExisting = false,
+		bool skipPackages = false)
 		:
 		fIgnorePaths(),
-		fSourceDevice(-1)
+		fSourceDevice(-1),
+		fTargetDirectory(targetDirectory != NULL ? targetDirectory : ""),
+		fKeepExisting(keepExisting && targetDirectory != NULL),
+		fSkipPackages(skipPackages),
+		fKept(0)
 	{
 		try {
 			fIgnorePaths.insert(kPackagesDirectoryPath);
@@ -154,7 +166,27 @@ public:
 				return false;
 		}
 
+		if (fSkipPackages && strcmp(path, "system/packages") == 0)
+			return false;
+
+		if (fKeepExisting && path[0] != '\0') {
+			BString target(fTargetDirectory);
+			target << "/" << path;
+			struct stat targetInfo;
+			if (lstat(target.String(), &targetInfo) == 0) {
+				if (S_ISDIR(targetInfo.st_mode) && S_ISDIR(statInfo.st_mode))
+					return true;
+				fKept++;
+				return false;
+			}
+		}
+
 		return true;
+	}
+
+	int32 Kept() const
+	{
+		return fKept;
 	}
 
 private:
@@ -163,6 +195,10 @@ private:
 			StringSet			fIgnorePaths;
 			StringSet			fPackageFSRootPaths;
 			dev_t				fSourceDevice;
+			BString				fTargetDirectory;
+			bool				fKeepExisting;
+			bool				fSkipPackages;
+	mutable	int32				fKept;
 };
 
 
@@ -175,7 +211,10 @@ WorkerThread::WorkerThread(const BMessenger& owner)
 	fOwner(owner),
 	fPackages(NULL),
 	fSpaceRequired(0),
-	fCancelSemaphore(-1)
+	fCancelSemaphore(-1),
+	fMode(INSTALL_MODE_ASK),
+	fUnattended(false),
+	fHadInstallerLink(false)
 {
 	Run();
 }
@@ -452,6 +491,10 @@ WorkerThread::_LaunchFinishScript(BPath &path)
 	if (system(command.String()) != 0)
 		return B_ERROR;
 
+	// An installation over an existing one keeps what the user had: the
+	// link is removed only if this installation put it there.
+	if (fHadInstallerLink)
+		return B_OK;
 	command.SetToFormat("rm -f \"%s/home/Desktop/Installer\"", path.Path());
 	return system(command.String());
 }
@@ -484,8 +527,10 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 
 	// check if target is initialized
 	// ask if init or mount as is
+	partition_id targetDisk = -1;
 	if (fDDRoster.GetPartitionWithID(targetPartitionID, &device,
 			&partition) == B_OK) {
+		targetDisk = device.ID();
 		if (!partition->IsMounted()) {
 			if ((err = partition->Mount()) < B_OK) {
 				_SetStatusMessage(mountError);
@@ -521,6 +566,11 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 		return _InstallationError(err);  // shouldn't happen
 
 	// check if target has enough space
+	if (fSpaceRequired > 0 && targetVolume.FreeBytes() < fSpaceRequired
+		&& fUnattended) {
+		_Log("the destination may not have enough space");
+		return _InstallationError(B_DEVICE_FULL);
+	}
 	if (fSpaceRequired > 0 && targetVolume.FreeBytes() < fSpaceRequired) {
 		BAlert* alert = new BAlert("", B_TRANSLATE("The destination disk may "
 			"not have enough space. Try choosing a different disk or choose "
@@ -554,6 +604,11 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 	}
 
 	// check not installing on boot volume
+	if (strncmp(BOOT_PATH, targetDirectory.Path(), strlen(BOOT_PATH)) == 0
+		&& fUnattended) {
+		_Log("refusing to install onto the running system's volume");
+		return _InstallationError(B_NOT_ALLOWED);
+	}
 	if (strncmp(BOOT_PATH, targetDirectory.Path(), strlen(BOOT_PATH)) == 0) {
 		BString text(B_TRANSLATE("Are you sure you want to "
 		"install onto the current boot disk? The %appname% will have to "
@@ -588,31 +643,62 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 			entries++;
 	}
 
-	if (entries != 0) {
-		BAlert* alert = new BAlert("", B_TRANSLATE("The target volume is not "
-			"empty. If it already contains a " DISTRO_NAME " installation, it "
-			"will be overwritten. This will remove all installed software.\n\n"
-			"If you want to upgrade your system without removing installed "
-			"software, see the Haiku User Guide's topic on the application "
-			"\"SoftwareUpdater\" for update instructions.\n\n"
-			"Are you sure you want to continue the installation?"),
-			B_TRANSLATE("Install anyway"), B_TRANSLATE("Cancel"), 0,
-			B_WIDTH_AS_USUAL, B_STOP_ALERT);
-		alert->SetShortcut(1, B_ESCAPE);
-		if (alert->Go() != 0) {
-		// TODO: Would be cool to offer the option here to clean additional
-		// folders at the user's choice.
-			return _InstallationError(B_CANCELED);
-		}
-		err = _PrepareCleanInstall(targetDirectory);
-		if (err != B_OK)
-			return _InstallationError(err);
+	// Renga (F-23): a destination that is not empty is never purged as a
+	// whole any more. What happens to it is chosen (the window asks, an
+	// unattended install says): upgrade an installation keeping files and
+	// applications, replace the system keeping files, or erase it after a
+	// second confirmation naming the volume.
+	InstallationInfo existing;
+	inspect_installation(targetDirectory.Path(), existing);
+	install_mode mode = _ChooseMode(targetDirectory, existing, entries == 0);
+	if (existing.found) {
+		_Log("destination %s has %s (%" B_PRId32 " packages, %" B_PRId32
+			" older states)", targetDirectory.Path(),
+			existing.Description().String(), existing.packageCount,
+			existing.stateCount);
+	}
+	_Log("mode: %s", entries == 0 ? "install onto an empty volume"
+		: install_mode_name(mode));
+	if (mode == INSTALL_MODE_CANCEL)
+		return _InstallationError(B_CANCELED);
+	if (mode == INSTALL_MODE_UPGRADE && !existing.found) {
+		_SetStatusMessage(B_TRANSLATE("There is no installation to upgrade "
+			"on the destination."));
+		_Log("no installation to upgrade");
+		return _InstallationError(B_ENTRY_NOT_FOUND);
+	}
+	if (mode == INSTALL_MODE_ERASE && !_ConfirmErase(targetDirectory))
+		return _InstallationError(B_CANCELED);
+
+	fHadInstallerLink = BEntry(BPath(targetDirectory.Path(),
+		"home/Desktop/Installer").Path()).Exists();
+
+	switch (mode) {
+		case INSTALL_MODE_UPGRADE:
+			err = _UpgradePackages(srcDirectory, targetDirectory);
+			break;
+		case INSTALL_MODE_REPLACE:
+			err = _RemoveSystemPackages(targetDirectory);
+			break;
+		case INSTALL_MODE_ERASE:
+			err = _EraseVolume(targetDirectory);
+			fHadInstallerLink = false;
+			break;
+		default:
+			break;
+	}
+	if (err != B_OK) {
+		_SaveLog(targetDirectory);
+		return _InstallationError(err);
 	}
 
 	// Begin actual installation
 
 	ProgressReporter reporter(fOwner, new BMessage(MSG_STATUS_MESSAGE));
-	EntryFilter entryFilter(srcDirectory.Path());
+	bool keepExisting = mode == INSTALL_MODE_UPGRADE
+		|| mode == INSTALL_MODE_REPLACE;
+	EntryFilter entryFilter(srcDirectory.Path(), targetDirectory.Path(),
+		keepExisting, mode == INSTALL_MODE_UPGRADE);
 	CopyEngine engine(&reporter, &entryFilter);
 	BList unzipEngines;
 
@@ -702,14 +788,38 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 	if (err != B_OK)
 		return _InstallationError(err);
 
+	if (keepExisting) {
+		_Log("kept %" B_PRId32 " existing files and folders (nothing was "
+			"overwritten)", entryFilter.Kept());
+	}
+	if (mode == INSTALL_MODE_UPGRADE) {
+		err = _WriteActivatedPackages(targetDirectory);
+		if (err != B_OK) {
+			_SaveLog(targetDirectory);
+			return _InstallationError(err);
+		}
+	}
+
 	err = _WriteBootSector(targetDirectory);
-	if (err != B_OK)
+	_Log("boot sector (makebootable): %s", err == B_OK ? "written"
+		: strerror(err));
+	if (err != B_OK) {
+		_SaveLog(targetDirectory);
 		return _InstallationError(err);
+	}
+	if (mode == INSTALL_MODE_UPGRADE || mode == INSTALL_MODE_REPLACE
+		|| mode == INSTALL_MODE_ERASE) {
+		_UpdateEFILoaders(targetDisk);
+	}
 
 	err = _LaunchFinishScript(targetDirectory);
-	if (err != B_OK)
+	if (err != B_OK) {
+		_SaveLog(targetDirectory);
 		return _InstallationError(err);
+	}
 
+	_Log("finished");
+	_SaveLog(targetDirectory);
 	fOwner.SendMessage(MSG_INSTALL_FINISHED);
 	return B_OK;
 }
@@ -1059,6 +1169,18 @@ TargetVisitor::Visit(BPartition *partition, int32 level)
 	char label[255];
 	char menuLabel[255];
 	make_partition_label(partition, label, menuLabel, !isValidTarget, false);
+
+	// Renga (F-23): name the installation a destination has.
+	InstallationInfo existing;
+	if (isValidTarget && inspect_partition(partition, existing) == B_OK
+		&& existing.found) {
+		BString installed = existing.Description();
+		strlcat(label, " - ", sizeof(label));
+		strlcat(label, installed.String(), sizeof(label));
+		strlcat(menuLabel, " - ", sizeof(menuLabel));
+		strlcat(menuLabel, installed.String(), sizeof(menuLabel));
+	}
+
 	PartitionMenuItem* item = new PartitionMenuItem(partition->ContentName(),
 		label, menuLabel, new BMessage(TARGET_PARTITION), partition->ID());
 

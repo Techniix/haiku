@@ -370,8 +370,16 @@ InstallerWindow::MessageReceived(BMessage *msg)
 			break;
 		}
 		case START_SCAN:
+		{
 			_ScanPartitions();
+			// "--target <name> --begin" (Renga): press Begin once.
+			extern bool gBeginAtOnce;
+			if (gBeginAtOnce && fDestMenu->FindMarked() != NULL) {
+				gBeginAtOnce = false;
+				PostMessage(BEGIN_MESSAGE);
+			}
 			break;
+		}
 		case BEGIN_MESSAGE:
 			switch (fInstallStatus) {
 				case kReadyForInstall:
@@ -757,6 +765,18 @@ InstallerWindow::_ScanPartitions()
 		delete item;
 
 	fWorkerThread->ScanDisksPartitions(fSrcMenu, fDestMenu, fEFILoaderMenu);
+
+	// "Installer --target <volume name>" (Renga): choose that destination.
+	extern const char* gPreselectedTarget;
+	for (int32 i = 0; gPreselectedTarget != NULL
+			&& i < fDestMenu->CountItems(); i++) {
+		PartitionMenuItem* item = (PartitionMenuItem*)fDestMenu->ItemAt(i);
+		if (strcmp(item->Name(), gPreselectedTarget) == 0
+			&& item->IsValidTarget()) {
+			item->SetMarked(true);
+			break;
+		}
+	}
 
 	if (fSrcMenu->ItemAt(0) != NULL)
 		_PublishPackages();

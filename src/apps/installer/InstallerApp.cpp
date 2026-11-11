@@ -27,8 +27,19 @@ static const uint32 kMsgNext = 'next';
 #define B_TRANSLATION_CONTEXT "InstallerApp"
 
 
-int main(int, char **)
+// Renga (F-23): the command line (InstallerCLI.cpp), and the destination
+// "--target <volume name>" preselects in the window.
+const char* gPreselectedTarget = NULL;
+bool gBeginAtOnce = false;
+int installer_command_line(int argc, char** argv);
+
+
+int main(int argc, char** argv)
 {
+	int status = installer_command_line(argc, argv);
+	if (status >= 0)
+		return status;
+
 	InstallerApp installer;
 	installer.Run();
 	return 0;
@@ -63,6 +74,14 @@ void
 InstallerApp::ReadyToRun()
 {
 #if 1
+	// "--target <name> --begin" (Renga, for automation and the test
+	// harness) goes straight to the installation, which then asks how to
+	// install over what is there.
+	extern bool gBeginAtOnce;
+	if (gBeginAtOnce) {
+		new InstallerWindow();
+		return;
+	}
 	// Show the EULA first.
 	fEULAWindow = new EULAWindow();
 #else

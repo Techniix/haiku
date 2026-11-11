@@ -38,6 +38,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --firmware uefi --two-installs   # pick the right disk
 3rdparty/ce/harness/ce-test.py --boot-menu-timeout 2   # boot menu countdown
 3rdparty/ce/harness/ce-test.py --other-systems  # boot other systems from the menu
+3rdparty/ce/harness/ce-test.py --installer-upgrade  # upgrade an old install in place
 3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
 3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
 3rdparty/ce/harness/ce-test.py --only epoll,signalfd  # quick, PARTIAL run
@@ -152,6 +153,45 @@ got DL and DS:SI, the removable media were found in the background and
 started, the empty CD drive answered within 3 s, every key was answered
 within 1.5 s and no search step took over a second, and Renga booted
 afterwards. They replace `boot.menu` in such a run.
+
+### Installing over an existing installation
+
+`--installer-upgrade` (BIOS, hard disk) tests the Installer's in-place
+modes (roadmap F-23). The image is built at 1200 MB
+(`-sHAIKU_IMAGE_SIZE`), so that an upgrade that keeps the old system fits.
+Two copies of it, the volumes renamed "OldHaiku" and "OldHaiku2", are
+made to look like an older stock Haiku installation with the build's
+`bfs_shell` and host `package` tool: the system package re-packed as
+`haiku-r1~beta5_hrev57937-1-x86_64.hpkg` (cached in
+`generated.x86_64/ce-installer-cache`), a user-installed package
+`ce_userapp-1.0-1-any.hpkg` (`data/ce_userapp/README`), an
+`activated-packages` file and an older state `state_2025-01-01_12:00:00`
+without the user package. They are attached as IDE disks (written, not
+snapshots), and the run boots three times:
+
+1. The test image: `installer_test` adds user files with attributes and
+   settings to both (and a line of its own to a settings file the source
+   has too), checks `Installer --list-targets`, runs `Installer
+   --unattended --target OldHaiku --mode upgrade` and checks the result on
+   disk, then prepares OldHaiku for the next boots (a phase file, the
+   harness's selection file, and a 5 s boot menu). On OldHaiku2 it runs `--mode replace`, then
+   `--mode erase` without and with a wrong `--confirm-erase` (both must be
+   refused, nothing changed) and with the right one.
+2. OldHaiku itself (`upgraded/`): Renga's system package is the one in use
+   (packagefs' `SYS:PACKAGE` attribute of `libroot.so`), the user package
+   is active, files, attributes and settings are there.
+3. OldHaiku again (`oldstate/`; phase A set `boot_menu_timeout 5` in it,
+   and the harness changed its phase file): a `BootMenuDriver` script chooses "Select boot
+   volume/state", the volume, the state below "Latest state", Escape,
+   `b`; the old system package must be the one in use.
+
+The second and third boot write into their own subdirectories; their
+serial logs are appended to `serial.log`, so their `installer.*` checks
+count like the others. Host checks: `installer.setup`,
+`installer.boot_upgraded`, `installer.boot_oldstate` (each ran to the
+end) and `installer.old_state_chosen` (the boot loader logged a package
+state other than "Latest state" as chosen). In any other run
+`installer_test` finds no OldHaiku volumes and reports nothing.
 
 Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and
 `ce-test-results/latest` always points to the newest run:
@@ -452,6 +492,20 @@ itself makes. The mixer's gain values follow its bent "dB" scale
 
 ## Current suites
 
+- **installer** (`installer_test`): see "Installing over an existing
+  installation"; only with `--installer-upgrade`.
+- **installer_ui** (renga-* images, `installer_ui_test`): the harness
+  attaches "CETarget", a 64 MiB BFS disk made with `bfs_shell
+  --initialize` holding a system package file
+  `haiku-r1~beta5_hrev57937-1-x86_64.hpkg` and a user file (mkfs on a
+  `diskimage` file in the guest refused to initialize it). The test checks
+  `Installer --list-targets`, starts `Installer --target CETarget
+  --begin` (no licence window, Begin pressed after the scan), checks after
+  10 s that it is still waiting, takes screenshot `installer_modes`
+  (`installer_ui.screenshots`; the mode window over the Installer), kills
+  it and checks that CETarget is unchanged. (Talking to the Installer
+  through messengers and scripting hung the test three times; not
+  resolved.)
 - **bootmenu** (renga-* images, `bootmenu_ui_test`): the Boot menu
   preferences. From the command line: `--set-timeout 7` writes the line
   and keeps every other line of the kernel settings file, `--set-default`

@@ -795,5 +795,46 @@ results = other_systems("bios", BIOS_GOOD.replace(
 expect("other systems: the floppy not started fails",
 	not results["other_media.found"])
 
+
+# --installer-upgrade: the host checks of the second and third boot.
+class InstallerArgs:
+	installer_upgrade = True
+
+
+def installer_checks(setup, boots, oldstate_log):
+	directory = tempfile.mkdtemp()
+	os.makedirs(os.path.join(directory, "oldstate"))
+	with open(os.path.join(directory, "oldstate", "serial.log"), "w") as f:
+		f.write(oldstate_log)
+	report = {"installer_setup": setup, "boots": boots}
+	ce_test.check_installer_boots(InstallerArgs, directory, report)
+	return {c["name"]: c["pass"] for c in report["host_checks"]}
+
+
+GOOD_SETUP = "OldHaiku and OldHaiku2: 25 packages, ..."
+GOOD_BOOTS = {"upgraded": {"status": "exited", "runner_finished": True},
+	"oldstate": {"status": "exited", "runner_finished": True}}
+CHOSEN = 'boot menu: package state "2026-11-11 01:46:09" chosen\n'
+results = installer_checks(GOOD_SETUP, GOOD_BOOTS, CHOSEN)
+expect("installer: a good run passes", all(results.values()), str(results))
+results = installer_checks("bfs_shell: error", GOOD_BOOTS, CHOSEN)
+expect("installer: failed disk setup fails", not results["installer.setup"])
+results = installer_checks(GOOD_SETUP, {"upgraded": {"status": "exited",
+	"runner_finished": True}, "oldstate": {"status": "stall",
+	"runner_finished": False}}, CHOSEN)
+expect("installer: the old state not booting fails",
+	not results["installer.boot_oldstate"])
+results = installer_checks(GOOD_SETUP, {"oldstate": GOOD_BOOTS["oldstate"]},
+	CHOSEN)
+expect("installer: the upgraded disk not booted fails",
+	not results["installer.boot_upgraded"])
+results = installer_checks(GOOD_SETUP, GOOD_BOOTS,
+	'boot menu: package state "Latest state" chosen\n')
+expect("installer: the latest state chosen fails",
+	not results["installer.old_state_chosen"])
+results = installer_checks(GOOD_SETUP, GOOD_BOOTS, "")
+expect("installer: no state chosen fails",
+	not results["installer.old_state_chosen"])
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)
