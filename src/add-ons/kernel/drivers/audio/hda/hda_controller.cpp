@@ -1020,6 +1020,9 @@ hda_stream_setup_buffers(hda_audio_group* audioGroup, hda_stream* stream,
 	}
 	dprintf("\n");
 
+	// Renga (F-31): HDMI/DisplayPort pins need more (hda_hdmi.h)
+	hda_audio_group_setup_display(audioGroup, stream);
+
 	snooze(1000);
 	return B_OK;
 }

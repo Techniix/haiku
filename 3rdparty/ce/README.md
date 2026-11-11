@@ -583,7 +583,16 @@ itself makes. The mixer's gain values follow its bent "dB" scale
   formats, speaker allocation, the output name and the multi_audio
   rates) with ELDs laid out after the HDA specification and CEA-861-D for
   an HDMI TV, a DisplayPort monitor and an AV receiver without a name,
-  and five malformed ones it must refuse. QEMU emulates no HDMI codec.
+  and five malformed ones it must refuse. Since the HDMI playback commit
+  also the playback set-up of `hda_hdmi.h`: the audio InfoFrame bytes
+  (HDMI after CEA-861-D with its checksum, DisplayPort as the InfoFrame
+  SDP Linux sends, stereo and 8 channels), the stereo ASP channel mapping,
+  the verb sequence for a pin and its converter in Linux's order (pin
+  output, digital enable, channel count, 8 slots, InfoFrame off, index,
+  bytes, best-effort transmission) for HDMI and DisplayPort, the rates
+  and sample sizes from the sink's ELD (CEA-861 basic audio without one),
+  and the choice of pin. QEMU emulates no HDMI codec: the verbs reaching a
+  real codec need hardware.
 - **uvc**: the UVC payload code of the usb_webcam media add-on
   (`addons/uvc/UVCPayload.cpp`) with replayed payloads: frames split into
   1024-byte payloads with 12-byte headers, the FID toggling, EOF set or

@@ -11,6 +11,7 @@
 
 #include "driver.h"
 #include "hda_eld.h"
+#include "hda_hdmi.h"
 #include "hda_codec_defs.h"
 
 
@@ -1249,6 +1250,9 @@ static void
 hda_audio_group_probe_display_pins(hda_audio_group* audioGroup)
 {
 	hda_codec* codec = audioGroup->codec;
+	hda_hdmi_pin_state pins[16];
+	hda_eld elds[16];
+	uint32 pinCount = 0;
 	for (uint32 i = 0; i < audioGroup->widget_count; i++) {
 		hda_widget& widget = audioGroup->widgets[i];
 		if (widget.type != WT_PIN_COMPLEX
@@ -1269,6 +1273,14 @@ hda_audio_group_probe_display_pins(hda_audio_group* audioGroup)
 			continue;
 		bool present = (sense & PIN_SENSE_PRESENCE_DETECT) != 0;
 		bool eldValid = (sense & (1u << 30)) != 0;
+		hda_hdmi_pin_state* state = pinCount < 16 ? &pins[pinCount] : NULL;
+		hda_eld* stateEld = pinCount < 16 ? &elds[pinCount] : NULL;
+		if (state != NULL) {
+			state->node = widget.node_id;
+			state->present = present;
+			state->eld_valid = false;
+			pinCount++;
+		}
 		if (!present || !eldValid) {
 			dprintf("hda: %s pin %" B_PRIu32 ": %s\n", kind, widget.node_id,
 				present ? "sink present, no ELD yet" : "no sink");
@@ -1319,7 +1331,112 @@ hda_audio_group_probe_display_pins(hda_audio_group* audioGroup)
 			"channels, rates %#x, sizes %#x, %u audio formats\n", kind,
 			widget.node_id, name, eld.lpcm_channels, eld.lpcm_rates,
 			eld.lpcm_bits, eld.sad_count);
+		if (state != NULL) {
+			state->eld_valid = true;
+			*stateEld = eld;
+		}
 	}
+
+	if (!audioGroup->display_only || pinCount == 0)
+		return;
+
+	// Renga (F-31): the pin to play on, and what its sink takes
+	int32 chosen = hda_hdmi_choose_pin(pins, pinCount);
+	hda_widget* pin = hda_audio_group_get_widget(audioGroup,
+		pins[chosen].node);
+	if (pin == NULL || pin->num_inputs == 0)
+		return;
+	int32 input = pin->active_input >= 0 ? pin->active_input : 0;
+	audioGroup->display_pin = pin->node_id;
+	audioGroup->display_converter = pin->inputs[input];
+	audioGroup->display_port = (pin->d.pin.capabilities & PIN_CAP_DP) != 0
+		&& (pin->d.pin.capabilities & PIN_CAP_HDMI) == 0;
+	audioGroup->display_eld_valid = pins[chosen].eld_valid;
+	if (pins[chosen].eld_valid) {
+		audioGroup->display_eld = elds[chosen];
+		audioGroup->display_port = elds[chosen].display_port;
+		hda_eld_output_name(elds[chosen], audioGroup->display_name,
+			sizeof(audioGroup->display_name));
+	} else {
+		strlcpy(audioGroup->display_name, audioGroup->display_port
+			? "DisplayPort" : "HDMI", sizeof(audioGroup->display_name));
+	}
+	dprintf("hda: display audio on pin %" B_PRIu32 ", converter %" B_PRIu32
+		": \"%s\"%s\n", audioGroup->display_pin,
+		audioGroup->display_converter, audioGroup->display_name,
+		pins[chosen].present ? "" : " (no sink connected)");
+}
+
+
+/*!	Renga (F-31): whether every output pin the output tree uses is an
+	HDMI or DisplayPort pin. Such groups play through their digital
+	converters (hda_hdmi.h); analog codecs, also those with an S/PDIF
+	converter, stay as they were.
+*/
+static bool
+hda_audio_group_is_display_only(hda_audio_group* audioGroup)
+{
+	uint32 displayPins = 0;
+	for (uint32 i = 0; i < audioGroup->widget_count; i++) {
+		hda_widget& widget = audioGroup->widgets[i];
+		if (widget.type != WT_PIN_COMPLEX
+			|| (widget.flags & WIDGET_FLAG_OUTPUT_PATH) == 0)
+			continue;
+		if ((widget.d.pin.capabilities & (PIN_CAP_HDMI | PIN_CAP_DP)) == 0)
+			return false;
+		displayPins++;
+	}
+	return displayPins > 0;
+}
+
+
+/*!	Renga (F-31): sets up the HDMI/DisplayPort pin and its converter for
+	\a stream after the converter's format and stream were set
+	(hda_stream_setup_buffers()): the verbs of hda_hdmi_setup_verbs(). The
+	pin is chosen again first (a monitor may have been plugged into another
+	connector since); the rates and formats were limited to what the sink
+	takes when the stream was created.
+*/
+void
+hda_audio_group_setup_display(hda_audio_group* audioGroup,
+	hda_stream* stream)
+{
+	if (!audioGroup->display_only || stream->type != STREAM_PLAYBACK)
+		return;
+
+	// The converter the stream was set up on (the pin choice may have
+	// changed since, on an unsolicited response).
+	uint32 oldConverter = stream->num_io_widgets > 0
+		? stream->io_widgets[0] : audioGroup->display_converter;
+	hda_audio_group_probe_display_pins(audioGroup);
+	if (audioGroup->display_converter != oldConverter) {
+		// another connector: its converter takes the stream
+		hda_codec* codec = audioGroup->codec;
+		corb_t verbs[2];
+		verbs[0] = MAKE_VERB(codec->addr, oldConverter,
+			VID_SET_CONVERTER_STREAM_CHANNEL, 0);
+		verbs[1] = MAKE_VERB(codec->addr, audioGroup->display_converter,
+			VID_SET_CONVERTER_STREAM_CHANNEL, stream->id << 4);
+		hda_send_verbs(codec, verbs, NULL, 2);
+		stream->io_widgets[0] = audioGroup->display_converter;
+		stream->pin_widget = audioGroup->display_pin;
+	}
+
+	hda_hdmi_verb list[HDA_HDMI_MAX_VERBS];
+	size_t count = hda_hdmi_setup_verbs(audioGroup->display_pin,
+		audioGroup->display_converter, audioGroup->display_port,
+		stream->num_channels, list, HDA_HDMI_MAX_VERBS);
+	corb_t verbs[HDA_HDMI_MAX_VERBS];
+	for (size_t i = 0; i < count && i < HDA_HDMI_MAX_VERBS; i++) {
+		verbs[i] = MAKE_VERB(audioGroup->codec->addr, list[i].node,
+			list[i].verb << 8, list[i].payload);
+	}
+	status_t status = hda_send_verbs(audioGroup->codec, verbs, NULL,
+		min_c(count, (size_t)HDA_HDMI_MAX_VERBS));
+	dprintf("hda: display pin %" B_PRIu32 ": %s, %" B_PRIu32 " channels, "
+		"%" B_PRIuSIZE " verbs: %s\n", audioGroup->display_pin,
+		audioGroup->display_name, stream->num_channels, count,
+		strerror(status));
 }
 
 
@@ -1436,6 +1553,7 @@ hda_codec_new_audio_group(hda_codec* codec, uint32 audioGroupNodeID)
 	if (hda_audio_group_build_tree(audioGroup) != B_OK)
 		goto err;
 	hda_audio_group_switch_init(audioGroup);
+	audioGroup->display_only = hda_audio_group_is_display_only(audioGroup);
 	hda_audio_group_probe_display_pins(audioGroup);
 
 	audioGroup->playback_stream = hda_stream_new(audioGroup, STREAM_PLAYBACK);
@@ -1480,6 +1598,13 @@ hda_audio_group_get_widgets(hda_audio_group* audioGroup, hda_stream* stream)
 	for (uint32 i = 0; i < audioGroup->widget_count && count < MAX_IO_WIDGETS;
 			i++) {
 		hda_widget& widget = audioGroup->widgets[i];
+
+		// Renga (F-31): display codecs play on the chosen pin only
+		bool display = audioGroup->display_only
+			&& stream->type == STREAM_PLAYBACK;
+		if (display && widget.type == WT_PIN_COMPLEX
+			&& widget.node_id != audioGroup->display_pin)
+			continue;
 
 		if ((widget.flags & flags) != 0) {
 			if (widget.type == WT_PIN_COMPLEX) {
@@ -1541,6 +1666,23 @@ hda_audio_group_get_widgets(hda_audio_group* audioGroup, hda_stream* stream)
 					hda_send_verbs(audioGroup->codec, &verb, NULL, 1);
 				}
 			}
+		}
+
+		if (display) {
+			// the chosen pin's digital converter, with what the sink takes
+			if (widget.type != type
+				|| widget.node_id != audioGroup->display_converter
+				|| (widget.capabilities.audio & AUDIO_CAP_STEREO) == 0
+				|| widget.d.io.formats == 0)
+				continue;
+			uint32 rates, formats;
+			hda_hdmi_limit_formats(audioGroup->display_eld_valid
+					? &audioGroup->display_eld : NULL, widget.d.io.rates,
+				widget.d.io.formats, &rates, &formats);
+			stream->sample_format = formats;
+			stream->sample_rate = rates;
+			stream->io_widgets[count++] = widget.node_id;
+			continue;
 		}
 
 		if (widget.type != type || (widget.flags & flags) == 0

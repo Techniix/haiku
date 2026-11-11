@@ -136,6 +136,11 @@ get_description(hda_audio_group* audioGroup, multi_description* data)
 	data->interface_minimum = B_CURRENT_INTERFACE_VERSION;
 
 	strcpy(data->friendly_name, "HD Audio");
+	// Renga (F-31): display audio is named after the monitor
+	if (audioGroup->display_only && audioGroup->display_name[0] != '\0') {
+		strlcpy(data->friendly_name, audioGroup->display_name,
+			sizeof(data->friendly_name));
+	}
 	strcpy(data->vendor_info, "Haiku");
 
 	int32 inChannels = 0;

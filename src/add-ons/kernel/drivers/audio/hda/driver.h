@@ -22,6 +22,7 @@
 
 #include "hda_controller_defs.h"
 #include "hda_codec_defs.h"
+#include "hda_eld.h"
 
 #define MAX_CARDS				4
 
@@ -280,6 +281,18 @@ struct hda_audio_group {
 	hda_association		associations[MAX_ASSOCIATIONS];
 
 	hda_multi*		multi;
+
+	/* Renga (F-31): an audio group whose outputs are all HDMI/DisplayPort
+	   pins (the display audio codecs of Intel, AMD and NVIDIA graphics)
+	   plays through one of them: display_pin with its digital converter
+	   display_converter (hda_hdmi.h). */
+	bool			display_only;
+	uint32			display_pin;
+	uint32			display_converter;
+	bool			display_port;
+	bool			display_eld_valid;
+	hda_eld			display_eld;
+	char			display_name[32];
 };
 
 /*!	This structure describes a single codec module in the
@@ -380,6 +393,8 @@ status_t hda_verb_read(hda_codec* codec, uint32 nid, uint32 vid, uint32 *respons
 /* hda_controller.c: Stream support */
 hda_stream* hda_stream_new(hda_audio_group* audioGroup, int type);
 void hda_stream_delete(hda_stream* stream);
+void hda_audio_group_setup_display(hda_audio_group* audioGroup,
+	hda_stream* stream);
 status_t hda_stream_setup_buffers(hda_audio_group* audioGroup,
 	hda_stream* stream, const char* desc);
 status_t hda_stream_start(hda_controller* controller, hda_stream* stream);
