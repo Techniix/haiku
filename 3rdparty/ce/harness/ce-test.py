@@ -232,7 +232,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"media_test", "media_ui_test", "media_usb_test", "Media", "desklink",
 	"media_sound_test", "Audio", "media_hwvideo_test",
 	"media_resample_test", "media_drift_test", "media_html5_test",
-	"media_routing_test", "software_video_accelerator",
+	"media_routing_test", "media_vcam_test", "virtual_camera.media_addon",
+	"software_video_accelerator",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
 	"media_stream_test", "libbnetapi.so", "http_streamer", "Screenshot",
 	"SoundRecorder", "media_addon_server", "crash_collector",
@@ -3425,6 +3426,8 @@ ROUTING_AUDIBLE_TONE = 5350
 # The Output menus with "None (loopback only)": the Audio preferences'
 # Applications page and the Media preferences.
 ROUTING_SCREENSHOTS = ["routing_loopback_only", "routing_loopback_only_media"]
+# CodyCam previewing the virtual camera (F-58, OBS Studio's O-12).
+VCAM_SCREENSHOTS = ["virtual_camera_codycam"]
 # media_routing_test (F-58, OBS Studio's O-4): application A routed by name
 # to "QEMU USB Audio" before it is plugged in plays this tone (left) once
 # the device is there.
@@ -3999,6 +4002,9 @@ def main():
 			analyze_media_usb_audio(results_dir, report)
 			check_screenshots(results_dir, report, MEDIA_USB_SCREENSHOTS,
 				"media_usb.screenshots")
+		if "media_vcam_test" in (args.only or available):
+			check_screenshots(results_dir, report, VCAM_SCREENSHOTS,
+				"virtual_camera.screenshots")
 		if "media_video_test" in (args.only or available):
 			check_screenshots(results_dir, report, CODYCAM_SCREENSHOTS,
 				"codycam.screenshots")

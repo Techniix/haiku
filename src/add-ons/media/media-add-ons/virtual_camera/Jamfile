@@ -1,0 +1,18 @@
+SubDir HAIKU_TOP src add-ons media media-add-ons virtual_camera ;
+
+# Renga (F-58, OBS Studio's O-12): a camera that one program feeds through
+# shared memory, see headers/private/media/VirtualCamera.h.
+
+UsePrivateHeaders media ;
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+
+local architectureObject ;
+for architectureObject in [ MultiArchSubDirSetup ] {
+	on $(architectureObject) {
+		Addon [ MultiArchDefaultGristFiles virtual_camera.media_addon ] :
+			VirtualCameraAddOn.cpp
+			VirtualCameraNode.cpp
+			: be media network libgnu.so [ TargetLibsupc++ ]
+		;
+	}
+}

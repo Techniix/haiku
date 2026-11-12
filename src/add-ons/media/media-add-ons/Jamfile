@@ -14,6 +14,7 @@ SubInclude HAIKU_TOP src add-ons media media-add-ons tone_producer_demo ;
 SubInclude HAIKU_TOP src add-ons media media-add-ons usb_vision ;
 SubInclude HAIKU_TOP src add-ons media media-add-ons usb_webcam ;
 SubInclude HAIKU_TOP src add-ons media media-add-ons video_producer_demo ;
+SubInclude HAIKU_TOP src add-ons media media-add-ons virtual_camera ;
 SubInclude HAIKU_TOP src add-ons media media-add-ons videowindow ;
 SubInclude HAIKU_TOP src add-ons media media-add-ons video_mixer ;
 SubInclude HAIKU_TOP src add-ons media media-add-ons vst_host ;
