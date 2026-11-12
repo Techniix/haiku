@@ -57,7 +57,12 @@ enum {
 enum {
 	B_GPU_PRESENT_VRR			= 0x01,	// variable refresh rate
 	B_GPU_PRESENT_ASYNC_FLIP	= 0x02,	// flips without waiting for vblank
-	B_GPU_PRESENT_SCALING		= 0x04	// planes scale source to destination
+	B_GPU_PRESENT_SCALING		= 0x04,	// planes scale source to destination
+		// (implies B_GPU_PRESENT_PLACEMENT)
+	B_GPU_PRESENT_PLACEMENT		= 0x08	// overlay planes can be positioned
+		// anywhere on the head at their source size (gpu_flip_params::
+		// destination honoured, width and height equal to the source's);
+		// for hardware that can place an overlay but not scale it
 };
 
 // gpu_flip_params::flags
@@ -87,7 +92,8 @@ typedef struct {
 	int			handle;				// driver-specific shareable descriptor
 	uint32		width;
 	uint32		height;
-	uint32		bytes_per_row;		// 0 if not linear
+	uint32		bytes_per_row;		// row pitch in bytes; 0 for a non-linear
+										// buffer lets the driver derive it
 	color_space	format;
 	uint64		modifier;			// driver tiling/layout, 0 = linear
 	uint64		offset;				// of the image inside the object
@@ -130,6 +136,10 @@ typedef struct {
 	status_t	(*flip)(uint32 head, uint32 plane, uint32 id,
 					const gpu_flip_params* params);
 	status_t	(*disable_plane)(uint32 head, uint32 plane);
+	// Vblank events for a head: repeat == true sends a B_GPU_EVENT_VBLANK at
+	// every vblank until called again with repeat == false; repeat == false
+	// sends one event at the next vblank and stops repeating. A request
+	// while one is still outstanding does not queue a second event.
 	status_t	(*request_vblank)(uint32 head, bool repeat);
 	int			(*event_fd)(void);
 	status_t	(*next_event)(gpu_present_event* event);
