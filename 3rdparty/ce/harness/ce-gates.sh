@@ -12,8 +12,8 @@
 #
 # Why: the build host restarts every few hours and kills running test runs.
 # This script records every finished configuration under a key made from
-# the exact tree being tested (HEAD, the uncommitted diff and the untracked
-# files). Run it again after a restart with the same arguments and it skips
+# the exact tree being tested (HEAD's files, the uncommitted diff and the
+# untracked files; project notes excluded, see below). Run it again after a restart with the same arguments and it skips
 # the configurations that already passed on the same tree, so only the
 # unfinished ones run again. Any change to the tree gives a new key, so a
 # result is never reused for code it did not test.
@@ -38,12 +38,19 @@ cd "$top" || exit 2
 harness=3rdparty/ce/harness
 results=generated.x86_64/ce-test-results
 
-# The key of the tree under test.
+# The key of the tree under test: the content of every tracked file at
+# HEAD, the uncommitted diff and the untracked files, minus project notes
+# that neither the build nor the harness reads (the roadmap and the partner
+# notes). So a notes-only commit made while a gate runs (the main session
+# updates the roadmap often) keeps the key and the finished results; any
+# change to code, data, tests or the harness still gives a new key.
+NOTES_RE='^(RENGA_MASTER_ROADMAP\.md|docs/partners/)'
 key=$( {
-	git rev-parse HEAD
-	git diff HEAD --binary
-	git ls-files --others --exclude-standard -z | sort -z \
-		| xargs -0 -r sha256sum
+	git ls-tree -r HEAD | awk -F '\t' -v re="$NOTES_RE" '$2 !~ re'
+	git diff HEAD --name-only | grep -Ev "$NOTES_RE" | tr '\n' '\0' \
+		| xargs -0 -r git diff HEAD --binary --
+	git ls-files --others --exclude-standard | grep -Ev "$NOTES_RE" \
+		| sort | tr '\n' '\0' | xargs -0 -r sha256sum
 } | sha256sum | cut -c1-16)
 state=generated.x86_64/ce-gates/$key
 mkdir -p "$state"
