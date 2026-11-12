@@ -317,7 +317,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-22 | Graphical boot loader | First part QEMU Tested, Windows entry verified on real hardware (2026-11-11); graphical menu Designed | 10 `other_systems.*`/`other_media.*` (UEFI) and 9 (BIOS) with `--other-systems`; 9 `bootmenu.*` + screenshot (renga-raw) |
 | F-23 | Installer redesign | Early part (in-place replacement) QEMU Tested, upgrade verified on real hardware (2026-11-11; stale non-packaged driver issue in F-59); wizard Designed | `installer.*` with `--installer-upgrade` (27 BIOS, 28 UEFI checks in the installer suite); 4 `installer_ui.*` + screenshot (renga-raw) |
 | F-24 | Partition manager | Designed | None |
-| F-25 | Lumina shell | In Development (external repo) | Host unit tests only |
+| F-25 | Lumina, rebuilt into Renga (window management, title bars, panel) | Designed (rework 2026-11-12: merging into Renga; portable core host-tested) | Host unit tests only |
 | F-26 | LinuxKPI_HaikuOS | QEMU Tested (core, in-tree build, Manager and `lkpictl`); `mt7921e` Implemented in Renga, hardware regression check pending | 31 `linuxkpi.*` (every image), 10 `linuxkpi_ui.*` + `linuxkpi_ui.screenshots` (renga-raw) |
 | F-27 | Renguin | Designed (scheduled, work order item 13) | None |
 | F-28 | Control Panel suite | Not Started | None |
