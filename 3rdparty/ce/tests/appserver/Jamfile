@@ -10,6 +10,14 @@ Application appserver_fd_test :
 	: be libgnu.so [ TargetLibstdc++ ]
 ;
 
+# Drag bitmaps with a hardware cursor (F-59), through app_server's
+# stand-in hardware cursor, see the source.
+Application hw_cursor_test :
+	hw_cursor_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test
+		hw_cursor_test ;
 }

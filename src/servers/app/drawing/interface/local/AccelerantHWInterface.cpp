@@ -33,6 +33,7 @@
 #include <unistd.h>
 
 #include <Accelerant.h>
+#include <HardwareCursor.h>
 #include <Cursor.h>
 #include <Directory.h>
 #include <FindDirectory.h>
@@ -120,6 +121,18 @@ AccelerantHWInterface::AccelerantHWInterface()
 	fAccSetCursorBitmap(NULL),
 	fAccMoveCursor(NULL),
 	fAccShowCursor(NULL),
+	fAccGetCursorMaxSize(NULL),
+	fHardwareCursorWidth(0),
+	fHardwareCursorHeight(0),
+	fDragCursorInHardware(false),
+	fSoftwareCursorFallbacks(0),
+	fDragBitmapsInHardware(true),
+	fTestCursorHooks(false),
+	fSavedSetCursorShape(NULL),
+	fSavedSetCursorBitmap(NULL),
+	fSavedMoveCursor(NULL),
+	fSavedShowCursor(NULL),
+	fSavedGetCursorMaxSize(NULL),
 
 	// dpms hooks
 	fAccDPMSCapabilities(NULL),
@@ -398,6 +411,10 @@ AccelerantHWInterface::_SetupDefaultHooks()
 		= (set_cursor_bitmap)fAccelerantHook(B_SET_CURSOR_BITMAP, NULL);
 	fAccMoveCursor = (move_cursor)fAccelerantHook(B_MOVE_CURSOR, NULL);
 	fAccShowCursor = (show_cursor)fAccelerantHook(B_SHOW_CURSOR, NULL);
+	fAccGetCursorMaxSize = (get_cursor_max_size)fAccelerantHook(
+		B_GET_CURSOR_MAX_SIZE, NULL);
+		// Renga (F-59), optional
+	_LoadCursorSettings();
 
 	// dpms
 	fAccDPMSCapabilities
@@ -1230,86 +1247,42 @@ AccelerantHWInterface::SetCursor(ServerCursor* cursor)
 	if (cursor == NULL || LockExclusiveAccess() == false)
 		return;
 
-	bool cursorSet = false;
-
-	if (fAccSetCursorBitmap != NULL) {
-		// Bitmap cursor
-		// TODO are x and y switched for this, too?
-		uint16 xHotSpot = (uint16)cursor->GetHotSpot().x;
-		uint16 yHotSpot = (uint16)cursor->GetHotSpot().y;
-
-		uint16 width = (uint16)cursor->Width();
-		uint16 height = (uint16)cursor->Height();
-
-		// Time to talk to the accelerant!
-		cursorSet = fAccSetCursorBitmap(width, height, xHotSpot,
-			yHotSpot, cursor->ColorSpace(), (uint16)cursor->BytesPerRow(),
-			cursor->Bits()) == B_OK;
-	}
-
-	if (!cursorSet && cursor->CursorData() != NULL && fAccSetCursorShape != NULL) {
-		// BeOS BCursor, 16x16 monochrome
-		uint8 size = cursor->CursorData()[0];
-		// CursorData()[1] is color depth (always monochrome)
-		// x and y are switched
-		uint8 xHotSpot = cursor->CursorData()[3];
-		uint8 yHotSpot = cursor->CursorData()[2];
-
-		// Create pointers to the cursor and/xor bit arrays
-		// for the BeOS BCursor there are two 32 byte, 16x16 bit arrays
-		// in the first:  1 is black,  0 is white
-		// in the second: 1 is opaque, 0 is transparent
-		// 1st	2nd
-		//  0	 0	 transparent
-		//  0	 1	 white
-		//  1	 0	 transparent
-		//  1	 1	 black
-		// for the HW cursor the first is ANDed and the second is XORed
-		// AND	XOR
-		//  0	 0	 white
-		//  0	 1	 black
-		//  1	 0	 transparent
-		//  1	 1	 reverse
-		// so, the first 32 bytes are the XOR mask
-		const uint8* xorMask = cursor->CursorData() + 4;
-		// the second 32 bytes *NOTed* are the AND mask
-		// TODO maybe this should be NOTed when copied to the ServerCursor
-		uint8 andMask[32];
-		const uint8* transMask = cursor->CursorData() + 36;
-		for (int32 i = 0; i < 32; i++)
-			andMask[i] = ~transMask[i];
-
-		// Time to talk to the accelerant!
-		cursorSet = fAccSetCursorShape(size, size, xHotSpot,
-			yHotSpot, andMask, xorMask) == B_OK;
-	}
-
-	if (cursorSet && !fHardwareCursorEnabled) {
-		// we switched from SW to HW, so we need to erase the SW cursor
-		if (fCursorVisible && fFloatingOverlaysLock.Lock()) {
-			IntRect r = _CursorFrame();
-			fCursorVisible = false;
-				// so the Invalidate doesn't draw it again
-			_RestoreCursorArea();
-			Invalidate(r);
-			fCursorVisible = true;
-			fFloatingOverlaysLock.Unlock();
-		}
-		// and we need to update our position
-		if (fAccMoveCursor != NULL)
-			fAccMoveCursor((uint16)fCursorLocation.x,
-				(uint16)fCursorLocation.y);
-	}
-
-	if (fAccShowCursor != NULL)
-		fAccShowCursor(cursorSet);
-
-	UnlockExclusiveAccess();
-
-	fHardwareCursorEnabled = cursorSet;
-
+	// Renga (F-59): HWInterface::SetCursor() first, so that fCursor and
+	// the combined cursor and drag bitmap are up to date when the
+	// hardware is given its image. It draws the software cursor only
+	// while the hardware cursor is off. The exclusive lock is held until
+	// the hardware has its image (the lock is recursive), so a
+	// SetDragBitmap() in between cannot hand the hardware an older
+	// cursor.
 	HWInterface::SetCursor(cursor);
 		// HWInterface claims ownership of cursor.
+
+	_UpdateHardwareCursor();
+
+	UnlockExclusiveAccess();
+}
+
+
+/*!	Renga (F-59): a drag bitmap (an icon dragged in Tracker, for example)
+	is shown by the hardware cursor too. HWInterface::SetDragBitmap()
+	combines it with the cursor (_AdoptDragBitmap()); the hardware gets
+	that same B_RGBA32 image, the pointer composited over the drag bitmap. Only if the accelerant refuses that image (too large,
+	or it has only a monochrome B_SET_CURSOR_SHAPE cursor) is the
+	software cursor used, for as long as the drag lasts.
+*/
+void
+AccelerantHWInterface::SetDragBitmap(const ServerBitmap* bitmap,
+	const BPoint& offsetFromCursor)
+{
+	// HWInterface::SetDragBitmap() draws into the frame buffer when the
+	// software cursor is in use; it did so without the exclusive lock.
+	if (!LockExclusiveAccess())
+		return;
+
+	HWInterface::SetDragBitmap(bitmap, offsetFromCursor);
+	_UpdateHardwareCursor();
+
+	UnlockExclusiveAccess();
 }
 
 
@@ -1345,6 +1318,480 @@ AccelerantHWInterface::MoveCursorTo(float x, float y)
 
 		UnlockExclusiveAccess();
 	}
+}
+
+
+/*!	Gives the accelerant the image the cursor should show now (the cursor,
+	or the cursor and the drag bitmap composited) and switches between
+	the hardware and the software cursor as needed. The exclusive access
+	lock must be held.
+*/
+void
+AccelerantHWInterface::_UpdateHardwareCursor()
+{
+	ServerCursorReference cursor = Cursor();
+	if (!cursor.IsSet())
+		return;
+
+	bool dragShown = _DragBitmapShown();
+	bool cursorSet = false;
+	bool dragInHardware = false;
+
+	if (dragShown && !fDragBitmapsInHardware) {
+		// The setting is off: the software cursor shows drags, as
+		// before F-59.
+		fSoftwareCursorFallbacks++;
+	} else if (fAccSetCursorBitmap != NULL) {
+		ServerCursorReference image = cursor;
+		if (dragShown) {
+			// HWInterface's combined image: the cursor composited over the
+			// drag bitmap, premultiplied like every cursor app_server
+			// hands the accelerant (CursorManager premultiplies the system
+			// cursors), so the hardware shows exactly what the software
+			// cursor would.
+			image = CursorAndDragBitmap();
+			if (image.Get() == cursor.Get()) {
+				// _AdoptDragBitmap() could not allocate the combined image
+				image.Unset();
+			}
+			if (image.IsSet() && !_HardwareCursorFits(image.Get())) {
+				// The accelerant reported a smaller limit; don't ask.
+				image.Unset();
+			}
+		}
+
+		if (image.IsSet()) {
+			// TODO are x and y switched for this, too?
+			uint16 xHotSpot = (uint16)image->GetHotSpot().x;
+			uint16 yHotSpot = (uint16)image->GetHotSpot().y;
+
+			uint16 width = (uint16)image->Width();
+			uint16 height = (uint16)image->Height();
+
+			// Time to talk to the accelerant!
+			cursorSet = fAccSetCursorBitmap(width, height, xHotSpot,
+				yHotSpot, image->ColorSpace(), (uint16)image->BytesPerRow(),
+				image->Bits()) == B_OK;
+			dragInHardware = cursorSet && dragShown;
+			if (cursorSet) {
+				fHardwareCursorWidth = width;
+				fHardwareCursorHeight = height;
+				fHardwareCursorHotSpot = image->GetHotSpot();
+				fHardwareCursorImage = image;
+			}
+		}
+		if (dragShown && !cursorSet)
+			fSoftwareCursorFallbacks++;
+	}
+
+	if (!cursorSet && !dragShown && cursor->CursorData() != NULL
+		&& fAccSetCursorShape != NULL) {
+		// BeOS BCursor, 16x16 monochrome; it cannot show a drag bitmap,
+		// so it is not used while one is shown.
+		uint8 size = cursor->CursorData()[0];
+		// CursorData()[1] is color depth (always monochrome)
+		// x and y are switched
+		uint8 xHotSpot = cursor->CursorData()[3];
+		uint8 yHotSpot = cursor->CursorData()[2];
+
+		// Create pointers to the cursor and/xor bit arrays
+		// for the BeOS BCursor there are two 32 byte, 16x16 bit arrays
+		// in the first:  1 is black,  0 is white
+		// in the second: 1 is opaque, 0 is transparent
+		// 1st	2nd
+		//  0	 0	 transparent
+		//  0	 1	 white
+		//  1	 0	 transparent
+		//  1	 1	 black
+		// for the HW cursor the first is ANDed and the second is XORed
+		// AND	XOR
+		//  0	 0	 white
+		//  0	 1	 black
+		//  1	 0	 transparent
+		//  1	 1	 reverse
+		// so, the first 32 bytes are the XOR mask
+		const uint8* xorMask = cursor->CursorData() + 4;
+		// the second 32 bytes *NOTed* are the AND mask
+		// TODO maybe this should be NOTed when copied to the ServerCursor
+		uint8 andMask[32];
+		const uint8* transMask = cursor->CursorData() + 36;
+		for (int32 i = 0; i < 32; i++)
+			andMask[i] = ~transMask[i];
+
+		// Time to talk to the accelerant!
+		cursorSet = fAccSetCursorShape(size, size, xHotSpot,
+			yHotSpot, andMask, xorMask) == B_OK;
+		if (cursorSet) {
+			fHardwareCursorWidth = size;
+			fHardwareCursorHeight = size;
+			fHardwareCursorHotSpot = BPoint(xHotSpot, yHotSpot);
+			fHardwareCursorImage.Unset();
+		}
+	}
+
+	if (cursorSet && !fHardwareCursorEnabled) {
+		// we switched from SW to HW, so we need to erase the SW cursor
+		if (fCursorVisible && fFloatingOverlaysLock.Lock()) {
+			IntRect r = _CursorFrame();
+			fCursorVisible = false;
+				// so the Invalidate doesn't draw it again
+			_RestoreCursorArea();
+			Invalidate(r);
+			fCursorVisible = true;
+			fFloatingOverlaysLock.Unlock();
+		}
+		// and we need to update our position
+		if (fAccMoveCursor != NULL)
+			fAccMoveCursor((uint16)fCursorLocation.x,
+				(uint16)fCursorLocation.y);
+	}
+
+	// Keep a hidden cursor hidden (SetCursorVisible() shows it again). It
+	// was shown after every cursor change before, so a cursor hidden with
+	// SetCursorVisible(false) came back with the next shape.
+	if (fAccShowCursor != NULL)
+		fAccShowCursor(cursorSet && IsCursorVisible());
+
+	bool switchedToSoftware = fHardwareCursorEnabled && !cursorSet;
+	fHardwareCursorEnabled = cursorSet;
+	fDragCursorInHardware = dragInHardware;
+	if (!cursorSet)
+		fHardwareCursorImage.Unset();
+
+	if (switchedToSoftware) {
+		// HWInterface only draws the software cursor when the cursor or
+		// the drag bitmap changes; it changed before the switch.
+		_ShowSoftwareCursor();
+	}
+}
+
+
+/*!	Draws the software cursor (with the drag bitmap, if any) where it is
+	now. The exclusive access lock must be held.
+*/
+void
+AccelerantHWInterface::_ShowSoftwareCursor()
+{
+	if (fHardwareCursorEnabled || !fFloatingOverlaysLock.Lock())
+		return;
+
+	if (IsDoubleBuffered())
+		Invalidate(_CursorFrame());
+	else
+		_DrawCursor(_CursorFrame());
+	fFloatingOverlaysLock.Unlock();
+}
+
+
+/*!	Whether a drag bitmap is shown with the cursor: the same tests as in
+	HWInterface::_AdoptDragBitmap(), which ignores drag bitmaps in other
+	color spaces.
+*/
+bool
+AccelerantHWInterface::_DragBitmapShown() const
+{
+	bool shown = false;
+	if (fFloatingOverlaysLock.Lock()) {
+		shown = fDragBitmap != NULL
+			&& (fDragBitmap->ColorSpace() == B_RGB32
+				|| fDragBitmap->ColorSpace() == B_RGBA32)
+			&& fDragBitmap->Bounds().Width() > 0
+			&& fDragBitmap->Bounds().Height() > 0;
+		fFloatingOverlaysLock.Unlock();
+	}
+	return shown;
+}
+
+
+/*!	Whether \a image is within the limit the accelerant reports
+	(B_GET_CURSOR_MAX_SIZE); true if it reports none.
+*/
+bool
+AccelerantHWInterface::_HardwareCursorFits(const ServerCursor* image) const
+{
+	if (fAccGetCursorMaxSize == NULL)
+		return true;
+
+	uint16 maxWidth = 0;
+	uint16 maxHeight = 0;
+	if (fAccGetCursorMaxSize(image->ColorSpace(), &maxWidth, &maxHeight)
+			!= B_OK)
+		return false;
+	return image->Width() <= maxWidth && image->Height() <= maxHeight;
+}
+
+
+// #pragma mark - Renga (F-59): hardware cursor state and test hooks
+
+
+namespace {
+
+/*!	A stand-in for an accelerant's hardware cursor (AS_TEST_HARDWARE_CURSOR,
+	harness images only): it keeps the last image and position it was given
+	and draws nothing, the way app_server sees a real one. Its state is
+	only touched under the HWInterface's exclusive lock.
+*/
+struct TestHardwareCursor {
+	uint16		maxWidth;
+	uint16		maxHeight;
+	uint16		width;
+	uint16		height;
+	uint16		hotX;
+	uint16		hotY;
+	color_space	space;
+	uint8*		bits;
+	uint16		x;
+	uint16		y;
+	bool		shown;
+	int32		setCalls;
+	int32		refused;
+	int32		sizeQueries;
+};
+
+TestHardwareCursor sTestCursor;
+
+
+status_t
+test_set_cursor_bitmap(uint16 width, uint16 height, uint16 hotX, uint16 hotY,
+	color_space space, uint16 bytesPerRow, const uint8* bits)
+{
+	sTestCursor.setCalls++;
+	if (width > sTestCursor.maxWidth || height > sTestCursor.maxHeight
+		|| (space != B_RGBA32 && space != B_RGB32) || bits == NULL
+		|| bytesPerRow < width * 4) {
+		sTestCursor.refused++;
+		return B_BAD_VALUE;
+	}
+
+	uint8* copy = (uint8*)malloc((size_t)width * height * 4);
+	if (copy == NULL) {
+		sTestCursor.refused++;
+		return B_NO_MEMORY;
+	}
+	for (uint32 y = 0; y < height; y++)
+		memcpy(copy + y * width * 4, bits + y * bytesPerRow, width * 4);
+
+	free(sTestCursor.bits);
+	sTestCursor.bits = copy;
+	sTestCursor.width = width;
+	sTestCursor.height = height;
+	sTestCursor.hotX = hotX;
+	sTestCursor.hotY = hotY;
+	sTestCursor.space = space;
+	return B_OK;
+}
+
+
+void
+test_move_cursor(uint16 x, uint16 y)
+{
+	sTestCursor.x = x;
+	sTestCursor.y = y;
+}
+
+
+void
+test_show_cursor(bool show)
+{
+	sTestCursor.shown = show;
+}
+
+
+status_t
+test_get_cursor_max_size(color_space space, uint16* maxWidth,
+	uint16* maxHeight)
+{
+	sTestCursor.sizeQueries++;
+	if (space != B_RGBA32 && space != B_RGB32)
+		return B_BAD_VALUE;
+	*maxWidth = sTestCursor.maxWidth;
+	*maxHeight = sTestCursor.maxHeight;
+	return B_OK;
+}
+
+}	// namespace
+
+
+status_t
+AccelerantHWInterface::SetTestHardwareCursor(bool enable, uint16 maxWidth,
+	uint16 maxHeight, bool reportMaxSize)
+{
+	if (access("/boot/system/non-packaged/data/ce-harness", F_OK) != 0)
+		return B_NOT_ALLOWED;
+	if (!LockExclusiveAccess())
+		return B_ERROR;
+
+	if (enable && !fTestCursorHooks) {
+		fSavedSetCursorShape = fAccSetCursorShape;
+		fSavedSetCursorBitmap = fAccSetCursorBitmap;
+		fSavedMoveCursor = fAccMoveCursor;
+		fSavedShowCursor = fAccShowCursor;
+		fSavedGetCursorMaxSize = fAccGetCursorMaxSize;
+		if (fHardwareCursorEnabled && fAccShowCursor != NULL)
+			fAccShowCursor(false);
+		fHardwareCursorEnabled = false;
+			// a real hardware cursor, if any, is off; the software
+			// cursor is erased when the stand-in takes over below
+	} else if (!enable && fTestCursorHooks) {
+		fAccSetCursorShape = fSavedSetCursorShape;
+		fAccSetCursorBitmap = fSavedSetCursorBitmap;
+		fAccMoveCursor = fSavedMoveCursor;
+		fAccShowCursor = fSavedShowCursor;
+		fAccGetCursorMaxSize = fSavedGetCursorMaxSize;
+		fTestCursorHooks = false;
+		fHardwareCursorEnabled = false;
+		free(sTestCursor.bits);
+		sTestCursor = TestHardwareCursor();
+	}
+
+	if (enable) {
+		free(sTestCursor.bits);
+		sTestCursor = TestHardwareCursor();
+		sTestCursor.maxWidth = maxWidth;
+		sTestCursor.maxHeight = maxHeight;
+		fAccSetCursorShape = NULL;
+		fAccSetCursorBitmap = test_set_cursor_bitmap;
+		fAccMoveCursor = test_move_cursor;
+		fAccShowCursor = test_show_cursor;
+		fAccGetCursorMaxSize = reportMaxSize ? test_get_cursor_max_size : NULL;
+		fTestCursorHooks = true;
+	}
+	fSoftwareCursorFallbacks = 0;
+
+	_UpdateHardwareCursor();
+	_ShowSoftwareCursor();
+		// if the hardware (or the stand-in) did not take it
+
+	UnlockExclusiveAccess();
+	return B_OK;
+}
+
+
+void
+AccelerantHWInterface::SetDragBitmapsInHardware(bool enabled)
+{
+	if (!LockExclusiveAccess())
+		return;
+	if (fDragBitmapsInHardware != enabled) {
+		fDragBitmapsInHardware = enabled;
+		_SaveCursorSettings();
+		_UpdateHardwareCursor();
+		_ShowSoftwareCursor();
+	}
+	UnlockExclusiveAccess();
+}
+
+
+bool
+AccelerantHWInterface::DragBitmapsInHardware() const
+{
+	return fDragBitmapsInHardware;
+}
+
+
+static status_t
+cursor_settings_path(BPath& path)
+{
+	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &path);
+	if (status == B_OK)
+		status = path.Append("system/app_server/hardware_cursor");
+	return status;
+}
+
+
+/*!	~/config/settings/system/app_server/hardware_cursor, a driver settings
+	file: "drag_bitmaps false" turns compositing drags into the hardware
+	cursor off. Written by SetDragBitmapsInHardware() (the Input
+	preferences); absent means the defaults.
+*/
+void
+AccelerantHWInterface::_LoadCursorSettings()
+{
+	BPath path;
+	if (cursor_settings_path(path) != B_OK)
+		return;
+	void* handle = load_driver_settings(path.Path());
+	if (handle == NULL)
+		return;
+	fDragBitmapsInHardware = get_driver_boolean_parameter(handle,
+		"drag_bitmaps", true, true);
+	unload_driver_settings(handle);
+}
+
+
+void
+AccelerantHWInterface::_SaveCursorSettings() const
+{
+	BPath path;
+	if (cursor_settings_path(path) != B_OK)
+		return;
+	if (fDragBitmapsInHardware) {
+		// the default: no file
+		unlink(path.Path());
+		return;
+	}
+	BPath parent;
+	if (path.GetParent(&parent) == B_OK)
+		create_directory(parent.Path(), 0755);
+	FILE* file = fopen(path.Path(), "w");
+	if (file == NULL)
+		return;
+	fprintf(file, "# Written by app_server (the Input preferences)\n"
+		"drag_bitmaps false\n");
+	fclose(file);
+}
+
+
+status_t
+AccelerantHWInterface::GetHardwareCursorInfo(hardware_cursor_info& info,
+	int32 sampleX, int32 sampleY)
+{
+	memset(&info, 0, sizeof(info));
+	if (!LockExclusiveAccess())
+		return B_ERROR;
+
+	info.hardware = fHardwareCursorEnabled;
+	info.test_hooks = fTestCursorHooks;
+	info.drag_bitmap = _DragBitmapShown();
+	info.drag_in_hardware = fHardwareCursorEnabled && fDragCursorInHardware;
+	info.visible = IsCursorVisible();
+	info.software_fallbacks = fSoftwareCursorFallbacks;
+	info.drag_compositing = fDragBitmapsInHardware;
+	if (fHardwareCursorEnabled) {
+		info.width = fHardwareCursorWidth;
+		info.height = fHardwareCursorHeight;
+		info.hot_x = (uint16)fHardwareCursorHotSpot.x;
+		info.hot_y = (uint16)fHardwareCursorHotSpot.y;
+	}
+
+	if (fTestCursorHooks) {
+		info.set_calls = sTestCursor.setCalls;
+		info.refused = sTestCursor.refused;
+		info.size_queries = sTestCursor.sizeQueries;
+		info.position_x = sTestCursor.x;
+		info.position_y = sTestCursor.y;
+		info.visible = sTestCursor.shown;
+		info.color_space = sTestCursor.space;
+		// what the stand-in "hardware" holds, not what app_server thinks
+		info.width = sTestCursor.width;
+		info.height = sTestCursor.height;
+		info.hot_x = sTestCursor.hotX;
+		info.hot_y = sTestCursor.hotY;
+		if (sTestCursor.bits != NULL && sampleX >= 0 && sampleY >= 0
+			&& sampleX < sTestCursor.width && sampleY < sTestCursor.height) {
+			memcpy(&info.sample, sTestCursor.bits
+				+ (sampleY * sTestCursor.width + sampleX) * 4, 4);
+		}
+	} else if (fHardwareCursorImage.IsSet() && sampleX >= 0 && sampleY >= 0
+		&& sampleX < (int32)fHardwareCursorImage->Width()
+		&& sampleY < (int32)fHardwareCursorImage->Height()) {
+		info.color_space = fHardwareCursorImage->ColorSpace();
+		memcpy(&info.sample, fHardwareCursorImage->Bits()
+			+ sampleY * fHardwareCursorImage->BytesPerRow() + sampleX * 4, 4);
+	}
+
+	UnlockExclusiveAccess();
+	return B_OK;
 }
 
 

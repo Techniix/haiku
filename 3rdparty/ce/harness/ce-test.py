@@ -1801,6 +1801,9 @@ class SerialReader(threading.Thread):
 		      0..32767 on both axes
 		  CE-HOST pointer_rel <dx> <dy>
 		      move the PS/2 mouse by dx, dy (at most 200 either way)
+		  CE-HOST pointer_button <device> down|up
+		      press or release the left button of an absolute device the
+		      harness attached (drags, F-59)
 		  CE-HOST screenshot <name>
 		      save the screen as screen-<name>.png in the results (name:
 		      up to 40 lower-case letters, digits and underscores)
@@ -1837,7 +1840,8 @@ class SerialReader(threading.Thread):
 					self.feeder.set_tone(*[int(w) for w in words[1:]])
 				else:
 					request["error"] = "no capture feed"
-			elif accepted and words[0] in ("pointer", "pointer_rel"):
+			elif accepted and words[0] in ("pointer", "pointer_rel",
+					"pointer_button"):
 				if self.qmp_path is not None:
 					request["error"] = qmp_pointer(self.qmp_path, words)
 			elif accepted and words[0] == "usb_audio":
@@ -2026,6 +2030,8 @@ def host_request_allowed(words):
 		return True
 	if len(words) == 2 and words[0] == "screenshot":
 		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None
+	if len(words) == 3 and words[0] == "pointer_button":
+		return words[1] in POINTER_DEVICES and words[2] in ("down", "up")
 	if len(words) == 3 and words[0] == "pointer_rel":
 		return all(re.fullmatch(r"-?\d{1,3}", w) is not None
 			and abs(int(w)) <= POINTER_REL_MAX for w in words[1:])
@@ -2100,7 +2106,7 @@ def qmp_pointer(path, words):
 				return output
 
 			execute("qmp_capabilities")
-			if words[0] == "pointer":
+			if words[0] in ("pointer", "pointer_button"):
 				name = POINTER_DEVICES[words[1]][1]
 				index = None
 				for line in hmp("info mice").splitlines():
@@ -2111,6 +2117,11 @@ def qmp_pointer(path, words):
 				if index is None:
 					return "no mouse \"%s\" in info mice" % name
 				hmp("mouse_set " + index)
+			if words[0] == "pointer_button":
+				execute("input-send-event", events=[
+					{"type": "btn", "data": {"button": "left",
+						"down": words[2] == "down"}}])
+			elif words[0] == "pointer":
 				execute("input-send-event", events=[
 					{"type": "abs", "data": {"axis": "x",
 						"value": int(words[2])}},
@@ -2868,7 +2879,8 @@ def check_pointer_devices(args, results_dir, report):
 				"%s" % (len(positions), POINTER_DEVICES[device][1]),
 		})
 	requests = [r for r in report.get("boot", {}).get("host_requests", [])
-		if r["request"].split()[0] in ("pointer", "pointer_rel")]
+		if r["request"].split()[0] in ("pointer", "pointer_rel",
+			"pointer_button")]
 	failed = [r for r in requests if not r["accepted"] or r.get("error")]
 	checks.append({
 		"name": "host.pointer_requests",
@@ -3635,6 +3647,50 @@ def check_screenshots(results_dir, report, names, check):
 			"; blank: " + ", ".join(flat) if flat else "")})
 
 
+# Screenshot hw_cursor_test asks for (F-59): a 300x300 drag bitmap over the
+# 256x256 limit of app_server's stand-in hardware cursor, which the software
+# cursor shows instead.
+HW_CURSOR_SCREENSHOTS = ["hw_cursor_software_drag", "input_drag_setting"]
+
+
+def check_hw_cursor_drag(results_dir, report):
+	"""hw_cursor.software_drag_drawn: when the hardware cursor cannot take a
+	drag image, the software cursor shows it. The test drags an opaque red
+	300x300 bitmap; the screenshot must have a red area at least 250 by 250
+	pixels (rows of 250 or more red pixels in 250 or more rows), which no
+	window of the desktop has."""
+	path = os.path.join(results_dir, "screen-hw_cursor_software_drag.png")
+	if not os.path.exists(path):
+		path = path[:-4] + ".ppm"
+	check = {"name": "hw_cursor.software_drag_drawn", "pass": False}
+	try:
+		from PIL import Image
+		picture = Image.open(path).convert("RGB")
+		width, height = picture.size
+		pixels = picture.load()
+		rows = 0
+		for y in range(height):
+			run = longest = 0
+			for x in range(width):
+				r, g, b = pixels[x, y]
+				if r >= 200 and g <= 60 and b <= 60:
+					run += 1
+					longest = max(longest, run)
+				else:
+					run = 0
+			if longest >= 250:
+				rows += 1
+		check["pass"] = rows >= 250
+		check["detail"] = "%d rows with 250 or more red pixels in a row " \
+			"(want 250 or more)" % rows
+	except ImportError:
+		check["pass"] = True
+		check["detail"] = "not checked (no Pillow)"
+	except OSError as error:
+		check["detail"] = "no screenshot: %s" % error
+	report.setdefault("host_checks", []).append(check)
+
+
 # #pragma mark - report
 
 
@@ -4028,6 +4084,11 @@ def main():
 		if "bootmenu_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
 				"bootmenu.screenshots")
+		if "hw_cursor_test" in (args.only or available) \
+				and "usb" in args.pointer_devices:
+			check_screenshots(results_dir, report, HW_CURSOR_SCREENSHOTS,
+				"hw_cursor.screenshots")
+			check_hw_cursor_drag(results_dir, report)
 		if "linuxkpi_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, LINUXKPI_SCREENSHOTS,
 				"linuxkpi_ui.screenshots")

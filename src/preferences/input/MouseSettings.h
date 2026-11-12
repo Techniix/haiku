@@ -59,6 +59,10 @@ public:
 		bool AcceptFirstClick() const { return fAcceptFirstClick; }
 		void SetAcceptFirstClick(bool accept_first_click);
 
+		// Renga (F-59): app_server's setting, the same for every mouse
+		bool DragBitmapsInHardware() const { return fDragInHardware; }
+		void SetDragBitmapsInHardware(bool enabled);
+
 		mouse_settings* GetSettings();
 
 private:
@@ -71,6 +75,8 @@ private:
 		mode_focus_follows_mouse	fOriginalFocusFollowsMouseMode;
 		bool						fAcceptFirstClick;
 		bool						fOriginalAcceptFirstClick;
+		bool						fDragInHardware;
+		bool						fOriginalDragInHardware;
 
 		mouse_settings	fSettings, fOriginalSettings;
 };

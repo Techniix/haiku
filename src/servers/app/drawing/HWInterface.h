@@ -25,6 +25,8 @@
 #include "MultiLocker.h"
 #include "ServerCursor.h"
 
+#include <HardwareCursorInfo.h>
+
 
 class BString;
 class DrawingEngine;
@@ -129,6 +131,21 @@ public:
 
 	virtual	void				SetDragBitmap(const ServerBitmap* bitmap,
 									const BPoint& offsetFromCursor);
+
+	// Renga (F-59): what the hardware cursor shows, for tests and
+	// diagnostics; a stand-in hardware cursor for the harness
+	// (headers/private/app/HardwareCursorInfo.h). Only
+	// AccelerantHWInterface has a hardware cursor.
+	virtual	status_t			SetTestHardwareCursor(bool enable,
+									uint16 maxWidth, uint16 maxHeight,
+									bool reportMaxSize)
+									{ return B_NOT_SUPPORTED; }
+	virtual	status_t			GetHardwareCursorInfo(
+									hardware_cursor_info& info,
+									int32 sampleX, int32 sampleY);
+	virtual	void				SetDragBitmapsInHardware(bool enabled) {}
+	virtual	bool				DragBitmapsInHardware() const
+									{ return true; }
 
 	// overlay support
 	virtual overlay_token		AcquireOverlayChannel();

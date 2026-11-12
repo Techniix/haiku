@@ -95,6 +95,15 @@ SettingsView::SettingsView(MouseSettings& settings)
 	fAcceptFirstClickBox = new BCheckBox(
 		B_TRANSLATE("Accept first click"), new BMessage(kMsgAcceptFirstClick));
 
+	// Renga (F-59): drags shown by the hardware pointer
+	fDragInHardwareBox = new BCheckBox("drag_in_hardware",
+		B_TRANSLATE("Show dragged items with the hardware pointer"),
+		new BMessage(kMsgDragInHardware));
+	fDragInHardwareBox->SetToolTip(B_TRANSLATE("Dragged icons and "
+		"selections move with the pointer as smoothly as the pointer "
+		"itself, when the graphics driver supports it. Turn this off if "
+		"dragged items look wrong with your graphics card."));
+
 	// Build the layout
 
 	// Layout is :
@@ -141,6 +150,12 @@ SettingsView::SettingsView(MouseSettings& settings)
 			.AddGroup(B_VERTICAL, 0)
 				.Add(fAcceptFirstClickBox)
 				.End()
+			.End()
+
+		// Advanced (Renga)
+		.AddGroup(B_HORIZONTAL, B_USE_SMALL_SPACING)
+			.Add(fDragInHardwareBox)
+			.AddGlue()
 			.End();
 
 	SetBorder(B_NO_BORDER);
@@ -199,4 +214,7 @@ SettingsView::UpdateFromSettings()
 		fSettings.AcceptFirstClick() ? B_CONTROL_ON : B_CONTROL_OFF);
 	fAcceptFirstClickBox->SetEnabled(
 		fSettings.MouseMode() != B_FOCUS_FOLLOWS_MOUSE);
+
+	fDragInHardwareBox->SetValue(
+		fSettings.DragBitmapsInHardware() ? B_CONTROL_ON : B_CONTROL_OFF);
 }

@@ -14,6 +14,7 @@
 #include "HWInterface.h"
 
 #include <AutoDeleter.h>
+#include <HardwareCursor.h>
 #include <image.h>
 #include <video_overlay.h>
 
@@ -80,6 +81,18 @@ public:
 	virtual	void				SetCursor(ServerCursor* cursor);
 	virtual	void				SetCursorVisible(bool visible);
 	virtual	void				MoveCursorTo(float x, float y);
+	virtual	void				SetDragBitmap(const ServerBitmap* bitmap,
+									const BPoint& offsetFromCursor);
+
+	// Renga (F-59): hardware cursor state, test stand-in
+	virtual	status_t			SetTestHardwareCursor(bool enable,
+									uint16 maxWidth, uint16 maxHeight,
+									bool reportMaxSize);
+	virtual	status_t			GetHardwareCursorInfo(
+									hardware_cursor_info& info,
+									int32 sampleX, int32 sampleY);
+	virtual	void				SetDragBitmapsInHardware(bool enabled);
+	virtual	bool				DragBitmapsInHardware() const;
 
 	// frame buffer access
 	virtual	RenderingBuffer*	FrontBuffer() const;
@@ -111,6 +124,14 @@ private:
 			void				_SetSystemPalette();
 			void				_SetGrayscalePalette();
 
+			void				_UpdateHardwareCursor();
+			void				_ShowSoftwareCursor();
+			bool				_DragBitmapShown() const;
+			bool				_HardwareCursorFits(
+									const ServerCursor* image) const;
+			void				_LoadCursorSettings();
+			void				_SaveCursorSettings() const;
+
 private:
 			int					fCardFD;
 			image_id			fAccelerantImage;
@@ -136,6 +157,25 @@ private:
 			set_cursor_bitmap		fAccSetCursorBitmap;
 			move_cursor				fAccMoveCursor;
 			show_cursor				fAccShowCursor;
+
+			// Renga (F-59): drag bitmaps in the hardware cursor
+			get_cursor_max_size		fAccGetCursorMaxSize;
+			uint16					fHardwareCursorWidth;
+			uint16					fHardwareCursorHeight;
+			BPoint					fHardwareCursorHotSpot;
+			ServerCursorReference	fHardwareCursorImage;
+			bool					fDragCursorInHardware;
+			int32					fSoftwareCursorFallbacks;
+			bool					fDragBitmapsInHardware;
+									// the setting, default on
+			// the stand-in for tests (SetTestHardwareCursor()) and the
+			// accelerant's own hooks while it is in use
+			bool					fTestCursorHooks;
+			set_cursor_shape		fSavedSetCursorShape;
+			set_cursor_bitmap		fSavedSetCursorBitmap;
+			move_cursor				fSavedMoveCursor;
+			show_cursor				fSavedShowCursor;
+			get_cursor_max_size		fSavedGetCursorMaxSize;
 
 			// dpms hooks
 			dpms_capabilities	fAccDPMSCapabilities;

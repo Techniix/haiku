@@ -21,6 +21,9 @@ const uint32 kMsgCursorSpeed		= 'SLcs';
 const uint32 kMsgFollowsMouseMode	= 'PUff';
 const uint32 kMsgMouseFocusMode		= 'PUmf';
 const uint32 kMsgAcceptFirstClick	= 'PUaf';
+const uint32 kMsgDragInHardware		= 'PUdh';
+	// Renga (F-59); with an int32 "renga:value" (tests, scripts) the
+	// check box is set to it first
 const uint32 kMsgMouseType		= 'PUmt';
 const uint32 kMsgMouseMap		= 'PUmm';
 const uint32 kMsgMouseSpeed		= 'SLms';

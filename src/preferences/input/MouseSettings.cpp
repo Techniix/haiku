@@ -17,6 +17,38 @@
 
 #include <stdio.h>
 
+#include <AppServerLink.h>
+#include <ServerProtocol.h>
+
+
+static const bool kDefaultDragInHardware = true;
+
+
+/*!	Renga (F-59): whether app_server shows dragged items with the hardware
+	pointer (see headers/private/app/HardwareCursorInfo.h).
+*/
+static bool
+get_drag_in_hardware()
+{
+	BPrivate::AppServerLink link;
+	link.StartMessage(AS_GET_HARDWARE_CURSOR_DRAG);
+	status_t status;
+	bool enabled = kDefaultDragInHardware;
+	if (link.FlushWithReply(status) == B_OK && status == B_OK)
+		link.Read<bool>(&enabled);
+	return enabled;
+}
+
+
+static void
+set_drag_in_hardware(bool enabled)
+{
+	BPrivate::AppServerLink link;
+	link.StartMessage(AS_SET_HARDWARE_CURSOR_DRAG);
+	link.Attach<bool>(enabled);
+	link.Flush();
+}
+
 
 MouseSettings::MouseSettings(BString name)
 	:
@@ -29,6 +61,7 @@ MouseSettings::MouseSettings(BString name)
 	fOriginalMode = fMode;
 	fOriginalFocusFollowsMouseMode = fFocusFollowsMouseMode;
 	fOriginalAcceptFirstClick = fAcceptFirstClick;
+	fOriginalDragInHardware = fDragInHardware;
 }
 
 
@@ -55,6 +88,7 @@ MouseSettings::_RetrieveSettings()
 	fMode = mouse_mode();
 	fFocusFollowsMouseMode = focus_follows_mouse_mode();
 	fAcceptFirstClick = accept_first_click();
+	fDragInHardware = get_drag_in_hardware();
 
 	return B_OK;
 }
@@ -71,6 +105,7 @@ MouseSettings::Defaults()
 	SetMouseMode(B_NORMAL_MOUSE);
 	SetFocusFollowsMouseMode(B_NORMAL_FOCUS_FOLLOWS_MOUSE);
 	SetAcceptFirstClick(kDefaultAcceptFirstClick);
+	SetDragBitmapsInHardware(kDefaultDragInHardware);
 
 	mouse_map map;
 	for (int i = 0; i < B_MAX_MOUSE_BUTTONS; i++)
@@ -90,6 +125,7 @@ MouseSettings::IsDefaultable() const
 		|| fMode != B_NORMAL_MOUSE
 		|| fFocusFollowsMouseMode != B_NORMAL_FOCUS_FOLLOWS_MOUSE
 		|| fAcceptFirstClick != kDefaultAcceptFirstClick
+		|| fDragInHardware != kDefaultDragInHardware
 		|| fSettings.map.button[0] != B_PRIMARY_MOUSE_BUTTON
 		|| fSettings.map.button[1] != B_SECONDARY_MOUSE_BUTTON
 		|| fSettings.map.button[2] != B_TERTIARY_MOUSE_BUTTON
@@ -110,6 +146,7 @@ MouseSettings::Revert()
 	SetMouseMode(fOriginalMode);
 	SetFocusFollowsMouseMode(fOriginalFocusFollowsMouseMode);
 	SetAcceptFirstClick(fOriginalAcceptFirstClick);
+	SetDragBitmapsInHardware(fOriginalDragInHardware);
 
 	SetMapping(fOriginalSettings.map);
 }
@@ -126,6 +163,7 @@ MouseSettings::IsRevertable() const
 		|| fMode != fOriginalMode
 		|| fFocusFollowsMouseMode != fOriginalFocusFollowsMouseMode
 		|| fAcceptFirstClick != fOriginalAcceptFirstClick
+		|| fDragInHardware != fOriginalDragInHardware
 		|| fSettings.map.button[0] != fOriginalSettings.map.button[0]
 		|| fSettings.map.button[1] != fOriginalSettings.map.button[1]
 		|| fSettings.map.button[2] != fOriginalSettings.map.button[2]
@@ -264,4 +302,12 @@ MultipleMouseSettings::AddMouseSettings(BString mouse_name)
 	fMouseSettingsObject.insert(
 		std::pair<BString, MouseSettings*>(mouse_name, settings));
 	return settings;
+}
+
+
+void
+MouseSettings::SetDragBitmapsInHardware(bool enabled)
+{
+	set_drag_in_hardware(enabled);
+	fDragInHardware = enabled;
 }

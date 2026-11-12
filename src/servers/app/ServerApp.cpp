@@ -3492,6 +3492,65 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			break;
 		}
 
+		// Renga (F-59): the hardware cursor
+		case AS_GET_HARDWARE_CURSOR_INFO:
+		{
+			int32 x;
+			int32 y;
+			link.Read<int32>(&x);
+			if (link.Read<int32>(&y) != B_OK) {
+				fLink.StartMessage(B_BAD_DATA);
+				fLink.Flush();
+				break;
+			}
+			hardware_cursor_info info;
+			status_t status = fDesktop->HWInterface()->GetHardwareCursorInfo(
+				info, x, y);
+			fLink.StartMessage(status);
+			if (status == B_OK)
+				fLink.Attach(&info, sizeof(info));
+			fLink.Flush();
+			break;
+		}
+
+		case AS_GET_HARDWARE_CURSOR_DRAG:
+		{
+			fLink.StartMessage(B_OK);
+			fLink.Attach<bool>(
+				fDesktop->HWInterface()->DragBitmapsInHardware());
+			fLink.Flush();
+			break;
+		}
+
+		case AS_SET_HARDWARE_CURSOR_DRAG:
+		{
+			bool enabled;
+			if (link.Read<bool>(&enabled) == B_OK)
+				fDesktop->HWInterface()->SetDragBitmapsInHardware(enabled);
+			break;
+		}
+
+		case AS_TEST_HARDWARE_CURSOR:
+		{
+			int32 enable;
+			uint16 maxWidth;
+			uint16 maxHeight;
+			bool reportMaxSize;
+			link.Read<int32>(&enable);
+			link.Read<uint16>(&maxWidth);
+			link.Read<uint16>(&maxHeight);
+			if (link.Read<bool>(&reportMaxSize) != B_OK) {
+				fLink.StartMessage(B_BAD_DATA);
+				fLink.Flush();
+				break;
+			}
+			status_t status = fDesktop->HWInterface()->SetTestHardwareCursor(
+				enable != 0, maxWidth, maxHeight, reportMaxSize);
+			fLink.StartMessage(status);
+			fLink.Flush();
+			break;
+		}
+
 		// Renga: screen capture
 		case AS_SCREEN_CAPTURE_START:
 		case AS_SCREEN_CAPTURE_FRAME:

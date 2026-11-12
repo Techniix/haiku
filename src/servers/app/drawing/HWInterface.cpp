@@ -306,6 +306,21 @@ HWInterface::SetDragBitmap(const ServerBitmap* bitmap,
 }
 
 
+status_t
+HWInterface::GetHardwareCursorInfo(hardware_cursor_info& info, int32 sampleX,
+	int32 sampleY)
+{
+	memset(&info, 0, sizeof(info));
+	info.visible = IsCursorVisible();
+	info.drag_compositing = DragBitmapsInHardware();
+	if (fFloatingOverlaysLock.Lock()) {
+		info.drag_bitmap = fDragBitmap != NULL;
+		fFloatingOverlaysLock.Unlock();
+	}
+	return B_OK;
+}
+
+
 // #pragma mark -
 
 

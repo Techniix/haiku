@@ -141,6 +141,18 @@ InputMouse::MessageReceived(BMessage* message)
 			break;
 		}
 
+		case kMsgDragInHardware:
+		{
+			BCheckBox* box = fSettingsView->fDragInHardwareBox;
+			int32 value;
+			if (message->FindInt32("renga:value", &value) == B_OK)
+				box->SetValue(value != 0 ? B_CONTROL_ON : B_CONTROL_OFF);
+			fSettings->SetDragBitmapsInHardware(box->Value() == B_CONTROL_ON);
+			fDefaultsButton->SetEnabled(fSettings->IsDefaultable());
+			fRevertButton->SetEnabled(fSettings->IsRevertable());
+			break;
+		}
+
 		case kMsgDoubleClickSpeed:
 		{
 			int32 value;

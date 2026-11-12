@@ -418,6 +418,11 @@ for words, allowed in [
 		(["pointer", "ps2", "0", "0"], False),
 		(["pointer", "usb", "0"], False),
 		(["pointer", "usb", "0", "0;quit"], False),
+		(["pointer_button", "usb", "down"], True),
+		(["pointer_button", "virtio", "up"], True),
+		(["pointer_button", "ps2", "down"], False),
+		(["pointer_button", "usb", "middle"], False),
+		(["pointer_button", "usb"], False),
 		(["pointer_rel", "40", "-30"], True),
 		(["pointer_rel", "201", "0"], False),
 		(["pointer_rel", "0x10", "0"], False),
@@ -788,6 +793,28 @@ try:
 	expect("screenshots: a missing one fails", not screenshots(["shown",
 		"missing"]))
 	expect("screenshots: a blank one fails", not screenshots(["black"]))
+
+	# hw_cursor.software_drag_drawn (F-59): the software cursor showed
+	# the 300x300 red drag bitmap, or did not.
+	def drag_drawn(size):
+		shot = tempfile.mkdtemp()
+		picture = Image.new("RGB", (640, 480), (40, 90, 150))
+		if size:
+			for x in range(100, 100 + size):
+				for y in range(60, 60 + size):
+					picture.putpixel((x, y), (255, 0, 0))
+		picture.save(os.path.join(shot, "screen-hw_cursor_software_drag.png"))
+		report = {}
+		ce_test.check_hw_cursor_drag(shot, report)
+		return report["host_checks"][0]["pass"]
+
+	expect("hw_cursor: a drawn drag bitmap passes", drag_drawn(300))
+	expect("hw_cursor: no drag bitmap fails", not drag_drawn(0))
+	expect("hw_cursor: a pointer-sized one fails", not drag_drawn(64))
+	missing = {}
+	ce_test.check_hw_cursor_drag(tempfile.mkdtemp(), missing)
+	expect("hw_cursor: a missing screenshot fails",
+		not missing["host_checks"][0]["pass"])
 except ImportError:
 	print("skip screenshot checks (no Pillow)")
 

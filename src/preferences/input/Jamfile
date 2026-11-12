@@ -1,6 +1,6 @@
 SubDir HAIKU_TOP src preferences input ;
 
-UsePrivateHeaders input ;
+UsePrivateHeaders app input ;
 
 Application Input :
 	Input.cpp

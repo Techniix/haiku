@@ -35,6 +35,7 @@ class SettingsView : public BBox {
 	public:
 				// FIXME use proper getters/setters for this?
 				BCheckBox*		fAcceptFirstClickBox;
+				BCheckBox*		fDragInHardwareBox;
 
 	private:
 		typedef	BBox			inherited;

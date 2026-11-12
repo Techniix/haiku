@@ -84,6 +84,26 @@ InputWindow::MessageReceived(BMessage* message)
 				message, fCardView->CardLayout()->VisibleItem()->View());
 			break;
 		}
+		case kMsgDragInHardware:
+		{
+			// Renga (F-59): the setting is the same for every mouse; sent
+			// from outside (a script, a test) while a keyboard's page is
+			// shown, it goes to the first mouse's page, which is shown.
+			BView* view = fCardView->CardLayout()->VisibleItem()->View();
+			if (dynamic_cast<InputMouse*>(view) == NULL) {
+				for (int32 i = 0; i < fCardView->CountChildren(); i++) {
+					if (dynamic_cast<InputMouse*>(fCardView->ChildAt(i))
+							!= NULL) {
+						fDeviceListView->Select(i);
+						fCardView->CardLayout()->SetVisibleItem(i);
+						view = fCardView->ChildAt(i);
+						break;
+					}
+				}
+			}
+			PostMessage(message, view);
+			break;
+		}
 		case SCROLL_AREA_CHANGED:
 		case SCROLL_CONTROL_CHANGED:
 		case TAP_CONTROL_CHANGED:

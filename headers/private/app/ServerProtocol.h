@@ -388,6 +388,15 @@ enum {
 	// bytes (tests and diagnostics of the transfer GPU buffers use)
 	AS_CHECK_CLIENT_FD,
 
+	// Renga (F-59): the hardware cursor's state, and a stand-in hardware
+	// cursor for tests (headers/private/app/HardwareCursorInfo.h)
+	AS_GET_HARDWARE_CURSOR_INFO,
+	AS_TEST_HARDWARE_CURSOR,
+	AS_GET_HARDWARE_CURSOR_DRAG,
+	AS_SET_HARDWARE_CURSOR_DRAG,
+		// the Input preferences' "Show dragged items with the hardware
+		// pointer" (bool), kept by app_server
+
 	AS_LAST_CODE
 };
 
