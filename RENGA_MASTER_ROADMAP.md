@@ -347,6 +347,8 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-58 | Partner requests, batch 1 (OBS Studio and Quasar requests to Renga) | Designed | None |
 | F-59 | Real-hardware feedback, batch 1 (maintainer test of 9731ba84) | Designed | None |
 | F-60 | Existing applications and preferences: review and Renga refresh | Designed | None |
+| F-61 | Responsiveness under load ("the BeOS demo") as a release gate | Designed | None |
+| F-62 | BFS queries as the system's search: smart folders, tags, content index | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -1432,6 +1434,42 @@ Worked on real hardware: the upgrade itself, Wi-Fi with the in-tree mt7921e (als
 | Links | Maintainer request, 2026-11-11. Overlaps: `F-44` (new bundled apps and additions to Screenshot, Expander, ProcessController), `F-41` (Deskbar), `F-59` (Tracker desktop menu), `F-32` (Audio, done) |
 
 Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal, WebPositive, StyledEdit, ShowImage, MediaPlayer, Screenshot, HaikuDepot and SoftwareUpdater, Installer and DriveSetup (with `F-23`/`F-24`), Mail and People, then the remaining tools, demos last (some demos may be dropped from the default image). Preferences in Control Panel order (`F-28`): Appearance and Backgrounds, Screen, Input and Keymap and Shortcuts, Network, Notifications, Time, Locale, Tracker and Deskbar settings, Screen saver, Printers, the rest.
+
+#### F-61 Responsiveness under load ("the BeOS demo") as a release gate
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Haiku keeps BeOS's threading model and is responsive, but nothing measures it; no real-time guarantees for media threads beyond priorities |
+| Renga maturity | Media latency checks (`media_latency.*`) only |
+| Status | **Designed** (maintainer, 2026-11-11) |
+| Completed | None |
+| Remaining | (1) A harness suite that recreates the BeOS demo under load: a parallel compile plus several video streams plus audio playback plus window dragging, while measuring input-to-screen latency, audio dropouts (xruns), dropped video frames and UI frame times; numbers recorded per commit in the history and compared with a baseline, so no release gets worse (a regression blocks the batch). (2) Real-hardware runs of the same suite on the maintainer's PC through a script he can run (QEMU numbers are relative only). (3) Scheduler work the suite justifies, each measured: media and audio threads that cannot be starved by CPU-bound work, priority inheritance on the locks media and UI threads share, deadline-style scheduling for audio periods, P-core and E-core awareness (with `F-37`), and game mode (`F-50`) building on the same mechanisms |
+| Known bugs/limitations | Not applicable |
+| Dependencies | None for the suite; `F-37`, `F-50` for parts of the scheduler work |
+| Difficulty | 4 (suite); 6-8 (scheduler work) |
+| Risk | Medium (scheduler changes need soak runs) |
+| Testing status | None |
+| Next milestone | The suite and its baseline, with the next batch's harness work |
+| Recommended next action | Build the suite early so it guards everything after it |
+| Links | Maintainer, 2026-11-11: "fast and responsive is the goal"; BeOS's founding promise |
+
+#### F-62 BFS queries as the system's search: smart folders, tags, content index
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | BFS attributes, indexes and live queries work (Tracker's Find window, saved queries); few programs use them; no content indexing; no tags |
+| Renga maturity | None |
+| Status | **Designed** (maintainer, 2026-11-11) |
+| Completed | None |
+| Remaining | Live queries as everyday features: smart folders in Tracker (saved live queries shown as folders in the sidebar and Deskbar), tags as an indexed attribute with a tag editor in Tracker's info panel and context menu, a full-text content index (a background indexer writing words to an index attribute, with plug-ins per file type, throttled and pausable, off for removable media unless asked), and one system-wide instant search (apps, settings pages, files, mail, contacts, recent items) on top of queries, shared with the Deskbar and Lumina launcher (`F-41`, `F-44` item 8); query speed measured on large volumes; extended attributes mapped to BFS attributes (`F-52`) so ported programs share them |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-52` (xattr mapping), `F-41`/`F-25` (launcher), `F-60` (Tracker review) |
+| Difficulty | 6 |
+| Risk | Low to medium (indexer load must stay invisible, `F-61`) |
+| Testing status | None |
+| Next milestone | Smart folders and tags in Tracker |
+| Recommended next action | With the Tracker review in `F-60` |
+| Links | Maintainer, 2026-11-11 |
 
 ### Bundled applications
 
