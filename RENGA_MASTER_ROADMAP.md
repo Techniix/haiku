@@ -791,6 +791,13 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Recommended next action | Start after gamepads (work order item 13) |
 | Links | Audit "Ranked ways to multiply available apps"; Renguin `docs/research-report.md`, `docs/TESTING.md` |
 
+**Approach (maintainer, 2026-11-12): built into Renga, optimal, reusing existing code.**
+
+- **Brought into Renga's tree**, not developed in its repository: the code of `Techniix/Renguin` (branch `stage5-libc-dynamic`) is imported with its history noted in the import commit, and work continues in Renga; the repository becomes reference.
+- **Renga-only, no stock Haiku constraint:** the kernel, libroot, the VFS, signals and the scheduler change wherever Renguin needs them to be correct and fast (a native per-team ABI in the syscall entry path, Linux signal semantics where needed, VFS hooks for `/proc`, `/sys` and path translation); add-only ABI still holds for Haiku and BeOS programs.
+- **Test what exists first:** before new work, link the imported code with Renga's toolchain, boot it, run its ordered test series in the harness and record what passes; fix what the import breaks before extending.
+- **Reuse before writing:** for each area, check existing code to port or adapt: FreeBSD's Linuxulator (`sys/compat/linux`: syscall tables, signal and errno translation, `ioctl` translation, `/proc` and `/sys` emulation, futex, epoll), NetBSD's and OpenBSD's Linux compatibility, the LinuxKPI already in Renga (`F-26`) for shared Linux definitions, gVisor's and WSL1's published syscall behaviour notes as references, musl and glibc test suites, the Linux Test Project (LTP) for conformance. Licences checked per import (BSD/MIT preferred; GPL code only as reference, not copied, unless kept in a separately licensed module).
+
 **Plan (maintainer, 2026-11-11): integrate what exists and finish it as we go, with its GUI.**
 
 - [ ] **Integration:** the per-team ABI personality hook becomes a proper Renga kernel feature (FreeBSD `sysentvec` model: per-team syscall table and signal translation chosen at exec), not an external patch; Renguin builds in-tree as a kernel module plus tools, packaged with Renga; Renguin's test series runs in the harness against static and dynamic glibc and musl programs.
