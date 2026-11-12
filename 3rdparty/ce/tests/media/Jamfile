@@ -93,6 +93,14 @@ Application media_html5_test :
 		[ TargetLibstdc++ ]
 ;
 
+# The mixer's routing and loopback additions requested by partner projects
+# (F-58, OBS Studio's O-1 to O-4): exclusions, routes by name, loopback only,
+# loopback by team.
+Application media_routing_test :
+	media_routing_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 # The low-latency audio mode (F-31): BSoundPlayer buffers, the mixer's
 # switch, the default output's period, latency and steadiness.
 Application sound_latency_test :
@@ -106,5 +114,5 @@ if $(CE_HARNESS) {
 		media_video_test
 		screen_capture_test sound_latency_test media_codec_test
 		media_stream_test media_hwvideo_test media_resample_test
-		media_drift_test media_html5_test ;
+		media_drift_test media_html5_test media_routing_test ;
 }

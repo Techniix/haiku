@@ -89,7 +89,8 @@ MixerCore::MixerCore(AudioMixer *node)
 	fOutputGain(1.0),
 	fTaps(new BList),
 	fTapBuffer(NULL),
-	fAllBuffer(NULL)
+	fAllBuffer(NULL),
+	fSelection(new loopback_selection)
 {
 }
 
@@ -112,6 +113,7 @@ MixerCore::~MixerCore()
 		rtm_free(fAllBuffer);
 
 	delete fTaps;
+	delete fSelection;
 
 	if (fTimeSource)
 		fTimeSource->Release();
@@ -787,15 +789,17 @@ MixerCore::UpdateRouting()
 */
 bool
 MixerCore::_InputFade(MixerInput* input, int mode, MixerTap* tap,
-	const char* signature, float& fadeStart, float& fadeEnd)
+	const loopback_selection* selection, float& fadeStart, float& fadeEnd)
 {
 	fadeStart = fadeEnd = 1.0f;
 	switch (mode) {
 		case kMixAll:
-			return true;
+			return selection == NULL
+				|| !selection->Excludes(input->AppSignature());
 		case kMixApplication:
-			return signature != NULL && signature[0] != '\0'
-				&& strcmp(input->AppSignature(), signature) == 0;
+			return selection != NULL && selection->signature[0] != '\0'
+				&& strcmp(input->AppSignature(), selection->signature) == 0
+				&& !selection->Excludes(input->AppSignature());
 	}
 
 	MixerTap* now = input->Sink();
@@ -823,7 +827,7 @@ MixerCore::_InputFade(MixerInput* input, int mode, MixerTap* tap,
 */
 bool
 MixerCore::_Mix(float* destination, int mode, MixerTap* tap,
-	const char* signature, int64 framePos, bigtime_t eventTime,
+	const loopback_selection* selection, int64 framePos, bigtime_t eventTime,
 	chan_info_list* inputChanInfos, chan_info_list* mixChanInfos)
 {
 	bool any = false;
@@ -831,7 +835,7 @@ MixerCore::_Mix(float* destination, int mode, MixerTap* tap,
 
 	for (int i = 0; MixerInput* input = Input(i); i++) {
 		float fadeStart, fadeEnd;
-		if (!_InputFade(input, mode, tap, signature, fadeStart, fadeEnd))
+		if (!_InputFade(input, mode, tap, selection, fadeStart, fadeEnd))
 			continue;
 
 		int count = input->GetMixerChannelCount();
@@ -983,7 +987,8 @@ void
 MixerCore::_FeedTaps(int64 framePos, bigtime_t eventTime,
 	chan_info_list* inputChanInfos, chan_info_list* mixChanInfos, bool silent)
 {
-	if (fTaps->IsEmpty() || fTapBuffer == NULL || fAllBuffer == NULL)
+	if (fTaps->IsEmpty() || fTapBuffer == NULL || fAllBuffer == NULL
+		|| fSelection == NULL)
 		return;
 
 	size_t bytes = fMixBufferChannelCount * fMixBufferFrameCount
@@ -1017,10 +1022,13 @@ MixerCore::_FeedTaps(int64 framePos, bigtime_t eventTime,
 			continue;
 		}
 
-		char signature[B_MIME_TYPE_LENGTH];
-		if (!tap->GetMixSource(signature, sizeof(signature)))
+		// Not on the stack: the exclusion list is 4 KiB. The mix thread is
+		// the only user (the core is locked).
+		loopback_selection& selection = *fSelection;
+		if (!tap->GetMixSource(selection))
 			continue;
-		if (signature[0] == '\0') {
+		if (selection.IsPlain()) {
+			// every stream: one mix shared by all such loopbacks
 			if (!allMixed) {
 				_Mix(fAllBuffer, kMixAll, NULL, NULL, framePos, eventTime,
 					inputChanInfos, mixChanInfos);
@@ -1029,7 +1037,9 @@ MixerCore::_FeedTaps(int64 framePos, bigtime_t eventTime,
 			tap->Push(fAllBuffer, fMixBufferChannelCount,
 				fMixBufferFrameCount, fMixBufferFrameRate, eventTime, fTimeSource->ID(), 1.0f);
 		} else {
-			_Mix(fTapBuffer, kMixApplication, NULL, signature, framePos,
+			// one application, or every stream less the exclusions
+			_Mix(fTapBuffer, selection.signature[0] != '\0'
+					? kMixApplication : kMixAll, NULL, &selection, framePos,
 				eventTime, inputChanInfos, mixChanInfos);
 			tap->Push(fTapBuffer, fMixBufferChannelCount,
 				fMixBufferFrameCount, fMixBufferFrameRate, eventTime, fTimeSource->ID(), 1.0f);

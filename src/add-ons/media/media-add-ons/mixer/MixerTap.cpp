@@ -159,11 +159,85 @@ MixerTap::SetApplications(const BStringList& signatures,
 
 
 bool
-MixerTap::GetMixSource(char* signature, size_t size)
+loopback_selection::Excludes(const char* candidate) const
+{
+	if (exclude[0] == '\0' || candidate == NULL || candidate[0] == '\0')
+		return false;
+	size_t length = strlen(candidate);
+	const char* line = exclude;
+	while (*line != '\0') {
+		const char* end = strchr(line, '\n');
+		if (end == NULL)
+			end = line + strlen(line);
+		if ((size_t)(end - line) == length
+			&& strncasecmp(line, candidate, length) == 0) {
+			return true;
+		}
+		line = *end == '\n' ? end + 1 : end;
+	}
+	return false;
+}
+
+
+BString
+MixerTap::Exclusions()
+{
+	BAutolock locker(fLock);
+	return fExclusions;
+}
+
+
+/*!	Renga (F-58, OBS Studio's O-1): leaves the streams of the listed
+	applications out of this loopback. \a list holds signatures separated
+	by newlines (a carriage return, spaces and tabs around each are
+	ignored, so does an empty line); it replaces the previous list. The
+	list is kept normalized, each signature followed by a newline, and cut
+	at loopback_selection::kMaxExclude bytes on a line boundary, so the mix
+	thread can copy it as it is.
+*/
+void
+MixerTap::SetExclusions(const char* list)
+{
+	BString normalized;
+	if (list != NULL) {
+		const char* line = list;
+		while (*line != '\0') {
+			const char* end = strchr(line, '\n');
+			if (end == NULL)
+				end = line + strlen(line);
+			const char* start = line;
+			const char* stop = end;
+			while (start < stop && (*start == ' ' || *start == '\t'
+					|| *start == '\r'))
+				start++;
+			while (stop > start && (stop[-1] == ' ' || stop[-1] == '\t'
+					|| stop[-1] == '\r'))
+				stop--;
+			if (stop > start && stop - start < B_MIME_TYPE_LENGTH
+				&& normalized.Length() + (stop - start) + 2
+					<= loopback_selection::kMaxExclude) {
+				normalized.Append(start, stop - start);
+				normalized.Append('\n', 1);
+			}
+			line = *end == '\n' ? end + 1 : end;
+		}
+	}
+
+	BAutolock locker(fLock);
+	fExclusions = normalized;
+	fLastChange = system_time();
+}
+
+
+bool
+MixerTap::GetMixSource(loopback_selection& selection)
 {
 	if (fLock.LockWithTimeout(0) != B_OK)
 		return false;
-	strlcpy(signature, fSourceSignature.String(), size);
+	strlcpy(selection.signature, fSourceSignature.String(),
+		sizeof(selection.signature));
+	strlcpy(selection.exclude, fExclusions.String(),
+		sizeof(selection.exclude));
 	fLock.Unlock();
 	return true;
 }
@@ -841,6 +915,12 @@ MixerTap::_UpdateWeb()
 		B_MIME_TYPE_LENGTH);
 	signature->SetFlags(B_HIDDEN_PARAMETER);
 
+	// Renga (F-58, O-1): applications left out, one signature per line.
+	BTextParameter* exclude = group->MakeTextParameter(kExcludeParameter,
+		B_MEDIA_RAW_AUDIO, "Excluded applications", "renga:loopback_exclude",
+		loopback_selection::kMaxExclude);
+	exclude->SetFlags(B_HIDDEN_PARAMETER);
+
 	SetParameterWeb(web);
 }
 
@@ -876,11 +956,14 @@ MixerTap::GetParameterValue(int32 id, bigtime_t* _lastChange, void* value,
 		*_size = length;
 		return B_OK;
 	}
-	if (id == kSignatureParameter) {
-		size_t length = fSourceSignature.Length() + 1;
+	if (id == kSignatureParameter || (id == kExcludeParameter
+			&& fKind == kLoopback)) {
+		const BString& text = id == kSignatureParameter
+			? fSourceSignature : fExclusions;
+		size_t length = text.Length() + 1;
 		if (*_size < length)
 			return B_BAD_VALUE;
-		memcpy(value, fSourceSignature.String(), length);
+		memcpy(value, text.String(), length);
 		*_size = length;
 		return B_OK;
 	}
@@ -892,6 +975,15 @@ void
 MixerTap::SetParameterValue(int32 id, bigtime_t when, const void* value,
 	size_t size)
 {
+	if (id == kExcludeParameter && fKind == kLoopback) {
+		BString list((const char*)value, strnlen((const char*)value, size));
+		SetExclusions(list.String());
+		BString normalized = Exclusions();
+		BroadcastNewParameterValue(when, kExcludeParameter,
+			(void*)normalized.String(), normalized.Length() + 1);
+		return;
+	}
+
 	BString signature;
 	if (id == kSourceParameter && size >= sizeof(int32)) {
 		int32 index = *(const int32*)value;

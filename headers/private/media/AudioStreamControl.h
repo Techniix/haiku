@@ -48,6 +48,11 @@ namespace BPrivate {
 #define RENGA_LOOPBACK_FLAVOR_NAME		"What you hear (loopback)"
 #define RENGA_LOOPBACK_SOURCE_ID		1
 #define RENGA_LOOPBACK_SIGNATURE_ID		2
+// F-58 (OBS Studio's O-1): a hidden text parameter of the loopback, the
+// signatures of applications left out, one per line. Look it up by kind;
+// the id is given for completeness.
+#define RENGA_LOOPBACK_EXCLUDE_KIND		"renga:loopback_exclude"
+#define RENGA_LOOPBACK_EXCLUDE_ID		4
 
 
 struct AudioStream {
@@ -228,6 +233,71 @@ public:
 			const char* text = signature != NULL ? signature : "";
 			status = parameter->SetValue(text, strlen(text) + 1,
 				system_time());
+			break;
+		}
+		delete web;
+		return status;
+	}
+
+	/*!	Leaves the applications in \a list (signatures separated by
+		newlines; NULL or "" for none) out of a loopback (F-58, O-1).
+	*/
+	static status_t SetLoopbackExclusions(const media_node& node,
+		const char* list)
+	{
+		return SetLoopbackText(node, RENGA_LOOPBACK_EXCLUDE_KIND,
+			list != NULL ? list : "");
+	}
+
+	//!	Sets a loopback's text parameter of the given kind.
+	static status_t SetLoopbackText(const media_node& node, const char* kind,
+		const char* text)
+	{
+		BParameterWeb* web;
+		status_t status = BMediaRoster::Roster()->GetParameterWebFor(node,
+			&web);
+		if (status != B_OK)
+			return status;
+		status = B_ENTRY_NOT_FOUND;
+		for (int32 i = 0; i < web->CountParameters(); i++) {
+			BParameter* parameter = web->ParameterAt(i);
+			if (parameter->Type() != BParameter::B_TEXT_PARAMETER
+				|| strcmp(parameter->Kind(), kind) != 0)
+				continue;
+			status = parameter->SetValue(text, strlen(text) + 1,
+				system_time());
+			break;
+		}
+		delete web;
+		return status;
+	}
+
+	//!	Reads a loopback's text parameter of the given kind.
+	static status_t GetLoopbackText(const media_node& node, const char* kind,
+		BString& text)
+	{
+		BParameterWeb* web;
+		status_t status = BMediaRoster::Roster()->GetParameterWebFor(node,
+			&web);
+		if (status != B_OK)
+			return status;
+		status = B_ENTRY_NOT_FOUND;
+		for (int32 i = 0; i < web->CountParameters(); i++) {
+			BParameter* parameter = web->ParameterAt(i);
+			if (parameter->Type() != BParameter::B_TEXT_PARAMETER
+				|| strcmp(parameter->Kind(), kind) != 0)
+				continue;
+			size_t size = ((BTextParameter*)parameter)->MaxBytes() + 1;
+			char* buffer = (char*)malloc(size);
+			if (buffer == NULL) {
+				status = B_NO_MEMORY;
+				break;
+			}
+			bigtime_t when;
+			status = parameter->GetValue(buffer, &size, &when);
+			if (status == B_OK)
+				text.SetTo(buffer, strnlen(buffer, size));
+			free(buffer);
 			break;
 		}
 		delete web;

@@ -10,12 +10,35 @@
 #include <Controllable.h>
 #include <Locker.h>
 #include <MediaEventLooper.h>
+#include <Mime.h>
 #include <String.h>
 #include <StringList.h>
 
 
 class BTimeSource;
 class MixerCore;
+
+
+/*!	What a loopback records, as the mix thread sees it: a copy taken
+	without waiting (MixerTap::GetMixSource()), so nothing here allocates.
+	Renga (F-58, OBS Studio's O-1): \a exclude leaves applications out of
+	the loopback, for programs that play their own monitoring and record
+	"What you hear" at the same time.
+*/
+struct loopback_selection {
+	enum { kMaxExclude = 4096 };
+
+	char		signature[B_MIME_TYPE_LENGTH];
+					// "" for every application
+	char		exclude[kMaxExclude];
+					// signatures left out, each followed by '\n'; "" none
+
+	// Whether the stream of \a signature is left out (case-insensitive,
+	// as MIME types compare).
+	bool		Excludes(const char* signature) const;
+	bool		IsPlain() const
+					{ return signature[0] == '\0' && exclude[0] == '\0'; }
+};
 
 
 /*!	A producer node fed by the system mixer's mix thread. Two kinds, in the
@@ -64,9 +87,14 @@ public:
 	// loopbacks: whose streams; empty for all
 			BString				SourceSignature();
 			void				SetSourceSignature(const char* signature);
-	// For the mix thread: copies the source signature without waiting;
-	// false if the tap is busy.
-			bool				GetMixSource(char* signature, size_t size);
+	// Loopbacks: applications left out (F-58, O-1), as a newline-separated
+	// list of signatures; empty for none. Normalized: one signature per
+	// line, each followed by '\n', blanks and empty lines dropped.
+			BString				Exclusions();
+			void				SetExclusions(const char* list);
+	// For the mix thread: copies the selection without waiting; false if
+	// the tap is busy.
+			bool				GetMixSource(loopback_selection& selection);
 	// The applications the mixer has streams of: signature, display name
 			void				SetApplications(const BStringList& signatures,
 									const BStringList& names);
@@ -152,9 +180,12 @@ public:
 	enum {
 		kSourceParameter = 1,		// discrete: 0 all, n: application n
 		kSignatureParameter = 2,	// text: signature, "" for all
-		kDriftParameter = 3			// sinks, text (hidden, kind
+		kDriftParameter = 3,		// sinks, text (hidden, kind
 									// "renga:clock_drift"): "<measured ppm>
 									// <applied ppm> <frames in> <frames out>"
+		kExcludeParameter = 4		// loopbacks, text (hidden, kind
+									// "renga:loopback_exclude"): signatures
+									// left out, one per line (F-58, O-1)
 	};
 
 private:
@@ -180,6 +211,7 @@ private:
 			BString				fDeviceName;
 			media_node_id		fDeviceNode;
 			BString				fSourceSignature;
+			BString				fExclusions;	// normalized, see above
 			BStringList			fAppSignatures;
 			BStringList			fAppNames;
 			bigtime_t			fLastChange;

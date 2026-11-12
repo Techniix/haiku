@@ -22,6 +22,7 @@ class BBufferGroup;
 class MixerInput;
 class MixerOutput;
 class MixerTap;
+struct loopback_selection;
 class Resampler;
 struct chan_info;
 template<class value> class RtList;
@@ -106,15 +107,18 @@ private:
 	enum {
 		kMixPrimary,		// streams on the default output
 		kMixSink,			// streams on one sink
-		kMixAll,			// every stream (loopback "what you hear")
+		kMixAll,			// every stream (loopback "what you hear"),
+							// less a loopback's exclusions
 		kMixApplication		// the streams of one application
 	};
 
 			bool				_InputFade(MixerInput* input, int mode,
-									MixerTap* tap, const char* signature,
+									MixerTap* tap,
+									const loopback_selection* selection,
 									float& fadeStart, float& fadeEnd);
 			bool				_Mix(float* destination, int mode,
-									MixerTap* tap, const char* signature,
+									MixerTap* tap,
+									const loopback_selection* selection,
 									int64 framePos, bigtime_t eventTime,
 									chan_info_list* inputChanInfos,
 									chan_info_list* mixChanInfos);
@@ -172,6 +176,8 @@ private:
 			BString				fPrimaryDeviceName;
 			float*				fTapBuffer;		// a sink's or loopback's mix
 			float*				fAllBuffer;		// sum of every target
+			loopback_selection*	fSelection;		// the mix thread's copy of a
+												// loopback's (F-58)
 
 	friend class MixerInput;
 		// NOTE: debug only
