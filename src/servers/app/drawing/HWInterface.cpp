@@ -55,6 +55,10 @@ HWInterface::HWInterface()
 	fListeners(20),
 	fDamageListener(NULL)
 {
+	fCursorMoves = 0;
+	fCursorWaitTotal = 0;
+	fCursorWaitMax = 0;
+
 }
 
 
@@ -128,6 +132,7 @@ HWInterface::SetCursor(ServerCursor* cursor)
 	if (fCursor.Get() != cursor) {
 		BRect oldFrame = _CursorFrame();
 
+		_CursorDamaged(_CursorImageFrame());
 		fCursor.SetTo(cursor);
 
 		Invalidate(oldFrame);
@@ -233,12 +238,20 @@ HWInterface::ObscureCursor()
 void
 HWInterface::MoveCursorTo(float x, float y)
 {
+	bigtime_t start = system_time();
 	if (!LockParallelAccess())
 		return;
 	if (!fFloatingOverlaysLock.Lock()) {
 		UnlockParallelAccess();
 		return;
 	}
+	// Renga (F-59): how long the pointer waited (a screen read holding
+	// the exclusive lock, for example)
+	bigtime_t wait = system_time() - start;
+	fCursorMoves++;
+	fCursorWaitTotal += wait;
+	if (wait > fCursorWaitMax)
+		fCursorWaitMax = wait;
 
 	BPoint p(x, y);
 	if (p != fCursorLocation) {
@@ -255,7 +268,10 @@ HWInterface::MoveCursorTo(float x, float y)
 		}
 
 		IntRect oldFrame = _CursorFrame();
+		IntRect oldImageFrame = _CursorImageFrame();
 		fCursorLocation = p;
+		_CursorDamaged(oldImageFrame);
+		_CursorDamaged(_CursorImageFrame());
 		if (fCursorVisible) {
 			// Invalidate and _DrawCursor would not draw
 			// anything if the cursor is hidden
@@ -911,6 +927,52 @@ HWInterface::_CursorFrame() const
 }
 
 
+/*!	The cursor's frame whether it is drawn in software or hardware (invalid
+	if hidden). The object must be locked.
+*/
+IntRect
+HWInterface::_CursorImageFrame() const
+{
+	IntRect frame(0, 0, -1, -1);
+	if (fCursorAndDragBitmap && fCursorVisible) {
+		frame = fCursorAndDragBitmap->Bounds();
+		frame.OffsetTo(fCursorLocation - fCursorAndDragBitmap->GetHotSpot());
+	}
+	return frame;
+}
+
+
+/*!	Renga (F-59): with a hardware cursor nothing on screen is invalidated
+	when it moves or changes, but screen captures that include the cursor
+	(ScreenCaptureManager) still need the damage. The software cursor's
+	frames reach them through Invalidate().
+*/
+void
+HWInterface::_CursorDamaged(const IntRect& frame) const
+{
+	if (fHardwareCursorEnabled && fDamageListener != NULL && frame.IsValid())
+		fDamageListener->ScreenDamaged(frame);
+}
+
+
+void
+HWInterface::GetCursorWaitStats(int32& moves, bigtime_t& total,
+	bigtime_t& max, bool reset)
+{
+	if (!fFloatingOverlaysLock.Lock())
+		return;
+	moves = fCursorMoves;
+	total = fCursorWaitTotal;
+	max = fCursorWaitMax;
+	if (reset) {
+		fCursorMoves = 0;
+		fCursorWaitTotal = 0;
+		fCursorWaitMax = 0;
+	}
+	fFloatingOverlaysLock.Unlock();
+}
+
+
 void
 HWInterface::_RestoreCursorArea() const
 {
@@ -937,6 +999,7 @@ HWInterface::_AdoptDragBitmap()
 
 	_RestoreCursorArea();
 	BRect oldCursorFrame = _CursorFrame();
+	_CursorDamaged(_CursorImageFrame());
 
 	if (fDragBitmap != NULL && fDragBitmap->Bounds().Width() > 0 && fDragBitmap->Bounds().Height() > 0) {
 		BRect bitmapFrame = fDragBitmap->Bounds();
@@ -1082,6 +1145,7 @@ HWInterface::_AdoptDragBitmap()
 		if (fCursorAreaBackup->buffer == NULL)
 			fCursorAreaBackup.Unset();
 	}
+	_CursorDamaged(_CursorImageFrame());
  	_DrawCursor(_CursorFrame());
 }
 

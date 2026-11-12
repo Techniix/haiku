@@ -144,6 +144,11 @@ public:
 									hardware_cursor_info& info,
 									int32 sampleX, int32 sampleY);
 	virtual	void				SetDragBitmapsInHardware(bool enabled) {}
+
+	// Renga (F-59): how long MoveCursorTo() waited for the engine lock
+			void				GetCursorWaitStats(int32& moves,
+									bigtime_t& total, bigtime_t& max,
+									bool reset);
 	virtual	bool				DragBitmapsInHardware() const
 									{ return true; }
 
@@ -214,6 +219,8 @@ protected:
 									int32 y, int32 right, int32 bottom) const;
 
 			IntRect				_CursorFrame() const;
+			IntRect				_CursorImageFrame() const;
+			void				_CursorDamaged(const IntRect& frame) const;
 			void				_RestoreCursorArea() const;
 			void				_AdoptDragBitmap();
 
@@ -276,6 +283,10 @@ protected:
 			int					fVGADevice;
 
 private:
+			int32				fCursorMoves;
+			bigtime_t			fCursorWaitTotal;
+			bigtime_t			fCursorWaitMax;
+
 			BList				fListeners;
 			HWInterfaceDamageListener* fDamageListener;
 };

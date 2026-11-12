@@ -29,6 +29,7 @@
 #include "DrawingEngine.h"
 #include "HWInterface.h"
 #include "RenderingBuffer.h"
+#include "ScreenReader.h"
 #include "ServerApp.h"
 #include "ServerBitmap.h"
 #include "ServerCursor.h"
@@ -676,18 +677,10 @@ ScreenCaptureManager::_Frame(ServerApp* app, LinkReceiver& link,
 		return;
 	}
 
-	DrawingEngine* engine = fDesktop->GetDrawingEngine();
-	::HWInterface* interface = fDesktop->HWInterface();
-	if (!engine->LockExclusiveAccess()) {
-		reply.StartMessage(B_ERROR);
-		return;
-	}
-
 	locker.Lock();
 	session = _FindSession(id);
 	if (session == NULL) {
 		locker.Unlock();
-		engine->UnlockExclusiveAccess();
 		reply.StartMessage(B_BAD_VALUE);
 		return;
 	}
@@ -734,81 +727,26 @@ ScreenCaptureManager::_Frame(ServerApp* app, LinkReceiver& link,
 	session->frames++;
 	locker.Unlock();
 
-	// Copy from the back buffer when there is one (it never holds the
-	// cursor); otherwise from the front buffer with the cursor hidden.
-	RenderingBuffer* buffer = interface->IsDoubleBuffered()
-		? interface->BackBuffer() : interface->FrontBuffer();
-	bool overlaysHidden = false;
-	if (buffer != NULL && copy.CountRects() > 0 && !interface->IsDoubleBuffered())
-		overlaysHidden = interface->HideFloatingOverlays(copy.Frame());
-
-	if (buffer != NULL) {
-		for (int32 i = 0; i < copy.CountRects(); i++) {
-			BRect rect = copy.RectAt(i);
-			bitmap->ImportBits(buffer->Bits(), buffer->BitsLength(),
-				buffer->BytesPerRow(), buffer->ColorSpace(), rect.LeftTop(),
-				rect.LeftTop() - frame.LeftTop(), rect.IntegerWidth() + 1,
-				rect.IntegerHeight() + 1);
-		}
-	}
-
-	if (overlaysHidden)
-		interface->ShowFloatingOverlays();
-
-	// The cursor, drawn into the bitmap like DrawingEngine::ReadBitmap()
-	// does. Its old and new frames are part of the damage when it moves or
-	// changes (HWInterface invalidates them), so a still cursor does not
+	// Renga (F-59): from the back buffer in main memory, under the drawing
+	// engine's parallel lock (drawing goes on, the pointer never waits);
+	// direct windows from the front buffer, windows in an update session
+	// from their last completed frame, the cursor and drag bitmap
+	// composited when asked (ScreenReader.h). What changes while it reads
+	// is reported as damage and copied again for the next frame. The
+	// cursor's frame is copied again next time too, to restore what was
+	// under it; its old and new frames are damage when it moves or
+	// changes (with a hardware cursor too), so a still cursor does not
 	// make every frame a changed one.
-	if (includeCursor && buffer != NULL
-		&& (bitmap->ColorSpace() == B_RGB32
-			|| bitmap->ColorSpace() == B_RGBA32)) {
-		ServerCursorReference cursorReference = interface->Cursor();
-		ServerCursor* cursor = cursorReference.Get();
-		if (cursor != NULL && interface->IsCursorVisible()) {
-			BPoint position = interface->CursorPosition()
-				- cursor->GetHotSpot();
-			BRect cursorFrame(position.x, position.y,
-				position.x + cursor->Width() - 1,
-				position.y + cursor->Height() - 1);
-			// Restore what was under the cursor last time it was drawn in:
-			// the region of the cursor is always copied again.
-			BRect inFrame = cursorFrame & frame;
-			if (inFrame.IsValid()) {
-				uint8* bits = bitmap->Bits();
-				int32 bpr = bitmap->BytesPerRow();
-				const uint8* cursorBits = cursor->Bits();
-				int32 cursorBPR = cursor->BytesPerRow();
-				for (int32 y = (int32)inFrame.top; y <= (int32)inFrame.bottom;
-						y++) {
-					int32 by = y - (int32)frame.top;
-					int32 cy = y - (int32)cursorFrame.top;
-					if (by >= bitmap->Height())
-						break;
-					for (int32 x = (int32)inFrame.left;
-							x <= (int32)inFrame.right; x++) {
-						int32 bx = x - (int32)frame.left;
-						int32 cx = x - (int32)cursorFrame.left;
-						if (bx >= bitmap->Width())
-							break;
-						uint8* d = bits + by * bpr + bx * 4;
-						const uint8* c = cursorBits + cy * cursorBPR + cx * 4;
-						uint8 alpha = 255 - c[3];
-						d[0] = ((d[0] * alpha) >> 8) + c[0];
-						d[1] = ((d[1] * alpha) >> 8) + c[1];
-						d[2] = ((d[2] * alpha) >> 8) + c[2];
-					}
-				}
-				// The pixels under the cursor have to be copied again for
-				// the next frame into this bitmap.
-				locker.Lock();
-				if ((session = _FindSession(id)) != NULL)
-					session->missed[slot].Include(inFrame);
-				locker.Unlock();
-			}
-		}
+	BRect cursorFrame;
+	ScreenReader::Read(fDesktop, bitmap, copy, frame.LeftTop(),
+		includeCursor, false, &cursorFrame);
+	if (cursorFrame.IsValid()) {
+		locker.Lock();
+		if ((session = _FindSession(id)) != NULL)
+			session->missed[slot].Include(cursorFrame & frame);
+		locker.Unlock();
 	}
 
-	engine->UnlockExclusiveAccess();
 	bigtime_t time = system_time();
 
 	reply.StartMessage(B_OK);

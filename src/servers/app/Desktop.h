@@ -138,6 +138,10 @@ public:
 			MultiLocker&		ScreenLocker() { return fScreenLock; }
 
 			status_t			LockDirectScreen(team_id team);
+			bool				IsDirectScreenLocked() const
+									{ return fDirectScreenTeam >= 0; }
+									// Renga (F-59): a BWindowScreen owns
+									// the screen
 			status_t			UnlockDirectScreen(team_id team);
 
 			const ::VirtualScreen& VirtualScreen() const

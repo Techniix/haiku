@@ -35,6 +35,7 @@
 #include "HWInterface.h"
 #include "MessagePrivate.h"
 #include "PortLink.h"
+#include "ScreenReader.h"
 #include "ServerApp.h"
 #include "ServerWindow.h"
 #include "WindowBehaviour.h"
@@ -176,6 +177,9 @@ Window::~Window()
 	DetachFromWindowStack(false);
 
 	gDecorManager.CleanupForWindow(this);
+
+	ScreenReader::DropUpdateSnapshot(this);
+		// Renga (F-59)
 }
 
 
@@ -1958,6 +1962,13 @@ Window::BeginUpdate(BPrivate::PortLink& link)
 	fDrawingEngine->SetCopyToFrontEnabled(false);
 
 	if (fDrawingEngine->LockParallelAccess()) {
+		// Renga (F-59): while screen captures are made, keep the update
+		// region's last completed frame for them before its background
+		// is cleared below; captures use it until EndUpdate() (see
+		// ScreenReader.h). Nothing is copied otherwise.
+		if (!IsOffscreenWindow() && ScreenReader::CaptureActive())
+			ScreenReader::SaveUpdateSnapshot(fDesktop, this, *dirty);
+
 		fTopView->Draw(GetDrawingEngine(), dirty, &fContentRegion, true);
 
 		fDrawingEngine->UnlockParallelAccess();
@@ -1985,6 +1996,9 @@ Window::EndUpdate()
 			fDrawingEngine->CopyToFront(*dirty);
 			fRegionPool.Recycle(dirty);
 		}
+
+		ScreenReader::DropUpdateSnapshot(this);
+			// Renga (F-59): the new frame is complete
 
 		fCurrentUpdateSession->SetUsed(false);
 

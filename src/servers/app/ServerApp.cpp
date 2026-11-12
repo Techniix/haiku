@@ -60,6 +60,8 @@
 #include "EventStream.h"
 #include "GlobalFontManager.h"
 #include "HWInterface.h"
+#include "RenderingBuffer.h"
+#include "ScreenReader.h"
 #include "InputManager.h"
 #include "OffscreenServerWindow.h"
 #include "Screen.h"
@@ -3424,11 +3426,33 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			bool success = false;
 
 			BReference<ServerBitmap> bitmap(GetBitmap(token), true);
-			if (bitmap != NULL) {
+			::HWInterface* interface = fDesktop->HWInterface();
+			if (bitmap != NULL && interface->IsDoubleBuffered()
+				&& interface->FrontBuffer() != NULL
+				&& !ScreenReader::LegacyReads()) {
+				// Renga (F-59): from the back buffer in main memory, the
+				// cursor composited, the engine locked only for the copy
+				// (ScreenReader.h)
+				RenderingBuffer* front = interface->FrontBuffer();
+				BRect screen(0, 0, front->Width() - 1, front->Height() - 1);
+				bounds.left = floorf(bounds.left);
+				bounds.top = floorf(bounds.top);
+				bounds.right = floorf(bounds.right);
+				bounds.bottom = floorf(bounds.bottom);
+				BRegion area(bounds & screen);
+				success = ScreenReader::Read(fDesktop, bitmap, area,
+					bounds.LeftTop(), drawCursor, true) == B_OK;
+			} else if (bitmap != NULL) {
+				bigtime_t start = system_time();
 				if (fDesktop->GetDrawingEngine()->LockExclusiveAccess()) {
+					bigtime_t locked = system_time();
 					success = fDesktop->GetDrawingEngine()->ReadBitmap(bitmap,
 						drawCursor, bounds) == B_OK;
 					fDesktop->GetDrawingEngine()->UnlockExclusiveAccess();
+					bigtime_t end = system_time();
+					ScreenReader::AddToTotals(end - start, end - locked, 0,
+						(int64)(bounds.IntegerWidth() + 1)
+							* (bounds.IntegerHeight() + 1), 0);
 				}
 			}
 
@@ -3509,6 +3533,34 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			fLink.StartMessage(status);
 			if (status == B_OK)
 				fLink.Attach(&info, sizeof(info));
+			fLink.Flush();
+			break;
+		}
+
+		case AS_TEST_SCREEN_READ:
+		{
+			int32 legacy;
+			bool reset;
+			link.Read<int32>(&legacy);
+			if (link.Read<bool>(&reset) != B_OK) {
+				fLink.StartMessage(B_BAD_DATA);
+				fLink.Flush();
+				break;
+			}
+			if (access("/boot/system/non-packaged/data/ce-harness", F_OK)
+					!= 0) {
+				fLink.StartMessage(B_NOT_ALLOWED);
+				fLink.Flush();
+				break;
+			}
+			if (legacy >= 0)
+				ScreenReader::SetLegacyReads(legacy != 0);
+			screen_read_stats stats;
+			ScreenReader::GetTotals(stats, reset);
+			fDesktop->HWInterface()->GetCursorWaitStats(stats.cursor_moves,
+				stats.cursor_wait_total, stats.cursor_wait_max, reset);
+			fLink.StartMessage(B_OK);
+			fLink.Attach(&stats, sizeof(stats));
 			fLink.Flush();
 			break;
 		}

@@ -17,7 +17,19 @@ Application hw_cursor_test :
 	: be [ TargetLibstdc++ ]
 ;
 
+# Reading the screen without the front buffer (F-59), see the source.
+Application screen_read_test :
+	screen_read_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+# its direct window (libgame), started by the test where libgame exists
+Application screen_read_direct :
+	screen_read_direct.cpp
+	: be game [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test
-		hw_cursor_test ;
+		hw_cursor_test screen_read_test ;
+	AddFilesToHaikuImage system non-packaged bin : screen_read_direct ;
 }

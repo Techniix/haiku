@@ -394,6 +394,10 @@ enum {
 	AS_TEST_HARDWARE_CURSOR,
 	AS_GET_HARDWARE_CURSOR_DRAG,
 	AS_SET_HARDWARE_CURSOR_DRAG,
+
+	// Renga (F-59): screen reads, for tests and measurements
+	// (headers/private/app/ScreenReadInfo.h)
+	AS_TEST_SCREEN_READ,
 		// the Input preferences' "Show dragged items with the hardware
 		// pointer" (bool), kept by app_server
 
