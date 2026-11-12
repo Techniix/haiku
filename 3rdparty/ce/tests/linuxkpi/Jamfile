@@ -8,8 +8,22 @@ Application linuxkpi_test :
 	: [ TargetLibstdc++ ]
 ;
 
+# Attaching, detaching and reloading a Wi-Fi driver on freebsd_network and
+# freebsd_wlan (fbsd_wlantest on QEMU's pci-testdev, see the source).
+Application wlan_reload_test :
+	wlan_reload_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+# The choice between a system driver and an older non-packaged copy.
+UsePrivateHeaders shared ;
+Application driver_override_test :
+	driver_override_test.cpp
+;
+
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : linuxkpi_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : linuxkpi_test
+		wlan_reload_test driver_override_test ;
 }
 
 # lkpictl, LinuxKPI Manager and the System logs integration, with

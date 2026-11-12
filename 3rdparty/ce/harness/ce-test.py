@@ -223,7 +223,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"input_server", "Terminal", "Keymap", "pointer_test", "usb_hid",
 	"virtio_input", "<input>tablet", "<input>virtio",
 	"usb_audio", "usb", "<usb>xhci", "usb_audio_test",
-	"lkpi_pcitest", "linuxkpi_test", "mt7921e", "lkpictl",
+	"lkpi_pcitest", "linuxkpi_test", "fbsd_wlantest", "wlan_reload_test",
+	"driver_override_test", "mt7921e", "lkpictl",
 	"LinuxKPIManager", "linuxkpi_ui_test", "hda", "hda_eld_test",
 	"usb_webcam.media_addon", "uvc_test", "CodyCam",
 	"video_producer_demo.media_addon", "media_video_test",
@@ -2291,6 +2292,9 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		# check_linuxkpi()). A 24-bit DMA mask instead of 28 puts nearly
 		# all guest memory above it, so the DMA API must bounce.
 		"-device", "edu,dma_mask=0xffffff",
+		# QEMU's PCI test device: fbsd_wlantest, the net80211 test
+		# driver of harness images, attaches to it (wlan_reload suite)
+		"-device", "pci-testdev",
 		# Device models report malformed guest requests as guest errors.
 		"-d", "guest_errors,unimp",
 		"-D", os.path.join(results_dir, "qemu.log"),

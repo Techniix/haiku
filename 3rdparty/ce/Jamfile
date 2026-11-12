@@ -48,6 +48,11 @@ if $(CE_HARNESS) {
 	if $(TARGET_ARCH) = x86_64 {
 		AddDriversToHaikuImage net : lkpi_pcitest ;
 	}
+	# A net80211 driver without a radio, matched against QEMU's
+	# pci-testdev: attach, detach and reload of a Wi-Fi driver on
+	# freebsd_network and freebsd_wlan (wlan_reload suite). It matches no
+	# real hardware, but stays a test driver: harness images only.
+	AddDriversToHaikuImage net : fbsd_wlantest ;
 
 	# The minimum images have no sound card drivers but virtio_sound; the
 	# driver tests need the USB audio driver there too (the Renga images

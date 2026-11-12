@@ -1,0 +1,23 @@
+SubDir HAIKU_TOP src add-ons kernel drivers network wlan fbsd_wlantest ;
+
+# Renga test driver: a FreeBSD net80211 driver without a radio, matched
+# against QEMU's "pci-testdev" (1b36:0005), so that the harness can attach,
+# detach and reload a Wi-Fi driver built on freebsd_network and
+# freebsd_wlan in QEMU (the vap and ifnet life cycle every FreeBSD and
+# LinuxKPI Wi-Fi driver goes through). Harness images only; see
+# 3rdparty/ce/tests/linuxkpi/wlan_reload_test.cpp.
+
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network compat ]
+	: true ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_wlan ] : true ;
+UsePrivateHeaders net system ;
+UsePrivateKernelHeaders ;
+
+SubDirCcFlags [ FDefines _KERNEL=1 FBSD_DRIVER=1 ] ;
+
+KernelAddon fbsd_wlantest :
+	fbsd_wlantest.c
+	:
+	freebsd_wlan.a
+	libfreebsd_network.a
+	;

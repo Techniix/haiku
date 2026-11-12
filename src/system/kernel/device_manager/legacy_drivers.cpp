@@ -16,6 +16,7 @@
 #include <NodeMonitor.h>
 
 #include <boot_device.h>
+#include <driver_override.h>
 #include <boot/kernel_args.h>
 #include <elf.h>
 #include <find_directory_private.h>
@@ -273,6 +274,35 @@ static DirectoryNodeHash sDirectoryNodeHash;
 static recursive_lock sLock;
 static bool sWatching;
 
+// Renga: the legacy driver operation in progress, for the kernel
+// debugger's crash report (crash_report.cpp): a panic in a driver's
+// init_hardware()/init_driver() or uninit_driver()/uninit_hardware() names
+// the driver and what was being done. Set and cleared with sLock held (by
+// the thread doing it); read only from the kernel debugger.
+static const char* volatile sDriverOperation = NULL;
+static const char* volatile sDriverOperationPath = NULL;
+
+
+static inline void
+set_driver_operation(const char* operation, const char* path)
+{
+	sDriverOperationPath = path;
+	sDriverOperation = operation;
+}
+
+
+extern "C" bool
+legacy_driver_current_operation(const char** _operation, const char** _path)
+{
+	const char* operation = sDriverOperation;
+	const char* path = sDriverOperationPath;
+	if (operation == NULL || path == NULL)
+		return false;
+	*_operation = operation;
+	*_path = path;
+	return true;
+}
+
 static DriverTable* sDriverHash;
 
 
@@ -413,23 +443,28 @@ load_driver(legacy_driver* driver)
 
 	// Init the driver
 
+	set_driver_operation("init_hardware", driver->path);
 	if (get_image_symbol(image, "init_hardware", B_SYMBOL_TYPE_TEXT,
 			(void**)&init_hardware) == B_OK
 		&& (status = init_hardware()) != B_OK) {
+		set_driver_operation(NULL, NULL);
 		TRACE(("%s: init_hardware() failed: %s\n", driver->name,
 			strerror(status)));
 		status = ENXIO;
 		goto error1;
 	}
 
+	set_driver_operation("init_driver", driver->path);
 	if (get_image_symbol(image, "init_driver", B_SYMBOL_TYPE_TEXT,
 			(void**)&init_driver) == B_OK
 		&& (status = init_driver()) != B_OK) {
+		set_driver_operation(NULL, NULL);
 		TRACE(("%s: init_driver() failed: %s\n", driver->name,
 			strerror(status)));
 		status = ENXIO;
 		goto error2;
 	}
+	set_driver_operation(NULL, NULL);
 
 	// resolve and cache those for the driver unload code
 	if (get_image_symbol(image, "uninit_driver", B_SYMBOL_TYPE_TEXT,
@@ -467,11 +502,14 @@ unload_driver(legacy_driver* driver)
 		return B_NO_INIT;
 	}
 
+	set_driver_operation("uninit_driver", driver->path);
 	if (driver->uninit_driver)
 		driver->uninit_driver();
 
+	set_driver_operation("uninit_hardware", driver->path);
 	if (driver->uninit_hardware)
 		driver->uninit_hardware();
+	set_driver_operation(NULL, NULL);
 
 	unload_kernel_add_on(driver->image);
 	driver->image = -1;
@@ -568,6 +606,38 @@ find_driver(dev_t device, ino_t node)
 }
 
 
+/*!	Renga: whether the system package's copy of the driver at \a path
+	(outside the system package) is newer, so that the system's is loaded
+	instead (see driver_override.h). On true, \a systemPath and
+	\a systemStat describe it.
+*/
+static bool
+system_copy_supersedes(const char* path, const struct stat& stat,
+	KPath& systemPath, struct stat& systemStat)
+{
+	KPath systemAddOns;
+	if (__find_directory(B_SYSTEM_ADDONS_DIRECTORY, gBootDevice, false,
+			systemAddOns.LockBuffer(), systemAddOns.BufferSize()) != B_OK) {
+		systemAddOns.UnlockBuffer();
+		return false;
+	}
+	systemAddOns.UnlockBuffer();
+
+	if (!driver_system_copy_path(path, systemAddOns.Path(),
+			systemPath.LockBuffer(), systemPath.BufferSize())) {
+		systemPath.UnlockBuffer();
+		return false;
+	}
+	systemPath.UnlockBuffer();
+
+	if (::stat(systemPath.Path(), &systemStat) != 0
+		|| !S_ISREG(systemStat.st_mode))
+		return false;
+	return driver_copy_is_older(stat.st_mtim.tv_sec, stat.st_mtim.tv_nsec,
+		systemStat.st_mtim.tv_sec, systemStat.st_mtim.tv_nsec);
+}
+
+
 static status_t
 add_driver(const char* path, image_id image)
 {
@@ -586,6 +656,22 @@ add_driver(const char* path, image_id image)
 	}
 
 	int32 priority = get_priority(path);
+
+	// Renga: a copy outside the system package that is older than the
+	// system's copy is a leftover (built before the system shipped this
+	// driver, against older kernel and compatibility code); use the
+	// system's. A newer copy, a developer's build, still wins.
+	KPath systemPath;
+	struct stat systemStat;
+	if (image < 0 && priority > 0
+		&& system_copy_supersedes(path, stat, systemPath, systemStat)) {
+		dprintf("devfs: \"%s\" is older than the system's copy \"%s\"; "
+			"using the system's (update or remove the older one to change "
+			"this)\n", path, systemPath.Path());
+		path = systemPath.Path();
+		stat = systemStat;
+		priority = get_priority(path);
+	}
 
 	RecursiveLocker _(sLock);
 

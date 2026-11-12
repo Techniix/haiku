@@ -84,6 +84,12 @@ static union {
 } sSyslogOnlyFilterStorage;
 static SyslogOnlyOutputFilter* sSyslogOnlyFilter = NULL;
 static char sMessageBuffer[512];
+
+// legacy_drivers.cpp: the driver whose init or uninit hook is running, if
+// any (Renga: the report names the add-on of a panic in a driver's load or
+// unload, e.g. a reload by the kernel daemon during boot).
+extern "C" bool legacy_driver_current_operation(const char** _operation,
+	const char** _path);
 static char sCommandBuffer[64];
 static bool sWriting = false;
 
@@ -180,6 +186,14 @@ crash_report_write(const char* messagePrefix, const char* message,
 	kprintf("free_memory_bytes: %" B_PRIu64 "\n",
 		(uint64)vm_page_num_free_pages() * B_PAGE_SIZE);
 	kprintf("debugger_cpu: %" B_PRId32 "\n", cpu);
+	const char* operation;
+	const char* driverPath;
+	if (legacy_driver_current_operation(&operation, &driverPath)
+		&& debug_is_kernel_memory_accessible((addr_t)driverPath, 1,
+			B_KERNEL_READ_AREA)) {
+		kprintf("%s %.256s (%s)\n", CRASH_REPORT_DRIVER, driverPath,
+			operation);
+	}
 
 	// The thread each CPU was running. The other CPUs are held in
 	// debug_trap_cpu_in_kdl(), which saved their registers, so "bt <id>"

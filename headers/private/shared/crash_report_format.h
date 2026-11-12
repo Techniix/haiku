@@ -21,6 +21,8 @@
 		time: <seconds since 1970, the kernel's real time clock>
 		uptime_us: ..., cpu_count: ..., cpu_model: ..., memory_bytes: ...,
 		free_memory_bytes: ..., debugger_cpu: ...
+		driver: <path> (<hook>)   only while a legacy driver's init or
+		                          uninit hook ran (the add-on to suspect)
 		--- cpu <n>: thread <id> "<name>"
 		<the debugger's "bt" output>
 		...
@@ -40,6 +42,7 @@
 #define CRASH_REPORT_END			"==== Renga crash report end ===="
 #define CRASH_REPORT_CPU			"--- cpu"
 #define CRASH_REPORT_IMAGES			"--- loaded kernel images"
+#define CRASH_REPORT_DRIVER			"driver:"
 #define CRASH_REPORT_FORMAT_VERSION	1
 
 #define CRASH_REPORT_REASON_PANIC			"panic"

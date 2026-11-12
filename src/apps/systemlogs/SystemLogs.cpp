@@ -642,6 +642,13 @@ crash_label(const char* leaf, const std::string& text)
 		std::string message = report_field(text, "message");
 		label.SetToFormat(B_TRANSLATE("Kernel crash, %s: %s - %s"),
 			when.c_str(), reason.c_str(), message.c_str());
+		std::string driver = report_field(text, "driver");
+		if (!driver.empty()) {
+			BString suffix;
+			suffix.SetToFormat(B_TRANSLATE(" (in driver %s)"),
+				driver.c_str());
+			label << suffix;
+		}
 	} else if (strncmp(leaf, "app-", 4) == 0) {
 		std::string when = report_field(text, "time");
 		std::string program = report_field(text, "program");
@@ -1126,6 +1133,13 @@ notify_new_crashes()
 		content.SetToFormat(B_TRANSLATE("The kernel stopped on %s: %s\n"
 			"Click to view the crash report."), when.c_str(),
 			message.c_str());
+		std::string driver = report_field(text, "driver");
+		if (!driver.empty()) {
+			BString line;
+			line.SetToFormat(B_TRANSLATE("\nIt happened in the driver %s."),
+				driver.c_str());
+			content << line;
+		}
 		notification.SetContent(content);
 		notification.SetMessageID(path.Path());
 		notification.SetOnClickApp(kSignature);

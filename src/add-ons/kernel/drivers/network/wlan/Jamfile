@@ -19,5 +19,8 @@ SubInclude HAIKU_TOP src add-ons kernel drivers network wlan zydwifi1211 ;
 SubInclude HAIKU_TOP src add-ons kernel drivers network wlan iaxwifi200 ;
 SubInclude HAIKU_TOP src add-ons kernel drivers network wlan idualwifi7260 ;
 
+# Renga's test driver (harness images only, see 3rdparty/ce/Jamfile)
+SubInclude HAIKU_TOP src add-ons kernel drivers network wlan fbsd_wlantest ;
+
 # Linux drivers (LinuxKPI)
 SubInclude HAIKU_TOP src add-ons kernel drivers network wlan mt7921e ;

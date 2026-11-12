@@ -392,7 +392,14 @@ if_detach(struct ifnet *ifp)
 	if (HAIKU_DRIVER_REQUIRES(FBSD_SWI_TASKQUEUE))
 		taskqueue_drain(taskqueue_swi, &ifp->if_linktask);
 
-	IF_ADDR_LOCK_DESTROY(ifp);
+	// Renga: the address lock is destroyed by if_free_inplace(), as in
+	// FreeBSD (if_free_internal()). Destroying it here too destroyed it
+	// twice for every interface that is detached and then freed, which is
+	// what every driver does (ether_ifdetach() + if_free(), and
+	// ieee80211_vap_detach() for every Wi-Fi vap): a KDEBUG kernel panics
+	// in the second mutex_destroy() ("the lock is held by -32768", the
+	// value the first one leaves), so unloading or reloading such a driver
+	// with its device attached took the system down.
 	ifq_uninit((struct ifqueue *) &ifp->if_snd);
 }
 
