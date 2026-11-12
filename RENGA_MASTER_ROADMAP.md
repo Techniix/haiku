@@ -354,6 +354,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-63 | Media graph made visible: patchbay and Linux audio as nodes (go/no-go per part) | Investigating | None |
 | F-64 | Automation app (modern successor to `hey` scripting) | Designed | None |
 | F-65 | Live widgets: replicants for the modern desktop, with Lumina | Designed | None |
+| F-66 | Tracker modernisation | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -1472,7 +1473,7 @@ Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal
 | Renga maturity | None |
 | Status | **Designed** (maintainer, 2026-11-11) |
 | Completed | None |
-| Remaining | Live queries as everyday features: smart folders in Tracker (saved live queries shown as folders in the sidebar and Deskbar), tags as an indexed attribute with a tag editor in Tracker's info panel and context menu, a full-text content index (a background indexer writing words to an index attribute, with plug-ins per file type, throttled and pausable, off for removable media unless asked), and one system-wide instant search (apps, settings pages, files, mail, contacts, recent items) on top of queries, shared with the Deskbar and Lumina launcher (`F-41`, `F-44` item 8); query speed measured on large volumes; extended attributes mapped to BFS attributes (`F-52`) so ported programs share them |
+| Remaining | Live queries as everyday features: smart folders in Tracker (saved live queries shown as folders in the sidebar and Deskbar), tags as an indexed attribute with a tag editor in Tracker's info panel and context menu, a full-text content index (a background indexer writing words to an index attribute, with plug-ins per file type, throttled and pausable, off for removable media unless asked), and one system-wide instant search (apps, settings pages, files, mail, contacts, recent items) on top of queries, shared with the Deskbar and Lumina launcher (`F-41`, `F-44` item 8); query speed measured on large volumes; extended attributes mapped to BFS attributes (`F-52`) so ported programs share them. **Smart search (maintainer, 2026-11-11), opt-in:** find photos by what is in them ("grass", "beach at sunset") with a small local image-text model (CLIP/SigLIP class, quantised, roughly 100-300 MB, an optional package, never sent off the machine): an indexer computes one embedding per image and stores it as a BFS attribute; a search turns the words into an embedding and compares (milliseconds for tens of thousands of photos). Indexing runs only when the machine is idle, on low priority, pausable, under the lean-by-design rule (seconds per hundred photos on a modern CPU, GPU later through `F-35`); text inside images (OCR, Tesseract) as a second optional part. Go/no-go after a measured prototype: if indexing visibly affects responsiveness (`F-61`) or the model is too heavy, it stays out |
 | Known bugs/limitations | Not applicable |
 | Dependencies | `F-52` (xattr mapping), `F-41`/`F-25` (launcher), `F-60` (Tracker review) |
 | Difficulty | 6 |
@@ -1534,6 +1535,24 @@ Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal
 | Testing status | None |
 | Next milestone | Design with mockups, together with the Lumina phase |
 | Recommended next action | With Lumina (`F-25`) |
+| Links | Maintainer, 2026-11-11 |
+
+#### F-66 Tracker modernisation
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Tracker A: fast and stable, BeOS-era design; spatial windows, attribute columns, live queries; no tabs, split view, path bar, sidebar, preview, operation queue or undo |
+| Renga maturity | Context menu additions planned in `F-44` (archives, network shares, sharing); desktop menu stall in `F-59` |
+| Status | **Designed** (maintainer, 2026-11-11: all of the list below approved) |
+| Completed | None |
+| Remaining | Keeping Tracker's strengths (live attributes and queries, its speed; the spatial mode stays as an option). **Navigation:** tabs; optional split view; a clickable, editable path bar; a sidebar (favourites, devices, network, smart folders `F-62`, tags, recent); back and forward history. **Seeing files:** Quick Look on Space (images, video, audio, PDF, text, fonts; Translation Kit and Media Kit); thumbnails for video, PDF and fonts, cached on disk; video thumbnails may play a few seconds of preview on hover, only if it is lag-free (small decode at thumbnail size on a low-priority thread after a short hover delay, cancelled on leave, off for network volumes by default), with settings to turn hover previews and thumbnails on or off per kind and per volume; gallery view; grouping by kind or date, folders first; type to filter in any window. **File operations:** one queue window for copy, move and delete with speed, time left, pause and resume; a conflict dialog (replace, keep both, skip; apply to all); undo for rename, move and trash; batch rename; Trash with "restore to original location". **Speed:** directories load asynchronously (huge folders never block a window), measured by `F-61` and `F-60`. **Reliability:** Tracker add-ons run out of process so a bad one cannot crash Tracker; a crashed Tracker restarts and reopens its windows. **Integration:** Open Terminal here; per-type "Open with" defaults; Linux programs from Renguin in "Open with"; an attribute editor in Get Info; dark mode and HiDPI with the Renga refresh. Settings for all of this in Tracker's preferences and later the Control Panel (`F-28`) |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-60` (Tracker review first), `F-62` (smart folders, tags, smart search), `F-61` (responsiveness), `F-27` (Renguin "Open with"), `F-40` (design language) |
+| Difficulty | 7 (in parts of 3-5) |
+| Risk | Medium (central program; upstream Tracker changes often, keep hunks organised) |
+| Testing status | None |
+| Next milestone | After the `F-60` review report, Tracker first |
+| Recommended next action | Split into small commits by area, each with harness checks and screenshots |
 | Links | Maintainer, 2026-11-11 |
 
 ### Bundled applications
