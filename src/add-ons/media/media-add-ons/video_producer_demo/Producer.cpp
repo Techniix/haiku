@@ -135,6 +135,12 @@ VideoProducer::NodeRegistered()
 	state->AddItem(B_HOST_TO_LENDIAN_INT32(0x00ff0000), "Red");
 	state->AddItem(B_HOST_TO_LENDIAN_INT32(0x0000ff00), "Green");
 	state->AddItem(B_HOST_TO_LENDIAN_INT32(0x000000ff), "Blue");
+	// Renga (F-58): the modes list cameras have ("renga:video_modes", see
+	// the usb_webcam add-on), so that clients can be tested with this
+	// source. Any size works; these are the usual ones. field_rate is
+	// honoured as asked.
+	main->MakeTextParameter(P_MODES, B_MEDIA_RAW_VIDEO, "Video modes",
+		"renga:video_modes", 256)->SetFlags(B_HIDDEN_PARAMETER);
 
 	fColor = B_HOST_TO_LENDIAN_INT32(0x00ff0000);
 	fLastColorChange = system_time();
@@ -284,7 +290,16 @@ VideoProducer::FormatProposal(const media_source &output, media_format *format)
 
 	err = format_is_compatible(*format, fOutput.format) ?
 			B_OK : B_MEDIA_BAD_FORMAT;
+	// Renga (F-58): keep the size and field_rate asked for (any is fine
+	// here); they were replaced by whatever the output had before
+	media_raw_video_format requested = format->u.raw_video;
 	*format = fOutput.format;
+	if (requested.display.line_width != 0)
+		format->u.raw_video.display.line_width = requested.display.line_width;
+	if (requested.display.line_count != 0)
+		format->u.raw_video.display.line_count = requested.display.line_count;
+	if (requested.field_rate > 0)
+		format->u.raw_video.field_rate = requested.field_rate;
 
 	return err;		
 }
@@ -538,6 +553,16 @@ status_t
 VideoProducer::GetParameterValue(
 	int32 id, bigtime_t *last_change, void *value, size_t *size)
 {
+	if (id == P_MODES) {
+		static const char kModes[] = "320x240 RGB32 29.97,15,5\n"
+			"640x480 RGB32 29.97,15,5\n";
+		if (*size < sizeof(kModes))
+			return B_BAD_VALUE;
+		*last_change = 0;
+		*size = sizeof(kModes);
+		memcpy(value, kModes, sizeof(kModes));
+		return B_OK;
+	}
 	if (id != P_COLOR)
 		return B_BAD_VALUE;
 
@@ -690,6 +715,12 @@ VideoProducer::FrameGenerator()
 			continue;
 
 		BAutolock _(fLock);
+
+		/* Renga: Disconnect() may have deleted the group after the check
+		 * above (it crashed the client's team when a connection ended
+		 * while a frame was due) */
+		if (fBufferGroup == NULL || !fEnabled)
+			continue;
 
 		/* Fetch a buffer from the buffer group */
 		BBuffer *buffer = fBufferGroup->RequestBuffer(

@@ -29,7 +29,7 @@ addonSources =
 	SonixCamDevice.cpp
 	NW80xCamDevice.cpp
 	# Renga: the USB Video Class add-on, built again (F-31 phase 2)
-	UVCCamDevice.cpp UVCDeframer.cpp UVCPayload.cpp
+	UVCCamDevice.cpp UVCDeframer.cpp UVCPayload.cpp UVCModes.cpp
 ;
 
 ## colorspace transforms sources

@@ -145,6 +145,7 @@ static	int32				_frame_generator_(void *data);
 		enum {
 			 P_COLOR,
 			 P_INFO,
+			 P_MODES,		// Renga (F-58, O-5): "renga:video_modes"
 			 P_LAST			// first available for addons
 		};
 		uint32				fColor;

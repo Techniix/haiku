@@ -8,6 +8,7 @@
 
 #include "UVCCamDevice.h"
 #include "UVCDeframer.h"
+#include "UVCModes.h"
 #include "UVCPayload.h"
 
 #include <Bitmap.h>
@@ -81,7 +82,9 @@ UVCCamDevice::UVCCamDevice(CamDeviceAddon& _addon, BUSBDevice* _device)
 	fMJPEGFormatIndex(0),
 	fMJPEGFrameIndex(0),
 	fUseMJPEG(false),
-	fUncompressedIsYUY2(false)
+	fUncompressedIsYUY2(false),
+	fRequestedFps(0),
+	fFrameInterval(0)
 {
 	fDeframer = new UVCDeframer(this);
 	SetDataInput(fDeframer);
@@ -158,6 +161,10 @@ UVCCamDevice::UVCCamDevice(CamDeviceAddon& _addon, BUSBDevice* _device)
 UVCCamDevice::~UVCCamDevice()
 {
 	free(fHeaderDescriptor);
+	for (int32 i = 0; i < fUncompressedFrames.CountItems(); i++)
+		free(fUncompressedFrames.ItemAt(i));
+	for (int32 i = 0; i < fMJPEGFrames.CountItems(); i++)
+		free(fMJPEGFrames.ItemAt(i));
 }
 
 
@@ -236,13 +243,22 @@ UVCCamDevice::_ParseVideoStreaming(const usbvc_class_descriptor* _descriptor,
 		{
 			const usb_video_frame_descriptor* descriptor
 				= (const usb_video_frame_descriptor*)_descriptor;
+			// Renga: the whole descriptor, frame intervals included (a copy
+			// of the struct kept three of them at most)
+			size_t size = max_c((size_t)descriptor->length,
+				sizeof(usb_video_frame_descriptor));
+			usb_video_frame_descriptor* copy
+				= (usb_video_frame_descriptor*)calloc(1, size);
+			if (copy != NULL)
+				memcpy(copy, descriptor, min_c(len, (size_t)descriptor->length));
 			if (_descriptor->descriptorSubtype == USB_VIDEO_VS_FRAME_UNCOMPRESSED) {
 				printf("VS_FRAME_UNCOMPRESSED:");
-				fUncompressedFrames.AddItem(
-					new usb_video_frame_descriptor(*descriptor));
+				if (copy != NULL)
+					fUncompressedFrames.AddItem(copy);
 			} else {
 				printf("VS_FRAME_MJPEG:");
-				fMJPEGFrames.AddItem(new usb_video_frame_descriptor(*descriptor));
+				if (copy != NULL)
+					fMJPEGFrames.AddItem(copy);
 			}
 			printf("\tbFrameIdx=%d,stillsupported=%s,"
 				"fixedframerate=%s\n", descriptor->frame_index,
@@ -621,6 +637,7 @@ UVCCamDevice::AcceptVideoFrame(uint32& width, uint32& height)
 			fUseMJPEG = false;
 			((UVCDeframer*)fDeframer)->SetFrameSize((size_t)width * height * 2);
 			SetVideoFrame(BRect(0, 0, width - 1, height - 1));
+			_ChooseInterval();
 			return B_OK;
 		}
 	}
@@ -632,6 +649,7 @@ UVCCamDevice::AcceptVideoFrame(uint32& width, uint32& height)
 			fUseMJPEG = true;
 			((UVCDeframer*)fDeframer)->SetFrameSize(0);
 			SetVideoFrame(BRect(0, 0, width - 1, height - 1));
+			_ChooseInterval();
 			return B_OK;
 		}
 	}
@@ -639,6 +657,78 @@ UVCCamDevice::AcceptVideoFrame(uint32& width, uint32& height)
 	fprintf(stderr, "UVCCamDevice::AcceptVideoFrame() Invalid frame dimensions"
 		"\n");
 	return B_ERROR;
+}
+
+
+const usb_video_frame_descriptor*
+UVCCamDevice::_CurrentFrame() const
+{
+	const BList& frames = fUseMJPEG ? fMJPEGFrames : fUncompressedFrames;
+	uint32 index = fUseMJPEG ? fMJPEGFrameIndex : fUncompressedFrameIndex;
+	for (int32 i = 0; i < frames.CountItems(); i++) {
+		const usb_video_frame_descriptor* descriptor
+			= (const usb_video_frame_descriptor*)frames.ItemAt(i);
+		if (descriptor->frame_index == index)
+			return descriptor;
+	}
+	return NULL;
+}
+
+
+//!	Renga: the interval of the current frame size nearest the rate asked.
+void
+UVCCamDevice::_ChooseInterval()
+{
+	const usb_video_frame_descriptor* descriptor = _CurrentFrame();
+	if (descriptor == NULL) {
+		fFrameInterval = 0;
+		return;
+	}
+	uint32 intervals[kUVCMaxIntervals];
+	int32 count = uvc_frame_intervals((const uint8*)descriptor,
+		descriptor->length, intervals, kUVCMaxIntervals);
+	fFrameInterval = uvc_choose_interval(intervals, count, fRequestedFps,
+		descriptor->default_frame_interval);
+}
+
+
+status_t
+UVCCamDevice::SetFrameRate(float fps)
+{
+	fRequestedFps = fps > 0 ? fps : 0;
+	_ChooseInterval();
+	return B_OK;
+}
+
+
+float
+UVCCamDevice::FrameRate()
+{
+	if (fFrameInterval == 0)
+		_ChooseInterval();
+	return uvc_interval_fps(fFrameInterval);
+}
+
+
+BString
+UVCCamDevice::VideoModes()
+{
+	BString modes;
+	for (int pass = 0; pass < 2; pass++) {
+		const BList& frames = pass == 0 ? fUncompressedFrames : fMJPEGFrames;
+		if (pass == 0 && !fUncompressedIsYUY2)
+			continue;
+		for (int32 i = 0; i < frames.CountItems(); i++) {
+			const usb_video_frame_descriptor* descriptor
+				= (const usb_video_frame_descriptor*)frames.ItemAt(i);
+			uint32 intervals[kUVCMaxIntervals];
+			int32 count = uvc_frame_intervals((const uint8*)descriptor,
+				descriptor->length, intervals, kUVCMaxIntervals);
+			modes << uvc_mode_line(descriptor->width, descriptor->height,
+				pass == 0 ? "YUY2" : "MJPEG", intervals, count) << "\n";
+		}
+	}
+	return modes;
 }
 
 
@@ -660,7 +750,9 @@ UVCCamDevice::_ProbeCommitFormat()
 	usb_video_probe_and_commit_controls request;
 	memset(&request, 0, sizeof(request));
 	request._hint.frame_interval = 1;
-	request.frame_interval = 333333;
+	// Renga (F-58, O-5): the interval chosen for the frame rate asked for
+	// (it was always 333333, 30 fps, whatever the camera offered)
+	request.frame_interval = fFrameInterval != 0 ? fFrameInterval : 333333;
 	request.format_index = fUseMJPEG ? fMJPEGFormatIndex
 		: fUncompressedFormatIndex;
 	request.frame_index = fUseMJPEG ? fMJPEGFrameIndex

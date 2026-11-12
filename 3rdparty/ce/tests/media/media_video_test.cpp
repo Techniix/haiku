@@ -23,9 +23,11 @@
 
 #include <Application.h>
 #include <MediaAddOn.h>
+#include <MediaRecorder.h>
 #include <MediaRoster.h>
 #include <Messenger.h>
 #include <OS.h>
+#include <ParameterWeb.h>
 #include <String.h>
 
 #include <signal.h>
@@ -163,6 +165,121 @@ wait_for_preview(BMediaRoster* roster, int32* consumers)
 }
 
 
+// #pragma mark - modes and frame rates (F-58, OBS Studio's O-5)
+
+
+static int32 sFrames;
+
+
+static void
+count_frame(void* cookie, bigtime_t timestamp, void* data, size_t size,
+	const media_format& format)
+{
+	atomic_add(&sFrames, 1);
+}
+
+
+/*!	Frames a recorder gets from \a node in \a seconds when it asks for
+	\a fps (field_rate), and the rate the connection got.
+*/
+static int32
+frames_at(const media_node& node, float fps, double seconds, float* _rate)
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_output output;
+	int32 count = 0;
+	*_rate = 0;
+	if (roster->GetFreeOutputsFor(node, &output, 1, &count,
+			B_MEDIA_RAW_VIDEO) != B_OK || count < 1)
+		return -1;
+	BMediaRecorder recorder("codycam test recorder", B_MEDIA_RAW_VIDEO);
+	if (recorder.InitCheck() != B_OK)
+		return -2;
+	recorder.SetHooks(count_frame, NULL, NULL);
+	media_format format;
+	format.type = B_MEDIA_RAW_VIDEO;
+	format.u.raw_video = media_raw_video_format::wildcard;
+	format.u.raw_video.display.format = B_RGB32;
+	format.u.raw_video.display.line_width = 320;
+	format.u.raw_video.display.line_count = 240;
+	format.u.raw_video.field_rate = fps;
+	if (recorder.Connect(node, &output, &format) != B_OK)
+		return -3;
+	*_rate = recorder.Format().u.raw_video.field_rate;
+	atomic_set(&sFrames, 0);
+	int32 frames = -4;
+	if (recorder.Start() == B_OK) {
+		snooze((bigtime_t)(seconds * 1000000));
+		frames = atomic_get(&sFrames);
+		recorder.Stop();
+	}
+	recorder.Disconnect();
+	return frames;
+}
+
+
+/*!	The "renga:video_modes" parameter of the synthetic source (cameras have
+	the same, from their descriptors; QEMU has no USB camera), and that a
+	connection's field_rate decides how many frames arrive.
+*/
+static void
+test_video_modes(BMediaRoster* roster, const dormant_node_info& info)
+{
+	media_node node;
+	status_t status = roster->InstantiateDormantNode(info, &node);
+	if (status != B_OK) {
+		report("video_modes", false, "instantiating: %s", strerror(status));
+		return;
+	}
+	BString modes;
+	BParameterWeb* web = NULL;
+	status = roster->GetParameterWebFor(node, &web);
+	for (int32 i = 0; web != NULL && i < web->CountParameters(); i++) {
+		BParameter* parameter = web->ParameterAt(i);
+		if (strcmp(parameter->Kind(), "renga:video_modes") != 0)
+			continue;
+		char text[1024];
+		size_t size = sizeof(text);
+		bigtime_t when;
+		if (parameter->GetValue(text, &size, &when) == B_OK)
+			modes.SetTo(text, strnlen(text, sizeof(text)));
+	}
+	delete web;
+	BString shown(modes);
+	shown.ReplaceAll("\n", "; ");
+	report("video_modes", modes.FindFirst("320x240 RGB32 29.97,15,5") >= 0,
+		"%s; \"%s\"", strerror(status), shown.String());
+
+	roster->ReleaseNode(node);
+
+	// A node of its own for each rate (the demo producer does not take a
+	// second connection after a stop well), on a running time source.
+	float rates[2] = { 15, 5 };
+	float got[2] = { 0, 0 };
+	int32 frames[2] = { -9, -9 };
+	for (int i = 0; i < 2; i++) {
+		media_node each;
+		if (roster->InstantiateDormantNode(info, &each) != B_OK)
+			continue;
+		media_node timeSource;
+		if (roster->GetTimeSource(&timeSource) == B_OK) {
+			roster->SetTimeSourceFor(each.node, timeSource.node);
+			roster->ReleaseNode(timeSource);
+		}
+		frames[i] = frames_at(each, rates[i], 3.0, &got[i]);
+		roster->ReleaseNode(each);
+	}
+	float rate15 = got[0], rate5 = got[1];
+	int32 frames15 = frames[0], frames5 = frames[1];
+	report("field_rate_honoured", rate15 == 15 && rate5 == 5
+			&& frames15 >= 36 && frames15 <= 50 && frames5 >= 11
+			&& frames5 <= 18,
+		"field_rate 15: got %.2f, %" B_PRId32 " frames in 3 s (want ~45); "
+		"5: got %.2f, %" B_PRId32 " frames (want ~15)", rate15, frames15,
+		rate5, frames5);
+}
+
+
 int
 main()
 {
@@ -208,6 +325,8 @@ main()
 		printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 		return 1;
 	}
+
+	test_video_modes(roster, infos[demo]);
 
 	pid_t team = fork();
 	if (team == 0) {

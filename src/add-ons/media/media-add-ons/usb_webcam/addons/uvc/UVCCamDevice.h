@@ -26,6 +26,9 @@ public:
 									uint32 &height);
 	virtual status_t			AcceptVideoFrame(uint32 &width,
 									uint32 &height);
+	virtual status_t			SetFrameRate(float fps);
+	virtual float				FrameRate();
+	virtual BString				VideoModes();
 	virtual void				AddParameters(BParameterGroup *group,
 									int32 &index);
 	virtual status_t			GetParameterValue(int32 id,
@@ -87,6 +90,16 @@ private:
 
 			BList				fUncompressedFrames;
 			BList				fMJPEGFrames;
+				// whole VS_FRAME descriptors (malloc()ed, with their
+				// frame intervals)
+			// Renga (F-58, O-5): the frame rate asked for (0 the default)
+			// and the interval of the current frame descriptor chosen for
+			// it, sent in the probe and commit
+			float				fRequestedFps;
+			uint32				fFrameInterval;
+
+			const usb_video_frame_descriptor* _CurrentFrame() const;
+			void				_ChooseInterval();
 
 			float				fBrightness;
 			float				fContrast;

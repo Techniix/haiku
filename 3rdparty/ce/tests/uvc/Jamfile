@@ -10,7 +10,8 @@ SEARCH_SOURCE += $(uvcDir) ;
 Application uvc_test :
 	uvc_test.cpp
 	UVCPayload.cpp
-	: [ TargetLibstdc++ ]
+	UVCModes.cpp
+	: be [ TargetLibstdc++ ]
 ;
 
 if $(CE_HARNESS) {

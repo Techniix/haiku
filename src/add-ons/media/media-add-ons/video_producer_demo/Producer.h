@@ -128,7 +128,7 @@ static	int32				_frame_generator_(void *data);
 		bool				fConnected;
 		bool				fEnabled;
 
-		enum				{ P_COLOR };
+		enum				{ P_COLOR, P_MODES };
 		uint32				fColor;
 		bigtime_t			fLastColorChange;
 };

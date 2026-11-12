@@ -184,6 +184,13 @@ VideoProducer::NodeRegistered()
 	g = main->MakeGroup("Info");
 	p = g->MakeTextParameter(
 		P_INFO, B_MEDIA_RAW_VIDEO, "", "Info", 256);
+	// Renga (F-58, OBS Studio's O-5): the camera's modes, one line per
+	// frame size and encoding, "<w>x<h> <encoding> <fps>,<fps>,..." (the
+	// output is B_RGB32 whatever the camera sends); read only. A
+	// connection's field_rate picks the nearest rate of its size.
+	p = g->MakeTextParameter(P_MODES, B_MEDIA_RAW_VIDEO, "Video modes",
+		"renga:video_modes", 4096);
+	p->SetFlags(B_HIDDEN_PARAMETER);
 
 	int32 id = P_LAST;
 	if (fCamDevice) {
@@ -331,7 +338,10 @@ status_t
 VideoProducer::FormatSuggestionRequested(
 		media_type type, int32 quality, media_format *format)
 {
-	if (type != B_MEDIA_ENCODED_VIDEO)
+	// Renga: raw video is what this node makes (only encoded video was
+	// accepted, so a suggestion for raw video always failed)
+	if (type != B_MEDIA_RAW_VIDEO && type != B_MEDIA_ENCODED_VIDEO
+		&& type != B_MEDIA_UNKNOWN_TYPE)
 		return B_MEDIA_BAD_FORMAT;
 
 	TOUCH(quality);
@@ -341,12 +351,18 @@ VideoProducer::FormatSuggestionRequested(
 			format->u.raw_video.display.line_count));
 
 	*format = fOutput.format;
+	format->u.raw_video.field_rate = FIELD_RATE;
 	uint32 width, height;
 	if (fCamDevice && fCamDevice->SuggestVideoFrame(width, height) == B_OK) {
 		format->u.raw_video.display.line_width = width;
 		format->u.raw_video.display.line_count = height;
+		// Renga (F-58, O-5): the camera's default rate for that size
+		if (fCamDevice->AcceptVideoFrame(width, height) == B_OK
+			&& fCamDevice->SetFrameRate(0) == B_OK
+			&& fCamDevice->FrameRate() > 0) {
+			format->u.raw_video.field_rate = fCamDevice->FrameRate();
+		}
 	}
-	format->u.raw_video.field_rate = FIELD_RATE;
 	return B_OK;
 }
 
@@ -371,6 +387,7 @@ VideoProducer::FormatProposal(const media_source &output, media_format *format)
 
 	uint32 width = format->u.raw_video.display.line_width;
 	uint32 height = format->u.raw_video.display.line_count;
+	float fieldRate = format->u.raw_video.field_rate;
 
 	*format = fOutput.format;
 
@@ -379,6 +396,12 @@ VideoProducer::FormatProposal(const media_source &output, media_format *format)
 		if (err >= B_OK) {
 			format->u.raw_video.display.line_width = width;
 			format->u.raw_video.display.line_count = height;
+			// Renga (F-58, O-5): the rate asked for, as the camera can
+			// do it for this size
+			if (fCamDevice->SetFrameRate(fieldRate) == B_OK
+				&& fCamDevice->FrameRate() > 0) {
+				format->u.raw_video.field_rate = fCamDevice->FrameRate();
+			}
 		}
 	}
 
@@ -521,6 +544,13 @@ VideoProducer::PrepareToConnect(const media_source &source,
 			format->u.raw_video.display.line_count);
 		if (err < B_OK)
 			return err;
+		// Renga (F-58, O-5): field_rate is honoured: the camera's nearest
+		// rate for this size (sent in its probe and commit); the old code
+		// always streamed at 30 fps and reported 5
+		if (fCamDevice->SetFrameRate(format->u.raw_video.field_rate) == B_OK
+			&& fCamDevice->FrameRate() > 0) {
+			format->u.raw_video.field_rate = fCamDevice->FrameRate();
+		}
 	}
 
 	if (format->u.raw_video.field_rate == 0)
@@ -717,6 +747,20 @@ VideoProducer::GetParameterValue(
 			*size = fInfoString.Length() + 1;
 			memcpy(value, fInfoString.String(), *size);
 			return B_OK;
+		case P_MODES:
+		{
+			BString modes;
+			if (fCamDevice != NULL) {
+				BAutolock lock(fCamDevice->Locker());
+				modes = fCamDevice->VideoModes();
+			}
+			if (*size < (size_t)(modes.Length() + 1))
+				return EINVAL;
+			*last_change = 0;
+			*size = modes.Length() + 1;
+			memcpy(value, modes.String(), *size);
+			return B_OK;
+		}
 	}
 
 	if (fCamDevice) {
@@ -753,6 +797,7 @@ VideoProducer::SetParameterValue(
 			fLastColorChange = when;
 			break;
 		case P_INFO:
+		case P_MODES:
 			// forbidden
 			return;
 		default:

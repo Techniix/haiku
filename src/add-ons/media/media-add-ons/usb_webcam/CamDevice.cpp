@@ -228,6 +228,27 @@ CamDevice::SetVideoFrame(BRect frame)
 
 
 status_t
+CamDevice::SetFrameRate(float fps)
+{
+	return B_NOT_SUPPORTED;
+}
+
+
+float
+CamDevice::FrameRate()
+{
+	return 0;
+}
+
+
+BString
+CamDevice::VideoModes()
+{
+	return BString();
+}
+
+
+status_t
 CamDevice::SetScale(float scale)
 {
 	return B_OK;

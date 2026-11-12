@@ -23,6 +23,7 @@
 
 #include <vector>
 
+#include "UVCModes.h"
 #include "UVCPayload.h"
 
 
@@ -300,6 +301,106 @@ test_mjpeg()
 }
 
 
+// #pragma mark - modes (F-58, OBS Studio's O-5)
+
+
+//!	A VS_FRAME descriptor: 26 fixed bytes, then the intervals.
+static std::vector<uint8>
+frame_descriptor(uint16 width, uint16 height, uint32 defaultInterval,
+	uint8 intervalType, const std::vector<uint32>& values)
+{
+	std::vector<uint8> d(26 + 4 * values.size(), 0);
+	d[0] = d.size();
+	d[1] = 0x24;
+	d[2] = 0x05;	// VS_FRAME_UNCOMPRESSED
+	d[3] = 1;
+	d[5] = width & 0xff;
+	d[6] = width >> 8;
+	d[7] = height & 0xff;
+	d[8] = height >> 8;
+	for (int i = 0; i < 4; i++)
+		d[21 + i] = (defaultInterval >> (8 * i)) & 0xff;
+	d[25] = intervalType;
+	for (size_t v = 0; v < values.size(); v++) {
+		for (int i = 0; i < 4; i++)
+			d[26 + 4 * v + i] = (values[v] >> (8 * i)) & 0xff;
+	}
+	return d;
+}
+
+
+static void
+test_modes()
+{
+	// discrete intervals, listed out of order
+	std::vector<uint8> discrete = frame_descriptor(640, 480, 333333, 3,
+		{ 666666, 333333, 2000000 });
+	uint32 intervals[kUVCMaxIntervals];
+	int32 count = uvc_frame_intervals(discrete.data(), discrete.size(),
+		intervals, kUVCMaxIntervals);
+	BString line = uvc_mode_line(640, 480, "YUY2", intervals, count);
+	report("modes_discrete", count == 3 && intervals[0] == 333333
+			&& intervals[1] == 666666 && intervals[2] == 2000000
+			&& line == "640x480 YUY2 30,15,5",
+		"%" B_PRId32 " intervals, \"%s\"", count, line.String());
+
+	// a continuous range: the common rates in it, and its ends
+	std::vector<uint8> continuous = frame_descriptor(1280, 720, 333333, 0,
+		{ 333333, 2000000, 333333 });
+	count = uvc_frame_intervals(continuous.data(), continuous.size(),
+		intervals, kUVCMaxIntervals);
+	bool ordered = count > 0;
+	bool inside = count > 0;
+	bool has15 = false;
+	for (int32 i = 0; i < count; i++) {
+		if (i > 0 && intervals[i] <= intervals[i - 1])
+			ordered = false;
+		if (intervals[i] < 333333 || intervals[i] > 2000000
+			|| (intervals[i] != 2000000
+				&& (intervals[i] - 333333) % 333333 != 0))
+			inside = false;
+		if (intervals[i] == 666666)
+			has15 = true;
+	}
+	line = uvc_mode_line(1280, 720, "MJPEG", intervals, count);
+	report("modes_continuous", count >= 4 && ordered && inside && has15
+			&& intervals[0] == 333333
+			&& intervals[count - 1] >= 2000000 - 333333
+			&& line.FindFirst(",5,5") < 0,
+		"%" B_PRId32 " intervals on the 333333 steps, \"%s\"", count,
+		line.String());
+
+	// bLength cuts the list (a camera's descriptor shorter than its count)
+	std::vector<uint8> truncated = discrete;
+	truncated[0] = 26 + 4;
+	count = uvc_frame_intervals(truncated.data(), truncated.size(),
+		intervals, kUVCMaxIntervals);
+	std::vector<uint8> broken = frame_descriptor(640, 480, 0, 0, {});
+	int32 none = uvc_frame_intervals(broken.data(), broken.size(), intervals,
+		kUVCMaxIntervals);
+	report("modes_malformed", count == 1 && none == 0,
+		"bLength for one of three intervals: %" B_PRId32 "; a continuous "
+		"range without its fields: %" B_PRId32, count, none);
+
+	// choosing an interval for a field_rate
+	count = uvc_frame_intervals(discrete.data(), discrete.size(),
+		intervals, kUVCMaxIntervals);
+	uint32 for14 = uvc_choose_interval(intervals, count, 14, 333333);
+	uint32 for0 = uvc_choose_interval(intervals, count, 0, 666666);
+	uint32 for100 = uvc_choose_interval(intervals, count, 100, 333333);
+	uint32 for5 = uvc_choose_interval(intervals, count, 5, 333333);
+	report("modes_choose_rate", for14 == 666666 && for0 == 666666
+			&& for100 == 333333 && for5 == 2000000,
+		"14 fps -> %" B_PRIu32 ", 0 -> default %" B_PRIu32 ", 100 -> %"
+		B_PRIu32 ", 5 -> %" B_PRIu32, for14, for0, for100, for5);
+
+	uint32 ntsc[] = { 333667, 1333333 };
+	line = uvc_mode_line(320, 240, "YUY2", ntsc, 2);
+	report("modes_rate_text", line == "320x240 YUY2 29.97,7.5",
+		"\"%s\"", line.String());
+}
+
+
 int
 main()
 {
@@ -308,6 +409,7 @@ main()
 	test_parser();
 	test_yuy2();
 	test_mjpeg();
+	test_modes();
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);
 	return sFailures == 0 ? 0 : 1;

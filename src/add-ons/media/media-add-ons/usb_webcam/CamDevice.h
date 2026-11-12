@@ -65,6 +65,13 @@ class CamDevice {
 	virtual status_t	AcceptVideoFrame(uint32 &width, uint32 &height);
 	virtual status_t	SetVideoFrame(BRect rect);
 	virtual BRect		VideoFrame() const { return fVideoFrame; };
+	// Renga (F-58, OBS Studio's O-5): the frame rate asked for (0: the
+	// device's default) and the one it will deliver for the current frame
+	// size, and the modes it offers ("renga:video_modes", one line per
+	// frame size and encoding: "<w>x<h> <encoding> <fps>,<fps>,...").
+	virtual status_t	SetFrameRate(float fps);
+	virtual float		FrameRate();
+	virtual BString		VideoModes();
 	virtual status_t	SetScale(float scale);
 	virtual status_t	SetVideoParams(float brightness, float contrast, float hue, float red, float green, float blue);
 
