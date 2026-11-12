@@ -880,6 +880,24 @@ Each rung's programs also run in the `F-61` responsiveness suite where relevant 
 - [ ] **Devices & Drivers page in the Control Panel** (Hardware section, `F-28`; LinuxKPI Manager grows into it): every device with its current driver (native, Linux, none), version, firmware, status and logs (System logs, `F-51`); switch driver per device with **test and revert** (the switch applies, and if the device does not come up or the user does not confirm within 20 seconds, the previous driver returns); per-device policy for new hardware (ask, use recommended, native only); "Native drivers only" as a global safety switch; and a hardware report for bug reports.
 - [ ] **Downloadable driver packs and firmware:** the online support idea, done safely: Linux driver modules and firmware come as signed packages in a Renga repository (RengaPorts), installed through the package system (so updates, rollback and package states apply), never as raw downloaded code.
 - [ ] **Safety net:** a Linux driver that crashes the system twice (`F-51` crash reports name it) is disabled for that device on the next boot, the native driver or none is used, and a notification explains it with a "try again" option; the boot menu's safe-mode options gain "Native drivers only".
+*Device coverage and out-of-the-box drivers (maintainer, 2026-11-12)*
+- [ ] **Device classes**, in order:
+  1. Wi-Fi: MediaTek `mt76` family, Intel `iwlwifi`, Realtek `rtw88`/`rtw89`/`rtl8xxxu`, Qualcomm `ath9k`/`ath10k`/`ath11k`/`ath12k`, Broadcom `brcmfmac`.
+  2. Bluetooth: `btusb`, `btintel`, `btmtk`, `btrtl`, `btbcm`.
+  3. Graphics: Intel `i915`/`xe`, AMD `amdgpu` and `radeon`, through the DRM bridge. NVIDIA stays with Quasar.
+  4. Ethernet that has no native driver: Intel `igc`/`ixgbe`/`ice`, Aquantia `atlantic`, Realtek `r8152` (USB).
+  5. Input: `i2c-hid`, `hid-multitouch` precision touchpads, and the game controller drivers `xpad`, `hid-playstation`, `hid-nintendo` and `hid-steam` (shared with F-42).
+  6. Webcams: `uvcvideo`, through a V4L2 shim feeding the Media Kit.
+  7. Laptop audio on Intel SOF DSPs, where native HDA cannot reach the codec.
+  8. Laptop platform support: `thinkpad_acpi`, `asus-wmi`, `ideapad-laptop`, sensors (`hwmon`), battery and backlight.
+  9. Card readers (`rtsx`) and other common USB devices, ranked by the hardware reports.
+- [ ] **Stays native:** boot storage (AHCI, NVMe, virtio), USB host controllers and the boot path, so a LinuxKPI problem can never stop the machine from booting.
+- [ ] **Bundled in the base image:** every LinuxKPI driver that passes its harness check, with its firmware, so more hardware works out of the box.
+  - Driver modules are small. A driver loads only when matching hardware is present, so there is no cost at run time, which fits the lean-by-design rule.
+  - Firmware is the size cost. Ship only the firmware files the bundled drivers request, packaged per family (for example `linuxkpi_firmware_intel_wifi`) and zstd-compressed, which comes to a few hundred MB instead of the full ~1 GB linux-firmware tree.
+  - Licensing: redistributable firmware only. Anything that is not redistributable is offered as a download in the Devices & Drivers page.
+  - The install media carries everything. The installer asks "Install drivers for all hardware (recommended)" or "Only for this computer", which can be changed later in Devices & Drivers. Uninstalled packs stay available offline from the media and online from RengaPorts.
+  - The image size is tracked per release in the harness, with a budget alarm.
 - [ ] **Harness:** QEMU checks for the installer's Hardware step, the new-device notification, the Control Panel page (switch, test-and-revert, policies), the database lookups and the crash fallback, with fake devices; real-hardware checks on the maintainer's MT7922.
 
 #### F-16 Boot splash
