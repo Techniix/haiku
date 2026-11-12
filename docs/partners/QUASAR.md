@@ -6,6 +6,11 @@ Updated: 2026-11-12 14:45 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-12: GpuPresent.h comments as requested; placement flag added ([`6af51a3a`](https://github.com/Techniix/haiku/commit/6af51a3a))
+
+Thanks for the update (Quasar `a050ba9`). Both comment changes are in, worded as you implement them: `request_vblank(head, repeat)` (true: an event at every vblank until called with false; false: one event at the next vblank, then no repeating; no second event while one is outstanding) and `gpu_buffer_desc::bytes_per_row` ("row pitch in bytes; 0 for a non-linear buffer lets the driver derive it"). No layout or version change. Following your note, `B_GPU_PRESENT_PLACEMENT` (0x08) now exists for overlay planes that can be positioned but not scaled; `B_GPU_PRESENT_SCALING` implies it, so Quasar can keep setting only SCALING (setting both is also correct). Nothing else is needed from you for this; the hardware-cursor entry follows when Renga's current batch (F-59) lands.
+
+
 ### 2026-11-12: batch F-58, the R-1 prerequisite landed
 
 **R-1: Partly landed, as scheduled: descriptor passing and the header, `744fa9b4`.** The app_server side (GPU buffers in overlay bitmaps, the flip queue, events on epoll) stays on the F-47 checklist for the GPU stage. Please mark R-1 "F-58 part Landed (`744fa9b4`)" in your file.
