@@ -15,6 +15,10 @@
 
 #include "ScreenshotWindow.h"
 
+#include <StringForSize.h>
+#include <sys/stat.h>
+#include <ScreenCapture.h>
+
 #include <stdlib.h>
 
 #include <Alert.h>
@@ -161,7 +165,8 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 	fQuitAfterRecording(false),
 	fRecordSystemAudioSetting(true),
 	fRecordMicrophoneSetting(false),
-	fFrameRate(30),
+	fFrameRate(kDefaultFrameRate),
+	fRecordBytes(0),
 	fRecordFormat(0)
 {
 	// _ReadSettings() needs a valid fOutputPathMenu
@@ -258,7 +263,7 @@ ScreenshotWindow::ScreenshotWindow(const Utility& utility, bool silent,
 	currentRate.SetToFormat(B_TRANSLATE("%" B_PRId32 " frames per second"),
 		(int32)fFrameRate);
 	fFrameRateMenu = new BPopUpMenu(currentRate.String());
-	const int32 kFrameRates[] = { 10, 15, 30, 60 };
+	const int32 kFrameRates[] = { 5, 10, 15, 24, 25, 30, 50, 60 };
 	for (uint32 i = 0; i < sizeof(kFrameRates) / sizeof(kFrameRates[0]);
 			i++) {
 		BString label;
@@ -533,8 +538,13 @@ ScreenshotWindow::MessageReceived(BMessage* message)
 			fRecordMicrophoneSetting = fRecordMicrophone->Value() != 0;
 			break;
 		case kFrameRate:
-			message->FindFloat("rate", &fFrameRate);
+		{
+			float rate;
+			if (message->FindFloat("rate", &rate) == B_OK
+				&& rate >= kMinFrameRate && rate <= kMaxFrameRate)
+				fFrameRate = rate;
 			break;
+		}
 		case kRecordFormat:
 			fRecordFormat = message->GetInt32("format", 0);
 			if (fRecordFormat < 0
@@ -1013,6 +1023,10 @@ ScreenshotWindow::_ReadSettings()
 	settings.FindBool("recordSystemAudio", &fRecordSystemAudioSetting);
 	settings.FindBool("recordMicrophone", &fRecordMicrophoneSetting);
 	settings.FindFloat("recordFrameRate", &fFrameRate);
+	// F-59: a missing, zero or broken value (settings written before the
+	// default existed showed "0 frames per second") becomes the default
+	if (!(fFrameRate >= kMinFrameRate && fFrameRate <= kMaxFrameRate))
+		fFrameRate = kDefaultFrameRate;
 	if (activeWindow)
 		fShotType = kActiveWindow;
 
@@ -1129,6 +1143,9 @@ ScreenshotWindow::_StartRecording(const BMessage* options)
 			capture.microphone);
 		capture.frameRate = options->GetFloat("frame rate",
 			capture.frameRate);
+		if (!(capture.frameRate >= kMinFrameRate
+				&& capture.frameRate <= kMaxFrameRate))
+			capture.frameRate = kDefaultFrameRate;
 		const char* format;
 		if (options->FindString("format", &format) == B_OK) {
 			for (int32 i = 0; i < (int32)B_COUNT_OF(kRecordFormats); i++) {
@@ -1192,6 +1209,8 @@ ScreenshotWindow::_StartRecording(const BMessage* options)
 		return;
 	}
 
+	fRecordPath = path;
+	fRecordBytes = 0;
 	status_t status = fRecorder->Start(capture, ref);
 	if (status != B_OK) {
 		BString text;
@@ -1291,5 +1310,18 @@ ScreenshotWindow::_UpdateRecordingStatus()
 	text.SetToFormat(B_TRANSLATE("Recording %" B_PRId32 ":%02" B_PRId32
 		", %" B_PRId32 " x %" B_PRId32), seconds / 60, seconds % 60,
 		frame.IntegerWidth() + 1, frame.IntegerHeight() + 1);
+
+	// F-59: the file's size, here and in the recording indicator
+	struct stat st;
+	if (fRecordPath.InitCheck() == B_OK
+		&& stat(fRecordPath.Path(), &st) == 0 && st.st_size != fRecordBytes) {
+		fRecordBytes = st.st_size;
+		BPrivate::BScreenCapture::SetOutputSize(fRecordBytes);
+	}
+	if (fRecordBytes > 0) {
+		char size[64];
+		string_for_size(fRecordBytes, size, sizeof(size));
+		text << ", " << size;
+	}
 	fRecordStatus->SetText(text.String());
 }

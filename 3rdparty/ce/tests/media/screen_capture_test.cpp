@@ -30,6 +30,8 @@
 #include <Application.h>
 #include <Bitmap.h>
 #include <Entry.h>
+#include <File.h>
+#include <FindDirectory.h>
 #include <MediaFile.h>
 #include <MediaFormats.h>
 #include <MediaRecorder.h>
@@ -48,6 +50,7 @@
 #include <math.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -239,6 +242,57 @@ compare_with_screen(const BBitmap* frame, BRect source)
 	write lock, every other Desktop user waiting; not understood yet, see
 	the roadmap's open issues), and the test should not depend on it.
 */
+/*!	F-59: a messenger to the agent's window titled \a title (in any of
+	its teams).
+*/
+static BMessenger
+agent_window(const char* title)
+{
+	BList teams;
+	be_roster->GetAppList(SCREEN_CAPTURE_AGENT_SIGNATURE, &teams);
+	for (int32 i = 0; i < teams.CountItems(); i++) {
+		BMessenger app(NULL, (team_id)(addr_t)teams.ItemAt(i));
+		BMessage get(B_GET_PROPERTY);
+		get.AddSpecifier("Messenger");
+		get.AddSpecifier("Window", title);
+		BMessage reply;
+		BMessenger result;
+		if (app.SendMessage(&get, &reply, 1000000, 1000000) == B_OK
+			&& reply.FindMessenger("result", &result) == B_OK
+			&& result.IsValid())
+			return result;
+	}
+	return BMessenger();
+}
+
+
+//!	F-59: the recording indicator's text ('Ritx').
+static BString
+indicator_text()
+{
+	BMessenger indicator = agent_window("Recording");
+	BMessage request('Ritx');
+	BMessage reply;
+	if (!indicator.IsValid() || indicator.SendMessage(&request, &reply,
+			1000000, 1000000) != B_OK)
+		return BString();
+	return BString(reply.GetString("text", ""));
+}
+
+
+//!	"m:ss" somewhere in \a text
+static bool
+has_elapsed_time(const BString& text)
+{
+	for (int32 i = 0; i + 3 < text.Length(); i++) {
+		if (isdigit(text[i]) && text[i + 1] == ':' && isdigit(text[i + 2])
+			&& isdigit(text[i + 3]))
+			return true;
+	}
+	return false;
+}
+
+
 static bool
 agent_window_exists(const char* title, team_id* _team = NULL)
 {
@@ -431,6 +485,60 @@ test_media_node(BRect region)
 
 
 // #pragma mark - recording through Screenshot
+
+
+/*!	F-59: Screenshot's recording frame rate started at 0 frames per second
+	for the maintainer (a settings file with "recordFrameRate" 0). With such
+	a file and no --frame-rate, a recording must be at the default 30.
+*/
+static void
+frame_rate_default_check(BRect region)
+{
+	BPath settingsPath;
+	find_directory(B_USER_SETTINGS_DIRECTORY, &settingsPath);
+	settingsPath.Append("Screenshot_settings");
+	BFile settingsFile(settingsPath.Path(), B_READ_WRITE | B_CREATE_FILE);
+	BMessage settings;
+	settings.Unflatten(&settingsFile);
+	BMessage saved(settings);
+	settings.RemoveName("recordFrameRate");
+	settings.AddFloat("recordFrameRate", 0);
+	settingsFile.Seek(0, SEEK_SET);
+	settingsFile.SetSize(0);
+	settings.Flatten(&settingsFile);
+
+	const char* kFile = "/tmp/capture_rate_test.mkv";
+	unlink(kFile);
+	BString command;
+	command.SetToFormat("/boot/system/apps/Screenshot --record 2 --region "
+		"%d,%d,%d,%d --file %s --quit >/dev/null 2>&1", (int)region.left,
+		(int)region.top, (int)region.IntegerWidth() + 1,
+		(int)region.IntegerHeight() + 1, kFile);
+	system(command.String());
+
+	entry_ref ref;
+	float rate = 0;
+	if (get_ref_for_path(kFile, &ref) == B_OK) {
+		BMediaFile file(&ref);
+		for (int32 i = 0; file.InitCheck() == B_OK
+				&& i < file.CountTracks(); i++) {
+			BMediaTrack* track = file.TrackAt(i);
+			media_format format;
+			if (track != NULL && track->EncodedFormat(&format) == B_OK
+				&& format.IsVideo())
+				rate = format.u.encoded_video.output.field_rate;
+			if (track != NULL)
+				file.ReleaseTrack(track);
+		}
+	}
+	report("frame_rate_default", rate > 29 && rate < 31,
+		"settings with frame rate 0: recorded at %.1f fps (want 30)", rate);
+	unlink(kFile);
+
+	settingsFile.Seek(0, SEEK_SET);
+	settingsFile.SetSize(0);
+	saved.Flatten(&settingsFile);
+}
 
 
 struct ScreenshotRun {
@@ -671,6 +779,8 @@ test_screenshot_recording(PatternWindow* window, BRect region,
 	unlink(kFile);
 	ScreenshotRun run;
 	run.exitStatus = -1;
+	if (format == NULL)
+		frame_rate_default_check(region);
 	run.command.SetToFormat("/boot/system/apps/Screenshot --record %.1f "
 		"--region %d,%d,%d,%d --file %s --system-audio --frame-rate %.0f "
 		"%s%s --quit 2>&1", kSeconds, (int)region.left, (int)region.top,
@@ -716,6 +826,26 @@ test_screenshot_recording(PatternWindow* window, BRect region,
 			// up.
 			printf("CE-HOST screenshot screenshot_recording\n");
 			fflush(stdout);
+		}
+		if (i == 2 && format == NULL) {
+			// F-59: the size Screenshot reports, in the session list and
+			// the indicator
+			BMessage sessions;
+			BScreenCapture::GetSessions(&sessions);
+			int64 bytes = 0;
+			const char* signature;
+			for (int32 j = 0; sessions.FindString("signature", j,
+					&signature) == B_OK; j++) {
+				if (strcasecmp(signature, kScreenshotSignature) == 0)
+					bytes = sessions.GetInt64("bytes", j, 0);
+			}
+			BString text = indicator_text();
+			bool sized = text.FindFirst("iB") >= 0
+				|| text.FindFirst("bytes") >= 0;
+			report("recording_size", bytes > 0 && sized
+					&& has_elapsed_time(text),
+				"%" B_PRId64 " bytes reported; indicator \"%s\"", bytes,
+				text.String());
 		}
 		snooze(1300000);
 	}
@@ -1191,6 +1321,24 @@ run_tests(PatternWindow* window)
 			shown ? "are up" : "did not appear");
 		snooze(1500000);
 		screenshot("capture_settings");
+
+		// F-59: the indicator shows the time recorded; the settings turn
+		// it off and "Restore defaults" on again.
+		BString before = indicator_text();
+		BMessenger settings = agent_window("Screen recording");
+		BMessage off('inop');
+		off.AddBool("renga:elapsed", false);
+		settings.SendMessage(&off);
+		snooze(2000000);
+		BString without = indicator_text();
+		screenshot("recording_indicator_settings");
+		settings.SendMessage('rsdf');
+		snooze(2000000);
+		BString restored = indicator_text();
+		report("indicator_elapsed", has_elapsed_time(before)
+				&& !has_elapsed_time(without) && has_elapsed_time(restored),
+			"\"%s\"; time off: \"%s\"; defaults: \"%s\"",
+			before.String(), without.String(), restored.String());
 		BMessenger(NULL, settingsTeam).SendMessage(B_QUIT_REQUESTED);
 	} else
 		report("settings_shown", false, "could not launch %s", kAgent);

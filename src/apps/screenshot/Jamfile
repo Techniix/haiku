@@ -10,7 +10,7 @@ Application Screenshot :
 	ScreenshotWindow.cpp
 	SelectAreaView.cpp
 	Utility.cpp
-	: be localestub media tracker translation [ TargetLibstdc++ ]
+	: be localestub media tracker translation [ TargetLibstdc++ ] <$(TARGET_PACKAGING_ARCH)>libshared.a
 	: ScreenshotApp.rdef
 ;
 

@@ -70,6 +70,7 @@ struct ScreenCaptureManager::Session {
 	int32		bitmapCount;
 	sem_id		notify;			// F-58 (O-8): released on damage, or -1
 	bool		notified;		// released since the last frame
+	int64		outputBytes;	// F-59: what the recording wrote so far
 
 	Session()
 		:
@@ -77,7 +78,8 @@ struct ScreenCaptureManager::Session {
 		stopped(false),
 		bitmapCount(0),
 		notify(-1),
-		notified(false)
+		notified(false),
+		outputBytes(0)
 	{
 	}
 };
@@ -277,6 +279,22 @@ ScreenCaptureManager::HandleMessage(ServerApp* app, int32 code,
 		case AS_SCREEN_CAPTURE_SET_NOTIFICATION:
 			_SetNotification(app, link, reply);
 			break;
+		case AS_SCREEN_CAPTURE_SET_OUTPUT_SIZE:
+		{
+			// F-59: for the indicator; every session of the team
+			int64 bytes;
+			if (link.Read<int64>(&bytes) != B_OK) {
+				reply.StartMessage(B_BAD_DATA);
+				break;
+			}
+			BAutolock locker(fLock);
+			for (int32 i = 0; Session* session = fSessions.ItemAt(i); i++) {
+				if (session->team == app->ClientTeam())
+					session->outputBytes = bytes;
+			}
+			reply.StartMessage(B_OK);
+			break;
+		}
 	}
 	reply.Flush();
 }
@@ -863,6 +881,12 @@ ScreenCaptureManager::_List(PortLink& reply)
 		reply.Attach<BRect>(session->lastFrame);
 		reply.Attach<bigtime_t>(session->started);
 		reply.Attach<int64>(session->frames);
+	}
+	// F-59, after the sessions (older readers stop before): the bytes each
+	// session's recording wrote, in the same order
+	for (int32 i = 0; Session* session = fSessions.ItemAt(i); i++) {
+		if (!session->stopped)
+			reply.Attach<int64>(session->outputBytes);
 	}
 }
 

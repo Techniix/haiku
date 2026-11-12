@@ -310,7 +310,27 @@ BScreenCapture::GetSessions(BMessage* sessions)
 		sessions->AddInt64("started", started);
 		sessions->AddInt64("frames", frames);
 	}
+	// F-59: an older app_server sends no sizes
+	for (int32 i = 0; i < count; i++) {
+		int64 bytes;
+		if (link.Read<int64>(&bytes) != B_OK)
+			break;
+		sessions->AddInt64("bytes", bytes);
+	}
 	return B_OK;
+}
+
+
+/*static*/ status_t
+BScreenCapture::SetOutputSize(int64 bytes)
+{
+	AppServerLink link;
+	link.StartMessage(AS_SCREEN_CAPTURE_SET_OUTPUT_SIZE);
+	link.Attach<int64>(bytes);
+	status_t status;
+	if (link.FlushWithReply(status) != B_OK)
+		return B_ERROR;
+	return status;
 }
 
 

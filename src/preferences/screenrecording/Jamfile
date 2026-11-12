@@ -4,7 +4,7 @@ UsePrivateHeaders app interface shared ;
 
 Application ScreenRecording :
 	ScreenRecording.cpp
-	: be localestub libcolumnlistview.a [ TargetLibstdc++ ]
+	: be localestub libcolumnlistview.a [ TargetLibstdc++ ] <$(TARGET_PACKAGING_ARCH)>libshared.a
 	: ScreenRecording.rdef
 ;
 

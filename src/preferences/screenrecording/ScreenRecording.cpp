@@ -25,6 +25,10 @@
 
 #include <Application.h>
 #include <Box.h>
+#include <File.h>
+#include <FindDirectory.h>
+#include <Path.h>
+#include <StringForSize.h>
 #include <Button.h>
 #include <Catalog.h>
 #include <CheckBox.h>
@@ -41,6 +45,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <vector>
 
@@ -55,6 +60,80 @@ using BPrivate::BScreenCapture;
 
 
 static const uint32 kMsgRefresh = 'rfsh';
+static const uint32 kMsgIndicatorOption = 'inop';
+	// F-59; with bools "renga:elapsed", "renga:size" the check boxes are
+	// set to them first (tests, scripts)
+static const uint32 kMsgRestoreDefaults = 'rsdf';
+static const uint32 kMsgIndicatorText = 'Ritx';
+	// F-59: the indicator replies with its "text" (tests)
+
+
+// F-59: the recording indicator's settings,
+// ~/config/settings/ScreenRecording_settings (a flattened BMessage)
+struct IndicatorSettings {
+	bool	showElapsed;
+	bool	showSize;
+
+	IndicatorSettings()
+	{
+		SetDefaults();
+	}
+
+	void SetDefaults()
+	{
+		showElapsed = true;
+		showSize = true;
+	}
+
+	bool IsDefault() const
+	{
+		return showElapsed && showSize;
+	}
+
+	static status_t Path(BPath& path)
+	{
+		status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &path);
+		if (status == B_OK)
+			status = path.Append("ScreenRecording_settings");
+		return status;
+	}
+
+	void Load()
+	{
+		SetDefaults();
+		BPath path;
+		if (Path(path) != B_OK)
+			return;
+		BFile file(path.Path(), B_READ_ONLY);
+		BMessage settings;
+		if (settings.Unflatten(&file) != B_OK)
+			return;
+		showElapsed = settings.GetBool("indicator elapsed", showElapsed);
+		showSize = settings.GetBool("indicator size", showSize);
+	}
+
+	void Save() const
+	{
+		BPath path;
+		if (Path(path) != B_OK)
+			return;
+		BMessage settings;
+		settings.AddBool("indicator elapsed", showElapsed);
+		settings.AddBool("indicator size", showSize);
+		BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+		settings.Flatten(&file);
+	}
+
+	//!	The settings file's modification time, to notice changes.
+	static time_t Modified()
+	{
+		BPath path;
+		struct stat st;
+		if (Path(path) != B_OK || stat(path.Path(), &st) != 0)
+			return 0;
+		return st.st_mtime;
+	}
+};
 static const uint32 kMsgAllow = 'alow';
 static const uint32 kMsgDeny = 'deny';
 static const uint32 kMsgStop = 'stop';
@@ -227,7 +306,8 @@ public:
 			B_NOT_MOVABLE | B_NOT_RESIZABLE | B_NOT_CLOSABLE
 				| B_NOT_ZOOMABLE | B_NOT_MINIMIZABLE | B_AVOID_FOCUS
 				| B_AUTO_UPDATE_SIZE_LIMITS, B_ALL_WORKSPACES),
-		fEmptySince(0)
+		fEmptySince(0),
+		fSettingsTime(-1)
 	{
 		fLabel = new BStringView("label", "");
 		BButton* stop = new BButton("stop", B_TRANSLATE("Stop"),
@@ -256,6 +336,13 @@ public:
 			case kMsgRefresh:
 				_Refresh();
 				break;
+			case kMsgIndicatorText:
+			{
+				BMessage reply(B_REPLY);
+				reply.AddString("text", fLabel->Text());
+				message->SendReply(&reply);
+				break;
+			}
 			case kMsgStopAll:
 			{
 				BMessage sessions;
@@ -283,17 +370,31 @@ public:
 private:
 	void _Refresh()
 	{
+		time_t modified = IndicatorSettings::Modified();
+		if (modified != fSettingsTime) {
+			fSettings.Load();
+			fSettingsTime = modified;
+		}
+
 		BMessage sessions;
 		BScreenCapture::GetSessions(&sessions);
 		BString names;
 		const char* name;
 		int32 count = 0;
+		bigtime_t started = 0;
+		int64 bytes = 0;
 		for (int32 i = 0; sessions.FindString("name", i, &name) == B_OK; i++) {
 			if (names.FindFirst(name) < 0) {
 				if (names.Length() > 0)
 					names << ", ";
 				names << name;
 			}
+			// F-59: the longest-running session's time, every
+			// recording's bytes
+			bigtime_t sessionStart = sessions.GetInt64("started", i, 0);
+			if (started == 0 || (sessionStart > 0 && sessionStart < started))
+				started = sessionStart;
+			bytes += sessions.GetInt64("bytes", i, 0);
 			count++;
 		}
 		if (count == 0) {
@@ -309,6 +410,25 @@ private:
 			BString text;
 			text.SetToFormat(B_TRANSLATE("Recording the screen: %s"),
 				names.String());
+			// F-59: elapsed time and size, as set in the preferences
+			if (fSettings.showElapsed && started > 0) {
+				int64 seconds = (system_time() - started) / 1000000;
+				BString elapsed;
+				if (seconds >= 3600) {
+					elapsed.SetToFormat("%" B_PRId64 ":%02" B_PRId64 ":%02"
+						B_PRId64, seconds / 3600, seconds / 60 % 60,
+						seconds % 60);
+				} else {
+					elapsed.SetToFormat("%" B_PRId64 ":%02" B_PRId64,
+						seconds / 60, seconds % 60);
+				}
+				text << "  " << elapsed;
+			}
+			if (fSettings.showSize && bytes > 0) {
+				char size[64];
+				string_for_size(bytes, size, sizeof(size));
+				text << "  " << size;
+			}
 			fLabel->SetText(text.String());
 		}
 		// Top right corner of the screen, below where the Deskbar sits by
@@ -321,6 +441,8 @@ private:
 	BStringView*	fLabel;
 	BMessageRunner*	fRunner;
 	bigtime_t		fEmptySince;
+	IndicatorSettings fSettings;
+	time_t			fSettingsTime;
 };
 
 
@@ -391,11 +513,36 @@ public:
 			"ask the first time they record; a red indicator is shown while "
 			"they do."));
 
+		// F-59: the indicator's options
+		fSettings.Load();
+		fShowElapsed = new BCheckBox("elapsed",
+			B_TRANSLATE("Show the time recorded"),
+			new BMessage(kMsgIndicatorOption));
+		fShowSize = new BCheckBox("size",
+			B_TRANSLATE("Show the size of the recording"),
+			new BMessage(kMsgIndicatorOption));
+		fDefaults = new BButton("defaults", B_TRANSLATE("Restore defaults"),
+			new BMessage(kMsgRestoreDefaults));
+		BBox* indicatorBox = new BBox("indicator box");
+		indicatorBox->SetLabel(B_TRANSLATE("Recording indicator"));
+		BGroupView* indicatorGroup = new BGroupView(B_VERTICAL, 0);
+		BLayoutBuilder::Group<>(indicatorGroup)
+			.SetInsets(B_USE_DEFAULT_SPACING)
+			.Add(fShowElapsed)
+			.Add(fShowSize);
+		indicatorBox->AddChild(indicatorGroup);
+		_ShowSettings();
+
 		BLayoutBuilder::Group<>(this, B_VERTICAL)
 			.SetInsets(B_USE_WINDOW_SPACING)
 			.Add(note)
 			.Add(appsBox)
-			.Add(sessionsBox);
+			.Add(sessionsBox)
+			.Add(indicatorBox)
+			.AddGroup(B_HORIZONTAL)
+				.Add(fDefaults)
+				.AddGlue()
+			.End();
 
 		_Refresh();
 		fRunner = new BMessageRunner(BMessenger(this),
@@ -430,6 +577,24 @@ public:
 				_Refresh();
 				break;
 			}
+			case kMsgIndicatorOption:
+			{
+				bool value;
+				if (message->FindBool("renga:elapsed", &value) == B_OK)
+					fShowElapsed->SetValue(value);
+				if (message->FindBool("renga:size", &value) == B_OK)
+					fShowSize->SetValue(value);
+				fSettings.showElapsed = fShowElapsed->Value() != 0;
+				fSettings.showSize = fShowSize->Value() != 0;
+				fSettings.Save();
+				_ShowSettings();
+				break;
+			}
+			case kMsgRestoreDefaults:
+				fSettings.SetDefaults();
+				fSettings.Save();
+				_ShowSettings();
+				break;
 			case kMsgStopSelected:
 			{
 				BRow* row = fSessions->CurrentSelection();
@@ -493,9 +658,20 @@ private:
 		}
 	}
 
+	void _ShowSettings()
+	{
+		fShowElapsed->SetValue(fSettings.showElapsed);
+		fShowSize->SetValue(fSettings.showSize);
+		fDefaults->SetEnabled(!fSettings.IsDefault());
+	}
+
 	BColumnListView*	fApplications;
 	BColumnListView*	fSessions;
 	std::vector<int32>	fSessionIDs;
+	IndicatorSettings	fSettings;
+	BCheckBox*			fShowElapsed;
+	BCheckBox*			fShowSize;
+	BButton*			fDefaults;
 	BMessageRunner*		fRunner;
 };
 

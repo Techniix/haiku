@@ -18,6 +18,7 @@
 #include <String.h>
 #include <TranslationDefs.h>
 #include <TranslatorFormats.h>
+#include <Path.h>
 #include <Window.h>
 
 
@@ -32,6 +33,12 @@ class BTextView;
 class BMessageRunner;
 class BStringView;
 class Recorder;
+
+
+// F-59: the recording frame rate (CaptureSession takes 1 to 60)
+static const float kDefaultFrameRate = 30;
+static const float kMinFrameRate = 1;
+static const float kMaxFrameRate = 60;
 
 
 class ScreenshotWindow : public BWindow {
@@ -116,6 +123,8 @@ private:
 			bool			fRecordSystemAudioSetting;
 			bool			fRecordMicrophoneSetting;
 			float			fFrameRate;
+			BPath			fRecordPath;	// F-59
+			off_t			fRecordBytes;
 			// Renga (F-31 phase 4): 0 Matroska (MPEG-4, PCM), 1 WebM
 			// (VP9, Opus)
 			int32			fRecordFormat;

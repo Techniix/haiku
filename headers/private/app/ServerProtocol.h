@@ -382,6 +382,9 @@ enum {
 		// F-58 (OBS Studio's O-7): asynchronous permission request
 	AS_SCREEN_CAPTURE_SET_NOTIFICATION,
 		// F-58 (O-8): a semaphore released when the source changes
+	AS_SCREEN_CAPTURE_SET_OUTPUT_SIZE,
+		// F-59: int64 bytes written so far by the calling team's
+		// recording, for the indicator
 
 	// Renga (F-58): a descriptor sent with app_server_send_fd(), checked:
 	// app_server takes it by token and replies with its size and first

@@ -102,6 +102,10 @@ public:
 				// "frame" (BRect), "started" (int64), "frames" (int64), one
 				// entry per session
 	static	status_t			StopSession(int32 id);
+	static	status_t			SetOutputSize(int64 bytes);
+				// F-59: what the calling team's recording has written so
+				// far, shown by the recording indicator ("bytes" in
+				// GetSessions())
 	static	status_t			GetPermissions(BMessage* permissions);
 				// "signature", "name", "state" (int32), one per application
 	static	status_t			SetPermission(const char* signature,
