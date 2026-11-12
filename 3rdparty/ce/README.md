@@ -595,6 +595,18 @@ of a 1 GiB guest was, so the bounce path went untested.
   read back: members, CRC of an inflated entry), and screenshots
   `crash_notification`, `systemlogs_crash`, `systemlogs_live`,
   `systemlogs_previous` (`crashlog.screenshots`).
+- **wlan_reload** and **driver_override** (every image,
+  `wlan_reload_test`, `driver_override_test`; roadmap F-58, the
+  maintainer's mt7921e boot panic): `fbsd_wlantest`, a net80211 driver
+  with no radio that attaches to QEMU's `pci-testdev` (1b36:0005, given
+  to every run) only when the test asks for it (a marker file), is
+  attached, its vap deleted and the driver reloaded and unloaded: a KDEBUG
+  kernel panicked on the second destruction of an interface's address
+  lock (`if_detach()` and `if_free()` both destroyed it). driver_override:
+  an older copy of a system driver in `non-packaged` (or `~/config/...`)
+  gives way to the system's copy, with a syslog line, and a newer or
+  user-only driver is still loaded; the crash report names the driver and
+  hook a panic happened in (`driver: <path> (<hook>)`).
 
 - **linuxkpi** (every image, `linuxkpi_test`): the LinuxKPI core
   (roadmap F-26), see "LinuxKPI" below. **linuxkpi_ui** (renga-* images,
@@ -675,6 +687,16 @@ of a 1 GiB guest was, so the bounce path went untested.
   (the preview built again in the same window, the old node released),
   quit. Screenshots `codycam_preview` and `codycam_switched`, checked by
   the harness (`codycam.screenshots`).
+- **virtual_camera** (`media_vcam_test`, renga-* images): the virtual
+  camera (roadmap F-58, OBS Studio's O-12;
+  `headers/private/media/VirtualCamera.h`). The flavor is listed among
+  the video sources CodyCam's query finds; without a feeder it sends grey
+  frames at the asked rate; a feeder's 160x120 red then green frames
+  arrive scaled to the recorder's 320x240 in that order; the status
+  parameter names the feeding team and size; a second feeder gets
+  `B_BUSY`; `CodyCam --camera "Virtual Camera"` previews it (screenshot
+  `virtual_camera_codycam`, `virtual_camera.screenshots`); after the
+  feeder disconnects, grey frames and "none" again.
 - **media_codec** (`media_codec_test`, renga-* images): the encode/decode
   API (`headers/private/media/MediaCodec.h`, roadmap F-31 phase 4) and the
   FFmpeg plug-in's encoders behind it. `MediaWriter` writes two seconds of
@@ -764,6 +786,22 @@ of a 1 GiB guest was, so the bounce path went untested.
   `html5_mp4` (`html5_media.screenshots`). WebPositive's own sound is
   logged, not checked: the packaged HaikuWebKit 1.10.0 plays it with gaps
   (WebM) or not at all (MP4), see the roadmap (F-57).
+- **media_routing** (`media_routing_test`, renga-* images): the mixer
+  interfaces of roadmap F-58 (OBS Studio's O-1 to O-4). Two child
+  applications play 5100 Hz on the left and 5300 Hz on the right;
+  loopback recordings check exclusions (`renga:loopback_exclude`: one,
+  two, normalized, with an application selection, beside a plain
+  loopback, cleared), routes by device name (`renga:routes`: to QEMU's
+  USB audio before it exists, kept while absent, applied when it is
+  plugged in, cleared; the host finds A's 5150 Hz in that device's
+  `usb-<n>.wav`, `media_routing_audio.route_to_usb`), the "None (loopback
+  only)" route (in the Output menu, out of "every stream", in the
+  application's own loopback; the host finds its 5250 Hz on no card,
+  `media_routing_audio.loopback_only_silent`) and loopbacks by team
+  (`renga:loopback_team`: two processes of one signature told apart; 0
+  selects by signature). Screenshots `routing_loopback_only` (Audio
+  preferences) and `routing_loopback_only_media` (Media preferences),
+  `media_routing.screenshots`.
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
   Media Kit tests): the low-latency audio mode (roadmap F-31,
   `headers/private/media/LowLatencyAudio.h`). A child process plays
@@ -835,6 +873,22 @@ of a 1 GiB guest was, so the bounce path went untested.
   waits, get the lock within 3 s of its release, and the lock must be free
   afterwards. A second writer or a reader must wait for an `RWLockManager`
   write lock.
+- **seqpacket** (every image, `seqpacket_test`; roadmap F-58, OBS
+  Studio's O-13): `SOCK_SEQPACKET` UNIX sockets: message boundaries
+  (10/3000/1 bytes), a message of 0 bytes, `MSG_TRUNC` (the rest of the
+  message dropped), the peer's close, descriptors with their message only
+  (a memfd shared, both ends of a pipe usable), room for 1 of 3
+  descriptors (the message, `MSG_CTRUNC`, nothing leaked), descriptors
+  with 0 bytes, and a bound listener with `connect()`/`accept()` passing
+  a memfd.
+- **appserver_fd** (every image, `appserver_fd_test`; roadmap F-58, the
+  Quasar driver's R-1 prerequisite): descriptors sent to app_server with
+  `BPrivate::app_server_send_fd()` (`headers/private/app/
+  ServerFdTransfer.h`): the socket exists, a memfd goes over and
+  app_server reads its size and bytes by token (`AS_CHECK_CLIENT_FD`), a
+  token is used once, another team cannot take it, 64 in a row, -1
+  refused, and app_server's serving thread is idle after a client's
+  connection closed.
 - **shortcut_keys**: Ctrl as the shortcut key, see above.
 - **usb_audio**: plugs QEMU's `usb-audio` in while the guest runs and
   drives `/dev/audio/hmulti/usb/<n>` with the multi_audio add-on's ioctl

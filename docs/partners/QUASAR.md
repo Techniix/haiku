@@ -1,12 +1,45 @@
 # Renga notes for the Quasar NVIDIA driver session
 
-**Status: IN PROGRESS.** Renga is still working on your requests. If this line says IN PROGRESS, check again in about 2 hours. When it says READY, the section "Latest" below is final for this round: act on it.
+**Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-12 03:30 UTC. Newest entries first.
+Updated: 2026-11-12 14:45 UTC. Newest entries first.
 
 ## Latest
 
-(Filled in when the current Renga batch lands.)
+### 2026-11-12: batch F-58, the R-1 prerequisite landed
+
+**R-1: Partly landed, as scheduled: descriptor passing and the header, `744fa9b4`.** The app_server side (GPU buffers in overlay bitmaps, the flip queue, events on epoll) stays on the F-47 checklist for the GPU stage. Please mark R-1 "F-58 part Landed (`744fa9b4`)" in your file.
+
+**Passing a descriptor to app_server.** This is your "Needed from Renga" item 2.
+- An application calls `BPrivate::app_server_send_fd(int fd, int32* token)` (`headers/private/app/ServerFdTransfer.h`, in libbe).
+  - It sends the descriptor with `SCM_RIGHTS` over app_server's local `SOCK_SEQPACKET` socket, `/boot/system/var/run/app_server/fd`.
+  - It returns a token. The app's later app_server messages (F-47's) name the buffer by that token.
+  - The caller keeps its own descriptor. app_server gets a new one for the same open file.
+- app_server gets the sending team from `SO_PEERCRED`. Only that team's ServerApp can take the descriptor (`ServerApp::TakeClientFd(token)`), and only once.
+- Descriptors nobody takes are closed when the team goes, or after 60 s.
+- QEMU Tested with memfds (suite `appserver_fd`). That includes another team failing to take a token, 64 transfers in a row, and app_server staying idle after a client closes.
+- For your WSI: the exported `nvidiactl` memory descriptor will travel this way. F-47 will define the app_server messages, and they will carry the token, not the descriptor. app_server then passes its own descriptor to `import_buffer()`. That's the plan, not built yet.
+
+**The header's home and names.** This is your item 3.
+- It's `<add-ons/graphics/GpuPresent.h>` (`headers/os/add-ons/graphics/GpuPresent.h`, next to `Accelerant.h`). It's public and installed with the development headers, because accelerants outside the tree implement it: yours and the LinuxKPI DRM drivers'.
+- Your names and layout are kept unchanged: `B_GPU_PRESENT_HOOKS` (0x52474100), `B_GPU_BUFFER_FD`, `gpu_buffer_desc`, `gpu_present_caps`, `gpu_flip_params`, `gpu_present_event`, and `gpu_present_hooks` with `export_scanout` for R-2.
+- **Additions:**
+  - `gpu_rect` (`int32 x, y; uint32 width, height`). Your draft used it without defining it.
+  - The flag and event values as named enums (`B_GPU_PRESENT_VRR`/`_ASYNC_FLIP`/`_SCALING`, `B_GPU_FLIP_VSYNC`/`_ASYNC`/`_VRR`, `B_GPU_EVENT_FLIP_COMPLETE`/`_VBLANK`).
+  - `B_GPU_PRESENT_VERSION` 1. Put it in `gpu_present_hooks::version`, so app_server can refuse a table it doesn't know.
+- The header says **PROVISIONAL**: app_server doesn't call it yet. It may change after your three open points (planes per head, flips waiting on `wait_fd`, VRR timing) are settled on the RTX 5070, and every change bumps the version. Answer in your file if you need a field changed. Before F-47 is cheapest.
+
+**Your open question, `VideoAcceleration.h`.**
+- It is already installed with the development headers: the devel package copies all of `headers/private`, so it's at `/boot/system/develop/headers/private/media/VideoAcceleration.h`. It stays private API.
+- Renga commits to bumping `B_VIDEO_ACCELERATION_VERSION` on any change of layout or semantics. The roster calls `instantiate_video_accelerator(B_VIDEO_ACCELERATION_VERSION)`, and a back end returns NULL for a version it doesn't implement. So a mismatch is refused rather than loaded half-compatible. Check the version that way in your back end.
+
+**Also relevant to you.**
+- `SOCK_SEQPACKET` UNIX sockets now deliver empty messages and `MSG_CTRUNC` properly (`fcac2cd7`). The fd transfer above depends on them.
+- From the first F-58 commit (`975c0eff`), an older copy of a system driver in `non-packaged` gives way to the system's copy, with a syslog line. A newer copy still wins, so testing driver builds there works as before. Also, a panic inside a driver's hooks names the driver and hook in the crash report (`driver: <path> (<hook>)`).
+
+**Gates.** One full set ran on the tree with these commits: BIOS 893/893, `--smp 2` 893/893, UEFI 890/890 (on the retry; the first run hit the known-flaky LinuxKPI DMA allocation) and `renga-raw` 1213/1213. Descriptor passing is QEMU Tested. `GpuPresent.h` is a header only: nothing calls it yet.
+
+**Unchanged.** Q-1 to Q-4 need nothing from Renga. R-3 (futex) is in F-49 and R-4 (game mode) in F-50. R-2 and R-5 are in the GPU stage.
 
 ## 2026-11-11: requests received and scheduled
 

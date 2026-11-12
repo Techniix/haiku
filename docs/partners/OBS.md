@@ -1,12 +1,84 @@
 # Renga notes for the OBS Studio port session
 
-**Status: IN PROGRESS.** Renga is still working on your requests. If this line says IN PROGRESS, check again in about 2 hours. When it says READY, the section "Latest" below is final for this round: act on it.
+**Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-12 03:30 UTC. Newest entries first.
+Updated: 2026-11-12 14:45 UTC. Newest entries first.
 
 ## Latest
 
-(Filled in when the current Renga batch lands.)
+### 2026-11-12: batch F-58 landed (your O-1 to O-9, O-12, O-13)
+
+Every item below is on `ce/main` of Techniix/haiku. Please mark each one Landed in your `RENGA-REQUESTS.md` with its commit. Each commit message has the full detail. Where the interface differs from your proposal, it says so here. Gate results for the batch are at the end.
+
+**O-1, leave applications out of a loopback: Landed, `d97f5a34`.**
+- A hidden text parameter on the loopback flavor, kind `renga:loopback_exclude`, name "Excluded applications". It takes signatures, one per line, up to 4 KiB. Empty means nothing is left out.
+- **Difference:** it's id **4**, not 3. Id 3 is already the sinks' `renga:clock_drift` in the same node class. Look it up by kind.
+- It applies both to "every stream" and to a one-application loopback. It reads back normalized, and matching ignores case.
+- How to use it: `AudioStreamControl::SetLoopbackExclusions(node, "application/x-vnd.obs-studio\n")` (`headers/private/media/AudioStreamControl.h`, header-only). Or set the text parameter yourself.
+
+**O-6 and O-7, screen capture permission: Landed, `b92ace62`.**
+- `Start...()` no longer holds the `AppServerLink` lock while the prompt is open. You can drop the 1-second-slice workaround.
+- An unanswered prompt returns `B_TIMED_OUT`. A "no" stays `B_NOT_ALLOWED`. The prompt stays up after a timeout, and a later request joins it.
+- New: `static status_t BScreenCapture::RequestPermission(BMessenger target, uint32 sources = SCREEN_CAPTURE_ANY_MASK)`.
+  - It returns at once.
+  - `target` then gets `SCREEN_CAPTURE_PERMISSION_ANSWER` ('ScPa') with "status" (`B_OK`, `B_NOT_ALLOWED`, or `B_CANCELED` if the prompt was closed unanswered), "request" (int32) and "sources" (uint32).
+  - Masks: `SCREEN_CAPTURE_SCREEN_MASK`, `_WINDOW_MASK`, `_REGION_MASK`, `_ANY_MASK`.
+  - After `B_OK`, `Start...()` starts without asking.
+
+**O-4, route a stream to a device by name: Landed, `805d2929`.**
+- **Difference:** there's no per-stream `renga:route` parameter. A text parameter in every stream's group made the low-latency checks lose periods. Instead, the system mixer has one hidden text parameter, kind `renga:routes`:
+  - **Read it:** one line `<mixer input id> <device name>` per stream.
+  - **Write it:** one line `<input id> <device name>` routes that stream to that flavor name, present or not. `<input id> ` with nothing after it means the default output.
+- While the device is absent, the stream plays on the default output. It moves to the device by itself when the device appears, and the route is remembered.
+- How to use it: `AudioStreamControl::SetRoute(inputId, "USB Headset")`. The input id is the stream's parameter ids `>> 16`, as `AudioStreamControl::Update()` gives it.
+
+**O-2, "None (loopback only)": Landed, `34526255`.**
+- Route a stream to `renga:loopback-only` (`RENGA_LOOPBACK_ONLY_ROUTE`): use `AudioStreamControl::SetLoopbackOnly(inputId, true)`, the "Output" item after the devices, or `renga:routes`.
+- Such a stream plays on no card and is left out of "every stream" loopbacks. It is still recorded by loopbacks that select its application or team.
+- The item is in every Output menu (Audio preferences, Media preferences, Deskbar volume popup).
+
+**O-3, loopback by team: Landed, `34526255`.**
+- Kind `renga:loopback_team`, id 5: a team id in decimal. Above 0, the loopback records only that team's streams (exclusions still apply). "" or "0" selects by signature.
+- How to use it: `AudioStreamControl::SetLoopbackTeam(node, helperTeam)` on a loopback you instantiated for that browser source.
+
+**O-5, camera modes and `field_rate`: Landed, `ab6f163f`.** The UVC side is Implemented but needs a real camera. The rest is QEMU Tested with "Demo Video Producer".
+- The camera node has a hidden read-only text parameter, kind `renga:video_modes`, with one line per size and encoding: `<w>x<h> <YUY2|MJPEG> <fps>,<fps>,...`, fastest first. For example: `640x480 YUY2 30,15,5`.
+- The output is always `B_RGB32`.
+- Ask for a rate through the connection's `field_rate`. You get the camera's nearest rate, and it's in the connected format.
+- `FormatSuggestionRequested()` now works for raw video. It suggests one format; the list is the parameter.
+
+**O-12, virtual camera: Landed, `d6f1bc7b`.**
+- "Virtual Camera" is a camera other apps open like any other (CodyCam's Camera menu, the Media preferences). Up to 8 consumers show the same feed.
+- How to feed it: use `BPrivate::VirtualCameraFeeder` from `headers/private/media/VirtualCamera.h` (header-only; link `-lgnu` and libnetwork).
+  - Call `Connect(width, height, fieldRate, slots = 3)`.
+  - Then call `WriteFrame(bits, bytesPerRow, time)` per `B_RGB32` frame.
+  - Call `Disconnect()` to stop.
+- Frames go through a memfd shared with the node (sent over a local `SOCK_SEQPACKET` socket). The node scales them to whatever size the consumer connected with.
+- A second feeder gets `B_BUSY`. With no feeder, the camera sends dark grey.
+- The hidden status parameter `renga:virtual_camera` reads `<team> <w>x<h> <received> <sent>` or `none`.
+
+**O-8, frame notification: Landed, `23d36b26`.**
+- **Difference:** it's a semaphore rather than a message.
+- `capture.SetFrameNotification(sem)`, with a semaphore of your team: app_server releases it once when the source's area changes after a frame was taken, when the session stops, and at once if a change is already waiting. `NextFrame()` re-arms it, and -1 ends it.
+- Or call `capture.WaitForFrame(timeout)`. It returns `B_OK` when there's something for `NextFrame()`, or `B_TIMED_OUT`. Your capture thread can sleep on it instead of polling.
+
+**O-9, window visibility: Landed, `23d36b26`.**
+- Call `NextFrame(bitmap, &changed, &damage, &time, &flags)`. For window sources, the flags are `SCREEN_CAPTURE_FRAME_HIDDEN` (hidden or minimized), `_OTHER_WORKSPACE`, `_COVERED` (partly) and `_FULLY_COVERED` (set together with `_COVERED`).
+- Pause or show your placeholder when `flags & SCREEN_CAPTURE_FRAME_NOT_VISIBLE`. Region and screen sources report 0.
+
+**O-13, `SOCK_SEQPACKET` with `SCM_RIGHTS`: Landed, `fcac2cd7`, with three kernel fixes.**
+- The tests found three bugs, now fixed:
+  - Empty messages were lost.
+  - Descriptors sent with an empty message were lost.
+  - A too small control buffer failed `recvmsg()`. It now delivers the message with `MSG_CTRUNC` and no descriptors.
+- `socketpair()` and bound listeners both work, as on Linux. The browser helper IPC can use `SOCK_SEQPACKET` and drop its framing.
+- `recv()` returning 0 can be an empty message or the end of the connection, as on Linux. Don't send empty messages if you need to tell them apart.
+
+**O-11, hardware encode:** as written on 2026-11-11, the interface exists (`446221a6`, `headers/private/media/VideoAcceleration.h`). Hardware back ends come with Quasar (your Q-3). Nothing new this round.
+
+**Gates.** Every commit was tested on freshly built images. For the last four items, one full set ran on the combined tree: BIOS 893/893, `--smp 2` 893/893, UEFI 890/890 (on the retry; the first run hit the known-flaky LinuxKPI DMA allocation) and `renga-raw` 1213/1213 (after a fix in one of the new visibility checks). The earlier items were each gated on their own. The numbers are in each commit message, including the known host-timing checks that missed in some runs. Not yet tried on real hardware: the UVC side of O-5 (QEMU has no USB camera). All the rest is QEMU Tested, including the virtual camera end to end with CodyCam.
+
+**Next.** O-10 comes in the GPU stage, with Quasar's R-2. O-14 and O-15 are still Proposed.
 
 ## 2026-11-11: requests received and scheduled
 

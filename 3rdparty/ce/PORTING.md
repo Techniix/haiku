@@ -26,6 +26,12 @@ updates this file in the same commit.
 | USB Audio Class 1 and 2 devices (headsets, DACs) | (driver `usb_audio`, hmulti) | | UAC1 only, broken at 44.1 kHz on xhci | Available (UAC2 not yet tried on hardware) |
 | UVC webcams (YUY2, MJPEG) as Media Kit video sources | (Media Kit, `usb_webcam` add-on) | libmedia (nothing extra) | Missing (UVC class not built) | Available (not yet tried on hardware) |
 | Screen, window or region capture (damage-based, timestamped, with the user's permission and an indicator); a capture session with system audio, one application's audio and the microphone, writing a file or feeding the port | `<ScreenCapture.h>`, `<CaptureSession.h>` (private headers) | libbe, libmedia (nothing extra) | Only `BScreen::ReadBitmap()` (whole frames, no damage, no consent) | Available |
+| Leaving applications out of a loopback; a "loopback only" output; loopbacks of one process (team); routing a stream to a device by name, kept while it is absent | (mixer parameters `renga:loopback_exclude`, `renga:loopback_team`, `renga:routes`; `AudioStreamControl.h`, private header) | libmedia (nothing extra) | Missing | Available |
+| Camera mode lists (sizes, rates, encodings); `field_rate` honoured | (parameter `renga:video_modes`) | libmedia (nothing extra) | Missing; UVC always 30 fps | Available (UVC side not yet tried on hardware) |
+| A virtual camera fed by one program (OBS's "Start Virtual Camera") | `<VirtualCamera.h>` (private header) | libmedia, `-lgnu`, libnetwork | Missing | Available |
+| Screen capture: asynchronous permission request, `B_TIMED_OUT`, frame notification, window visibility flags | `<ScreenCapture.h>` (private header) | libbe (nothing extra) | Missing | Available |
+| `SOCK_SEQPACKET` UNIX sockets with `SCM_RIGHTS`; messages of 0 bytes; `MSG_CTRUNC` | `<sys/socket.h>` | libnetwork (nothing extra) | Empty messages lost, a too small control buffer failed `recvmsg()` | Fixed |
+| Passing a file descriptor to app_server; GPU presentation table for accelerants (provisional) | `<ServerFdTransfer.h>` (private), `<add-ons/graphics/GpuPresent.h>` | libbe | Missing | Descriptor passing available; `GpuPresent.h` not used by app_server yet (GPU stage) |
 | HDMI/DisplayPort audio | (driver `hda`) | | Missing | Stereo playback on the monitor's connector, named after it (not yet tried on hardware) |
 | Low-latency audio: small, fixed `BSoundPlayer` buffers and short sound card periods per application | `<SoundPlayer.h>`; `RENGA_AUDIO_LOW_LATENCY=1` | libmedia (nothing extra) | Missing (10 ms player buffers, 21-43 ms card periods) | Available |
 | Encoding and decoding audio and video by codec name (`MediaWriter`, `MediaReader`); VP8, VP9, Opus, Vorbis, AAC, MP3, FLAC encoders; seeking | `<MediaCodec.h>` (private header) | libmedia (nothing extra) | Only `BMediaFile`; no VP8/VP9/Opus encoders; AAC/MP3/Vorbis and float FLAC failed; no codec headers in Matroska/WebM/Ogg; audio seeking wrong | Available |
@@ -797,8 +803,39 @@ plain Media Kit calls:
   such a recording got no data. The mixer no longer stops the default
   sound card while something records from its input.
 
-Since: the commits that added `MixerTap` to the mixer add-on. Tests:
-`media_test.cpp` (renga-* images).
+- **Leaving applications out (OBS's own monitoring).** A loopback's
+  hidden text parameter of kind `renga:loopback_exclude` (id 4,
+  "Excluded applications", at most 4 KiB) lists signatures, one per line,
+  whose streams it does not record; empty: none. It applies to "every
+  stream" and to a one-application loopback alike, and is read back
+  normalized. `AudioStreamControl::SetLoopbackExclusions(node, list)`.
+  Find the parameter by kind, not by id (the request proposed id 3,
+  which the sinks' `renga:clock_drift` already has).
+- **One process rather than one application.** Kind
+  `renga:loopback_team` (id 5): a team id in decimal; above 0 the
+  loopback records only that team's streams (the signature selection is
+  then not looked at; exclusions still apply). "" or "0": by signature.
+  For helper processes of one executable (OBS's browser sources).
+  `AudioStreamControl::SetLoopbackTeam(node, team)`.
+- **Heard by recorders only.** A stream routed to "None (loopback only)"
+  (the "Output" parameter's item after the devices, value <device count>
+  + 1; route name `RENGA_LOOPBACK_ONLY_ROUTE`, "renga:loopback-only")
+  plays on no card and is left out of "every stream" loopbacks, but is
+  recorded by loopbacks that select its application or team.
+  `AudioStreamControl::SetLoopbackOnly(id, true)`.
+- **Routes by device name.** The system mixer's hidden text parameter of
+  kind `renga:routes` lists "<input id> <device name>" per stream;
+  writing one such line routes that stream to the device of that flavor
+  name, present or not ("<input id> " is the default output again). The
+  stream plays on the default output while the device is absent and
+  moves there when it appears (hot-plug), and the route is remembered per
+  signature. `AudioStreamControl::SetRoute(id, name)`. The "Output" menus
+  show such a route as "<name> (not available)".
+
+Since: the commits that added `MixerTap` to the mixer add-on; exclusions,
+teams, loopback only and routes by name in F-58 (`d97f5a34`,
+`805d2929`, `34526255`). Tests: `media_test.cpp`, `media_routing_test.cpp`
+(renga-* images).
 
 ### Sound cards and cameras that come and go
 
@@ -835,6 +872,28 @@ nothing to restart, and nothing changed in the public API:
   also has "Demo Video Producer" (`video_producer_demo`), a synthetic
   source useful for testing a port without a camera.
   `CodyCam --camera <name>` previews a given source.
+- **Camera modes.** A camera node's hidden read-only text parameter of
+  kind `renga:video_modes` lists what it can send, one line per size and
+  encoding: `<width>x<height> <YUY2|MJPEG> <fps>,<fps>,...`, fastest
+  first ("640x480 YUY2 30,15,5"). The output is always `B_RGB32`; the
+  encoding says what crosses the bus. Ask for a rate with the
+  connection's `field_rate`: the camera's nearest interval is used and
+  put into the connected format (0: the camera's default). The demo
+  producer has the same parameter. (`ab6f163f`; the UVC side needs a
+  real camera to be fully tested.)
+- **Virtual camera.** "Virtual Camera" (`virtual_camera` add-on, every
+  image) is a camera other applications open like any other (CodyCam's
+  Camera menu, the Media preferences' video input), fed by one program:
+  `BPrivate::VirtualCameraFeeder` in `headers/private/media/
+  VirtualCamera.h` (header-only; link `-lgnu` for `memfd_create()` and
+  libnetwork). `Connect(width, height, fieldRate, slots = 3)`, then
+  `WriteFrame(bits, bytesPerRow, time)` per `B_RGB32` frame,
+  `Disconnect()`. Frames travel in a memfd shared with the camera node
+  (the descriptor goes over a local `SOCK_SEQPACKET` socket); the node
+  scales them to the size its consumer connected with. A second feeder
+  gets `B_BUSY`; without one the camera sends dark grey. Its hidden text
+  parameter `renga:virtual_camera` says who feeds it ("<team>
+  <w>x<h> <received> <sent>", or "none"). (`d6f1bc7b`)
 - **HDMI/DisplayPort audio**: a display audio codec (Intel, AMD, NVIDIA
   graphics) is a sound card named after the monitor ("HDMI: <monitor>",
   "DisplayPort: <monitor>"), playing stereo LPCM in the rates and sample
@@ -875,7 +934,18 @@ the mixer's loopback.
 - **Permission.** The first `Start...()` of an application (by signature)
   shows the Screen recording prompt and waits for the answer (default
   timeout 2 minutes; pass your own). "Remember my decision" stores it;
-  otherwise it holds until the application quits. The Screen recording
+  otherwise it holds until the application quits. When the timeout passes
+  without an answer, `Start...()` returns `B_TIMED_OUT` (a "no" stays
+  `B_NOT_ALLOWED`); the prompt stays up, and a later request joins it.
+  The wait does not hold the application's app_server link (it did, up
+  to the whole timeout, before F-58 `b92ace62`).
+- **Asking without blocking.** `BScreenCapture::RequestPermission(
+  BMessenger target, uint32 sources = SCREEN_CAPTURE_ANY_MASK)` (static)
+  returns at once; the answer arrives at `target` as a
+  `SCREEN_CAPTURE_PERMISSION_ANSWER` ('ScPa') message with "status"
+  (`B_OK`, `B_NOT_ALLOWED`, or `B_CANCELED` when the prompt was closed
+  unanswered), "request" and "sources". A known answer is sent at once.
+  Then `Start...()` starts without asking. The Screen recording
   preferences (`/boot/system/preferences/ScreenRecording`) list the
   decisions and the running captures; `ScreenRecording --set <signature>
   allow|deny|ask` and `--list` do the same from scripts. While any capture
@@ -902,10 +972,23 @@ the mixer's loopback.
   it.
 - **Limits.** Window capture copies the window's area of the screen:
   without a compositor (`F-33`) a window on top of it shows in the
-  capture. Frames are sampled by the caller (no frame callbacks from
-  app_server yet). The video file has a constant frame rate; when the
+  capture; `NextFrame()`'s flags say when that happens (below). The video file has a constant frame rate; when the
   encoder is slower than real time the session repeats frames to keep
   audio and video in step. Multi-monitor capture waits for `F-38`.
+
+- **Waiting for frames (F-58, `23d36b26`).** `SetFrameNotification(sem_id)` (a
+  semaphore of your team): app_server releases it once when the source's
+  area changes after a frame was taken, when the session stops, and at
+  once if a change is already waiting; taking a frame re-arms it; -1 ends
+  it. `WaitForFrame(timeout)` does the same with a semaphore of its own
+  (`B_OK`: call `NextFrame()`; `B_TIMED_OUT`). A recorder can sleep
+  instead of polling at its frame rate.
+- **Window visibility (F-58, `23d36b26`).** `NextFrame(bitmap, &changed, &damage,
+  &time, &flags)`: for window sources `SCREEN_CAPTURE_FRAME_HIDDEN`
+  (hidden or minimized), `_OTHER_WORKSPACE`, `_COVERED` (partly),
+  `_FULLY_COVERED` (with `_COVERED`); `SCREEN_CAPTURE_FRAME_NOT_VISIBLE`
+  is the mask for "the frame does not show the window" (pause or show a
+  placeholder). Region and screen sources report 0.
 
 Since: the commits that added `ScreenCaptureManager` to app_server,
 `CaptureSession.cpp` to libmedia and recording to Screenshot. Tests:
@@ -1090,6 +1173,64 @@ For ports:
 
 Since: the commit that added `headers/private/shared/ShortcutKeyStyle.h`.
 Tests: `shortcut_keys_test.cpp`.
+
+### SOCK_SEQPACKET UNIX sockets
+
+`socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds)` and bound
+`SOCK_SEQPACKET` listeners (`bind()`, `listen()`, `connect()`,
+`accept()`) keep message boundaries and carry descriptors with
+`SCM_RIGHTS` as on Linux; an IPC can drop its own framing. Fixed in F-58
+(they affected `SOCK_DGRAM` UNIX sockets too):
+
+- A message of 0 bytes is a message: `recv()` returns 0 for it, and it
+  can carry descriptors. (It was not queued at all; the receiver blocked
+  or got `EWOULDBLOCK`.) `poll()` reports it readable; `FIONREAD` then
+  says 1. As on Linux, `recv()` returning 0 is also the end of the
+  connection; tell them apart with `MSG_PEEK` or by not sending empty
+  messages.
+- A control buffer too small for the descriptors is not an error: the
+  message is delivered with `MSG_CTRUNC` and **no** descriptors (they
+  are closed; Linux delivers those that fit). Before, `recvmsg()` failed
+  and the message was lost.
+- A datagram queue holds at most 4096 messages.
+
+Since: `fcac2cd7`. Tests: `seqpacket_test.cpp` (every image).
+
+### Passing descriptors to app_server; GPU presentation (for drivers)
+
+For the GPU stage (F-47) and accelerant authors (Quasar's R-1); not
+something ports call today.
+
+- **`BPrivate::app_server_send_fd(int fd, int32* token)`**
+  (`headers/private/app/ServerFdTransfer.h`, libbe) hands a descriptor to
+  app_server over a local `SOCK_SEQPACKET` socket
+  (`/boot/system/var/run/app_server/fd`) with `SCM_RIGHTS` and returns a
+  token that app_server messages name it by. Only the sending team's
+  ServerApp can take it, once; untaken ones are closed when the team goes
+  or after 60 s. The caller keeps its own descriptor.
+- **`<add-ons/graphics/GpuPresent.h>`** (public, installed with the
+  development headers): the vendor-neutral accelerant table Quasar
+  proposed, unchanged in its names and layout, plus `gpu_rect` and
+  `B_GPU_PRESENT_VERSION` (1). Feature code `B_GPU_PRESENT_HOOKS`
+  (0x52474100) for `get_accelerant_hook()`. **Provisional**: app_server
+  does not call it yet, and it may change once the open points are
+  settled on hardware; every change bumps the version, which the
+  accelerant reports in the table.
+
+Since: `744fa9b4`. Tests: `appserver_fd_test.cpp` (every image).
+
+### Drivers in non-packaged
+
+A copy of a system driver in `/boot/system/non-packaged/add-ons/kernel`
+(or the user's `~/config/non-packaged/add-ons/kernel`) that is **older**
+than the system's copy no longer replaces it: the system copy loads and
+the kernel log says so (`devfs: "<path>" is older than the system's
+copy "<path>"; using the system's ...`). A newer copy, or a driver the system does not have, loads as
+before, so testing a driver build in non-packaged still works; remove
+stale copies when a driver moves into the system package (the in-tree
+`mt7921e`). A panic inside a driver's hooks names the driver and hook in
+the crash report (`driver: <path> (<hook>)`) and in System logs.
+Since: `975c0eff`.
 
 ## Planned (do not work around these yet)
 
