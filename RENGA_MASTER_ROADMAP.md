@@ -1408,6 +1408,16 @@ Checklist (request IDs from the requesting files):
 - [x] O-11: tell OBS the Media Kit video acceleration interface exists (`446221a6`); its hardware back ends come with Quasar (Q-3) and the GPU stage. Done in `docs/partners/OBS.md` (2026-11-11 and 2026-11-12).
 - [x] Added during the batch (maintainer priority): the mt7921e boot panic, `975c0eff`: `freebsd_network` destroyed every interface's address lock twice (upstream bug 55); an older `non-packaged` copy of a system driver gives way to the system's; crash reports name the driver and hook (Implemented: not seen in QEMU).
 
+**Batch 2 (OBS requests of 2026-11-12, OBS `renga` branch up to `013dece`; validated by the main session).** Scheduled right after the F-59 image, before `F-61`; grouped (independent items):
+
+- [ ] O-16, valid: in `ScreenCaptureManager`, an answered but not remembered request ("Don't allow" or a prompt that went away) stays in `fRequests` and answers the next `RequestPermission()` "no" without a prompt, so OBS's "Try again" needs two clicks. An answer belongs to its request only; a new explicit request after it was delivered prompts again.
+- [ ] O-17: the team of each mixer stream (`renga:app_team` per input, `AudioStream::team` in `AudioStreamControl`).
+- [ ] O-18: loopback-only routing by team that the mixer does not remember (transient, set before the stream starts so no sound reaches the speakers first); with O-17 OBS drops the second signature its browser helpers use.
+- [ ] O-19, valid: UNIX `SOCK_SEQPACKET`/`SOCK_DGRAM` sends of a message that can never fit the receiver's buffer wait forever; return `EMSGSIZE` as Linux and the BSDs do (kernel, so the full gate set on its own).
+- [ ] O-20: `VirtualCameraFeeder::WriteFrame()` gets a timeout and a non-blocking mode (`B_WOULD_BLOCK` / `B_TIMED_OUT`), and `Disconnect()` never hangs if media_addon_server stopped reading.
+- [ ] Fixes found by OBS: `VirtualCamera.h`'s comment on `renga:virtual_camera` lists three fields, the node writes five values (`<team> <w>x<h> <received> <sent>`): fix the comment (confirmed). `media_vcam_test.cpp` and "not thread safe": the main path waits for the feeding thread before `Disconnect()`; check the error paths and make every path join the thread first.
+- Note: O-5's UVC side gets its first real-camera test when the maintainer runs OBS.
+
 #### F-59 Real-hardware feedback, batch 1 (2026-11-11)
 
 | Field | Value |
