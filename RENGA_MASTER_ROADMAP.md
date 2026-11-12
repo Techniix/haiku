@@ -120,6 +120,8 @@ These come from the audit's architecture report and apply to every change:
 - **Every change gets an automated check, plus a known-bad case for the check itself.** New harness checks get a case in `selftest.py` so a broken check cannot pass silently. Wherever possible, a new test is shown to fail on the old code.
 - **Every user-facing feature ships with its GUI** (maintainer, 2026-11-09). A feature people use or configure is not Implemented until it can be reached and controlled from the desktop: a settings page (today's preferences, later the Control Panel, `F-28`), a menu, a Deskbar or panel item, or a window, as fits. The GUI is part of the same work item and is checked with screenshots in the harness. Pure programming interfaces (`epoll`, `memfd`, ...) and automatic behaviour without options are exempt; settings that exist only as files or command-line switches are not.
 - **Tiered test gates** (maintainer, 2026-11-11; replaces "all four full runs before every commit"). *Every commit:* a fresh build, the full `--profile renga-raw` run (the largest image) and `selftest.py` with 0 failures, plus the relevant suites (`--only`) on default, `--smp 2` and `--firmware uefi`. *Also full default, `--smp 2` and UEFI runs on that commit* when it touches the kernel, drivers, the boot loader or installer, locking, memory management, libroot, the harness itself, or anything else where SMP or firmware can differ. *End of every batch* (before reporting it done) *and before every image handed to the maintainer:* the full four-way sweep on the final tree; a regression found there is bisected over the batch's commits and fixed before the batch counts as done. *Known flaky checks* (listed in section 8.3 and the README: currently `media_latency.low_latency_latency`, `media.click_free_volume`, `sound_settings.output_device_back`, `linuxkpi.edu_dma_*` on UEFI) are retried once automatically and reported either way; a repeated failure blocks. Commit messages state which tier ran and its numbers.
+- **Lean by design, never at the cost of what the user is doing** (maintainer, 2026-11-11). Renga's own background services start on demand and stay idle when they have nothing to do (an indexer pauses under load, Bluetooth services need Bluetooth hardware). Renga never throttles, delays or batches a program's own work to save resources (no "data saver" or "app standby" behaviour that delays mail or notifications). Fresh-desktop memory, idle CPU, idle wake-ups and boot time are measured every batch (`F-61`); a regression must be justified in its commit.
+- **Responsiveness first, including Lumina.** Lumina and every Renga component follow the BeOS approach: one thread per window, nothing slow on a UI or media thread, measured by `F-61`.
 - **No KPTI or other always-on costs by default.** The compositor, if built, is optional and off by default.
 - **AI-written work stays in the fork.** Upstream's `AGENTS.md` (at `4197d30f`) forbids AI-generated or AI-assisted contributions. The maintainer files upstream reports himself, in his own words. That is not a priority now; candidates are collected in the [upstream bug reports doc](https://claude.ai/artifact/FVtf9E5sE982Ty1zWf9Sm9).
 
@@ -349,6 +351,9 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-60 | Existing applications and preferences: review and Renga refresh | Designed | None |
 | F-61 | Responsiveness under load ("the BeOS demo") as a release gate | Designed | None |
 | F-62 | BFS queries as the system's search: smart folders, tags, content index | Designed | None |
+| F-63 | Media graph made visible: patchbay and Linux audio as nodes (go/no-go per part) | Investigating | None |
+| F-64 | Automation app (modern successor to `hey` scripting) | Designed | None |
+| F-65 | Live widgets: replicants for the modern desktop, with Lumina | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -981,6 +986,8 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 - [ ] **Installation previews:** every change is planned first and shown as a list and a before/after picture; nothing is written until confirmed.
 - [ ] **Recovery and rollback where technically possible:** the old partition tables and boot entries are saved before writing and every step is journaled, so a failed or interrupted install can be undone. Overwritten partition contents cannot be restored; the preview says so.
 
+**First-boot welcome (maintainer, 2026-11-11, polish):** after installation, a short welcome on first login in the Renga style: what is new, the shortcut key (Ctrl or Alt), network and Wi-Fi, appearance (light/dark), privacy-relevant permissions (screen recording), and where help lives; skippable, reopenable from the Help menu.
+
 #### F-24 Advanced partition manager
 
 | Field | Value |
@@ -1113,6 +1120,8 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | System | Desktop shell | Lumina on or off at login; "Restore the stock desktop now"; engine status (active, or inactive with the reason); what happens after repeated shell crashes (fall back to stock, notify) | None |
 
 Not settings and therefore not in the Control Panel: the `lumina` command (scripting, tests) and Lumina's developer experiments.
+
+**Renga user guide (maintainer, 2026-11-11, polish):** a built-in, searchable user guide (the Help entry in Deskbar and every application's Help menu), with a page per Control Panel page and per bundled application, written as each item lands; screenshots taken by the harness so they stay current.
 
 #### F-40 Visual identity pack (themes)
 
@@ -1453,6 +1462,8 @@ Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal
 | Recommended next action | Build the suite early so it guards everything after it |
 | Links | Maintainer, 2026-11-11: "fast and responsive is the goal"; BeOS's founding promise |
 
+**Also measured (maintainer, 2026-11-11):** boot time to a usable desktop, with a target to set after the first baseline (BeOS booted in seconds), and the lean-by-design figures from section 1.2 (fresh-desktop memory, idle CPU, idle wake-ups). Lumina is held to the same gate as Deskbar.
+
 #### F-62 BFS queries as the system's search: smart folders, tags, content index
 
 | Field | Value |
@@ -1469,6 +1480,60 @@ Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal
 | Testing status | None |
 | Next milestone | Smart folders and tags in Tracker |
 | Recommended next action | With the Tracker review in `F-60` |
+| Links | Maintainer, 2026-11-11 |
+
+#### F-63 Media graph made visible: patchbay and Linux audio as nodes
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | The Media Kit's node graph (BeOS design); Cortex (`src/apps/cortex`) shows it, dated and developer-oriented |
+| Renga maturity | Per-application routing, loopbacks and per-device settings in the Audio preferences (`F-32`); the node graph unchanged |
+| Status | **Investigating** (maintainer, 2026-11-11: only with a serious benefit, without needless complexity, without large rework, and only if Linux programs under Renguin fit in as smoothly as native ones; otherwise leave things as they are) |
+| Completed | None |
+| Remaining | Go/no-go per part, decided with measurements and a short design note before any building: (a) **Routing view**: a visual patchbay page in the Audio preferences (a modern Cortex for everyday use: applications, devices, loopbacks, with live latency per connection, drag to reroute), built only on the existing graph and `F-32`'s routing, no new kernel or media_server design; (b) **Linux programs as nodes**: Renguin's audio (a PulseAudio/PipeWire-protocol server in Renga, which Renguin needs anyway) maps each Linux program to an ordinary application stream with its own volume, routing and capture, indistinguishable from a native one; if that cannot be made as smooth, (b) and anything depending on it is left out; (c) **network media nodes** (another Renga machine's devices) only if (a) and (b) went ahead and the benefit is clear; (d) audio plug-in hosting and MIDI 2.0 only on concrete demand |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-32` (done), `F-27` (Renguin) for (b), `F-61` (latency must not regress) |
+| Difficulty | 4 (a); 6 (b); 7 (c) |
+| Risk | Medium; kept low by the go/no-go rule |
+| Testing status | None |
+| Next milestone | Design note for (a) and (b) with Renguin's audio plan |
+| Recommended next action | With Renguin (`F-27`), when its audio is designed |
+| Links | Maintainer, 2026-11-11 |
+
+#### F-64 Automation app (modern successor to `hey` scripting)
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Every BeOS/Haiku application can be scripted through `BMessage` scripting (properties and specifiers); the command-line `hey` uses it; no GUI, little known |
+| Renga maturity | None |
+| Status | **Designed** (maintainer, 2026-11-11) |
+| Completed | None |
+| Remaining | An automation app inspired by Apple's Shortcuts and similar tools, improved: (1) an intuitive editor of steps as blocks (search for actions, drag to reorder, variables passed between steps, if/repeat/choose, test-run with each step's result shown); (2) actions from every scriptable application found automatically through its scripting suites, plus built-in actions (files, Tracker queries `F-62`, clipboard, notifications, media and audio routing `F-32`, network, windows and workspaces, shell commands, Renguin programs); (3) triggers: hotkey, Deskbar/launcher, Tracker context menu on selected files, a schedule, a device connected (the headset case, `F-59`), a network joined, an app started or quit, a file appearing in a folder, login; (4) sharing as a single file, with a permission summary shown before first run; (5) widgets and Deskbar buttons that run a shortcut (`F-65`); (6) a command-line runner. Runs in its own team, never blocking the UI; actions that change things outside the user's files ask the first time |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-62` (queries), `F-65` (widgets), `F-28` (settings) |
+| Difficulty | 6 |
+| Risk | Low |
+| Testing status | None |
+| Next milestone | Design with mockups |
+| Recommended next action | Polish stage, after bundled apps batch 2 |
+| Links | Maintainer, 2026-11-11 |
+
+#### F-65 Live widgets: replicants for the modern desktop, with Lumina
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Replicants (`BDragger`, `BShelf`): a live view of one application running inside another (Deskbar tray, the desktop); powerful but hidden behind a handle, unstyled, no placement or sizing rules, no gallery |
+| Renga maturity | None |
+| Status | **Designed** (maintainer, 2026-11-11) |
+| Completed | None |
+| Remaining | Modern widgets on the replicant mechanism, so existing replicants keep working: a widget gallery (add from a panel, drag onto the desktop, the Lumina panel or a Lumina widget area), resizable widgets with size classes, snapping and alignment on the desktop, Renga styling and dark mode, per-widget settings, widgets that update without polling (notifications, queries `F-62`, media `F-31`), widgets running in their own team so a broken widget cannot take Tracker or the panel down (crash shown in place, restart button), and a set of built-in widgets (clock and calendar, system monitor, now playing with controls, weather, notes, a shortcut button `F-64`, a live query `F-62`, network, battery). Lumina integration: Lumina's panel and desktop are widget hosts, Lumina's layout profiles remember widget arrangements, and the same widget works in Deskbar, Lumina and on the desktop. Responsiveness: widgets are measured by `F-61` |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-25` (Lumina), `F-41` (Deskbar), `F-40` (design language) |
+| Difficulty | 6 |
+| Risk | Medium (Tracker's desktop shelf, compatibility with existing replicants) |
+| Testing status | None |
+| Next milestone | Design with mockups, together with the Lumina phase |
+| Recommended next action | With Lumina (`F-25`) |
 | Links | Maintainer, 2026-11-11 |
 
 ### Bundled applications
@@ -1512,6 +1577,8 @@ Checklist:
   - [ ] Passwords app for the key store (BKeyStore), also the store behind Chromium's saved passwords (`F-43` phase D).
 
 ### Multimedia
+
+**Modern image formats (maintainer, 2026-11-11, polish):** Translators for AVIF, JPEG XL, HEIC/HEIF, WebP (check the existing one) and SVG (read), so ShowImage, Tracker thumbnails and every program using the Translation Kit open them.
 
 #### F-31 Media Kit
 
