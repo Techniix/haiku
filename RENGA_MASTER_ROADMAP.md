@@ -1467,6 +1467,8 @@ Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal
 
 **Also measured (maintainer, 2026-11-11):** boot time to a usable desktop, with a target to set after the first baseline (BeOS booted in seconds), and the lean-by-design figures from section 1.2 (fresh-desktop memory, idle CPU, idle wake-ups). Lumina is held to the same gate as Deskbar.
 
+**Flaky checks fixed with the suite (maintainer, 2026-11-12):** (a) `media_latency.low_latency_latency` measures audio latency on a shared 2-CPU QEMU host, where the same code measured 19-37 ms against a 30 ms limit: measure the host's own timing noise during the run and judge the latency relative to it (or compare low-latency against normal mode in the same run), with absolute numbers coming from the F-61 suite on the maintainer's PC; (b) `linuxkpi.edu_dma_*` on UEFI: QEMU's `edu` device sometimes does not answer under OVMF; find the cause (interrupt routing, BAR mapping or DMA mask under UEFI) and fix the setup, or run those checks on BIOS only and say so; (c) `media_drift.skew_*` if the F-58 sweep shows them host-timing dependent. Goal: no check in the "known flaky" list; each one removed with the evidence (repeated runs under load) in its commit.
+
 #### F-62 BFS queries as the system's search: smart folders, tags, content index
 
 | Field | Value |
