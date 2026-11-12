@@ -113,7 +113,11 @@ private:
 			void				_LoadPermissions();
 			void				_SavePermissions();
 
-			bool				_SourceFrame(Session* session, BRect& frame);
+			bool				_SourceFrame(Session* session, BRect& frame,
+									uint32* _flags = NULL);
+			void				_SetNotification(ServerApp* app,
+									BPrivate::LinkReceiver& link,
+									BPrivate::PortLink& reply);
 			Session*			_FindSession(int32 id);
 			void				_RemoveSession(Session* session);
 			void				_UpdateActive();

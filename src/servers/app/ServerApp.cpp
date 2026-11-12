@@ -3449,6 +3449,7 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 		case AS_SCREEN_CAPTURE_GET_REQUEST:
 		case AS_SCREEN_CAPTURE_ANSWER_REQUEST:
 		case AS_SCREEN_CAPTURE_REQUEST_PERMISSION:
+		case AS_SCREEN_CAPTURE_SET_NOTIFICATION:
 			if (fDesktop->ScreenCapture() != NULL) {
 				fDesktop->ScreenCapture()->HandleMessage(this, code, link,
 					fLink);

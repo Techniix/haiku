@@ -6,7 +6,9 @@
 
 #include <ScreenCapture.h>
 
+#include <Autolock.h>
 #include <Bitmap.h>
+#include <Locker.h>
 #include <Message.h>
 #include <Messenger.h>
 
@@ -14,6 +16,8 @@
 #include <BitmapPrivate.h>
 #include <MessengerPrivate.h>
 #include <ServerProtocol.h>
+
+#include <map>
 
 
 namespace BPrivate {
@@ -121,11 +125,79 @@ BScreenCapture::RequestPermission(BMessenger target, uint32 sources)
 }
 
 
+// F-58 (O-8): WaitForFrame()'s semaphore per session, kept here so that
+// the class keeps its size.
+static BLocker sWaitLock("screen capture waits");
+static std::map<int32, sem_id> sWaitSemaphores;
+
+
+static void
+delete_wait_semaphore(int32 session)
+{
+	BAutolock locker(sWaitLock);
+	std::map<int32, sem_id>::iterator it = sWaitSemaphores.find(session);
+	if (it != sWaitSemaphores.end()) {
+		delete_sem(it->second);
+		sWaitSemaphores.erase(it);
+	}
+}
+
+
+status_t
+BScreenCapture::SetFrameNotification(sem_id semaphore)
+{
+	if (fSession < 0)
+		return B_NO_INIT;
+	AppServerLink link;
+	link.StartMessage(AS_SCREEN_CAPTURE_SET_NOTIFICATION);
+	link.Attach<int32>(fSession);
+	link.Attach<sem_id>(semaphore);
+	status_t status;
+	if (link.FlushWithReply(status) != B_OK)
+		return B_ERROR;
+	return status;
+}
+
+
+status_t
+BScreenCapture::WaitForFrame(bigtime_t timeout)
+{
+	if (fSession < 0)
+		return B_NO_INIT;
+	sem_id semaphore = -1;
+	{
+		BAutolock locker(sWaitLock);
+		std::map<int32, sem_id>::iterator it
+			= sWaitSemaphores.find(fSession);
+		if (it != sWaitSemaphores.end())
+			semaphore = it->second;
+	}
+	if (semaphore < 0) {
+		semaphore = create_sem(0, "screen capture frame");
+		if (semaphore < 0)
+			return semaphore;
+		status_t status = SetFrameNotification(semaphore);
+		if (status != B_OK) {
+			delete_sem(semaphore);
+			return status;
+		}
+		BAutolock locker(sWaitLock);
+		sWaitSemaphores[fSession] = semaphore;
+	}
+	status_t status;
+	do {
+		status = acquire_sem_etc(semaphore, 1, B_RELATIVE_TIMEOUT, timeout);
+	} while (status == B_INTERRUPTED);
+	return status == B_OK ? B_OK : B_TIMED_OUT;
+}
+
+
 status_t
 BScreenCapture::Stop()
 {
 	if (fSession < 0)
 		return B_OK;
+	delete_wait_semaphore(fSession);
 	AppServerLink link;
 	link.StartMessage(AS_SCREEN_CAPTURE_STOP);
 	link.Attach<int32>(fSession);
@@ -140,6 +212,14 @@ BScreenCapture::Stop()
 status_t
 BScreenCapture::NextFrame(BBitmap* bitmap, bool* _changed, BRegion* _damage,
 	bigtime_t* _time)
+{
+	return NextFrame(bitmap, _changed, _damage, _time, NULL);
+}
+
+
+status_t
+BScreenCapture::NextFrame(BBitmap* bitmap, bool* _changed, BRegion* _damage,
+	bigtime_t* _time, uint32* _flags)
 {
 	if (fSession < 0)
 		return B_NO_INIT;
@@ -175,6 +255,11 @@ BScreenCapture::NextFrame(BBitmap* bitmap, bool* _changed, BRegion* _damage,
 		if (_damage != NULL)
 			_damage->Include(rect);
 	}
+	uint32 flags = 0;
+	if (link.Read<uint32>(&flags) != B_OK)
+		flags = 0;
+	if (_flags != NULL)
+		*_flags = flags;
 	if (_changed != NULL)
 		*_changed = changed;
 	if (_time != NULL)

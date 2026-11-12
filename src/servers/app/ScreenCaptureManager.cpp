@@ -67,12 +67,16 @@ struct ScreenCaptureManager::Session {
 	BRect		bitmapFrames[kMaxBitmapsPerSession];
 		// the source frame each bitmap was last filled for
 	int32		bitmapCount;
+	sem_id		notify;			// F-58 (O-8): released on damage, or -1
+	bool		notified;		// released since the last frame
 
 	Session()
 		:
 		frames(0),
 		stopped(false),
-		bitmapCount(0)
+		bitmapCount(0),
+		notify(-1),
+		notified(false)
 	{
 	}
 };
@@ -188,6 +192,12 @@ ScreenCaptureManager::ScreenDamaged(const BRect& frame)
 		session->sinceLastFrame.Include(frame);
 		for (int32 j = 0; j < session->bitmapCount; j++)
 			session->missed[j].Include(frame);
+		// F-58 (O-8): once per frame, when the source's area changed
+		if (session->notify >= 0 && !session->notified
+			&& (session->frames == 0 || session->lastFrame.Intersects(frame))) {
+			session->notified = true;
+			release_sem_etc(session->notify, 1, B_DO_NOT_RESCHEDULE);
+		}
 	}
 }
 
@@ -262,6 +272,9 @@ ScreenCaptureManager::HandleMessage(ServerApp* app, int32 code,
 			break;
 		case AS_SCREEN_CAPTURE_REQUEST_PERMISSION:
 			_RequestPermission(app, link, reply);
+			break;
+		case AS_SCREEN_CAPTURE_SET_NOTIFICATION:
+			_SetNotification(app, link, reply);
 			break;
 	}
 	reply.Flush();
@@ -545,8 +558,11 @@ ScreenCaptureManager::_Start(ServerApp* app, LinkReceiver& link,
 	asked). Must be called without fLock (it takes the window lock).
 */
 bool
-ScreenCaptureManager::_SourceFrame(Session* session, BRect& frame)
+ScreenCaptureManager::_SourceFrame(Session* session, BRect& frame,
+	uint32* _flags)
 {
+	if (_flags != NULL)
+		*_flags = 0;
 	BRect screen = fDesktop->VirtualScreen().Frame();
 	switch (session->source) {
 		case SCREEN_CAPTURE_SCREEN:
@@ -573,8 +589,32 @@ ScreenCaptureManager::_SourceFrame(Session* session, BRect& frame)
 						frame = frame
 							| window->Decorator()->GetFootprint().Frame();
 					}
+					BRect whole = frame;
 					frame = frame & screen;
 					found = frame.IsValid();
+					// F-58 (OBS Studio's O-9): whether the window's area
+					// shows the window
+					if (_flags != NULL) {
+						uint32 flags = 0;
+						if (window->IsHidden() || window->IsMinimized())
+							flags |= SCREEN_CAPTURE_FRAME_HIDDEN;
+						if (!window->InWorkspace(
+								fDesktop->CurrentWorkspace()))
+							flags |= SCREEN_CAPTURE_FRAME_OTHER_WORKSPACE;
+						if (flags == 0) {
+							BRegion visible(window->VisibleRegion());
+							BRegion wanted(found ? frame : whole);
+							BRegion shown(wanted);
+							shown.IntersectWith(&visible);
+							wanted.Exclude(&visible);
+							if (shown.CountRects() == 0)
+								flags |= SCREEN_CAPTURE_FRAME_FULLY_COVERED
+									| SCREEN_CAPTURE_FRAME_COVERED;
+							else if (wanted.CountRects() > 0)
+								flags |= SCREEN_CAPTURE_FRAME_COVERED;
+						}
+						*_flags = flags;
+					}
 				}
 			}
 			fDesktop->UnlockSingleWindow();
@@ -624,10 +664,14 @@ ScreenCaptureManager::_Frame(ServerApp* app, LinkReceiver& link,
 	}
 
 	BRect frame;
-	if (!_SourceFrame(session, frame)) {
+	uint32 visibility = 0;
+	if (!_SourceFrame(session, frame, &visibility)) {
 		locker.Lock();
-		if ((session = _FindSession(id)) != NULL)
+		if ((session = _FindSession(id)) != NULL) {
 			session->stopped = true;
+			if (session->notify >= 0)
+				release_sem_etc(session->notify, 1, B_DO_NOT_RESCHEDULE);
+		}
 		reply.StartMessage(B_ENTRY_NOT_FOUND);
 		return;
 	}
@@ -684,6 +728,8 @@ ScreenCaptureManager::_Frame(ServerApp* app, LinkReceiver& link,
 	}
 	session->sinceLastFrame.MakeEmpty();
 	session->lastFrame = frame;
+	session->notified = false;
+		// F-58 (O-8): the next change releases the semaphore again
 	bool includeCursor = (session->flags & SCREEN_CAPTURE_INCLUDE_CURSOR) != 0;
 	session->frames++;
 	locker.Unlock();
@@ -782,6 +828,48 @@ ScreenCaptureManager::_Frame(ServerApp* app, LinkReceiver& link,
 		rect.OffsetBy(-frame.LeftTop());
 		reply.Attach<BRect>(rect);
 	}
+	// F-58 (O-9), after the rectangles: older clients stop reading before
+	reply.Attach<uint32>(visibility);
+}
+
+
+/*!	AS_SCREEN_CAPTURE_SET_NOTIFICATION (F-58, OBS Studio's O-8): int32
+	session, sem_id. The semaphore (the client's) is released once when
+	the source's area changes after a frame was taken, and when the
+	session is stopped; -1 ends the notification. Replies B_OK.
+*/
+void
+ScreenCaptureManager::_SetNotification(ServerApp* app, LinkReceiver& link,
+	PortLink& reply)
+{
+	int32 id;
+	sem_id semaphore;
+	link.Read<int32>(&id);
+	if (link.Read<sem_id>(&semaphore) != B_OK) {
+		reply.StartMessage(B_BAD_DATA);
+		return;
+	}
+	sem_info info;
+	if (semaphore >= 0 && (get_sem_info(semaphore, &info) != B_OK
+			|| info.team != app->ClientTeam())) {
+		reply.StartMessage(B_BAD_VALUE);
+		return;
+	}
+	BAutolock locker(fLock);
+	Session* session = _FindSession(id);
+	if (session == NULL || session->team != app->ClientTeam()) {
+		reply.StartMessage(B_BAD_VALUE);
+		return;
+	}
+	session->notify = semaphore;
+	// a change since the last frame is reported at once
+	session->notified = false;
+	if (semaphore >= 0 && (session->sinceLastFrame.CountRects() > 0
+			|| session->stopped)) {
+		session->notified = true;
+		release_sem_etc(semaphore, 1, B_DO_NOT_RESCHEDULE);
+	}
+	reply.StartMessage(B_OK);
 }
 
 
@@ -802,6 +890,8 @@ ScreenCaptureManager::_Stop(ServerApp* app, int32 id, bool any,
 	if (any && session->team != app->ClientTeam()) {
 		// Stopped by the user: the owner learns it at its next frame.
 		session->stopped = true;
+		if (session->notify >= 0)
+			release_sem_etc(session->notify, 1, B_DO_NOT_RESCHEDULE);
 	} else
 		_RemoveSession(session);
 	_UpdateActive();
@@ -978,8 +1068,11 @@ ScreenCaptureManager::_SetPermissionLocked(const char* signature,
 	if (state != SCREEN_CAPTURE_PERMISSION_ALLOWED) {
 		// Revoked: running sessions of that application end.
 		for (int32 i = 0; Session* session = fSessions.ItemAt(i); i++) {
-			if (session->signature == signature)
+			if (session->signature == signature) {
 				session->stopped = true;
+				if (session->notify >= 0)
+					release_sem_etc(session->notify, 1, B_DO_NOT_RESCHEDULE);
+			}
 		}
 		fAllowedOnce.MakeEmpty();
 		_UpdateActive();

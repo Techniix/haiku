@@ -48,6 +48,20 @@ enum {
 	SCREEN_CAPTURE_PERMISSION_ANSWER	= 'ScPa'
 };
 
+// What NextFrame() says about a window source (F-58, OBS Studio's O-9).
+// Without a compositor a window's area of the screen is captured, so a
+// recorder pauses on HIDDEN and OTHER_WORKSPACE (the area shows something
+// else) and may on FULLY_COVERED. Region and screen sources report 0.
+enum {
+	SCREEN_CAPTURE_FRAME_HIDDEN				= 0x01,	// hidden or minimized
+	SCREEN_CAPTURE_FRAME_OTHER_WORKSPACE	= 0x02,	// not on the shown one
+	SCREEN_CAPTURE_FRAME_COVERED			= 0x04,	// partly covered
+	SCREEN_CAPTURE_FRAME_FULLY_COVERED		= 0x08,	// nothing of it shows
+	SCREEN_CAPTURE_FRAME_NOT_VISIBLE		= SCREEN_CAPTURE_FRAME_HIDDEN
+		| SCREEN_CAPTURE_FRAME_OTHER_WORKSPACE
+		| SCREEN_CAPTURE_FRAME_FULLY_COVERED
+};
+
 // What the user decided for an application (by signature).
 enum screen_capture_permission {
 	SCREEN_CAPTURE_PERMISSION_UNKNOWN	= 0,	// ask (the default)

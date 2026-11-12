@@ -380,6 +380,8 @@ enum {
 	AS_SCREEN_CAPTURE_ANSWER_REQUEST,
 	AS_SCREEN_CAPTURE_REQUEST_PERMISSION,
 		// F-58 (OBS Studio's O-7): asynchronous permission request
+	AS_SCREEN_CAPTURE_SET_NOTIFICATION,
+		// F-58 (O-8): a semaphore released when the source changes
 
 	AS_LAST_CODE
 };

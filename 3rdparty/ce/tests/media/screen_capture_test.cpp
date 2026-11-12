@@ -913,6 +913,164 @@ test_permission_requests()
 }
 
 
+// #pragma mark - frame notification and window visibility (F-58)
+
+
+static uint32
+frame_flags(BScreenCapture& capture, BBitmap* bitmap)
+{
+	bool changed;
+	uint32 flags = 0xffffffff;
+	if (capture.NextFrame(bitmap, &changed, NULL, NULL, &flags) != B_OK)
+		return 0xffffffff;
+	return flags;
+}
+
+
+//!	Polls until the window capture reports \a want (all bits set; for 0,
+//	no bit set) or 3 s.
+static uint32
+wait_flags(BScreenCapture& capture, BBitmap* bitmap, uint32 want)
+{
+	uint32 flags = 0;
+	for (int i = 0; i < 30; i++) {
+		flags = frame_flags(capture, bitmap);
+		if (flags != 0xffffffff
+			&& (want == 0 ? flags == 0 : (flags & want) == want))
+			break;
+		snooze(100000);
+	}
+	return flags;
+}
+
+
+/*!	O-8 (OBS Studio's requests): a semaphore released once when the
+	captured window changes, WaitForFrame(); O-9: NextFrame()'s flags for a
+	window that is shown, covered, minimized, hidden or on another
+	workspace.
+*/
+static void
+test_frame_events(PatternWindow* window, BScreenCapture& capture,
+	BRect frame)
+{
+	BBitmap bitmap(frame.OffsetToCopy(B_ORIGIN), B_RGB32);
+	bool changed;
+	sem_id semaphore = create_sem(0, "capture test frames");
+	status_t status = capture.SetFrameNotification(semaphore);
+	capture.NextFrame(&bitmap, &changed);
+	snooze(200000);
+	while (acquire_sem_etc(semaphore, 1, B_RELATIVE_TIMEOUT, 0) == B_OK)
+		;
+	capture.NextFrame(&bitmap, &changed);
+	status_t idle = acquire_sem_etc(semaphore, 1, B_RELATIVE_TIMEOUT, 800000);
+	report("notify_idle", status == B_OK && idle == B_TIMED_OUT,
+		"SetFrameNotification: %s; with nothing drawn: %s (want %s)",
+		strerror(status), strerror(idle), strerror(B_TIMED_OUT));
+
+	rgb_color colors[] = { make(0, 200, 0), make(200, 0, 200),
+		make(0, 0, 220), make(255, 0, 0) };
+	if (window->Lock()) {
+		window->View()->SetCenter(colors[0]);
+		window->View()->Sync();
+		window->Unlock();
+	}
+	bigtime_t start = system_time();
+	status_t woken = acquire_sem_etc(semaphore, 1, B_RELATIVE_TIMEOUT,
+		3000000);
+	bigtime_t took = system_time() - start;
+	// More drawing before the next frame: no second release.
+	if (window->Lock()) {
+		window->View()->SetCenter(colors[1]);
+		window->View()->Sync();
+		window->Unlock();
+	}
+	status_t again = acquire_sem_etc(semaphore, 1, B_RELATIVE_TIMEOUT,
+		500000);
+	status = capture.NextFrame(&bitmap, &changed);
+	report("notify_damage", woken == B_OK && took < 1000000
+			&& again == B_TIMED_OUT && status == B_OK && changed,
+		"released %s after %" B_PRIdBIGTIME " us; again before the next "
+		"frame: %s (want once); that frame changed: %s", strerror(woken),
+		took, strerror(again), changed ? "yes" : "no");
+	capture.SetFrameNotification(-1);
+	delete_sem(semaphore);
+
+	status_t waitIdle = capture.WaitForFrame(400000);
+	thread_id drawer = spawn_thread([](void* data) -> status_t {
+		snooze(300000);
+		PatternWindow* window = (PatternWindow*)data;
+		if (window->Lock()) {
+			window->View()->SetCenter(make(0, 0, 220));
+			window->View()->Sync();
+			window->Unlock();
+		}
+		return B_OK;
+	}, "drawer", B_NORMAL_PRIORITY, window);
+	resume_thread(drawer);
+	start = system_time();
+	status_t waitDamage = capture.WaitForFrame(3000000);
+	took = system_time() - start;
+	status_t result;
+	wait_for_thread(drawer, &result);
+	capture.NextFrame(&bitmap, &changed);
+	report("wait_for_frame", waitIdle == B_TIMED_OUT && waitDamage == B_OK
+			&& took >= 200000 && took < 1500000 && changed,
+		"idle: %s; drawn 0.3 s later: %s after %" B_PRIdBIGTIME " us",
+		strerror(waitIdle), strerror(waitDamage), took);
+
+	// O-9: the window's flags.
+	uint32 shown = wait_flags(capture, &bitmap, 0);
+	BWindow* cover = new BWindow(BRect(frame.left + 20, frame.top + 20,
+			frame.left + 80, frame.top + 60), "Cover", B_BORDERED_WINDOW_LOOK,
+		B_FLOATING_ALL_WINDOW_FEEL, B_AVOID_FOCUS);
+	cover->Show();
+	uint32 covered = wait_flags(capture, &bitmap,
+		BPrivate::SCREEN_CAPTURE_FRAME_COVERED);
+	if (cover->Lock())
+		cover->Quit();
+	snooze(300000);
+	if (window->Lock()) {
+		window->Minimize(true);
+		window->Unlock();
+	}
+	uint32 minimized = wait_flags(capture, &bitmap,
+		BPrivate::SCREEN_CAPTURE_FRAME_HIDDEN);
+	if (window->Lock()) {
+		window->Minimize(false);
+		window->Unlock();
+	}
+	uint32 restored = wait_flags(capture, &bitmap, 0);
+	if (window->Lock()) {
+		window->SetWorkspaces(1 << 1);
+		window->Unlock();
+	}
+	uint32 elsewhere = wait_flags(capture, &bitmap,
+		BPrivate::SCREEN_CAPTURE_FRAME_OTHER_WORKSPACE);
+	if (window->Lock()) {
+		window->SetWorkspaces(B_CURRENT_WORKSPACE);
+		window->Activate();
+		window->Unlock();
+	}
+	uint32 back = wait_flags(capture, &bitmap, 0);
+	for (int i = 0; i < 30 && back != 0; i++) {
+		snooze(100000);
+		back = frame_flags(capture, &bitmap);
+	}
+	report("visibility_flags", shown == 0
+			&& (covered & BPrivate::SCREEN_CAPTURE_FRAME_COVERED) != 0
+			&& (covered & BPrivate::SCREEN_CAPTURE_FRAME_FULLY_COVERED) == 0
+			&& (minimized & BPrivate::SCREEN_CAPTURE_FRAME_HIDDEN) != 0
+			&& restored == 0
+			&& (elsewhere & BPrivate::SCREEN_CAPTURE_FRAME_OTHER_WORKSPACE)
+				!= 0
+			&& back == 0,
+		"shown 0x%" B_PRIx32 ", partly covered 0x%" B_PRIx32 ", minimized 0x%"
+		B_PRIx32 ", restored 0x%" B_PRIx32 ", on workspace 2 0x%" B_PRIx32
+		", back 0x%" B_PRIx32, shown, covered, minimized, restored, elsewhere,
+		back);
+}
+
+
 static void
 run_tests(PatternWindow* window)
 {
@@ -1055,11 +1213,23 @@ run_tests(PatternWindow* window)
 		differing = compare_with_screen(&windowBitmap, windowFrame);
 		report("window_matches", status == B_OK && differing == 0,
 			"%s; %" B_PRId32 " pixels differ", strerror(status), differing);
+		test_frame_events(window, windowCapture, windowFrame);
 	}
 
 	// Revoked while capturing: the session ends; a new one is refused.
+	sem_id stopSemaphore = create_sem(0, "capture stop");
+	windowCapture.SetFrameNotification(stopSemaphore);
+	windowCapture.NextFrame(&bitmap, &changed);
+	while (acquire_sem_etc(stopSemaphore, 1, B_RELATIVE_TIMEOUT, 0) == B_OK)
+		;
 	result = run_agent(BString("--set ").Append(kSignature)
 		.Append(" deny").String());
+	status_t stopWoken = acquire_sem_etc(stopSemaphore, 1,
+		B_RELATIVE_TIMEOUT, 2000000);
+	report("notify_stopped", stopWoken == B_OK,
+		"the notification semaphore after the permission was revoked: %s",
+		strerror(stopWoken));
+	delete_sem(stopSemaphore);
 	status = windowCapture.NextFrame(&bitmap, &changed);
 	report("revoked_stops", result == 0 && status == B_CANCELED,
 		"after --set deny: NextFrame %s (want %s)", strerror(status),

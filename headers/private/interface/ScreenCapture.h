@@ -6,6 +6,7 @@
 #define _SCREEN_CAPTURE_H
 
 
+#include <OS.h>
 #include <Rect.h>
 #include <Region.h>
 #include <String.h>
@@ -79,6 +80,19 @@ public:
 			status_t			NextFrame(BBitmap* bitmap, bool* _changed,
 									BRegion* _damage = NULL,
 									bigtime_t* _time = NULL);
+	// F-58 (OBS Studio's O-9): the same, and for window sources whether
+	// the window shows (SCREEN_CAPTURE_FRAME_* of ScreenCaptureDefs.h).
+			status_t			NextFrame(BBitmap* bitmap, bool* _changed,
+									BRegion* _damage, bigtime_t* _time,
+									uint32* _flags);
+
+	// F-58 (OBS Studio's O-8): \a semaphore (of this team) is released
+	// once when the source changes after a frame was taken (and when the
+	// session is stopped); -1 ends that. WaitForFrame() does the same with
+	// a semaphore of its own: B_OK when there is something new for
+	// NextFrame(), B_TIMED_OUT after \a timeout.
+			status_t			SetFrameNotification(sem_id semaphore);
+			status_t			WaitForFrame(bigtime_t timeout);
 
 	// For the Screen recording preferences and the indicator; changing
 	// permissions and stopping other applications' sessions needs system
