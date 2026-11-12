@@ -587,6 +587,119 @@ test_exclusions()
 }
 
 
+// #pragma mark - O-4: routes by device name
+
+
+static const char* kUsbDevice = "QEMU USB Audio";
+
+
+static void
+host(const char* request)
+{
+	printf("CE-HOST %s\n", request);
+	fflush(stdout);
+}
+
+
+/*!	Waits until \a test holds for A's stream (re-read every 200 ms). */
+template<typename Test>
+static bool
+wait_stream(AudioStreamControl& control, AudioStream& stream,
+	bigtime_t timeout, Test test)
+{
+	bigtime_t deadline = system_time() + timeout;
+	do {
+		if (control.Update() == B_OK) {
+			const AudioStream* found = control.FindStream(kSignatureA);
+			if (found != NULL) {
+				stream = *found;
+				if (test(control, stream))
+					return true;
+			}
+		}
+		snooze(200000);
+	} while (system_time() < deadline);
+	return false;
+}
+
+
+/*!	A stream routed by name to a device that is not there yet keeps the
+	route, plays on the default output, moves to the device when it is
+	plugged in (QEMU's usb-audio; the harness finds A's 5150 Hz in that
+	device's usb-<n>.wav, media_routing_audio.route_to_usb), and keeps the
+	route when it is pulled out again.
+*/
+static void
+test_routes(Player& a)
+{
+	AudioStreamControl control;
+	AudioStream stream;
+	if (!wait_stream(control, stream, 5000000,
+			[](AudioStreamControl&, AudioStream&) { return true; })) {
+		report("route_absent_kept", false, "A's stream not listed");
+		return;
+	}
+	bool absent = !control.Outputs().HasString(kUsbDevice);
+	status_t status = control.SetRoute(stream.id, kUsbDevice);
+	bool kept = wait_stream(control, stream, 5000000,
+		[](AudioStreamControl& control, AudioStream& stream) {
+			return stream.route == kUsbDevice
+				&& stream.output == control.Outputs().CountStrings();
+		});
+	report("route_absent_kept", absent && status == B_OK && kept
+			&& stream.hasRoute,
+		"%s absent: %s; SetRoute: %s; route \"%s\", Output index %" B_PRId32
+		" of %" B_PRId32 " choices (the \"not available\" item)", kUsbDevice,
+		absent ? "yes" : "no", strerror(status), stream.route.String(),
+		stream.output, control.Outputs().CountStrings());
+
+	// Still heard meanwhile (on the default output; the loopback records
+	// it either way).
+	ChannelCheck left, right;
+	status = record(kSignatureA, NULL, 1.0, 5100, 0, left, right);
+	report("route_absent_plays", status == B_OK && present(left),
+		"%s; A while its device is absent: L %.3f", strerror(status),
+		left.amplitude);
+
+	tone(a, 5150, 0);
+	host("usb_audio add");
+	bool applied = wait_stream(control, stream, 30000000,
+		[](AudioStreamControl& control, AudioStream& stream) {
+			int32 index = control.Outputs().IndexOf(kUsbDevice);
+			return index > 0 && stream.output == index;
+		});
+	report("route_applied", applied,
+		"after the plug-in: route \"%s\", Output index %" B_PRId32 " (%s)",
+		stream.route.String(), stream.output,
+		stream.output >= 0 && stream.output < control.Outputs().CountStrings()
+			? control.Outputs().StringAt(stream.output).String() : "?");
+	// Let the device play A's tone for the harness.
+	snooze(3000000);
+	tone(a, 5100, 0);
+	snooze(300000);
+
+	host("usb_audio remove");
+	bool gone = wait_stream(control, stream, 30000000,
+		[](AudioStreamControl& control, AudioStream&) {
+			return !control.Outputs().HasString(kUsbDevice);
+		});
+	report("route_kept_while_absent", gone && stream.route == kUsbDevice
+			&& stream.output == control.Outputs().CountStrings(),
+		"device %s; route \"%s\", Output index %" B_PRId32 " of %" B_PRId32,
+		gone ? "gone" : "still listed", stream.route.String(), stream.output,
+		control.Outputs().CountStrings());
+
+	status = control.SetRoute(stream.id, "");
+	bool cleared = wait_stream(control, stream, 5000000,
+		[](AudioStreamControl&, AudioStream& stream) {
+			return stream.route == "" && stream.output == 0;
+		});
+	report("route_cleared", status == B_OK && cleared,
+		"%s; route \"%s\", Output index %" B_PRId32, strerror(status),
+		stream.route.String(), stream.output);
+}
+
+
 int
 main(int argc, char** argv)
 {
@@ -623,6 +736,7 @@ main(int argc, char** argv)
 	} else {
 		snooze(500000);
 		test_exclusions();
+		test_routes(a);
 	}
 
 	stop_player(a);

@@ -679,6 +679,26 @@ expect("media usb: a missing second plug-in fails",
 	not all(c["pass"] for c in checks.values()), str(list(checks)))
 
 
+# media_routing_test's route by name (F-58): A's tone on a usb-<n>.wav.
+def routing_recordings(present=True):
+	directory = tempfile.mkdtemp()
+	write_wav(os.path.join(directory, "usb-0.wav"), silence(0.5))
+	write_wav(os.path.join(directory, "usb-1.wav"), silence(0.3)
+		+ usb_tone(ce_test.ROUTING_USB_TONE if present else 0, 0, 2.0, 0.9)
+		+ silence(0.2))
+	report = {}
+	ce_test.analyze_routing_audio(directory, report)
+	return report["host_checks"][0]
+
+
+check = routing_recordings()
+expect("routing: the routed tone on the USB device passes", check["pass"],
+	check["detail"])
+check = routing_recordings(present=False)
+expect("routing: no tone on the USB device fails", not check["pass"],
+	check["detail"])
+
+
 # media_sound_test's phases (SOUND_PHASES): the Audio preferences'
 # master volume, mute, output menu and per-application output menu.
 def sound_recordings(master=None, mute_leaks=False, stays_default=False):

@@ -21,7 +21,12 @@
 	- a B_OUTPUT_MUX discrete parameter "Output": 0 the default output, n
 	  the n-th output device (Renga mixers only),
 	- a discrete parameter of kind "renga:low_latency" "Low latency": 0 off,
-	  1 on (Renga mixers only; LowLatencyAudio.h).
+	  1 on (Renga mixers only; LowLatencyAudio.h),
+	The mixer's own hidden text parameter of kind "renga:routes" (Renga
+	mixers only, F-58) lists every stream's route by device name, a line
+	"<input id> <device name>" each ("" for the default output), and takes
+	one such line to set a route; any name can be set, also of a device
+	that is not there.
 	The stream's mixer input id is the parameters' id >> 16, as the mixer
 	encodes them. The loopback ("What you hear") is a flavor of the mixer
 	add-on; StartLoopback() instantiates one and selects whose streams it
@@ -46,6 +51,7 @@ namespace BPrivate {
 
 #define RENGA_APP_SIGNATURE_KIND		"renga:app_signature"
 #define RENGA_LOOPBACK_FLAVOR_NAME		"What you hear (loopback)"
+#define RENGA_ROUTES_KIND				"renga:routes"
 #define RENGA_LOOPBACK_SOURCE_ID		1
 #define RENGA_LOOPBACK_SIGNATURE_ID		2
 // F-58 (OBS Studio's O-1): a hidden text parameter of the loopback, the
@@ -65,6 +71,8 @@ struct AudioStream {
 	bool		hasOutput;		// the mixer offers routing
 	bool		lowLatency;		// low-latency mode switched on
 	bool		hasLowLatency;	// the mixer offers the low-latency mode
+	BString		route;			// device name routed to, "" default output
+	bool		hasRoute;		// the mixer offers routes by name (F-58)
 };
 
 
@@ -112,6 +120,7 @@ public:
 
 		for (int32 i = 0; i < fWeb->CountGroups(); i++)
 			_ScanGroup(fWeb->GroupAt(i));
+		_ReadRoutes();
 		return B_OK;
 	}
 
@@ -192,6 +201,22 @@ public:
 		if (index <= 0)
 			return B_ENTRY_NOT_FOUND;
 		return SetOutput(id, index);
+	}
+
+	/*!	Routes the stream to the device named \a device, whether it exists
+		or not (F-58, OBS Studio's O-4): it plays there whenever the device
+		is there, on the default output meanwhile. NULL or "": the default
+		output. Remembered for the application, like the "Output" choice.
+	*/
+	status_t SetRoute(int32 id, const char* device)
+	{
+		BParameter* parameter = _FindKind(RENGA_ROUTES_KIND);
+		if (parameter == NULL)
+			return B_ENTRY_NOT_FOUND;
+		BString line;
+		line << id << " " << (device != NULL ? device : "");
+		return parameter->SetValue(line.String(), line.Length() + 1,
+			system_time());
 	}
 
 	/*!	Instantiates a loopback source, recording every stream (\a signature
@@ -342,6 +367,7 @@ private:
 		stream.hasOutput = false;
 		stream.lowLatency = false;
 		stream.hasLowLatency = false;
+		stream.hasRoute = false;
 		bool isStream = false;
 
 		for (int32 i = 0; i < group->CountParameters(); i++) {
@@ -410,6 +436,50 @@ private:
 		bigtime_t when;
 		size_t got = size;
 		return parameter->GetValue(value, &got, &when) == B_OK;
+	}
+
+	BParameter* _FindKind(const char* kind)
+	{
+		if (fWeb == NULL)
+			return NULL;
+		for (int32 i = 0; i < fWeb->CountParameters(); i++) {
+			BParameter* parameter = fWeb->ParameterAt(i);
+			if (strcmp(parameter->Kind(), kind) == 0)
+				return parameter;
+		}
+		return NULL;
+	}
+
+	//!	Fills in the streams' routes from the mixer's "renga:routes".
+	void _ReadRoutes()
+	{
+		BParameter* parameter = _FindKind(RENGA_ROUTES_KIND);
+		if (parameter == NULL)
+			return;
+		char* text = (char*)malloc(8193);
+		if (text == NULL)
+			return;
+		size_t size = 8192;
+		bigtime_t when;
+		if (parameter->GetValue(text, &size, &when) == B_OK) {
+			text[min_c(size, (size_t)8192)] = '\0';
+			for (char* line = text; line != NULL && *line != '\0';) {
+				char* next = strchr(line, '\n');
+				if (next != NULL)
+					*next++ = '\0';
+				int32 id = atoi(line);
+				const char* space = strchr(line, ' ');
+				for (int32 i = 0; i < fStreams.CountItems(); i++) {
+					AudioStream* stream = (AudioStream*)fStreams.ItemAt(i);
+					if (stream->id != id)
+						continue;
+					stream->hasRoute = true;
+					stream->route = space != NULL ? space + 1 : "";
+				}
+				line = next;
+			}
+		}
+		free(text);
 	}
 
 	BParameter* _Find(int32 id, const char* kind, bool discrete)

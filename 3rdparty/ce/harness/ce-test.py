@@ -299,9 +299,10 @@ POINTER_REL_MAX = 200
 # gets the next audiodev, a wav recorder writing usb-<n>.wav, because QEMU
 # closes the file when the device goes and would start it again on the
 # next add. USB_AUDIO_DEVICES bounds the adds per run: usb_audio_test plugs
-# in twice, media_sound_test (the Audio preferences' device list) once,
-# media_usb_test twice.
-USB_AUDIO_DEVICES = 5
+# in twice, media_routing_test (a route by name kept while the device is
+# absent, F-58) once, media_sound_test (the Audio preferences' device list)
+# once, media_usb_test twice.
+USB_AUDIO_DEVICES = 6
 USB_AUDIO_CONTROLLER = "audiousb"
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
@@ -3416,6 +3417,36 @@ def analyze_media_usb_audio(results_dir, report):
 					if segment else "not found", seconds)})
 
 
+# media_routing_test (F-58, OBS Studio's O-4): application A routed by name
+# to "QEMU USB Audio" before it is plugged in plays this tone (left) once
+# the device is there.
+ROUTING_USB_TONE = 5150
+ROUTING_USB_SECONDS = 1.5
+
+
+def analyze_routing_audio(results_dir, report):
+	"""media_routing_test's route by name: some usb-<n>.wav carries A's
+	ROUTING_USB_TONE on the left for ROUTING_USB_SECONDS or longer (the
+	stream reached the device it was routed to before it existed)."""
+	checks = report.setdefault("host_checks", [])
+	best = (0.0, None)
+	for path in sorted(glob.glob(os.path.join(results_dir, "usb-*.wav"))):
+		try:
+			_, _, segments = media_segments(path, read_wav,
+				[ROUTING_USB_TONE, 5300])
+		except (OSError, ValueError, struct.error):
+			continue
+		for segment in segments:
+			if segment["key"][0] == ROUTING_USB_TONE \
+					and segment["seconds"] > best[0]:
+				best = (segment["seconds"], os.path.basename(path))
+	checks.append({"name": "media_routing_audio.route_to_usb",
+		"pass": best[0] >= ROUTING_USB_SECONDS,
+		"detail": "%d Hz on the left: %s (want %.1fs)" % (ROUTING_USB_TONE,
+			"%.1fs in %s" % best if best[1] else "in no usb-<n>.wav",
+			ROUTING_USB_SECONDS)})
+
+
 def zero_runs(samples, start, end, minimum):
 	"""Runs of more than \a minimum zero samples in samples[start:end]:
 	(count, longest)."""
@@ -3914,6 +3945,8 @@ def main():
 			analyze_usb_audio(results_dir, report)
 		if "media_test" in (args.only or available):
 			analyze_media_audio(results_dir, report)
+		if "media_routing_test" in (args.only or available):
+			analyze_routing_audio(results_dir, report)
 		if "media_sound_test" in (args.only or available):
 			analyze_sound_audio(results_dir, report)
 			check_screenshots(results_dir, report, SOUND_SCREENSHOTS,

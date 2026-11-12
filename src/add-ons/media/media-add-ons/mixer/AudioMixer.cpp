@@ -84,6 +84,18 @@
 #define PARAM_IS_LOW_LATENCY(id)			(((id) & 0xf) == 0xd)
 // Renga: the signatures in low-latency mode (hidden text, read only)
 #define PARAM_ETC_LOW_LATENCY_APPS			100
+// Renga (F-58, OBS Studio's O-4): the streams' routes by device name, one
+// hidden text parameter of the mixer, kind "renga:routes". Read: a line
+// "<input id> <device name>" per stream ("" for the default output). Write:
+// one line "<input id> <device name>": any name, also of a device that is
+// not there; the stream plays on it whenever it exists, on the default
+// output meanwhile. One parameter for all streams, not one per stream:
+// with a text parameter in every stream's group, clients that read the
+// whole web (AudioStreamControl) did one more round trip per stream each
+// time, and the low-latency checks (media_latency.device_continuous) lost
+// periods on the card in every run after the routing tests.
+#define PARAM_ETC_ROUTES					110
+#define RENGA_ROUTES_KIND					"renga:routes"
 // How long the default output keeps short periods after the last
 // low-latency stream went (a program that closes and opens its player again
 // does not make the device switch back and forth).
@@ -1508,6 +1520,17 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 				*ioSize = sizeof(int32);
 				static_cast<int32 *>(value)[0] = fCore->Settings()->RefuseInputFormatChange();
 				break;
+			case PARAM_ETC_ROUTES:
+			{
+				BString list;
+				for (int32 i = 0; MixerInput* input = fCore->Input(i); i++)
+					list << input->ID() << " " << input->Route() << "\n";
+				if (*ioSize < (size_t)list.Length() + 1)
+					goto err;
+				memcpy(value, list.String(), list.Length() + 1);
+				*ioSize = list.Length() + 1;
+				break;
+			}
 			case PARAM_ETC_LOW_LATENCY_APPS:
 			{
 				// Renga: the signatures in low-latency mode, one per line
@@ -1761,6 +1784,42 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 					goto err;
 				fCore->Settings()->SetRefuseInputFormatChange(static_cast<const int32 *>(value)[0]);
 				break;
+			case PARAM_ETC_ROUTES:
+			{
+				// "<input id> <device name>" (F-58, O-4)
+				BString line((const char*)value,
+					strnlen((const char*)value, min_c(size, (size_t)512)));
+				line.RemoveAll("\n");
+				int32 space = line.FindFirst(' ');
+				BString number, route;
+				if (space < 0)
+					number = line;
+				else {
+					line.CopyInto(number, 0, space);
+					line.CopyInto(route, space + 1, line.Length() - space - 1);
+				}
+				route.Trim();
+				char* end = NULL;
+				long id = strtol(number.String(), &end, 10);
+				if (number.Length() == 0 || end == NULL || *end != '\0')
+					goto err;
+				MixerInput* input = NULL;
+				for (int32 i = 0; (input = fCore->Input(i)) != NULL; i++) {
+					if (input->ID() == id)
+						break;
+				}
+				if (input == NULL)
+					goto err;
+				if (route != input->Route()) {
+					input->SetRoute(route.String());
+					fCore->UpdateRouting();
+					fCore->Settings()->SaveConnectionSettings(input);
+					wakeRouter = true;
+					// the "Output" menu gets or loses its "(not available)"
+					update = true;
+				}
+				break;
+			}
 			default:
 				ERROR("unhandled ETC 0x%08lx\n", id);
 				break;
@@ -2179,6 +2238,8 @@ AudioMixer::UpdateParameterWeb()
 	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_LOW_LATENCY_APPS),
 		B_MEDIA_RAW_AUDIO, "Low-latency applications",
 		RENGA_LOW_LATENCY_APPS_KIND, 4096)->SetFlags(B_HIDDEN_PARAMETER);
+	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_ROUTES), B_MEDIA_RAW_AUDIO,
+		"Routes", RENGA_ROUTES_KIND, 8192)->SetFlags(B_HIDDEN_PARAMETER);
 
 	dp = group->MakeDiscreteParameter(PARAM_ETC(70), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Resampling algorithm:"), B_INPUT_MUX);
