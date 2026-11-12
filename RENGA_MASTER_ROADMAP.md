@@ -346,6 +346,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-57 | WebKit keep-up (HaikuWebKit rebase, WebPositive quick fixes) | In Progress (item 4, HTML5 media through the Media Kit: in-tree part QEMU Tested, `9731ba84`; WebKit-side patch in RengaPorts, not built) | 9 `html5_media.*` + `html5_media.screenshots` (renga-raw) |
 | F-58 | Partner requests, batch 1 (OBS Studio and Quasar requests to Renga) | Designed | None |
 | F-59 | Real-hardware feedback, batch 1 (maintainer test of 9731ba84) | Designed | None |
+| F-60 | Existing applications and preferences: review and Renga refresh | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -1411,6 +1412,26 @@ Worked on real hardware: the upgrade itself, Wi-Fi with the in-tree mt7921e (als
 - [ ] **Screen capture without the front buffer** (same series, `0001` and `0002`, from the OBS Studio port): `BScreen::ReadBitmap()` reads the front buffer (slow write-combined video memory, about 25-30 ms per 2560x1080 frame on the RTX 5070) under the drawing engine's exclusive lock, so screen recording makes the pointer stutter. **Renga does it properly instead of the upstream-minimal patch:** capture (both `ReadBitmap()` and Renga's `BScreenCapture`, F-31 phase 3) reads from the back buffer in main memory and composites the cursor and drag bitmap itself when asked, without the exclusive lock where a short read lock is enough; direct windows and `BWindowScreen` (whose content only exists in the front buffer) are read from the front buffer for their area only; windows in an update session are captured from their last completed frame (keep the region until `EndUpdate()`), so no stale or half-drawn patches. Damage tracking for `BScreenCapture` comes from the same place (OBS O-8). GPU buffer export (Quasar R-2, F-47) replaces the copy later.
 - [x] Boot menu: the Windows entry (chainloading) boots on the maintainer's PC (2026-11-11, 9731ba84).
 - [ ] Still to test on the machine: a webcam (none available).
+
+#### F-60 Existing applications and preferences: review and Renga refresh
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | 61 applications in `src/apps` and 26 preferences in `src/preferences` (plus Tracker and Deskbar), of very mixed age and polish |
+| Renga maturity | Renga additions in some (Screenshot recording, Audio, Boot menu, System logs, LinuxKPI Manager, Media); the rest unchanged |
+| Status | **Designed** (maintainer request, 2026-11-11) |
+| Completed | None |
+| Remaining | One by one, every bundled application and preference: (1) **features** that users of a modern desktop expect from that kind of program, compared with its counterparts on other systems, written as a short list per app and agreed before building; (2) **settings and options** the program lacks, and preferences that need to cover Renga's new capabilities (audio routing, capture, game mode, LinuxKPI devices, gamepads, crash logs, shortcut key, boot menu, ...); (3) **the Renga refresh**: layout, spacing, icons, wording and HiDPI to the Renga design language (`F-40`, the concept A look), with screenshots before and after; (4) **bugs**: open upstream Trac tickets for the program, plus what the review finds; (5) **memory leaks**: run each program's tests and a scripted session under the malloc debugger (`MALLOC_DEBUG`, `leak_check` / `libroot_debug`), fix leaks, add a harness leak check per program; (6) **performance**: startup time, idle CPU, redraw and large-input cases (big folders, big files), measured before and after. Preferences become Control Panel pages as `F-28` lands, with one settings model so the standalone app and the page never disagree |
+| Known bugs/limitations | Not applicable |
+| Dependencies | `F-40` design language (for the refresh; the other five parts do not wait for it), `F-28` (Control Panel pages), `F-38` (HiDPI sweep overlaps) |
+| Difficulty | 2-6 per program |
+| Risk | Low per program; the volume is large |
+| Testing status | None |
+| Next milestone | The review report: for every program, a one-screen entry with gaps, settings, known bugs, leak and performance results, ranked by how much people use it |
+| Recommended next action | Produce the review report first (read-only audit plus leak and performance runs in QEMU), then work through it most-used-first, a few programs per batch, between the larger items |
+| Links | Maintainer request, 2026-11-11. Overlaps: `F-44` (new bundled apps and additions to Screenshot, Expander, ProcessController), `F-41` (Deskbar), `F-59` (Tracker desktop menu), `F-32` (Audio, done) |
+
+Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal, WebPositive, StyledEdit, ShowImage, MediaPlayer, Screenshot, HaikuDepot and SoftwareUpdater, Installer and DriveSetup (with `F-23`/`F-24`), Mail and People, then the remaining tools, demos last (some demos may be dropped from the default image). Preferences in Control Panel order (`F-28`): Appearance and Backgrounds, Screen, Input and Keymap and Shortcuts, Network, Notifications, Time, Locale, Tracker and Deskbar settings, Screen saver, Printers, the rest.
 
 ### Bundled applications
 
