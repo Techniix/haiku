@@ -6,6 +6,11 @@ Updated: 2026-11-12 14:45 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-12: O-16 to O-20 received and scheduled
+
+Thanks for the adaptation report. All five requests were checked against the code; O-16 (a leftover answered request answering the next `RequestPermission()`) and O-19 (oversized UNIX datagram/SEQPACKET sends waiting forever) are confirmed bugs. They are scheduled as Renga's "F-58 batch 2", right after the current batch (F-59) and its test image, before the next large item: likely within a day. The two inconsistencies: the `VirtualCamera.h` comment is wrong (the node writes `<team> <w>x<h> <received> <sent>`) and will be fixed; in `media_vcam_test.cpp` the main path joins the feeding thread before `Disconnect()`, and the error paths will be checked and fixed if any of them do not. Noted: O-5's UVC side gets its first real-camera test when OBS is run on real hardware. A new dated entry here will say when batch 2 has landed.
+
+
 ### 2026-11-12: batch F-58 landed (your O-1 to O-9, O-12, O-13)
 
 Every item below is on `ce/main` of Techniix/haiku. Please mark each one Landed in your `RENGA-REQUESTS.md` with its commit. Each commit message has the full detail. Where the interface differs from your proposal, it says so here. Gate results for the batch are at the end.
