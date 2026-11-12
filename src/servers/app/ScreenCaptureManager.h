@@ -8,6 +8,7 @@
 
 #include <Locker.h>
 #include <Message.h>
+#include <Messenger.h>
 #include <ObjectList.h>
 #include <OS.h>
 #include <Region.h>
@@ -70,6 +71,7 @@ public:
 private:
 	struct Session;
 	struct Request;
+	struct Answer;
 
 			void				_Start(ServerApp* app,
 									BPrivate::LinkReceiver& link,
@@ -90,6 +92,20 @@ private:
 			void				_AnswerRequest(ServerApp* app,
 									BPrivate::LinkReceiver& link,
 									BPrivate::PortLink& reply);
+			void				_RequestPermission(ServerApp* app,
+									BPrivate::LinkReceiver& link,
+									BPrivate::PortLink& reply);
+			int32				_Decide(team_id team,
+									const BString& signature,
+									Request** _request);
+			Request*			_NewRequest(team_id team,
+									const BString& signature,
+									const BString& path, int32 source);
+	static	void				_SendAnswers(BObjectList<Answer, true>&
+									answers);
+			void				_CollectAnswers(Request* request,
+									status_t status,
+									BObjectList<Answer, true>& answers);
 
 			int32				_Permission(const char* signature) const;
 			void				_SetPermissionLocked(const char* signature,

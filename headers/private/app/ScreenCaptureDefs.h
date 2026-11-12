@@ -29,6 +29,25 @@ enum {
 	SCREEN_CAPTURE_WINDOW_BORDER	= 0x02	// window: with tab and border
 };
 
+// Masks of the sources, for BScreenCapture::RequestPermission() (F-58).
+enum {
+	SCREEN_CAPTURE_SCREEN_MASK	= 1 << SCREEN_CAPTURE_SCREEN,
+	SCREEN_CAPTURE_WINDOW_MASK	= 1 << SCREEN_CAPTURE_WINDOW,
+	SCREEN_CAPTURE_REGION_MASK	= 1 << SCREEN_CAPTURE_REGION,
+	SCREEN_CAPTURE_ANY_MASK		= 0x07
+};
+
+// The answer to BScreenCapture::RequestPermission() (F-58, OBS Studio's
+// O-7), sent to the messenger given there:
+//	"status"	int32	B_OK: allowed; B_NOT_ALLOWED: the user said no (or
+//						remembered no); B_CANCELED: the prompt was closed
+//						without an answer
+//	"request"	int32	the prompt's request id, -1 if no prompt was needed
+//	"sources"	uint32	the sources asked for
+enum {
+	SCREEN_CAPTURE_PERMISSION_ANSWER	= 'ScPa'
+};
+
 // What the user decided for an application (by signature).
 enum screen_capture_permission {
 	SCREEN_CAPTURE_PERMISSION_UNKNOWN	= 0,	// ask (the default)

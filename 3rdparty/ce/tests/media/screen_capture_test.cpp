@@ -35,6 +35,7 @@
 #include <MediaRecorder.h>
 #include <MediaRoster.h>
 #include <MediaTrack.h>
+#include <Looper.h>
 #include <Messenger.h>
 #include <Path.h>
 #include <Roster.h>
@@ -52,6 +53,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <vector>
 
 #include <CaptureSession.h>
@@ -737,6 +739,180 @@ test_screenshot_recording(PatternWindow* window, BRect region,
 // #pragma mark - main checks
 
 
+// #pragma mark - asking without blocking (F-58)
+
+
+//!	Receives RequestPermission()'s answers.
+class AnswerLooper : public BLooper {
+public:
+	AnswerLooper()
+		:
+		BLooper("permission answers"),
+		fSemaphore(create_sem(0, "permission answer")),
+		fStatus(B_ERROR),
+		fRequest(0),
+		fCount(0)
+	{
+	}
+
+	~AnswerLooper()
+	{
+		delete_sem(fSemaphore);
+	}
+
+	virtual void MessageReceived(BMessage* message)
+	{
+		if (message->what != BPrivate::SCREEN_CAPTURE_PERMISSION_ANSWER) {
+			BLooper::MessageReceived(message);
+			return;
+		}
+		fStatus = message->GetInt32("status", B_ERROR);
+		fRequest = message->GetInt32("request", 0);
+		fCount++;
+		release_sem(fSemaphore);
+	}
+
+	//!	The next answer's status, or B_TIMED_OUT.
+	status_t Wait(bigtime_t timeout, int32* _request = NULL)
+	{
+		if (acquire_sem_etc(fSemaphore, 1, B_RELATIVE_TIMEOUT, timeout)
+				!= B_OK)
+			return B_TIMED_OUT;
+		if (_request != NULL)
+			*_request = fRequest;
+		return fStatus;
+	}
+
+private:
+	sem_id			fSemaphore;
+	volatile status_t fStatus;
+	volatile int32	fRequest;
+	volatile int32	fCount;
+};
+
+
+struct TimedStartArgs {
+	BScreenCapture*	capture;
+	bigtime_t		timeout;
+	status_t		status;
+	bigtime_t		took;
+};
+
+
+static status_t
+timed_start_thread(void* data)
+{
+	TimedStartArgs* args = (TimedStartArgs*)data;
+	bigtime_t start = system_time();
+	args->status = args->capture->StartScreen(0, args->timeout);
+	args->took = system_time() - start;
+	return B_OK;
+}
+
+
+/*!	O-6, O-7 of OBS Studio's requests (F-58): while a Start...() waits for
+	the user, the application's other threads still reach app_server; an
+	unanswered prompt is B_TIMED_OUT, not a no; RequestPermission() returns
+	at once and the answer arrives as a message.
+*/
+static void
+test_permission_requests()
+{
+	run_agent(BString("--set ").Append(kSignature).Append(" ask").String());
+
+	BScreenCapture capture;
+	TimedStartArgs args = { &capture, 5000000, B_ERROR, 0 };
+	thread_id thread = spawn_thread(timed_start_thread, "timed start", 10,
+		&args);
+	resume_thread(thread);
+	bool prompted = wait_for_agent_window("Screen recording", 20000000);
+
+	// app_server calls of this application while the prompt is open.
+	std::vector<bigtime_t> latencies;
+	if (prompted) {
+		bigtime_t until = system_time() + 2000000;
+		while (system_time() < until && latencies.size() < 400) {
+			bigtime_t start = system_time();
+			count_workspaces();
+			latencies.push_back(system_time() - start);
+			snooze(7000);
+		}
+	}
+	status_t threadResult;
+	wait_for_thread(thread, &threadResult);
+	std::vector<bigtime_t> sorted = latencies;
+	std::sort(sorted.begin(), sorted.end());
+	bigtime_t median = sorted.empty() ? -1 : sorted[sorted.size() / 2];
+	bigtime_t worst = sorted.empty() ? -1 : sorted.back();
+	report("link_free_while_asking", prompted && median >= 0
+			&& median < 30000,
+		"prompt %s; %d app_server calls while Start waited: median %"
+		B_PRIdBIGTIME " us, worst %" B_PRIdBIGTIME " us (the old wait held "
+		"the link between its 100 ms polls)", prompted ? "up" : "missing",
+		(int)latencies.size(), median, worst);
+	report("prompt_timeout", args.status == B_TIMED_OUT
+			&& args.took >= 4500000 && args.took < 8000000,
+		"StartScreen with the prompt unanswered: %s after %.1f s (want %s)",
+		strerror(args.status), args.took / 1000000.0,
+		strerror(B_TIMED_OUT));
+
+	AnswerLooper* looper = new AnswerLooper;
+	looper->Run();
+	BMessenger target(looper);
+
+	// The prompt is still up: the request joins it.
+	bigtime_t start = system_time();
+	status_t status = BScreenCapture::RequestPermission(target,
+		BPrivate::SCREEN_CAPTURE_SCREEN_MASK);
+	bigtime_t took = system_time() - start;
+	status_t early = looper->Wait(500000);
+	report("async_returns_at_once", status == B_OK && took < 500000
+			&& early == B_TIMED_OUT,
+		"RequestPermission: %s after %" B_PRIdBIGTIME " us; no answer yet: "
+		"%s", strerror(status), took, early == B_TIMED_OUT ? "yes" : "no");
+
+	if (agent_window_exists("Screen recording")) {
+		printf("CE-HOST sendkey ret\n");
+		fflush(stdout);
+	}
+	int32 request = 0;
+	status_t answer = looper->Wait(15000000, &request);
+	report("async_answer", answer == B_OK && request > 0,
+		"answer after \"Allow\": %s, request %" B_PRId32, strerror(answer),
+		request);
+
+	BScreenCapture allowed;
+	start = system_time();
+	status = allowed.StartScreen(0, 5000000);
+	report("async_then_start", status == B_OK
+			&& system_time() - start < 1000000,
+		"StartScreen after the answer: %s after %" B_PRIdBIGTIME " us",
+		strerror(status), system_time() - start);
+	allowed.Stop();
+
+	status = BScreenCapture::RequestPermission(target);
+	answer = looper->Wait(5000000, &request);
+	report("async_known", status == B_OK && answer == B_OK && request == -1,
+		"asked again: %s, answer %s, request %" B_PRId32 " (want -1, no "
+		"prompt)", strerror(status), strerror(answer), request);
+
+	run_agent(BString("--set ").Append(kSignature).Append(" deny").String());
+	status = BScreenCapture::RequestPermission(target);
+	answer = looper->Wait(5000000, &request);
+	report("async_denied", status == B_OK && answer == B_NOT_ALLOWED,
+		"when denied: %s, answer %s (want %s)", strerror(status),
+		strerror(answer), strerror(B_NOT_ALLOWED));
+	run_agent(BString("--set ").Append(kSignature).Append(" allow").String());
+
+	status = BScreenCapture::RequestPermission(target, 0);
+	report("async_bad_sources", status == B_BAD_VALUE,
+		"no source: %s (want %s)", strerror(status), strerror(B_BAD_VALUE));
+
+	if (looper->Lock())
+		looper->Quit();
+}
+
+
 static void
 run_tests(PatternWindow* window)
 {
@@ -897,6 +1073,9 @@ run_tests(PatternWindow* window)
 		"StartScreen when denied: %s after %" B_PRIdBIGTIME " us",
 		strerror(status), system_time() - start);
 	run_agent(BString("--set ").Append(kSignature).Append(" allow").String());
+
+	// Asking without blocking (F-58).
+	test_permission_requests();
 
 	// The Media Kit node.
 	test_media_node(region);

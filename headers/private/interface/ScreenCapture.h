@@ -15,6 +15,7 @@
 
 class BBitmap;
 class BMessage;
+class BMessenger;
 
 
 namespace BPrivate {
@@ -26,8 +27,20 @@ namespace BPrivate {
 	Start() asks app_server for a session. The first time an application
 	captures, the user is asked (the Screen recording preferences show the
 	prompt); Start() waits for the answer up to \a permissionTimeout and
-	returns B_NOT_ALLOWED if the answer is no (or none came). While a
-	session runs, an indicator with a Stop button is on screen.
+	returns B_NOT_ALLOWED if the answer is no, B_TIMED_OUT if none came in
+	time (the prompt stays up; a later Start() or RequestPermission() waits
+	for the same one). Other threads of the application can use app_server
+	meanwhile (F-58, O-6). While a session runs, an indicator with a Stop
+	button is on screen.
+
+	RequestPermission() asks without waiting (F-58, OBS Studio's O-7): it
+	returns at once, and the answer comes to \a target as a
+	SCREEN_CAPTURE_PERMISSION_ANSWER message ("status": B_OK allowed,
+	B_NOT_ALLOWED no, B_CANCELED the prompt was closed without an answer;
+	see ScreenCaptureDefs.h), right away if the answer is already known.
+	\a sources is a mask of SCREEN_CAPTURE_*_MASK; the prompt names the
+	first of screen, window, region in it. Permission is per application,
+	so a Start...() after an allowed answer starts without asking.
 
 	NextFrame() fills a B_RGB32 bitmap of at least Frame()'s size with the
 	source, copying only what changed since that bitmap was last filled; it
@@ -84,6 +97,9 @@ public:
 									int32& source);
 	static	status_t			AnswerRequest(int32 request, bool allow,
 									bool remember);
+	// F-58 (O-7): returns at once; the answer is sent to \a target.
+	static	status_t			RequestPermission(BMessenger target,
+									uint32 sources = SCREEN_CAPTURE_ANY_MASK);
 
 private:
 			status_t			_Start(int32 source, int32 windowToken,

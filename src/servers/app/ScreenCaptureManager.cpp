@@ -18,6 +18,7 @@
 #include <Path.h>
 
 #include <LinkReceiver.h>
+#include <MessengerPrivate.h>
 #include <PthreadMutexLocker.h>
 #include <PortLink.h>
 #include <ScreenCaptureDefs.h>
@@ -87,6 +88,33 @@ struct ScreenCaptureManager::Request {
 	team_id		prompt;
 	int32		answer;		// SCREEN_CAPTURE_PERMISSION_*; UNKNOWN: pending
 	bigtime_t	created;
+	BObjectList<BMessenger, true> waiters;
+		// F-58: whom to tell the answer (RequestPermission())
+	uint32		sources;	// what they asked for (SCREEN_CAPTURE_*_MASK)
+
+	Request()
+		:
+		waiters(2),
+		sources(0)
+	{
+	}
+};
+
+
+struct ScreenCaptureManager::Answer {
+	BMessenger	target;
+	BMessage	message;
+
+	Answer(const BMessenger& target, status_t status, int32 request,
+			uint32 sources)
+		:
+		target(target),
+		message(SCREEN_CAPTURE_PERMISSION_ANSWER)
+	{
+		message.AddInt32("status", status);
+		message.AddInt32("request", request);
+		message.AddUInt32("sources", sources);
+	}
 };
 
 
@@ -167,7 +195,17 @@ ScreenCaptureManager::ScreenDamaged(const BRect& frame)
 void
 ScreenCaptureManager::ApplicationQuit(team_id team)
 {
+	BObjectList<Answer, true> answers(4);
 	BAutolock locker(fLock);
+	for (int32 i = 0; Request* request = fRequests.ItemAt(i); i++) {
+		// F-58: a prompt that went away without an answer (closed,
+		// crashed); its request stays until the next Start...() takes it
+		// as a no for now, as before.
+		if (request->prompt == team
+			&& request->answer == SCREEN_CAPTURE_PERMISSION_UNKNOWN) {
+			_CollectAnswers(request, B_CANCELED, answers);
+		}
+	}
 	for (int32 i = fSessions.CountItems() - 1; i >= 0; i--) {
 		if (fSessions.ItemAt(i)->team == team)
 			delete fSessions.RemoveItemAt(i);
@@ -183,6 +221,8 @@ ScreenCaptureManager::ApplicationQuit(team_id team)
 			delete fAllowedOnce.RemoveItemAt(i);
 	}
 	_UpdateActive();
+	locker.Unlock();
+	_SendAnswers(answers);
 }
 
 
@@ -220,8 +260,197 @@ ScreenCaptureManager::HandleMessage(ServerApp* app, int32 code,
 		case AS_SCREEN_CAPTURE_ANSWER_REQUEST:
 			_AnswerRequest(app, link, reply);
 			break;
+		case AS_SCREEN_CAPTURE_REQUEST_PERMISSION:
+			_RequestPermission(app, link, reply);
+			break;
 	}
 	reply.Flush();
+}
+
+
+/*!	The user's decision for \a team's application, with fLock held:
+	remembered by signature, for this run of the application (allowed
+	once), or still to be asked. Returns SCREEN_CAPTURE_PERMISSION_ALLOWED
+	or _DENIED, or _UNKNOWN with *_request set to the pending request
+	(NULL if there is none yet). An answered request is used up here: an
+	answer without "remember" holds for this run of the application if it
+	was yes, and for this one call if it was no.
+*/
+int32
+ScreenCaptureManager::_Decide(team_id team, const BString& signature,
+	Request** _request)
+{
+	*_request = NULL;
+	int32 permission = _Permission(signature);
+	BString teamKey;
+	teamKey << team;
+	for (int32 i = 0; i < fAllowedOnce.CountItems(); i++) {
+		if (*fAllowedOnce.ItemAt(i) == teamKey)
+			permission = SCREEN_CAPTURE_PERMISSION_ALLOWED;
+	}
+	Request* request = NULL;
+	for (int32 i = 0; Request* item = fRequests.ItemAt(i); i++) {
+		if (item->team == team)
+			request = item;
+	}
+	if (request != NULL
+		&& request->answer != SCREEN_CAPTURE_PERMISSION_UNKNOWN) {
+		// Answered, possibly without "remember": this run only.
+		permission = request->answer;
+		if (permission == SCREEN_CAPTURE_PERMISSION_ALLOWED)
+			fAllowedOnce.AddItem(new BString(teamKey));
+		fRequests.RemoveItem(request, true);
+		request = NULL;
+	}
+	if (permission == SCREEN_CAPTURE_PERMISSION_ALLOWED
+		|| permission == SCREEN_CAPTURE_PERMISSION_DENIED) {
+		return permission;
+	}
+
+	if (request != NULL) {
+		// The prompt went away without an answer (closed, crashed): that
+		// is a no for now.
+		team_info info;
+		if (request->prompt >= 0
+			&& get_team_info(request->prompt, &info) != B_OK) {
+			fRequests.RemoveItem(request, true);
+			return SCREEN_CAPTURE_PERMISSION_DENIED;
+		}
+	}
+	*_request = request;
+	return SCREEN_CAPTURE_PERMISSION_UNKNOWN;
+}
+
+
+//!	A new request, with the prompt started; fLock held. NULL on failure.
+ScreenCaptureManager::Request*
+ScreenCaptureManager::_NewRequest(team_id team, const BString& signature,
+	const BString& path, int32 source)
+{
+	Request* request = new(std::nothrow) Request;
+	if (request == NULL)
+		return NULL;
+	request->id = fNextID++;
+	request->team = team;
+	request->signature = signature;
+	request->path = path;
+	request->name = leaf_name(path);
+	request->source = source;
+	request->answer = SCREEN_CAPTURE_PERMISSION_UNKNOWN;
+	request->created = system_time();
+	BString argument;
+	argument << request->id;
+	request->prompt = _LaunchAgent("--prompt", argument.String());
+	if (request->prompt < 0) {
+		delete request;
+		return NULL;
+	}
+	if (!fRequests.AddItem(request)) {
+		delete request;
+		return NULL;
+	}
+	return request;
+}
+
+
+//!	Moves \a request's waiters into \a answers, with \a status; fLock held.
+void
+ScreenCaptureManager::_CollectAnswers(Request* request, status_t status,
+	BObjectList<Answer, true>& answers)
+{
+	while (BMessenger* target = request->waiters.RemoveItemAt(0)) {
+		Answer* answer = new(std::nothrow) Answer(*target, status,
+			request->id, request->sources);
+		delete target;
+		if (answer != NULL && !answers.AddItem(answer))
+			delete answer;
+	}
+}
+
+
+//!	Sends the answers collected; without fLock (a target may be slow).
+/*static*/ void
+ScreenCaptureManager::_SendAnswers(BObjectList<Answer, true>& answers)
+{
+	for (int32 i = 0; Answer* answer = answers.ItemAt(i); i++)
+		answer->target.SendMessage(&answer->message, (BHandler*)NULL, 500000);
+}
+
+
+/*!	AS_SCREEN_CAPTURE_REQUEST_PERMISSION (F-58, OBS Studio's O-7): uint32
+	sources (SCREEN_CAPTURE_*_MASK), team_id, port_id and int32 token of the
+	messenger to answer. Replies at once: B_OK with int32 request (-1 if the
+	answer is already known; it is sent right away) and bool pending. The
+	answer comes as a SCREEN_CAPTURE_PERMISSION_ANSWER message (see
+	ScreenCaptureDefs.h) when the user has answered, or when the prompt was
+	closed without an answer (B_CANCELED). The prompt is the same one a
+	waiting Start...() of the application shares.
+*/
+void
+ScreenCaptureManager::_RequestPermission(ServerApp* app, LinkReceiver& link,
+	PortLink& reply)
+{
+	uint32 sources;
+	team_id targetTeam;
+	port_id targetPort;
+	int32 targetToken;
+	link.Read<uint32>(&sources);
+	link.Read<team_id>(&targetTeam);
+	link.Read<port_id>(&targetPort);
+	if (link.Read<int32>(&targetToken) != B_OK) {
+		reply.StartMessage(B_BAD_DATA);
+		return;
+	}
+	sources &= SCREEN_CAPTURE_ANY_MASK;
+	if (sources == 0 || targetPort < 0) {
+		reply.StartMessage(B_BAD_VALUE);
+		return;
+	}
+	int32 source = (sources & SCREEN_CAPTURE_SCREEN_MASK) != 0
+		? SCREEN_CAPTURE_SCREEN : (sources & SCREEN_CAPTURE_WINDOW_MASK) != 0
+			? SCREEN_CAPTURE_WINDOW : SCREEN_CAPTURE_REGION;
+
+	BMessenger target;
+	BMessenger::Private(target).SetTo(targetTeam, targetPort, targetToken);
+
+	team_id team = app->ClientTeam();
+	BString signature(app->Signature());
+	BString path = team_path(team);
+
+	BObjectList<Answer, true> answers(1);
+	BAutolock locker(fLock);
+	Request* request = NULL;
+	int32 permission = _Decide(team, signature, &request);
+	if (permission == SCREEN_CAPTURE_PERMISSION_UNKNOWN && request == NULL)
+		request = _NewRequest(team, signature, path, source);
+
+	if (permission != SCREEN_CAPTURE_PERMISSION_UNKNOWN || request == NULL) {
+		// Known already (or nobody can ask: no).
+		status_t status = permission == SCREEN_CAPTURE_PERMISSION_ALLOWED
+			? B_OK : B_NOT_ALLOWED;
+		Answer* answer = new(std::nothrow) Answer(target, status, -1,
+			sources);
+		if (answer != NULL)
+			answers.AddItem(answer);
+		reply.StartMessage(B_OK);
+		reply.Attach<int32>(-1);
+		reply.Attach<bool>(false);
+		locker.Unlock();
+		reply.Flush();
+		_SendAnswers(answers);
+		return;
+	}
+
+	BMessenger* waiter = new(std::nothrow) BMessenger(target);
+	if (waiter == NULL || !request->waiters.AddItem(waiter)) {
+		delete waiter;
+		reply.StartMessage(B_NO_MEMORY);
+		return;
+	}
+	request->sources |= sources;
+	reply.StartMessage(B_OK);
+	reply.Attach<int32>(request->id);
+	reply.Attach<bool>(true);
 }
 
 
@@ -257,72 +486,21 @@ ScreenCaptureManager::_Start(ServerApp* app, LinkReceiver& link,
 
 	BAutolock locker(fLock);
 
-	// The user's decision: remembered by signature, for this run of the
-	// application, or still to be asked.
-	int32 permission = _Permission(signature);
-	BString teamKey;
-	teamKey << team;
-	for (int32 i = 0; i < fAllowedOnce.CountItems(); i++) {
-		if (*fAllowedOnce.ItemAt(i) == teamKey)
-			permission = SCREEN_CAPTURE_PERMISSION_ALLOWED;
-	}
 	Request* request = NULL;
-	for (int32 i = 0; Request* item = fRequests.ItemAt(i); i++) {
-		if (item->team == team)
-			request = item;
-	}
-	if (request != NULL && request->answer != SCREEN_CAPTURE_PERMISSION_UNKNOWN) {
-		// Answered, possibly without "remember": this run only.
-		permission = request->answer;
-		if (permission == SCREEN_CAPTURE_PERMISSION_ALLOWED)
-			fAllowedOnce.AddItem(new BString(teamKey));
-		fRequests.RemoveItem(request, true);
-		request = NULL;
-	}
-
+	int32 permission = _Decide(team, signature, &request);
 	if (permission == SCREEN_CAPTURE_PERMISSION_DENIED) {
 		reply.StartMessage(B_NOT_ALLOWED);
 		return;
 	}
 	if (permission != SCREEN_CAPTURE_PERMISSION_ALLOWED) {
-		if (request != NULL) {
-			// The prompt went away without an answer (closed, crashed):
-			// that is a no for now.
-			team_info info;
-			if (request->prompt >= 0
-				&& get_team_info(request->prompt, &info) != B_OK) {
-				fRequests.RemoveItem(request, true);
+		if (request == NULL) {
+			request = _NewRequest(team, signature, path, source);
+			if (request == NULL) {
+				// Nobody can ask the user (or no memory): no.
 				reply.StartMessage(B_NOT_ALLOWED);
 				return;
 			}
-			reply.StartMessage(B_WOULD_BLOCK);
-			reply.Attach<int32>(request->id);
-			return;
 		}
-
-		request = new(std::nothrow) Request;
-		if (request == NULL) {
-			reply.StartMessage(B_NO_MEMORY);
-			return;
-		}
-		request->id = fNextID++;
-		request->team = team;
-		request->signature = signature;
-		request->path = path;
-		request->name = leaf_name(path);
-		request->source = source;
-		request->answer = SCREEN_CAPTURE_PERMISSION_UNKNOWN;
-		request->created = system_time();
-		BString argument;
-		argument << request->id;
-		request->prompt = _LaunchAgent("--prompt", argument.String());
-		if (request->prompt < 0) {
-			// Nobody can ask the user: no.
-			delete request;
-			reply.StartMessage(B_NOT_ALLOWED);
-			return;
-		}
-		fRequests.AddItem(request);
 		reply.StartMessage(B_WOULD_BLOCK);
 		reply.Attach<int32>(request->id);
 		return;
@@ -754,6 +932,7 @@ ScreenCaptureManager::_AnswerRequest(ServerApp* app, LinkReceiver& link,
 		reply.StartMessage(B_NOT_ALLOWED);
 		return;
 	}
+	BObjectList<Answer, true> answers(2);
 	BAutolock locker(fLock);
 	for (int32 i = 0; Request* request = fRequests.ItemAt(i); i++) {
 		if (request->id != id)
@@ -764,7 +943,12 @@ ScreenCaptureManager::_AnswerRequest(ServerApp* app, LinkReceiver& link,
 			_SetPermissionLocked(request->signature, request->name,
 				request->answer);
 		}
+		// F-58: tell those who asked asynchronously. The answer stays in
+		// the request for the application's next Start...().
+		_CollectAnswers(request, allow ? B_OK : B_NOT_ALLOWED, answers);
 		reply.StartMessage(B_OK);
+		locker.Unlock();
+		_SendAnswers(answers);
 		return;
 	}
 	reply.StartMessage(B_ENTRY_NOT_FOUND);

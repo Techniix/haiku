@@ -1229,7 +1229,10 @@ ScreenshotWindow::_RecordingStarted(BMessage* message)
 	BString text;
 	if (status == B_NOT_ALLOWED)
 		text = B_TRANSLATE("Screen recording was not allowed.");
-	else
+	else if (status == B_TIMED_OUT) {
+		// F-58: the prompt was not answered in time
+		text = B_TRANSLATE("Screen recording was not answered in time.");
+	} else
 		text.SetToFormat(B_TRANSLATE("Could not record: %s"),
 			strerror(status));
 	fRecordStatus->SetText(text.String());

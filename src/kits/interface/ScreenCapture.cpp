@@ -8,9 +8,11 @@
 
 #include <Bitmap.h>
 #include <Message.h>
+#include <Messenger.h>
 
 #include <AppServerLink.h>
 #include <BitmapPrivate.h>
+#include <MessengerPrivate.h>
 #include <ServerProtocol.h>
 
 
@@ -64,28 +66,58 @@ BScreenCapture::_Start(int32 source, int32 windowToken, BRect region,
 
 	// While the user has not answered, app_server replies B_WOULD_BLOCK;
 	// ask again until there is an answer or the time is up.
+	// Renga (F-58, OBS Studio's O-6): the application's app_server link is
+	// held for one request at a time only, not while waiting between them,
+	// so that the application's other threads (its windows above all) can
+	// use app_server while the prompt is open. The link used to stay locked
+	// for the whole wait, up to the timeout.
+	// O-7: a prompt that was not answered in time is B_TIMED_OUT, a no
+	// stays B_NOT_ALLOWED.
 	bigtime_t deadline = system_time() + permissionTimeout;
 	while (true) {
-		AppServerLink link;
-		link.StartMessage(AS_SCREEN_CAPTURE_START);
-		link.Attach<int32>(source);
-		link.Attach<int32>(windowToken);
-		link.Attach<BRect>(region);
-		link.Attach<uint32>(flags);
 		status_t status;
-		if (link.FlushWithReply(status) != B_OK)
-			return B_ERROR;
-		if (status == B_OK) {
-			link.Read<int32>(&fSession);
-			link.Read<BRect>(&fFrame);
-			return B_OK;
+		{
+			AppServerLink link;
+			link.StartMessage(AS_SCREEN_CAPTURE_START);
+			link.Attach<int32>(source);
+			link.Attach<int32>(windowToken);
+			link.Attach<BRect>(region);
+			link.Attach<uint32>(flags);
+			if (link.FlushWithReply(status) != B_OK)
+				return B_ERROR;
+			if (status == B_OK) {
+				link.Read<int32>(&fSession);
+				link.Read<BRect>(&fFrame);
+				return B_OK;
+			}
 		}
 		if (status != B_WOULD_BLOCK)
 			return status;
 		if (system_time() >= deadline)
-			return B_NOT_ALLOWED;
+			return B_TIMED_OUT;
 		snooze(100000);
 	}
+}
+
+
+/*static*/ status_t
+BScreenCapture::RequestPermission(BMessenger target, uint32 sources)
+{
+	if (!target.IsValid())
+		return B_BAD_VALUE;
+	if ((sources & SCREEN_CAPTURE_ANY_MASK) == 0)
+		return B_BAD_VALUE;
+	BMessenger::Private messenger(target);
+	AppServerLink link;
+	link.StartMessage(AS_SCREEN_CAPTURE_REQUEST_PERMISSION);
+	link.Attach<uint32>(sources);
+	link.Attach<team_id>(messenger.Team());
+	link.Attach<port_id>(messenger.Port());
+	link.Attach<int32>(messenger.Token());
+	status_t status;
+	if (link.FlushWithReply(status) != B_OK)
+		return B_ERROR;
+	return status;
 }
 
 
