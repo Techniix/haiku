@@ -798,6 +798,18 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 - **Test what exists first:** before new work, link the imported code with Renga's toolchain, boot it, run its ordered test series in the harness and record what passes; fix what the import breaks before extending.
 - **Reuse before writing:** for each area, check existing code to port or adapt: FreeBSD's Linuxulator (`sys/compat/linux`: syscall tables, signal and errno translation, `ioctl` translation, `/proc` and `/sys` emulation, futex, epoll), NetBSD's and OpenBSD's Linux compatibility, the LinuxKPI already in Renga (`F-26`) for shared Linux definitions, gVisor's and WSL1's published syscall behaviour notes as references, musl and glibc test suites, the Linux Test Project (LTP) for conformance. Licences checked per import (BSD/MIT preferred; GPL code only as reference, not copied, unless kept in a separately licensed module).
 
+**Reworked for Renga, then proven with real Linux programs (maintainer, 2026-11-12).** The imported code is reworked for Renga's kernel and facilities, not just made to compile. Near completion, an iterative application ladder, each rung automated in the harness (QEMU, with an Alpine and a Debian root) before moving up, failures fixed and re-run, results recorded per rung:
+
+1. Static test programs; busybox; coreutils; `bash`; `vim`/`nano`; `less`, `grep`, `sed`, `awk`, `find`, `tar`, `xz`.
+2. Developer tools: `git`, `make`, `gcc` and `clang` building a small project, `python3`, `node`, `gdb` (needs `ptrace`), `strace`.
+3. Networking: `curl`, `wget`, `ssh`/`scp`, `apt`/`apk` installing packages, DNS, a small HTTP server reached from the host.
+4. Long-running and multi-process: `tmux`, `htop`, a SQLite and a PostgreSQL server, `rsync`.
+5. Graphical (with `F-43` phases C and D): a Wayland client, `foot`, `gedit`, `GIMP`, `Inkscape`, an X11 program through XWayland, `LibreOffice`.
+6. Media and audio: `mpv`, `ffmpeg`, an audio player through the PipeWire/Pulse server, `OBS`'s Linux build as a stress test.
+7. Large applications: Firefox, Chromium (with `seccomp`), Steam and a native Linux game, Discord with the Rich Presence bridge.
+
+Each rung's programs also run in the `F-61` responsiveness suite where relevant (a Linux build in the background must not make the desktop stutter), and the maintainer runs a short list from the top rung on his PC.
+
 **Plan (maintainer, 2026-11-11): integrate what exists and finish it as we go, with its GUI.**
 
 - [ ] **Integration:** the per-team ABI personality hook becomes a proper Renga kernel feature (FreeBSD `sysentvec` model: per-team syscall table and signal translation chosen at exec), not an external patch; Renguin builds in-tree as a kernel module plus tools, packaged with Renga; Renguin's test series runs in the harness against static and dynamic glibc and musl programs.
