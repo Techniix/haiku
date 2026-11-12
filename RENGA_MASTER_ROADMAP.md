@@ -344,6 +344,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-56 | Profiling and tracing tools | Not Started | None |
 | F-57 | WebKit keep-up (HaikuWebKit rebase, WebPositive quick fixes) | In Progress (item 4, HTML5 media through the Media Kit: in-tree part QEMU Tested, `9731ba84`; WebKit-side patch in RengaPorts, not built) | 9 `html5_media.*` + `html5_media.screenshots` (renga-raw) |
 | F-58 | Partner requests, batch 1 (OBS Studio and Quasar requests to Renga) | Designed | None |
+| F-59 | Real-hardware feedback, batch 1 (maintainer test of 9731ba84) | Designed | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -1376,6 +1377,33 @@ Checklist (request IDs from the requesting files):
 - [ ] O-13: `SOCK_SEQPACKET` socketpair tests with `SCM_RIGHTS`.
 - [ ] Quasar R-1 prerequisite: passing a file descriptor from an application to app_server (`SCM_RIGHTS` on a local socket alongside the app_server link), and a decision on the header's home and names (`<add-ons/graphics/GpuPresent.h>` proposed). The app_server flip queue itself is in F-47.
 - [ ] O-11: tell OBS the Media Kit video acceleration interface exists (`446221a6`); its hardware back ends come with Quasar (Q-3) and the GPU stage.
+
+#### F-59 Real-hardware feedback, batch 1 (2026-11-11)
+
+| Field | Value |
+| --- | --- |
+| Upstream maturity | Not applicable |
+| Renga maturity | Reported by the maintainer from his PC (Renga 9731ba84 anyboot, installed with "upgrade existing installation") |
+| Status | **Designed** |
+| Completed | None |
+| Remaining | Checklist below |
+| Known bugs/limitations | Not applicable |
+| Dependencies | None |
+| Difficulty | 3-5 |
+| Risk | Low to medium |
+| Testing status | None |
+| Next milestone | The boot panic first (interrupting F-58); the rest right after F-58, before F-57 |
+| Recommended next action | As below |
+| Links | Maintainer report, 2026-11-11 |
+
+Worked on real hardware: the upgrade itself, Wi-Fi with the in-tree mt7921e (also after a reboot), browsing, changing the output device, all audio devices listed correctly, HDMI audio listed (playback untested, the monitor has no speakers). The maintainer reports the whole system and WebPositive feeling noticeably smoother than before (cause not measured).
+
+- [ ] **Boot panic after "upgrade existing installation":** a stale out-of-tree `mt7921e` in `/boot/system/non-packaged` (built earlier from LinuxKPI_HaikuOS) was reloaded by the legacy driver watcher once Renga's in-tree copy existed; its unload path (`stop_wlan` -> `lkpi_ic_vap_delete` -> `if_free` -> `if_free_inplace`) panicked in `mutex_destroy()` with a garbage holder (-32768). Workaround used: safe mode "Disable user add-ons", delete the stale copy. Fix: check the in-tree teardown for the same bug (unload/reload checks in the harness), stop a stale non-packaged duplicate of a driver Renga ships from taking the boot down (system copy preferred, or the upgrade option moves it aside with a notification), crash report names the add-on.
+- [ ] **No crash report after that panic** (F-51 on real hardware): the panic screen said the report was kept for the next boot, but System logs showed none after several reboots (the first of them in safe mode). Find out whether the ring at 63 MiB survives this machine's reset, whether safe mode or a later boot lost it, and how the maintainer rebooted (KDL `reboot`, reset button or power).
+- [ ] **Screen recording** (F-44, Screenshot): the frame rate starts at 0 frames per second; give it a sensible default (30) and a minimum. The recording indicator (top right, with Stop) should show the elapsed time counting up (and the file size).
+- [ ] **New audio device notification** (F-32, maintainer request): when an audio device is connected (his USB gaming headset), show a notification naming it with "Switch to it" and "Not now", and a way to remember the choice. Per device in Audio preferences: "When connected: ask / switch automatically / do nothing", plus "switch back when disconnected" to the previous output. Design to settle: a device priority list (like PipeWire's or Windows' default device order) behind the same setting, input and output handled separately, and per-application routes (F-32) left alone.
+- [ ] **YouTube in WebPositive** ("Your browser can't play this video"): YouTube needs Media Source Extensions, which the packaged HaikuWebKit 1.10.0 lacks. Goes with the F-57 rebase (MSE through the Media Kit), not with the quick fixes.
+- [ ] Still to test on the machine: the boot menu (Windows entry); a webcam (none available).
 
 ### Bundled applications
 
