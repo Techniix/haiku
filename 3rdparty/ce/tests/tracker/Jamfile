@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP 3rdparty ce tests tracker ;
+
+# Tracker's folder menus built ahead of time (F-59), see the source.
+Application tracker_menu_test :
+	tracker_menu_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : tracker_menu_test ;
+}

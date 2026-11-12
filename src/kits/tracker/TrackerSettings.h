@@ -97,6 +97,10 @@ public:
 	bool GenerateImageThumbnails();
 	void SetGenerateImageThumbnails(bool enabled);
 
+	// Renga (F-59)
+	bool PrefetchFolderMenus();
+	void SetPrefetchFolderMenus(bool enabled);
+
 	bool ShowSelectionWhenInactive();
 	void SetShowSelectionWhenInactive(bool);
 	bool TransparentSelection();

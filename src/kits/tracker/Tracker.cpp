@@ -34,6 +34,9 @@ All rights reserved.
 
 #include "Tracker.h"
 
+#include "NavMenu.h"
+#include "NavMenuPrefetch.h"
+
 #include <errno.h>
 #include <fs_attr.h>
 #include <fs_info.h>
@@ -549,6 +552,39 @@ TTracker::MessageReceived(BMessage* message)
 			ShowSettingsWindow();
 			fSettingsWindow->ShowPage(
 				TrackerSettingsWindow::kAutomountSettings);
+			break;
+
+		case kTestBuildNavMenu:
+			// Renga (F-59), harness images only: builds the folder menu
+			// of "refs" as hovering it would, and replies with the time
+			// it took, the items, and the prefetch cache's counters.
+			// "prefetch" (bool, optional) changes the setting first.
+			if (access("/boot/system/non-packaged/data/ce-harness", F_OK)
+					== 0) {
+				BMessage reply(B_REPLY);
+				bool prefetch;
+				if (message->FindBool("prefetch", &prefetch) == B_OK) {
+					TrackerSettings().SetPrefetchFolderMenus(prefetch);
+					if (!prefetch)
+						NavMenuPrefetch::Default()->Clear();
+				}
+				entry_ref ref;
+				if (message->FindRef("refs", &ref) == B_OK) {
+					bigtime_t time;
+					int32 items;
+					BNavMenu::BuildForTest(ref, &time, &items);
+					reply.AddInt64("time", time);
+					reply.AddInt32("items", items);
+				}
+				NavMenuPrefetch* cache = NavMenuPrefetch::Default();
+				reply.AddInt32("hits", cache->Hits());
+				reply.AddInt32("misses", cache->Misses());
+				reply.AddInt32("builds", cache->Builds());
+				reply.AddInt32("folders", cache->CountFolders());
+				reply.AddBool("setting",
+					TrackerSettings().PrefetchFolderMenus());
+				message->SendReply(&reply);
+			}
 			break;
 
 		case kShowSettingsWindow:

@@ -84,6 +84,7 @@ All rights reserved.
 #include "Model.h"
 #include "MountMenu.h"
 #include "NavMenu.h"
+#include "NavMenuPrefetch.h"
 #include "Navigator.h"
 #include "OpenWithWindow.h"
 #include "PoseView.h"
@@ -1981,6 +1982,9 @@ BContainerWindow::SetupNavigationMenu(BMenu* parent, const entry_ref* ref)
 		ref = &resolvedRef;
 	}
 
+	// Renga (F-59): read the folder now, before the pointer gets to it
+	NavMenuPrefetch::Default()->Prefetch(*ref);
+
 	// always build a fresh navigation menu
 	delete fNavigationItem;
 	fNavigationItem
@@ -2641,6 +2645,16 @@ BContainerWindow::AddWindowContextMenu(BMenu* menu)
 
 	if (ShouldHaveAddOnMenus())
 		menu->AddItem(new BMenuItem(new BMenu(Shortcuts()->AddOnsLabel())));
+
+	if (PoseView()->IsDesktopView()) {
+		// Renga (F-59): the Desktop's settings, in place
+		menu->AddSeparatorItem();
+		BMenuItem* settings = new BMenuItem(
+			B_TRANSLATE("Tracker preferences" B_UTF8_ELLIPSIS),
+			new BMessage(kShowSettingsWindow));
+		settings->SetTarget(be_app);
+		menu->AddItem(settings);
+	}
 
 #if DEBUG
 	menu->AddSeparatorItem();

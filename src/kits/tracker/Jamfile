@@ -59,6 +59,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			MountMenu.cpp
 			Navigator.cpp
 			NavMenu.cpp
+			NavMenuPrefetch.cpp
 			NodePreloader.cpp
 			NodeWalker.cpp
 			OpenWithWindow.cpp

@@ -37,6 +37,7 @@ their respective holders. All rights reserved.
 
 
 #include "NavMenu.h"
+#include "NavMenuPrefetch.h"
 
 #include <algorithm>
 
@@ -260,6 +261,69 @@ SpringLoadedFolderCacheDragData(const BMessage* incoming, BMessage** message,
 #define B_TRANSLATION_CONTEXT "NavMenu"
 
 
+//	#pragma mark - PrefetchedEntryList
+
+
+/*!	Renga (F-59): the entries of a folder as NavMenuPrefetch built them, in
+	place of a DirectoryEntryList: AddNextItem() takes the next Model
+	instead of reading an entry and building one.
+*/
+class PrefetchedEntryList : public EntryListBase {
+public:
+	PrefetchedEntryList()
+		:
+		fModels(32),
+		fIndex(0)
+	{
+		fStatus = B_OK;
+	}
+
+	BObjectList<Model, true>& Models() { return fModels; }
+
+	Model* NextModel()
+	{
+		return fModels.ItemAt(fIndex++);
+	}
+
+	virtual status_t GetNextEntry(BEntry* entry, bool traverse = false)
+	{
+		Model* model = NextModel();
+		if (model == NULL)
+			return B_ENTRY_NOT_FOUND;
+		return entry->SetTo(model->EntryRef(), traverse);
+	}
+
+	virtual status_t GetNextRef(entry_ref* ref)
+	{
+		Model* model = NextModel();
+		if (model == NULL)
+			return B_ENTRY_NOT_FOUND;
+		*ref = *model->EntryRef();
+		return B_OK;
+	}
+
+	virtual int32 GetNextDirents(struct dirent*, size_t, int32)
+	{
+		return 0;
+	}
+
+	virtual status_t Rewind()
+	{
+		fIndex = 0;
+		return B_OK;
+	}
+
+	virtual int32 CountEntries()
+	{
+		return fModels.CountItems();
+	}
+
+private:
+	BObjectList<Model, true> fModels;
+	int32		fIndex;
+};
+
+
 BNavMenu::BNavMenu(const char* title, uint32 message, const BHandler* target,
 	BWindow* parentWindow, const BStringList* list)
 	:
@@ -429,7 +493,17 @@ BNavMenu::StartBuildingItemList()
 		fContainer = new VirtualDirectoryEntryList(&startModel);
 	} else if (startModel.IsDesktop()) {
 		fIteratingDesktop = true;
-		fContainer = DesktopPoseView::InitDesktopDirentIterator(0, startModel.EntryRef());
+		// Renga (F-59): prebuilt, or prebuilt next time
+		PrefetchedEntryList* prefetched = new PrefetchedEntryList;
+		if (NavMenuPrefetch::Default()->Get(*startModel.EntryRef(),
+				prefetched->Models())) {
+			fContainer = prefetched;
+		} else {
+			delete prefetched;
+			NavMenuPrefetch::Default()->Prefetch(*startModel.EntryRef());
+			fContainer = DesktopPoseView::InitDesktopDirentIterator(0,
+				startModel.EntryRef());
+		}
 		if (TrackerSettings().MountVolumesOntoDesktop())
 			AddVolumeItems();
 		else if (TrackerSettings().ShowDisksIcon())
@@ -457,10 +531,20 @@ BNavMenu::StartBuildingItemList()
 			}
 		}
 	} else {
-		BDirectory* directory = dynamic_cast<BDirectory*>(startModel.Node());
-		ASSERT(directory != NULL);
-		if (directory != NULL)
-			fContainer = new DirectoryEntryList(*directory);
+		// Renga (F-59): prebuilt, or prebuilt next time
+		PrefetchedEntryList* prefetched = new PrefetchedEntryList;
+		if (NavMenuPrefetch::Default()->Get(*startModel.EntryRef(),
+				prefetched->Models())) {
+			fContainer = prefetched;
+		} else {
+			delete prefetched;
+			NavMenuPrefetch::Default()->Prefetch(*startModel.EntryRef());
+			BDirectory* directory
+				= dynamic_cast<BDirectory*>(startModel.Node());
+			ASSERT(directory != NULL);
+			if (directory != NULL)
+				fContainer = new DirectoryEntryList(*directory);
+		}
 	}
 
 	if (fContainer == NULL || fContainer->InitCheck() != B_OK)
@@ -525,6 +609,16 @@ BNavMenu::AddNextItem()
 	if ((fFlags & kVolumesOnly) != 0) {
 		BuildVolumeMenu();
 		return false;
+	}
+
+	// Renga (F-59): a prebuilt Model, already filtered like below
+	if (PrefetchedEntryList* prefetched
+			= dynamic_cast<PrefetchedEntryList*>(fContainer)) {
+		Model* model = prefetched->NextModel();
+		if (model == NULL)
+			return false;
+		AddOneItem(model);
+		return true;
 	}
 
 	BEntry entry;
@@ -645,11 +739,24 @@ BNavMenu::NewModelItem(Model* model, const BMessage* invokeMessage,
 	BMessage* message = new BMessage(*invokeMessage);
 	message->AddRef("refs", model->EntryRef());
 
-	menu_info info;
-	get_menu_info(&info);
+	// Renga (F-59): the menu font, asked of app_server once a second at
+	// most instead of for every item (a round trip each; a folder of a
+	// few hundred entries spent most of its build time here).
+	static BLocker sMenuFontLock("nav menu font");
+	static BFont sMenuFont;
+	static bigtime_t sMenuFontTime = 0;
 	BFont menuFont;
-	menuFont.SetFamilyAndStyle(info.f_family, info.f_style);
-	menuFont.SetSize(info.font_size);
+	if (sMenuFontLock.Lock()) {
+		if (system_time() - sMenuFontTime > 1000000 || sMenuFontTime == 0) {
+			menu_info info;
+			get_menu_info(&info);
+			sMenuFont.SetFamilyAndStyle(info.f_family, info.f_style);
+			sMenuFont.SetSize(info.font_size);
+			sMenuFontTime = system_time();
+		}
+		menuFont = sMenuFont;
+		sMenuFontLock.Unlock();
+	}
 
 	// truncate name if necessary
 	BString truncatedString(model->Name());
@@ -769,8 +876,21 @@ BNavMenu::DoneBuildingItemList()
 	}
 
 	int32 count = fItemList->CountItems();
-	for (int32 index = 0; index < count; index++)
-		AddItem(fItemList->ItemAt(index));
+	int32 subfolders = 0;
+	for (int32 index = 0; index < count; index++) {
+		BMenuItem* item = fItemList->ItemAt(index);
+		// Renga (F-59): the subfolders shown are read ahead of time, so
+		// that hovering one opens it at once
+		if (item->Submenu() != NULL && subfolders < 32) {
+			if (BNavMenu* menu = dynamic_cast<BNavMenu*>(item->Submenu())) {
+				if (menu->fNavDir.device >= 0) {
+					NavMenuPrefetch::Default()->Prefetch(menu->fNavDir);
+					subfolders++;
+				}
+			}
+		}
+		AddItem(item);
+	}
 
 	fItemList->MakeEmpty();
 
@@ -781,6 +901,25 @@ BNavMenu::DoneBuildingItemList()
 	}
 
 	SetTargetForItems(fMessenger);
+}
+
+
+void
+BNavMenu::BuildForTest(const entry_ref& directory, bigtime_t* _time,
+	int32* _items)
+{
+	BNavMenu* menu = new BNavMenu("test", B_REFS_RECEIVED, BMessenger());
+	menu->SetNavDir(&directory);
+	bigtime_t start = system_time();
+	if (menu->StartBuildingItemList()) {
+		while (menu->AddNextItem())
+			;
+		menu->DoneBuildingItemList();
+	}
+	*_time = system_time() - start;
+	menu->ClearMenuBuildingState();
+	*_items = menu->CountItems();
+	delete menu;
 }
 
 

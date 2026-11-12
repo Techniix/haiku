@@ -108,6 +108,11 @@ public:
 
 	static int32 GetMaxMenuWidth();
 
+	// Renga (F-59): builds the menu of \a directory as hovering it would,
+	// without showing it (the harness measures it)
+	static void BuildForTest(const entry_ref& directory, bigtime_t* _time,
+		int32* _items);
+
 	static int CompareFolderNamesFirstOne(const BMenuItem*, const BMenuItem*);
 	static int CompareOne(const BMenuItem*, const BMenuItem*);
 

@@ -77,6 +77,7 @@ private:
 	BooleanValueSetting* fHideDotFiles;
 	BooleanValueSetting* fTypeAheadFiltering;
 	BooleanValueSetting* fGenerateImageThumbnails;
+	BooleanValueSetting* fPrefetchFolderMenus;
 
 	ScalarValueSetting* fRecentApplicationsCount;
 	ScalarValueSetting* fRecentDocumentsCount;
@@ -139,6 +140,7 @@ TTrackerState::TTrackerState()
 	fHideDotFiles(NULL),
 	fTypeAheadFiltering(NULL),
 	fGenerateImageThumbnails(NULL),
+	fPrefetchFolderMenus(NULL),
 	fRecentApplicationsCount(NULL),
 	fRecentDocumentsCount(NULL),
 	fRecentFoldersCount(NULL),
@@ -169,6 +171,7 @@ TTrackerState::TTrackerState(const TTrackerState&)
 	fHideDotFiles(NULL),
 	fTypeAheadFiltering(NULL),
 	fGenerateImageThumbnails(NULL),
+	fPrefetchFolderMenus(NULL),
 	fRecentApplicationsCount(NULL),
 	fRecentDocumentsCount(NULL),
 	fRecentFoldersCount(NULL),
@@ -234,6 +237,8 @@ TTrackerState::LoadSettingsIfNeeded()
 		= new BooleanValueSetting("TypeAheadFiltering", kDefaultTypeAheadFiltering));
 	Add(fGenerateImageThumbnails
 		= new BooleanValueSetting("GenerateImageThumbnails", kDefaultGenerateImageThumbnails));
+	Add(fPrefetchFolderMenus
+		= new BooleanValueSetting("PrefetchFolderMenus", kDefaultPrefetchFolderMenus));
 
 	Add(fRecentApplicationsCount
 		= new ScalarValueSetting("RecentApplications", kDefaultRecentApplications, "", ""));
@@ -476,6 +481,20 @@ void
 TrackerSettings::SetGenerateImageThumbnails(bool enabled)
 {
 	gTrackerState.fGenerateImageThumbnails->SetValue(enabled);
+}
+
+
+bool
+TrackerSettings::PrefetchFolderMenus()
+{
+	return gTrackerState.fPrefetchFolderMenus->Value();
+}
+
+
+void
+TrackerSettings::SetPrefetchFolderMenus(bool enabled)
+{
+	gTrackerState.fPrefetchFolderMenus->SetValue(enabled);
 }
 
 

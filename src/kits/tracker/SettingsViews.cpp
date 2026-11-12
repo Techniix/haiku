@@ -35,6 +35,8 @@ All rights reserved.
 
 #include "SettingsViews.h"
 
+#include "NavMenuPrefetch.h"
+
 #include <Box.h>
 #include <Button.h>
 #include <Catalog.h>
@@ -170,11 +172,13 @@ DesktopSettingsView::DesktopSettingsView()
 	fShowDisksIconRadioButton(NULL),
 	fMountVolumesOntoDesktopRadioButton(NULL),
 	fMountSharedVolumesOntoDesktopCheckBox(NULL),
+	fPrefetchFolderMenusCheckBox(NULL),
 	fShowDisksIcon(kDefaultShowDisksIcon),
 	fMountVolumesOntoDesktop(kDefaultMountVolumesOntoDesktop),
 	fMountSharedVolumesOntoDesktop(kDefaultMountSharedVolumesOntoDesktop),
 	fIntegrateNonBootBeOSDesktops(false),
-	fEjectWhenUnmounting(kDefaultEjectWhenUnmounting)
+	fEjectWhenUnmounting(kDefaultEjectWhenUnmounting),
+	fPrefetchFolderMenus(kDefaultPrefetchFolderMenus)
 {
 	fShowDisksIconRadioButton = new BRadioButton("",
 		B_TRANSLATE("Show Disks icon"),
@@ -188,6 +192,15 @@ DesktopSettingsView::DesktopSettingsView()
 		B_TRANSLATE("Show shared volumes on Desktop"),
 		new BMessage(kVolumesOnDesktopChanged));
 
+	// Renga (F-59)
+	fPrefetchFolderMenusCheckBox = new BCheckBox("prefetch",
+		B_TRANSLATE("Prefetch folder menus in the background"),
+		new BMessage(kPrefetchFolderMenusChanged));
+	fPrefetchFolderMenusCheckBox->SetToolTip(B_TRANSLATE("Folder submenus "
+		"(the Desktop entry of the Desktop's menu, \"Move to\", \"Copy "
+		"to\") open at once: their folders are read in the background "
+		"before they are needed, and read again when they change."));
+
 	const float spacing = be_control_look->DefaultItemSpacing();
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
@@ -197,6 +210,8 @@ DesktopSettingsView::DesktopSettingsView()
 			.Add(fMountSharedVolumesOntoDesktopCheckBox)
 			.SetInsets(spacing * 2, 0, 0, 0)
 			.End()
+		.AddStrut(spacing)
+		.Add(fPrefetchFolderMenusCheckBox)
 		.AddGlue()
 		.SetInsets(spacing);
 }
@@ -208,6 +223,7 @@ DesktopSettingsView::AttachedToWindow()
 	fShowDisksIconRadioButton->SetTarget(this);
 	fMountVolumesOntoDesktopRadioButton->SetTarget(this);
 	fMountSharedVolumesOntoDesktopCheckBox->SetTarget(this);
+	fPrefetchFolderMenusCheckBox->SetTarget(this);
 }
 
 
@@ -250,6 +266,19 @@ DesktopSettingsView::MessageReceived(BMessage* message)
 				&notificationMessage);
 
 			// Tell the settings window the contents have changed:
+			Window()->PostMessage(kSettingsContentsModified);
+			break;
+		}
+
+		case kPrefetchFolderMenusChanged:
+		{
+			bool value;
+			if (message->FindBool("renga:value", &value) == B_OK)
+				fPrefetchFolderMenusCheckBox->SetValue(value);
+			bool enabled = fPrefetchFolderMenusCheckBox->Value() == 1;
+			settings.SetPrefetchFolderMenus(enabled);
+			if (!enabled)
+				NavMenuPrefetch::Default()->Clear();
 			Window()->PostMessage(kSettingsContentsModified);
 			break;
 		}
@@ -303,6 +332,7 @@ DesktopSettingsView::SetDefaults()
 	settings.SetMountVolumesOntoDesktop(kDefaultMountVolumesOntoDesktop);
 	settings.SetMountSharedVolumesOntoDesktop(kDefaultMountSharedVolumesOntoDesktop);
 	settings.SetEjectWhenUnmounting(kDefaultEjectWhenUnmounting);
+	settings.SetPrefetchFolderMenus(kDefaultPrefetchFolderMenus);
 
 	ShowCurrentSettings();
 	_SendNotices();
@@ -317,7 +347,8 @@ DesktopSettingsView::IsDefaultable() const
 	return settings.ShowDisksIcon() != kDefaultShowDisksIcon
 		|| settings.MountVolumesOntoDesktop() != kDefaultMountVolumesOntoDesktop
 		|| settings.MountSharedVolumesOntoDesktop() != kDefaultMountSharedVolumesOntoDesktop
-		|| settings.EjectWhenUnmounting() != kDefaultEjectWhenUnmounting;
+		|| settings.EjectWhenUnmounting() != kDefaultEjectWhenUnmounting
+		|| settings.PrefetchFolderMenus() != kDefaultPrefetchFolderMenus;
 }
 
 
@@ -330,6 +361,9 @@ DesktopSettingsView::Revert()
 	settings.SetMountVolumesOntoDesktop(fMountVolumesOntoDesktop);
 	settings.SetMountSharedVolumesOntoDesktop(fMountSharedVolumesOntoDesktop);
 	settings.SetEjectWhenUnmounting(fEjectWhenUnmounting);
+	settings.SetPrefetchFolderMenus(fPrefetchFolderMenus);
+	if (!fPrefetchFolderMenus)
+		NavMenuPrefetch::Default()->Clear();
 
 	ShowCurrentSettings();
 	_SendNotices();
@@ -371,6 +405,7 @@ DesktopSettingsView::ShowCurrentSettings()
 		settings.MountSharedVolumesOntoDesktop());
 	fMountSharedVolumesOntoDesktopCheckBox->SetEnabled(
 		settings.MountVolumesOntoDesktop());
+	fPrefetchFolderMenusCheckBox->SetValue(settings.PrefetchFolderMenus());
 }
 
 
@@ -383,6 +418,7 @@ DesktopSettingsView::RecordRevertSettings()
 	fMountVolumesOntoDesktop = settings.MountVolumesOntoDesktop();
 	fMountSharedVolumesOntoDesktop = settings.MountSharedVolumesOntoDesktop();
 	fEjectWhenUnmounting = settings.EjectWhenUnmounting();
+	fPrefetchFolderMenus = settings.PrefetchFolderMenus();
 }
 
 
@@ -393,7 +429,9 @@ DesktopSettingsView::IsRevertable() const
 		|| fMountVolumesOntoDesktop !=
 			(fMountVolumesOntoDesktopRadioButton->Value() > 0)
 		|| fMountSharedVolumesOntoDesktop !=
-			(fMountSharedVolumesOntoDesktopCheckBox->Value() > 0);
+			(fMountSharedVolumesOntoDesktopCheckBox->Value() > 0)
+		|| fPrefetchFolderMenus
+			!= (fPrefetchFolderMenusCheckBox->Value() > 0);
 }
 
 

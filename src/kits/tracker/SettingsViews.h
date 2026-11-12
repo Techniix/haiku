@@ -90,12 +90,14 @@ private:
 	BRadioButton*	fShowDisksIconRadioButton;
 	BRadioButton*	fMountVolumesOntoDesktopRadioButton;
 	BCheckBox*		fMountSharedVolumesOntoDesktopCheckBox;
+	BCheckBox*		fPrefetchFolderMenusCheckBox;
 
 	bool fShowDisksIcon;
 	bool fMountVolumesOntoDesktop;
 	bool fMountSharedVolumesOntoDesktop;
 	bool fIntegrateNonBootBeOSDesktops;
 	bool fEjectWhenUnmounting;
+	bool fPrefetchFolderMenus;
 
 	typedef SettingsView _inherited;
 };
