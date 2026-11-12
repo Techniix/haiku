@@ -12,6 +12,7 @@
 
 #include "AppServer.h"
 
+#include <new>
 #include <syslog.h>
 
 #include <AutoDeleter.h>
@@ -20,6 +21,7 @@
 #include <RosterPrivate.h>
 
 #include "BitmapManager.h"
+#include "FdTransferServer.h"
 #include "Desktop.h"
 #include "GlobalFontManager.h"
 #include "InputManager.h"
@@ -70,6 +72,12 @@ AppServer::AppServer(status_t* status)
 
 	// Create the bitmap allocator. Object declared in BitmapManager.cpp
 	gBitmapManager = new BitmapManager();
+
+	// Renga (F-58): descriptors from applications, next to the link
+	// (ServerFdTransfer.h). Without it app_server works as before.
+	FdTransferServer* fdTransfer = new(std::nothrow) FdTransferServer();
+	if (fdTransfer != NULL && fdTransfer->Start() != B_OK)
+		syslog(LOG_WARNING, "app_server: no descriptor transfer socket");
 
 #ifndef HAIKU_TARGET_PLATFORM_LIBBE_TEST
 #if 0

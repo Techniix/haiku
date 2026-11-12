@@ -1,0 +1,15 @@
+SubDir HAIKU_TOP 3rdparty ce tests appserver ;
+
+# Passing descriptors from applications to app_server (F-58, the Quasar
+# driver's R-1 prerequisite), see the source.
+UsePrivateHeaders app interface ;
+ObjectHdrs [ FGristFiles appserver_fd_test$(SUFOBJ) ]
+	: [ FDirName $(HAIKU_TOP) headers compatibility gnu ] ;
+Application appserver_fd_test :
+	appserver_fd_test.cpp
+	: be libgnu.so [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test ;
+}

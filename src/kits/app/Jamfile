@@ -61,6 +61,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			RosterPrivate.cpp
 			Server.cpp
 			ServerLink.cpp
+			ServerFdTransfer.cpp
 			ServerMemoryAllocator.cpp
 			TokenSpace.cpp
 			TypeConstants.cpp

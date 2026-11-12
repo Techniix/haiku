@@ -50,6 +50,8 @@ public:
 	virtual						~ServerApp();
 
 			status_t			InitCheck();
+	// Renga (F-58): a descriptor this application sent (ServerFdTransfer.h)
+			int					TakeClientFd(int32 token);
 
 	virtual	void				Quit();
 			void				Quit(sem_id shutdownSemaphore);

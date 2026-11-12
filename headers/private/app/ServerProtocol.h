@@ -383,6 +383,11 @@ enum {
 	AS_SCREEN_CAPTURE_SET_NOTIFICATION,
 		// F-58 (O-8): a semaphore released when the source changes
 
+	// Renga (F-58): a descriptor sent with app_server_send_fd(), checked:
+	// app_server takes it by token and replies with its size and first
+	// bytes (tests and diagnostics of the transfer GPU buffers use)
+	AS_CHECK_CLIENT_FD,
+
 	AS_LAST_CODE
 };
 

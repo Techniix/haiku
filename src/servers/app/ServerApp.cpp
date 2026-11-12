@@ -23,10 +23,14 @@
 
 #include "ServerApp.h"
 
+#include "FdTransferServer.h"
+
 #include <new>
 #include <stdio.h>
 #include <string.h>
 #include <syslog.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <AppDefs.h>
 #include <Autolock.h>
@@ -212,10 +216,24 @@ ServerApp::~ServerApp()
 
 	if (fDesktop->ScreenCapture() != NULL)
 		fDesktop->ScreenCapture()->ApplicationQuit(fClientTeam);
+	if (FdTransferServer::Default() != NULL)
+		FdTransferServer::Default()->TeamQuit(fClientTeam);
 
 	delete fAppFontManager;
 
 	STRACE(("ServerApp %s::~ServerApp(): Exiting\n", Signature()));
+}
+
+
+/*!	Renga (F-58): the descriptor this application sent with
+	app_server_send_fd() under \a token, now owned by the caller; -1 if
+	there is none for this team.
+*/
+int
+ServerApp::TakeClientFd(int32 token)
+{
+	FdTransferServer* server = FdTransferServer::Default();
+	return server != NULL ? server->Take(fClientTeam, token) : -1;
 }
 
 
@@ -3434,6 +3452,42 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			if (status == B_OK)
 				fLink.AttachString(path.String());
 
+			fLink.Flush();
+			break;
+		}
+
+		// Renga (F-58): a descriptor the client sent, checked
+		case AS_CHECK_CLIENT_FD:
+		{
+			int32 token;
+			int32 wanted;
+			link.Read<int32>(&token);
+			if (link.Read<int32>(&wanted) != B_OK) {
+				fLink.StartMessage(B_BAD_DATA);
+				fLink.Flush();
+				break;
+			}
+			int fd = TakeClientFd(token);
+			if (fd < 0) {
+				fLink.StartMessage(B_ENTRY_NOT_FOUND);
+				fLink.Flush();
+				break;
+			}
+			struct stat st;
+			char data[256];
+			wanted = max_c(0, min_c(wanted, (int32)sizeof(data)));
+			ssize_t bytes = fstat(fd, &st) == 0 ? pread(fd, data, wanted, 0)
+				: -1;
+			close(fd);
+			if (bytes < 0) {
+				fLink.StartMessage(B_IO_ERROR);
+				fLink.Flush();
+				break;
+			}
+			fLink.StartMessage(B_OK);
+			fLink.Attach<int64>((int64)st.st_size);
+			fLink.Attach<int32>((int32)bytes);
+			fLink.Attach(data, bytes);
 			fLink.Flush();
 			break;
 		}
