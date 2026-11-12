@@ -835,7 +835,7 @@ Each rung's programs also run in the `F-61` responsiveness suite where relevant 
 - [ ] **GUI (Renguin Manager, Interface Kit):** set up and manage Linux roots (create from Alpine, Debian or Arch images, update, remove), list and launch Linux programs with their icons in Deskbar and Tracker, per-program settings, running Linux processes, logs and diagnostics (with System logs, `F-51`); a Control Panel page later (`F-28`).
 - [ ] **Harness:** the ordered test series, Alpine busybox, a glibc shell, `git`, a small Wayland client, and the Rich Presence bridge, each as automated checks.
 
-#### F-26 LinuxKPI_HaikuOS
+#### F-26 LinuxKPI (built into Renga)
 
 | Field | Value |
 | --- | --- |
@@ -863,6 +863,24 @@ Each rung's programs also run in the `F-61` responsiveness suite where relevant 
 - [ ] Fetched drivers are ordinary packages, so they update with the system and are part of package states (`F-44` backup and restore).
 
 ### Boot and installation
+
+**Renga redesign review (maintainer, 2026-11-12): LinuxKPI as a built-in Renga subsystem, with driver choice made visible.** Same rule as Lumina, Quasar and Renguin: Renga is its own fork, so LinuxKPI no longer needs to fit a stock Haiku kernel; it is redesigned to be fast, correct and part of the system. Approved direction; implementation slotted before the GPU stage (its DRM layer is how Intel and AMD graphics arrive).
+
+*Architecture*
+- [ ] **One shared LinuxKPI module** in the kernel instead of a copy per driver; Linux drivers become small modules on top of it (smaller memory use, one place to fix bugs).
+- [ ] **Built on Renga's kernel primitives directly**, not on `freebsd_network` shims: DMA mapping and IOMMU-aware bounce buffers on Renga's VM, interrupts with real MSI-X and shared INTx, work queues and tasklets on Renga kernel threads and DPCs, timers on the kernel timer, wait queues on condition variables, `sx`/`rwsem`/RCU with their real semantics; each change measured against the current build and kept only if it holds the verified hardware behaviour (MT7922).
+- [ ] **Shared Linux definitions with Renguin** (`F-27`): one set of Linux structures, errno and ioctl tables used by both layers.
+- [ ] **A driver database** generated at build time from each Linux driver's PCI and USB ID tables plus the native drivers' tables, so the system knows for any device which drivers exist, native and Linux, and which is recommended (by tested status, features, performance).
+- [ ] **DRM/KMS core** for i915/xe and amdgpu (with `F-35`, `F-47`): the Linux DRM drivers drive the hardware; a bridge exposes them as a Renga accelerant implementing the vendor-neutral `GpuPresent.h` interface, so app_server and Vulkan use them like Quasar.
+- [ ] **More drivers through it**, in order of value: Wi-Fi (Intel `iwlwifi`, Realtek `rtw88`/`rtw89`, Qualcomm `ath11k`/`ath12k`, more MediaTek), Bluetooth (`btusb` and controllers' firmware), then whatever the driver database shows users need most (`F-60`-style report from the hardware list).
+
+*Driver choice, made visible (maintainer's ideas, extended)*
+- [ ] **During installation from the install media:** the installer's Hardware step lists every device with its status: works with a native driver; a Linux driver is available on the media; a Linux driver can be downloaded (once a network is up); no driver yet. For each device with a choice it recommends one and says why ("Native: tested on this hardware" / "Linux: native driver lacks 5 GHz and WPA3"), the user can switch, and the choice is saved for the installed system. Common Wi-Fi and Ethernet Linux drivers ship on the media so a network can be had before anything is downloaded. Devices with no driver are listed plainly ("no driver for this device yet") with a link to report it.
+- [ ] **New hardware, any time:** when a device appears that has never been seen (at boot or plugged in while running), a notification names it and offers the same choice: native driver, Linux driver, or none available; "Use recommended", "Choose...", "Not now"; "remember for this device" by default. Devices already decided are silent.
+- [ ] **Devices & Drivers page in the Control Panel** (Hardware section, `F-28`; LinuxKPI Manager grows into it): every device with its current driver (native, Linux, none), version, firmware, status and logs (System logs, `F-51`); switch driver per device with **test and revert** (the switch applies, and if the device does not come up or the user does not confirm within 20 seconds, the previous driver returns); per-device policy for new hardware (ask, use recommended, native only); "Native drivers only" as a global safety switch; and a hardware report for bug reports.
+- [ ] **Downloadable driver packs and firmware:** the online support idea, done safely: Linux driver modules and firmware come as signed packages in a Renga repository (RengaPorts), installed through the package system (so updates, rollback and package states apply), never as raw downloaded code.
+- [ ] **Safety net:** a Linux driver that crashes the system twice (`F-51` crash reports name it) is disabled for that device on the next boot, the native driver or none is used, and a notification explains it with a "try again" option; the boot menu's safe-mode options gain "Native drivers only".
+- [ ] **Harness:** QEMU checks for the installer's Hardware step, the new-device notification, the Control Panel page (switch, test-and-revert, policies), the database lookups and the crash fallback, with fake devices; real-hardware checks on the maintainer's MT7922.
 
 #### F-16 Boot splash
 
