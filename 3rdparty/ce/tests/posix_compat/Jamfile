@@ -46,6 +46,12 @@ Application memfd_test :
 	: libgnu.so network
 ;
 
+# SOCK_SEQPACKET UNIX sockets with SCM_RIGHTS (F-58, OBS Studio's O-13).
+Application seqpacket_test :
+	seqpacket_test.cpp
+	: libgnu.so network
+;
+
 # getrandom/getauxval/backtrace/copy_file_range are in libgnu,
 # sendmmsg/recvmmsg in libnetwork.
 Application libc_ext_test :
@@ -122,6 +128,6 @@ Application timerfd_test :
 ;
 
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test
+	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test seqpacket_test
 		mqueue_test quic_udp_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test user_locks_test vm_semantics_test ;
 }

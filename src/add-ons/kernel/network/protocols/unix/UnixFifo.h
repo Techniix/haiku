@@ -76,6 +76,9 @@ public:
 
 	size_t	Readable() const;
 	size_t	Writable() const;
+	bool	HasMessage() const;
+		// Renga (F-58): something to read; in a datagram queue that can
+		// be a message of 0 bytes
 
 	status_t Read(UnixRequest& request);
 	status_t Write(UnixRequest& request);
@@ -92,8 +95,12 @@ private:
 	typedef DoublyLinkedList<AncillaryDataEntry> AncillaryDataList;
 
 	struct DatagramEntry : DoublyLinkedListLinkImpl<DatagramEntry> {
+		DatagramEntry() : size(0), ancillaryData(NULL) {}
 		struct sockaddr_storage	address;
 		size_t	size;
+		ancillary_data_container* ancillaryData;
+			// Renga (F-58): a datagram's ancillary data (SCM_RIGHTS) stays
+			// with it, so a message of 0 bytes can carry descriptors too
 	};
 
 	typedef DoublyLinkedList<DatagramEntry> DatagramList;
@@ -102,6 +109,7 @@ private:
 	size_t				fCapacity;
 	AncillaryDataList	fAncillaryData;
 	DatagramList		fDatagrams;
+	size_t				fDatagramCount;
 	UnixFifoType		fType;
 };
 

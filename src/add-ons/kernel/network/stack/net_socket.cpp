@@ -242,12 +242,15 @@ add_ancillary_data(net_socket* socket, ancillary_data_container* container,
 
 static status_t
 process_ancillary_data(net_socket* socket, ancillary_data_container* container,
-	msghdr* messageHeader, int flags)
+	msghdr* messageHeader, int flags, bool* _truncated = NULL)
 {
 	uint8* dataBuffer = (uint8*)messageHeader->msg_control;
 	int dataBufferLen = messageHeader->msg_controllen;
 
 	if (container == NULL || dataBuffer == NULL) {
+		// no room at all for the message's control data
+		if (container != NULL && _truncated != NULL)
+			*_truncated = true;
 		messageHeader->msg_controllen = 0;
 		return B_OK;
 	}
@@ -257,6 +260,12 @@ process_ancillary_data(net_socket* socket, ancillary_data_container* container,
 
 	ssize_t bytesWritten = socket->first_info->process_ancillary_data(
 		socket->first_protocol, container, dataBuffer, dataBufferLen, flags);
+	if (bytesWritten == B_NO_MEMORY && _truncated != NULL) {
+		// Renga (F-58): the control buffer is too small (unix.cpp): the
+		// message is delivered anyway, with MSG_CTRUNC
+		*_truncated = true;
+		bytesWritten = 0;
+	}
 	if (bytesWritten < 0)
 		return bytesWritten;
 
@@ -339,18 +348,19 @@ socket_receive_no_buffer(net_socket* socket, msghdr* header, void* data,
 
 	// process ancillary data
 	if (header != NULL) {
+		bool truncated = false;
 		status_t status = process_ancillary_data(socket, ancillaryData, header,
-			flags & (MSG_CMSG_CLOEXEC | MSG_CMSG_CLOFORK));
+			flags & (MSG_CMSG_CLOEXEC | MSG_CMSG_CLOFORK), &truncated);
 		if (status != B_OK)
 			return status;
 
-		header->msg_flags = 0;
+		header->msg_flags = truncated ? MSG_CTRUNC : 0;
 	}
 
 	size_t totalLength = calculate_total_length(header, data, length);
 	if (totalLength < (size_t)bytesRead) {
 		if (header != NULL)
-			header->msg_flags = MSG_TRUNC;
+			header->msg_flags |= MSG_TRUNC;
 		if ((flags & MSG_TRUNC) == 0)
 			return totalLength;
 	}

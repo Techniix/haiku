@@ -387,9 +387,13 @@ unix_process_ancillary_data(net_protocol *self,
 	}
 
 	// check if there's enough space in the buffer
+	// Renga (F-58): a too small control buffer is no error of recvmsg():
+	// the message is delivered with MSG_CTRUNC and no descriptors (the
+	// container's are closed with it, none leak). B_NO_MEMORY tells
+	// net_socket.cpp so.
 	size_t neededBufferSpace = CMSG_SPACE(sizeof(int) * totalCount);
 	if (bufferSize < neededBufferSpace)
-		return B_BAD_VALUE;
+		return B_NO_MEMORY;
 
 	// init header
 	cmsghdr* messageHeader = (cmsghdr*)buffer;

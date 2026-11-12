@@ -20,6 +20,11 @@
 #include "UnixDebug.h"
 
 
+// Renga (F-58): at most this many datagrams wait in one queue (messages of
+// 0 bytes take no room in the ring buffer).
+static const size_t kMaxQueuedDatagrams = 4096;
+
+
 // #pragma mark - UnixRequest
 
 
@@ -115,6 +120,7 @@ UnixBufferQueue::UnixBufferQueue(size_t capacity, UnixFifoType type)
 	:
 	fBuffer(NULL),
 	fCapacity(capacity),
+	fDatagramCount(0),
 	fType(type)
 {
 }
@@ -124,6 +130,12 @@ UnixBufferQueue::~UnixBufferQueue()
 {
 	while (AncillaryDataEntry* entry = fAncillaryData.RemoveHead()) {
 		gStackModule->delete_ancillary_data_container(entry->data);
+		delete entry;
+	}
+
+	while (DatagramEntry* entry = fDatagrams.RemoveHead()) {
+		if (entry->ancillaryData != NULL)
+			gStackModule->delete_ancillary_data_container(entry->ancillaryData);
 		delete entry;
 	}
 
@@ -151,7 +163,22 @@ UnixBufferQueue::Readable() const
 size_t
 UnixBufferQueue::Writable() const
 {
+	// Renga (F-58): messages of 0 bytes take no room in the ring buffer;
+	// the number of queued messages is limited instead.
+	if (fType == UnixFifoType::Datagram
+		&& fDatagramCount >= kMaxQueuedDatagrams) {
+		return 0;
+	}
 	return ring_buffer_writable(fBuffer);
+}
+
+
+bool
+UnixBufferQueue::HasMessage() const
+{
+	if (fType == UnixFifoType::Datagram)
+		return fDatagramCount > 0;
+	return Readable() > 0;
 }
 
 
@@ -229,6 +256,13 @@ UnixBufferQueue::Read(UnixRequest& request)
 
 	if (!clone && fType == UnixFifoType::Datagram) {
 		fDatagrams.RemoveHead();
+		fDatagramCount--;
+
+		// Renga (F-58): the datagram's own ancillary data
+		if (datagramEntry->ancillaryData != NULL) {
+			request.AddAncillaryData(datagramEntry->ancillaryData);
+			datagramEntry->ancillaryData = NULL;
+		}
 
 		if (request.Address() != NULL)
 			memcpy(request.Address(), &datagramEntry->address, sizeof(datagramEntry->address));
@@ -264,6 +298,13 @@ UnixBufferQueue::Read(UnixRequest& request)
 		}
 		if (fType == UnixFifoType::Datagram && request.Address() != NULL)
 			memcpy(request.Address(), &datagramEntry->address, sizeof(datagramEntry->address));
+		if (fType == UnixFifoType::Datagram
+			&& datagramEntry->ancillaryData != NULL) {
+			status_t error = request.CloneAncillaryData(
+				datagramEntry->ancillaryData);
+			if (error != B_OK)
+				return error;
+		}
 	}
 
 
@@ -300,10 +341,12 @@ UnixBufferQueue::Write(UnixRequest& request)
 		}
 	}
 
-	// If the request has ancillary data create an entry first.
+	// If the request has ancillary data create an entry first. (A
+	// datagram keeps its own, see below.)
 	AncillaryDataEntry* ancillaryEntry = NULL;
 	ObjectDeleter<AncillaryDataEntry> ancillaryEntryDeleter;
-	if (writable > 0 && request.AncillaryData() != NULL) {
+	if (writable > 0 && request.AncillaryData() != NULL
+		&& fType != UnixFifoType::Datagram) {
 		ancillaryEntry = new(std::nothrow) AncillaryDataEntry;
 		if (ancillaryEntry == NULL)
 			return B_NO_MEMORY;
@@ -348,7 +391,30 @@ UnixBufferQueue::Write(UnixRequest& request)
 	}
 
 	if (fType == UnixFifoType::Datagram) {
+		// Renga (F-58): the ancillary data (SCM_RIGHTS) goes with the
+		// datagram, also when it has no bytes. net_socket.cpp leaves the
+		// container to the protocol only when bytes were sent, so a message
+		// of 0 bytes gets a copy (the descriptors are referenced again).
+		if (request.AncillaryData() != NULL) {
+			if (request.TotalSize() > 0) {
+				datagramEntry->ancillaryData = request.AncillaryData();
+				request.UnsetAncillaryData();
+			} else {
+				ancillary_data_container* copy
+					= gStackModule->create_ancillary_data_container();
+				if (copy == NULL)
+					return B_NO_MEMORY;
+				status_t error = gStackModule->clone_ancillary_data(
+					request.AncillaryData(), copy);
+				if (error != B_OK) {
+					gStackModule->delete_ancillary_data_container(copy);
+					return error;
+				}
+				datagramEntry->ancillaryData = copy;
+			}
+		}
 		fDatagrams.Add(datagramEntry);
+		fDatagramCount++;
 		datagramEntryDeleter.Detach();
 	}
 
@@ -433,7 +499,7 @@ UnixFifo::Read(const iovec* vecs, size_t vecCount,
 	TRACE("[%" B_PRId32 "] %p->UnixFifo::Read(%p, %ld, %" B_PRIdBIGTIME ") %d\n",
 		find_thread(NULL), this, vecs, vecCount, timeout, peek);
 
-	if (IsReadShutdown() && fBuffer.Readable() == 0)
+	if (IsReadShutdown() && !fBuffer.HasMessage())
 		RETURN_ERROR(UNIX_FIFO_SHUTDOWN);
 
 	UnixRequest request(vecs, vecCount, NULL, address, peek);
@@ -446,15 +512,16 @@ UnixFifo::Read(const iovec* vecs, size_t vecCount,
 	fReaders.Remove(&request);
 	fReadRequested -= request.TotalSize();
 
-	if (firstInQueue && !fReaders.IsEmpty() && fBuffer.Readable() > 0
+	if (firstInQueue && !fReaders.IsEmpty() && fBuffer.HasMessage()
 			&& !IsReadShutdown()) {
 		// There's more to read, other readers, and we were first in the queue.
 		// So we need to notify the others.
 		fReadCondition.NotifyAll();
 	}
 
-	if (request.BytesTransferred() > 0 && !fWriters.IsEmpty()
-			&& !IsWriteShutdown()) {
+	if ((request.BytesTransferred() > 0
+			|| (fType == UnixFifoType::Datagram && error == B_OK && !peek))
+		&& !fWriters.IsEmpty() && !IsWriteShutdown()) {
 		// We read something and there are writers. Notify them
 		fWriteCondition.NotifyAll();
 	}
@@ -504,8 +571,9 @@ UnixFifo::Write(const iovec* vecs, size_t vecCount,
 		fWriteCondition.NotifyAll();
 	}
 
-	if (request.BytesTransferred() > 0 && !fReaders.IsEmpty()
-			&& !IsReadShutdown()) {
+	if ((request.BytesTransferred() > 0
+			|| (fType == UnixFifoType::Datagram && error == B_OK))
+		&& !fReaders.IsEmpty() && !IsReadShutdown()) {
 		// We've written something and there are readers. Notify them.
 		fReadCondition.NotifyAll();
 	}
@@ -524,7 +592,12 @@ size_t
 UnixFifo::Readable() const
 {
 	size_t readable = fBuffer.Readable();
-	return (off_t)readable > fReadRequested ? readable - fReadRequested : 0;
+	readable = (off_t)readable > fReadRequested ? readable - fReadRequested : 0;
+	// Renga (F-58): a queued message of 0 bytes makes the socket readable
+	// for select() and poll() (FIONREAD then says 1)
+	if (readable == 0 && fReaders.IsEmpty() && fBuffer.HasMessage())
+		readable = 1;
+	return readable;
 }
 
 
@@ -570,7 +643,7 @@ UnixFifo::_Read(UnixRequest& request, bigtime_t timeout)
 		RETURN_ERROR(B_WOULD_BLOCK);
 
 	while (fReaders.Head() != &request
-		&& !(IsReadShutdown() && fBuffer.Readable() == 0)) {
+		&& !(IsReadShutdown() && !fBuffer.HasMessage())) {
 		ConditionVariableEntry entry;
 		fReadCondition.Add(&entry);
 
@@ -583,7 +656,7 @@ UnixFifo::_Read(UnixRequest& request, bigtime_t timeout)
 			RETURN_ERROR(error);
 	}
 
-	if (fBuffer.Readable() == 0) {
+	if (!fBuffer.HasMessage()) {
 		if (IsReadShutdown())
 			RETURN_ERROR(UNIX_FIFO_SHUTDOWN);
 
@@ -596,7 +669,7 @@ UnixFifo::_Read(UnixRequest& request, bigtime_t timeout)
 
 	// wait for any data to become available
 // TODO: Support low water marks!
-	while (fBuffer.Readable() == 0
+	while (!fBuffer.HasMessage()
 			&& !IsReadShutdown() && !IsWriteShutdown()) {
 		ConditionVariableEntry entry;
 		fReadCondition.Add(&entry);
@@ -610,7 +683,7 @@ UnixFifo::_Read(UnixRequest& request, bigtime_t timeout)
 			RETURN_ERROR(error);
 	}
 
-	if (fBuffer.Readable() == 0) {
+	if (!fBuffer.HasMessage()) {
 		if (IsReadShutdown())
 			RETURN_ERROR(UNIX_FIFO_SHUTDOWN);
 		if (IsWriteShutdown())
@@ -647,13 +720,16 @@ UnixFifo::_Write(UnixRequest& request, bigtime_t timeout)
 	if (IsReadShutdown())
 		RETURN_ERROR(EPIPE);
 
-	if (request.TotalSize() == 0)
+	// Renga (F-58): a datagram of 0 bytes is a message too (SOCK_SEQPACKET
+	// and SOCK_DGRAM); only a stream has nothing to do.
+	if (request.TotalSize() == 0 && fType != UnixFifoType::Datagram)
 		return 0;
 
 	status_t error = B_OK;
 	const size_t minimumWrite = _MinimumWritableSize(request);
 
-	while (error == B_OK && request.BytesRemaining() > 0) {
+	while (error == B_OK && (request.BytesRemaining() > 0
+			|| fType == UnixFifoType::Datagram)) {
 		// wait for any space to become available
 		while (error == B_OK && fBuffer.Writable() < minimumWrite
 				&& !IsWriteShutdown() && !IsReadShutdown()) {
@@ -677,7 +753,9 @@ UnixFifo::_Write(UnixRequest& request, bigtime_t timeout)
 		// write as much as we can
 		error = fBuffer.Write(request);
 
-		if (request.BytesTransferred() >= (ssize_t)minimumWrite)
+		// a datagram is written whole, at once
+		if (fType == UnixFifoType::Datagram
+			|| request.BytesTransferred() >= (ssize_t)minimumWrite)
 			break;
 	}
 
@@ -693,7 +771,7 @@ UnixFifo::_WriteNonBlocking(UnixRequest& request)
 	if (fWriters.Head() != &request || fBuffer.Writable() < _MinimumWritableSize(request))
 		RETURN_ERROR(B_WOULD_BLOCK);
 
-	if (request.TotalSize() == 0)
+	if (request.TotalSize() == 0 && fType != UnixFifoType::Datagram)
 		return 0;
 
 	// Write as much as we can.
@@ -706,7 +784,8 @@ UnixFifo::_MinimumWritableSize(const UnixRequest& request) const
 {
 	switch (fType) {
 		case UnixFifoType::Datagram:
-			return request.TotalSize();
+			// at least 1: Writable() is 0 when no more messages fit
+			return request.TotalSize() > 0 ? request.TotalSize() : 1;
 		case UnixFifoType::Stream:
 		default:
 			return 1;
