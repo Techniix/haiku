@@ -699,6 +699,30 @@ expect("routing: no tone on the USB device fails", not check["pass"],
 	check["detail"])
 
 
+# media_routing_test's loopback-only phase (F-58, O-2).
+def loopback_only_recordings(leak=False, phase=True):
+	directory = tempfile.mkdtemp()
+	wav = silence(0.3)
+	if phase:
+		wav += usb_tone(ce_test.ROUTING_SILENT_TONE if leak else 0,
+			ce_test.ROUTING_AUDIBLE_TONE, 2.0, 1.0)
+	write_wav(os.path.join(directory, "audio.wav"), wav + silence(0.3))
+	report = {}
+	ce_test.analyze_loopback_only_audio(directory, report)
+	return report["host_checks"][0]
+
+
+check = loopback_only_recordings()
+expect("loopback only: A silent, B heard passes", check["pass"],
+	check["detail"])
+check = loopback_only_recordings(leak=True)
+expect("loopback only: A heard on the card fails", not check["pass"],
+	check["detail"])
+check = loopback_only_recordings(phase=False)
+expect("loopback only: no phase at all fails", not check["pass"],
+	check["detail"])
+
+
 # media_sound_test's phases (SOUND_PHASES): the Audio preferences'
 # master volume, mute, output menu and per-application output menu.
 def sound_recordings(master=None, mute_leaks=False, stays_default=False):

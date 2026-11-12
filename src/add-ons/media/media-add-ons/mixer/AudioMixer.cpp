@@ -1637,15 +1637,18 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 		}
 		if (PARAM_IS_OUTPUT(id)) {
 			// output device: 0 default, n the n-th device of the web's list,
-			// count + 1 a device that is not available now
+			// count + 1 "None (loopback only)" (F-58, O-2), count + 2 a
+			// device that is not available now
 			if (*ioSize < sizeof(int32))
 				goto err;
 			*ioSize = sizeof(int32);
 			int32 index = 0;
-			if (input->Route()[0] != '\0') {
+			if (input->LoopbackOnly())
+				index = fOutputDevices.CountStrings() + 1;
+			else if (input->Route()[0] != '\0') {
 				index = fOutputDevices.IndexOf(input->Route());
 				index = index >= 0 ? index + 1
-					: fOutputDevices.CountStrings() + 1;
+					: fOutputDevices.CountStrings() + 2;
 			}
 			static_cast<int32 *>(value)[0] = index;
 		}
@@ -1925,7 +1928,16 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 				input->SetRoute("");
 			else if (index - 1 < fOutputDevices.CountStrings())
 				input->SetRoute(fOutputDevices.StringAt(index - 1));
-			else
+			else if (index == fOutputDevices.CountStrings() + 1) {
+				// F-58 (O-2): on no output, in its own loopbacks only
+				bool changed = !input->LoopbackOnly();
+				input->SetRoute(RENGA_LOOPBACK_ONLY_ROUTE);
+				if (changed)
+					update = true;
+			} else if (index == fOutputDevices.CountStrings() + 2
+				&& input->Route()[0] != '\0' && !input->LoopbackOnly()) {
+				// the unavailable device it is routed to: no change
+			} else
 				goto err;
 			fCore->UpdateRouting();
 			wakeRouter = true;
@@ -2142,10 +2154,15 @@ AudioMixer::UpdateParameterWeb()
 		dp->AddItem(0, B_TRANSLATE("Default output"));
 		for (int32 j = 0; j < fOutputDevices.CountStrings(); j++)
 			dp->AddItem(j + 1, fOutputDevices.StringAt(j).String());
-		if (in->Route()[0] != '\0' && !fOutputDevices.HasString(in->Route())) {
+		// F-58 (OBS Studio's O-2): heard nowhere, recorded by the
+		// loopbacks of this application (or team) only
+		dp->AddItem(fOutputDevices.CountStrings() + 1,
+			B_TRANSLATE("None (loopback only)"));
+		if (in->Route()[0] != '\0' && !in->LoopbackOnly()
+			&& !fOutputDevices.HasString(in->Route())) {
 			BString unavailable(in->Route());
 			unavailable << " " << B_TRANSLATE("(not available)");
-			dp->AddItem(fOutputDevices.CountStrings() + 1,
+			dp->AddItem(fOutputDevices.CountStrings() + 2,
 				unavailable.String());
 		}
 		dp = group->MakeDiscreteParameter(PARAM_LOW_LATENCY(in->ID()),
@@ -2476,7 +2493,7 @@ AudioMixer::_RouteOnce()
 	for (int32 i = 0; MixerInput* input = fCore->Input(i); i++) {
 		const char* route = input->Route();
 		if (route[0] != '\0' && primaryName != route
-			&& !wanted.HasString(route)) {
+			&& !input->LoopbackOnly() && !wanted.HasString(route)) {
 			wanted.Add(route);
 		}
 	}

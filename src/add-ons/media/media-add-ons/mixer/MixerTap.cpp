@@ -8,6 +8,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <Autolock.h>
@@ -64,6 +65,7 @@ MixerTap::MixerTap(BMediaAddOn* addOn, kind_t kind, const char* name,
 	fBufferGroup(NULL),
 	fOwnBufferGroup(false),
 	fDeviceNode(-1),
+	fSourceTeam(0),
 	fLastChange(0),
 	fChannels(2),
 	fRate(kDefaultRate),
@@ -229,11 +231,29 @@ MixerTap::SetExclusions(const char* list)
 }
 
 
+team_id
+MixerTap::SourceTeam()
+{
+	BAutolock locker(fLock);
+	return fSourceTeam;
+}
+
+
+void
+MixerTap::SetSourceTeam(team_id team)
+{
+	BAutolock locker(fLock);
+	fSourceTeam = team > 0 ? team : 0;
+	fLastChange = system_time();
+}
+
+
 bool
 MixerTap::GetMixSource(loopback_selection& selection)
 {
 	if (fLock.LockWithTimeout(0) != B_OK)
 		return false;
+	selection.team = fSourceTeam;
 	strlcpy(selection.signature, fSourceSignature.String(),
 		sizeof(selection.signature));
 	strlcpy(selection.exclude, fExclusions.String(),
@@ -921,6 +941,12 @@ MixerTap::_UpdateWeb()
 		loopback_selection::kMaxExclude);
 	exclude->SetFlags(B_HIDDEN_PARAMETER);
 
+	// Renga (F-58, O-3): one team's streams (helper processes of one
+	// executable share its signature).
+	BTextParameter* team = group->MakeTextParameter(kTeamParameter,
+		B_MEDIA_RAW_AUDIO, "Team", "renga:loopback_team", 16);
+	team->SetFlags(B_HIDDEN_PARAMETER);
+
 	SetParameterWeb(web);
 }
 
@@ -956,6 +982,16 @@ MixerTap::GetParameterValue(int32 id, bigtime_t* _lastChange, void* value,
 		*_size = length;
 		return B_OK;
 	}
+	if (id == kTeamParameter && fKind == kLoopback) {
+		char text[16];
+		snprintf(text, sizeof(text), "%" B_PRId32, fSourceTeam);
+		size_t length = strlen(text) + 1;
+		if (*_size < length)
+			return B_BAD_VALUE;
+		memcpy(value, text, length);
+		*_size = length;
+		return B_OK;
+	}
 	if (id == kSignatureParameter || (id == kExcludeParameter
 			&& fKind == kLoopback)) {
 		const BString& text = id == kSignatureParameter
@@ -975,6 +1011,20 @@ void
 MixerTap::SetParameterValue(int32 id, bigtime_t when, const void* value,
 	size_t size)
 {
+	if (id == kTeamParameter && fKind == kLoopback) {
+		BString text((const char*)value, strnlen((const char*)value, size));
+		text.Trim();
+		char* end = NULL;
+		long team = strtol(text.String(), &end, 10);
+		if (text.Length() > 0 && (end == NULL || *end != '\0'))
+			return;
+		SetSourceTeam(text.Length() > 0 ? (team_id)team : 0);
+		char reply[16];
+		snprintf(reply, sizeof(reply), "%" B_PRId32, SourceTeam());
+		BroadcastNewParameterValue(when, kTeamParameter, reply,
+			strlen(reply) + 1);
+		return;
+	}
 	if (id == kExcludeParameter && fKind == kLoopback) {
 		BString list((const char*)value, strnlen((const char*)value, size));
 		SetExclusions(list.String());

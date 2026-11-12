@@ -710,6 +710,13 @@ MixerCore::_MixThread()
 // #pragma mark - taps and routing
 
 
+/*!	F-58 (O-2): the "sink" of a loopback-only stream in _InputFade() and
+	PreviousSink(): no tap, and not the default output (NULL). Never
+	dereferenced.
+*/
+MixerTap* const MixerCore::kNowhere = reinterpret_cast<MixerTap*>(1);
+
+
 void
 MixerCore::AddTap(MixerTap* tap)
 {
@@ -766,7 +773,8 @@ MixerCore::UpdateRouting()
 	for (int32 i = 0; MixerInput* input = Input(i); i++) {
 		MixerTap* sink = NULL;
 		const char* route = input->Route();
-		if (route[0] != '\0' && fPrimaryDeviceName != route) {
+		if (route[0] != '\0' && fPrimaryDeviceName != route
+			&& !input->LoopbackOnly()) {
 			for (int32 j = 0; j < fTaps->CountItems(); j++) {
 				MixerTap* tap = (MixerTap*)fTaps->ItemAt(j);
 				if (tap->Kind() == MixerTap::kSink && !tap->IsDead()
@@ -794,16 +802,24 @@ MixerCore::_InputFade(MixerInput* input, int mode, MixerTap* tap,
 	fadeStart = fadeEnd = 1.0f;
 	switch (mode) {
 		case kMixAll:
-			return selection == NULL
-				|| !selection->Excludes(input->AppSignature());
+			// F-58 (O-2): a loopback-only stream is left out of the
+			// loopbacks of every stream
+			return !input->LoopbackOnly() && (selection == NULL
+				|| !selection->Excludes(input->AppSignature()));
 		case kMixApplication:
-			return selection != NULL && selection->signature[0] != '\0'
-				&& strcmp(input->AppSignature(), selection->signature) == 0
-				&& !selection->Excludes(input->AppSignature());
+			if (selection == NULL || selection->Excludes(input->AppSignature()))
+				return false;
+			// F-58 (O-3): a team's streams, or an application's
+			if (selection->team > 0)
+				return input->Team() == selection->team;
+			return selection->signature[0] != '\0'
+				&& strcmp(input->AppSignature(), selection->signature) == 0;
 	}
 
-	MixerTap* now = input->Sink();
-	if (now != NULL && !now->IsReady())
+	// F-58 (O-2): a loopback-only stream is on no output: it fades out of
+	// the one it was on and into none.
+	MixerTap* now = input->LoopbackOnly() ? kNowhere : input->Sink();
+	if (now != NULL && now != kNowhere && !now->IsReady())
 		now = NULL;
 	MixerTap* before = input->PreviousSink();
 	MixerTap* target = mode == kMixPrimary ? NULL : tap;
@@ -974,7 +990,10 @@ MixerCore::_FinishMixCycle(int64 framePos, bigtime_t eventTime)
 				input->SetLastMixerChannelGain(channel, gain);
 		}
 		MixerTap* now = input->Sink();
-		input->SetPreviousSink(now != NULL && now->IsReady() ? now : NULL);
+		if (input->LoopbackOnly())
+			input->SetPreviousSink(kNowhere);
+		else
+			input->SetPreviousSink(now != NULL && now->IsReady() ? now : NULL);
 	}
 }
 
@@ -1038,7 +1057,7 @@ MixerCore::_FeedTaps(int64 framePos, bigtime_t eventTime,
 				fMixBufferFrameCount, fMixBufferFrameRate, eventTime, fTimeSource->ID(), 1.0f);
 		} else {
 			// one application, or every stream less the exclusions
-			_Mix(fTapBuffer, selection.signature[0] != '\0'
+			_Mix(fTapBuffer, selection.IsSelective()
 					? kMixApplication : kMixAll, NULL, &selection, framePos,
 				eventTime, inputChanInfos, mixChanInfos);
 			tap->Push(fTapBuffer, fMixBufferChannelCount,

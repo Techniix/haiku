@@ -42,6 +42,7 @@
 #include <String.h>
 #include <StringList.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -52,6 +53,14 @@ namespace BPrivate {
 #define RENGA_APP_SIGNATURE_KIND		"renga:app_signature"
 #define RENGA_LOOPBACK_FLAVOR_NAME		"What you hear (loopback)"
 #define RENGA_ROUTES_KIND				"renga:routes"
+// F-58 (OBS Studio's O-2): the route of a stream heard on no output and
+// recorded only by loopbacks of its application or team; the "Output"
+// menu calls it "None (loopback only)".
+#define RENGA_LOOPBACK_ONLY_ROUTE		"renga:loopback-only"
+// F-58 (O-3): a hidden text parameter of the loopback, a team id in
+// decimal: that team's streams only ("" or "0": by signature as before).
+#define RENGA_LOOPBACK_TEAM_KIND		"renga:loopback_team"
+#define RENGA_LOOPBACK_TEAM_ID			5
 #define RENGA_LOOPBACK_SOURCE_ID		1
 #define RENGA_LOOPBACK_SIGNATURE_ID		2
 // F-58 (OBS Studio's O-1): a hidden text parameter of the loopback, the
@@ -71,8 +80,10 @@ struct AudioStream {
 	bool		hasOutput;		// the mixer offers routing
 	bool		lowLatency;		// low-latency mode switched on
 	bool		hasLowLatency;	// the mixer offers the low-latency mode
-	BString		route;			// device name routed to, "" default output
+	BString		route;			// device name routed to, "" default output,
+								// RENGA_LOOPBACK_ONLY_ROUTE for none
 	bool		hasRoute;		// the mixer offers routes by name (F-58)
+	bool		loopbackOnly;	// heard nowhere, in its own loopbacks only
 };
 
 
@@ -217,6 +228,23 @@ public:
 		line << id << " " << (device != NULL ? device : "");
 		return parameter->SetValue(line.String(), line.Length() + 1,
 			system_time());
+	}
+
+	/*!	Plays the stream on no output (\a on), recorded only by loopbacks
+		of its application or team, or on the default output again (F-58,
+		O-2). Remembered for the application, like the "Output" choice.
+	*/
+	status_t SetLoopbackOnly(int32 id, bool on)
+	{
+		return SetRoute(id, on ? RENGA_LOOPBACK_ONLY_ROUTE : "");
+	}
+
+	//!	Records only the streams of \a team (0: by signature again; O-3).
+	static status_t SetLoopbackTeam(const media_node& node, team_id team)
+	{
+		char text[16];
+		snprintf(text, sizeof(text), "%" B_PRId32, team > 0 ? team : 0);
+		return SetLoopbackText(node, RENGA_LOOPBACK_TEAM_KIND, text);
 	}
 
 	/*!	Instantiates a loopback source, recording every stream (\a signature
@@ -368,6 +396,7 @@ private:
 		stream.lowLatency = false;
 		stream.hasLowLatency = false;
 		stream.hasRoute = false;
+		stream.loopbackOnly = false;
 		bool isStream = false;
 
 		for (int32 i = 0; i < group->CountParameters(); i++) {
@@ -475,6 +504,8 @@ private:
 						continue;
 					stream->hasRoute = true;
 					stream->route = space != NULL ? space + 1 : "";
+					stream->loopbackOnly
+						= stream->route == RENGA_LOOPBACK_ONLY_ROUTE;
 				}
 				line = next;
 			}

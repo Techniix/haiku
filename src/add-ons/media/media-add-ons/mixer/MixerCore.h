@@ -23,6 +23,13 @@ class MixerInput;
 class MixerOutput;
 class MixerTap;
 struct loopback_selection;
+
+
+// F-58 (OBS Studio's O-2): the route of a stream that plays on no output
+// and is only recorded by loopbacks of its application or team. Not a
+// device name any device can have (devices are named after their flavor,
+// and no flavor name has the "renga:" prefix).
+#define RENGA_LOOPBACK_ONLY_ROUTE	"renga:loopback-only"
 class Resampler;
 struct chan_info;
 template<class value> class RtList;
@@ -100,6 +107,8 @@ public:
 			const char*			PrimaryDeviceName() const
 									{ return fPrimaryDeviceName.String(); }
 			void				UpdateRouting();
+
+	static	MixerTap* const	kNowhere;
 
 private:
 	typedef RtList<chan_info> chan_info_list;

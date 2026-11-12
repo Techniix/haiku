@@ -798,6 +798,13 @@ MixerInput::SetRoute(const char* deviceName)
 }
 
 
+bool
+MixerInput::LoopbackOnly() const
+{
+	return fRoute == RENGA_LOOPBACK_ONLY_ROUTE;
+}
+
+
 float
 MixerInput::LastMixerChannelGain(int mixerChannel)
 {

@@ -24,6 +24,8 @@
 #include <MediaAddOn.h>
 #include <MediaRecorder.h>
 #include <MediaRoster.h>
+#include <Messenger.h>
+#include <Roster.h>
 #include <OS.h>
 #include <ParameterWeb.h>
 #include <SoundPlayer.h>
@@ -50,6 +52,8 @@ using BPrivate::AudioStreamControl;
 
 static const char* kSignatureA = "application/x-vnd.Renga-routing-test-a";
 static const char* kSignatureB = "application/x-vnd.Renga-routing-test-b";
+// Two processes of one application (OBS's browser helpers): O-3.
+static const char* kSignatureC = "application/x-vnd.Renga-routing-test-c";
 static const float kAmplitude = 0.25f;
 // A level below this is silence (a stream left out of a recording).
 static const double kSilence = 0.005;
@@ -700,6 +704,218 @@ test_routes(Player& a)
 }
 
 
+// #pragma mark - O-2: loopback only; O-3: by team
+
+
+static void
+screenshot(const char* name)
+{
+	printf("CE-HOST screenshot %s\n", name);
+	fflush(stdout);
+	snooze(1500000);
+}
+
+
+/*!	Starts a preferences application and quits it after a screenshot. It
+	must be gone afterwards: the Audio preferences' level meter and the
+	Media preferences keep reading the mixer while they are open, which
+	disturbs the timing checks of the tests after this one.
+*/
+static void
+show_and_shoot(const char* command, const char* signature, const char* name)
+{
+	BString line(command);
+	line << " &";
+	system(line.String());
+	snooze(5000000);
+	screenshot(name);
+	if (strcmp(signature, "application/x-vnd.Renga-Audio") == 0) {
+		// The Audio preferences remember "advanced"; the sound_settings
+		// suite after this one starts from the plain view.
+		BMessage get(B_GET_PROPERTY);
+		get.AddSpecifier("Messenger");
+		get.AddSpecifier("Window", (int32)0);
+		BMessage reply;
+		BMessenger window;
+		if (BMessenger(signature).SendMessage(&get, &reply, 2000000,
+				2000000) == B_OK
+			&& reply.FindMessenger("result", &window) == B_OK) {
+			BMessage plain('AuAv');
+			plain.AddBool("advanced", false);
+			window.SendMessage(&plain);
+			snooze(500000);
+		}
+	}
+	BMessenger(signature).SendMessage(B_QUIT_REQUESTED);
+	for (int i = 0; i < 30 && be_roster->IsRunning(signature); i++)
+		snooze(100000);
+	if (be_roster->IsRunning(signature)) {
+		team_id team = be_roster->TeamFor(signature);
+		if (team >= 0)
+			kill_team(team);
+		snooze(500000);
+	}
+}
+
+
+/*!	"None (loopback only)": A plays on no output (the harness checks that
+	its 5250 Hz is on neither card while B's 5350 Hz is,
+	media_routing_audio.loopback_only_silent), is left out of the
+	loopback of every stream and recorded by A's own loopback.
+*/
+static void
+test_loopback_only(Player& a, Player& b)
+{
+	AudioStreamControl control;
+	AudioStream stream;
+	if (!wait_stream(control, stream, 5000000,
+			[](AudioStreamControl&, AudioStream&) { return true; })) {
+		report("loopback_only_menu", false, "A's stream not listed");
+		return;
+	}
+	int32 none = control.Outputs().IndexOf("None (loopback only)");
+	status_t status = control.SetLoopbackOnly(stream.id, true);
+	bool set = wait_stream(control, stream, 5000000,
+		[](AudioStreamControl& control, AudioStream& stream) {
+			return stream.loopbackOnly && stream.output
+				== control.Outputs().IndexOf("None (loopback only)");
+		});
+	report("loopback_only_menu", none > 0 && status == B_OK && set,
+		"\"None (loopback only)\" is choice %" B_PRId32 " of %" B_PRId32
+		"; SetLoopbackOnly: %s; route \"%s\", Output index %" B_PRId32,
+		none, control.Outputs().CountStrings(), strerror(status),
+		stream.route.String(), stream.output);
+
+	tone(a, 5250, 0);
+	tone(b, 0, 5350);
+	snooze(800000);
+	ChannelCheck left, right;
+	status = record(NULL, NULL, 1.5, 5250, 5350, left, right);
+	report("loopback_only_not_in_all", status == B_OK && absent(left)
+			&& present(right),
+		"%s; every stream: L (A) %.4f, R (B) %.3f", strerror(status),
+		left.amplitude, right.amplitude);
+	status = record(kSignatureA, NULL, 1.2, 5250, 0, left, right);
+	report("loopback_only_in_own", status == B_OK && present(left),
+		"%s; A's loopback: L %.3f purity >= %.3f", strerror(status),
+		left.amplitude, left.minPurity);
+
+	// The Output menus show it: the Audio preferences (advanced
+	// Applications page) and the Media preferences.
+	show_and_shoot("/boot/system/preferences/Audio --page applications "
+		"--advanced", "application/x-vnd.Renga-Audio",
+		"routing_loopback_only");
+	show_and_shoot("/boot/system/preferences/Media --advanced-audio",
+		"application/x-vnd.Haiku-Media", "routing_loopback_only_media");
+
+	tone(a, 5100, 0);
+	tone(b, 0, 5300);
+	status = control.SetLoopbackOnly(stream.id, false);
+	bool back = wait_stream(control, stream, 5000000,
+		[](AudioStreamControl&, AudioStream& stream) {
+			return !stream.loopbackOnly && stream.output == 0;
+		});
+	snooze(500000);
+	status_t recorded = record(NULL, NULL, 1.0, 5100, 5300, left, right);
+	report("loopback_only_cleared", status == B_OK && back
+			&& recorded == B_OK && present(left) && present(right),
+		"%s; back on the default output: %s; every stream: L %.3f, R %.3f",
+		strerror(status), back ? "yes" : "no", left.amplitude,
+		right.amplitude);
+}
+
+
+/*!	Two processes of one application, one on each channel: a loopback of
+	either's team records only that one; team 0 records the application
+	(both).
+*/
+static void
+test_teams(const char* self)
+{
+	Player c1 = { NULL, kSignatureC };
+	Player c2 = { NULL, kSignatureC };
+	bool started = start_player(c1, self, kSignatureC);
+	tone(c1, 5400, 0);
+	snooze(1500000);
+	BList before;
+	be_roster->GetAppList(kSignatureC, &before);
+	started = started && start_player(c2, self, kSignatureC);
+	tone(c2, 0, 5450);
+	team_id team1 = before.CountItems() == 1
+		? (team_id)(addr_t)before.ItemAt(0) : -1;
+	team_id team2 = -1;
+	for (int i = 0; i < 50 && team2 < 0; i++) {
+		BList teams;
+		be_roster->GetAppList(kSignatureC, &teams);
+		for (int32 j = 0; j < teams.CountItems(); j++) {
+			team_id team = (team_id)(addr_t)teams.ItemAt(j);
+			if (team != team1)
+				team2 = team;
+		}
+		if (team2 < 0)
+			snooze(200000);
+	}
+	snooze(2000000);
+		// both streams in the mixer
+
+	ChannelCheck left1, right1, left2, right2;
+	status_t status1 = B_ERROR, status2 = B_ERROR;
+	BString readBack;
+	for (int which = 0; which < 2; which++) {
+		team_id team = which == 0 ? team1 : team2;
+		LoopbackRecorder loopback;
+		status_t status = loopback.Create(kSignatureC);
+		if (status == B_OK)
+			status = AudioStreamControl::SetLoopbackTeam(loopback.node, team);
+		if (status == B_OK && which == 0) {
+			AudioStreamControl::GetLoopbackText(loopback.node,
+				RENGA_LOOPBACK_TEAM_KIND, readBack);
+		}
+		if (status == B_OK)
+			status = loopback.Start();
+		if (status == B_OK)
+			snooze(1200000);
+		loopback.Stop();
+		(which == 0 ? left1 : left2) = check_channel(loopback.recording,
+			false, 0.3, 5400);
+		(which == 0 ? right1 : right2) = check_channel(loopback.recording,
+			true, 0.3, 5450);
+		(which == 0 ? status1 : status2) = status;
+	}
+	BString expected;
+	expected << team1;
+	report("team_selects_process", started && team1 >= 0 && team2 >= 0
+			&& status1 == B_OK && status2 == B_OK && present(left1)
+			&& absent(right1) && absent(left2) && present(right2)
+			&& readBack == expected,
+		"teams %" B_PRId32 "/%" B_PRId32 " of one signature; first's "
+		"loopback: L %.3f R %.4f; second's: L %.4f R %.3f; parameter read "
+		"back \"%s\"", team1, team2, left1.amplitude, right1.amplitude,
+		left2.amplitude, right2.amplitude, readBack.String());
+
+	LoopbackRecorder loopback;
+	status_t status = loopback.Create(kSignatureC);
+	if (status == B_OK)
+		status = AudioStreamControl::SetLoopbackTeam(loopback.node, team1);
+	if (status == B_OK)
+		status = AudioStreamControl::SetLoopbackTeam(loopback.node, 0);
+	if (status == B_OK)
+		status = loopback.Start();
+	if (status == B_OK)
+		snooze(1200000);
+	loopback.Stop();
+	ChannelCheck left = check_channel(loopback.recording, false, 0.3, 5400);
+	ChannelCheck right = check_channel(loopback.recording, true, 0.3, 5450);
+	report("team_zero_by_signature", status == B_OK && present(left)
+			&& present(right),
+		"%s; team 0: the application's streams, L %.3f R %.3f",
+		strerror(status), left.amplitude, right.amplitude);
+
+	stop_player(c1);
+	stop_player(c2);
+}
+
+
 int
 main(int argc, char** argv)
 {
@@ -737,6 +953,8 @@ main(int argc, char** argv)
 		snooze(500000);
 		test_exclusions();
 		test_routes(a);
+		test_loopback_only(a, b);
+		test_teams(argv[0]);
 	}
 
 	stop_player(a);

@@ -32,12 +32,19 @@ struct loopback_selection {
 					// "" for every application
 	char		exclude[kMaxExclude];
 					// signatures left out, each followed by '\n'; "" none
+	team_id		team;
+					// F-58 (O-3): > 0, the streams of this team only (the
+					// signature is not looked at then)
 
 	// Whether the stream of \a signature is left out (case-insensitive,
 	// as MIME types compare).
 	bool		Excludes(const char* signature) const;
 	bool		IsPlain() const
-					{ return signature[0] == '\0' && exclude[0] == '\0'; }
+					{ return signature[0] == '\0' && exclude[0] == '\0'
+						&& team <= 0; }
+	// One application's (or team's) streams, rather than every stream.
+	bool		IsSelective() const
+					{ return signature[0] != '\0' || team > 0; }
 };
 
 
@@ -92,6 +99,10 @@ public:
 	// line, each followed by '\n', blanks and empty lines dropped.
 			BString				Exclusions();
 			void				SetExclusions(const char* list);
+	// Loopbacks: one team's streams only (F-58, O-3); 0 or less for the
+	// signature selection as before.
+			team_id				SourceTeam();
+			void				SetSourceTeam(team_id team);
 	// For the mix thread: copies the selection without waiting; false if
 	// the tap is busy.
 			bool				GetMixSource(loopback_selection& selection);
@@ -183,9 +194,12 @@ public:
 		kDriftParameter = 3,		// sinks, text (hidden, kind
 									// "renga:clock_drift"): "<measured ppm>
 									// <applied ppm> <frames in> <frames out>"
-		kExcludeParameter = 4		// loopbacks, text (hidden, kind
+		kExcludeParameter = 4,		// loopbacks, text (hidden, kind
 									// "renga:loopback_exclude"): signatures
 									// left out, one per line (F-58, O-1)
+		kTeamParameter = 5			// loopbacks, text (hidden, kind
+									// "renga:loopback_team"): a team id in
+									// decimal; "" or "0" for none (O-3)
 	};
 
 private:
@@ -212,6 +226,7 @@ private:
 			media_node_id		fDeviceNode;
 			BString				fSourceSignature;
 			BString				fExclusions;	// normalized, see above
+			team_id				fSourceTeam;
 			BStringList			fAppSignatures;
 			BStringList			fAppNames;
 			bigtime_t			fLastChange;

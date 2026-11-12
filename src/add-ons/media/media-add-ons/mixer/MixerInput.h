@@ -83,6 +83,10 @@ public:
 	// the chosen device is not available).
 			const char*			Route() const { return fRoute.String(); }
 			void				SetRoute(const char* deviceName);
+	// F-58 (OBS Studio's O-2): the "None (loopback only)" route: the stream
+	// plays on no output and is left out of loopbacks of every stream, but
+	// recorded by loopbacks of its application or team.
+			bool				LoopbackOnly() const;
 			MixerTap*			Sink() const { return fSink; }
 	// Low-latency mode (LowLatencyAudio.h): the default output runs with
 	// short periods while such a stream is connected.

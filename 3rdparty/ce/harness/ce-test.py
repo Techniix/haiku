@@ -3417,6 +3417,14 @@ def analyze_media_usb_audio(results_dir, report):
 					if segment else "not found", seconds)})
 
 
+# media_routing_test (F-58, OBS Studio's O-2): A set to "None (loopback
+# only)" plays this tone (left) on no card while B plays its tone (right)
+# on the default output.
+ROUTING_SILENT_TONE = 5250
+ROUTING_AUDIBLE_TONE = 5350
+# The Output menus with "None (loopback only)": the Audio preferences'
+# Applications page and the Media preferences.
+ROUTING_SCREENSHOTS = ["routing_loopback_only", "routing_loopback_only_media"]
 # media_routing_test (F-58, OBS Studio's O-4): application A routed by name
 # to "QEMU USB Audio" before it is plugged in plays this tone (left) once
 # the device is there.
@@ -3445,6 +3453,36 @@ def analyze_routing_audio(results_dir, report):
 		"detail": "%d Hz on the left: %s (want %.1fs)" % (ROUTING_USB_TONE,
 			"%.1fs in %s" % best if best[1] else "in no usb-<n>.wav",
 			ROUTING_USB_SECONDS)})
+
+
+def analyze_loopback_only_audio(results_dir, report):
+	"""media_routing_test's "None (loopback only)" phase: B's
+	ROUTING_AUDIBLE_TONE on the right of audio.wav (the phase happened)
+	and A's ROUTING_SILENT_TONE on the left of neither card."""
+	checks = report.setdefault("host_checks", [])
+	audible = 0.0
+	heard = []
+	for name, reader in (("audio.wav", read_wav),
+			("sdl-out.raw", read_raw_audio)):
+		try:
+			_, _, segments = media_segments(os.path.join(results_dir, name),
+				reader, [ROUTING_SILENT_TONE, ROUTING_AUDIBLE_TONE],
+				spread=TONE_SPREAD if name == "sdl-out.raw" else 0.0)
+		except (OSError, ValueError, struct.error):
+			continue
+		for segment in segments:
+			if name == "audio.wav" \
+					and segment["key"][1] == ROUTING_AUDIBLE_TONE:
+				audible = max(audible, segment["seconds"])
+			if segment["key"][0] == ROUTING_SILENT_TONE \
+					and segment["seconds"] >= 0.3:
+				heard.append("%.1fs in %s" % (segment["seconds"], name))
+	checks.append({"name": "media_routing_audio.loopback_only_silent",
+		"pass": audible >= 1.5 and not heard,
+		"detail": "B's %d Hz %.1fs on the default output (want 1.5s); A's "
+			"%d Hz: %s" % (ROUTING_AUDIBLE_TONE, audible,
+			ROUTING_SILENT_TONE, ", ".join(heard) if heard
+				else "on no card")})
 
 
 def zero_runs(samples, start, end, minimum):
@@ -3947,6 +3985,9 @@ def main():
 			analyze_media_audio(results_dir, report)
 		if "media_routing_test" in (args.only or available):
 			analyze_routing_audio(results_dir, report)
+			analyze_loopback_only_audio(results_dir, report)
+			check_screenshots(results_dir, report, ROUTING_SCREENSHOTS,
+				"media_routing.screenshots")
 		if "media_sound_test" in (args.only or available):
 			analyze_sound_audio(results_dir, report)
 			check_screenshots(results_dir, report, SOUND_SCREENSHOTS,
