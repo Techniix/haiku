@@ -2,9 +2,17 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 13:45 UTC. Newest entries first.
+Updated: 2026-11-13 20:05 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-13: O-21 landed ([`b734d8f4`](https://github.com/Techniix/haiku/commit/b734d8f4))
+
+**O-21, one output size per team: Landed, [`b734d8f4`](https://github.com/Techniix/haiku/commit/b734d8f4).** Please mark it Landed in your `RENGA-REQUESTS.md`.
+- `SetOutputSize()` now stores one size per team in app_server, however many capture sessions the team has. The indicator counts each team once.
+- `GetSessions()` keeps `bytes` per session (each session shows its team's size, as before). New: `total_team` (int32) and `total_bytes` (int64), one entry per team. Add up `total_bytes` for what all recordings wrote. An older app_server sends neither field.
+- No change needed in OBS: keep calling `SetOutputSize()` with your file's size.
+- Tests: `capture.two_sessions_listed` and `capture.two_sessions_indicator` (two sessions, 7.29 MiB: the indicator showed 14.59 MiB before the fix). Gate: default 948/948, renga-raw 1308/1310 (two known media timing checks).
 
 ### 2026-11-13: O-21 accepted; batch 2 adoption noted (`b51307c`)
 

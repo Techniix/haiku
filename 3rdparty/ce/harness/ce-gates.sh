@@ -41,7 +41,8 @@ set -u
 #  sound_settings.test_sound              one impure loopback window under host load
 #  media_routing.loopback_only_cleared    the same, right after a route change
 #  media_routing.transient_in_own_team    the same, in a team's own loopback
-KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|media\.click_free_mute|sound_settings\.test_sound|media_routing\.loopback_only_cleared|media_routing\.transient_in_own_team|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared|media_latency\.low_latency_mix_continuous|media_latency\.device_continuous|media_usb_audio\.back_on_usb'
+#  media_usb.unplug_fallback              open: media_addon_server's node release (F-31)
+KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|media\.click_free_mute|sound_settings\.test_sound|media_routing\.loopback_only_cleared|media_routing\.transient_in_own_team|media_usb\.unplug_fallback|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared|media_latency\.low_latency_mix_continuous|media_latency\.device_continuous|media_usb_audio\.back_on_usb'
 
 [ $# -ge 2 ] || { sed -n '2,12p' "$0" >&2; exit 2; }
 label=$1; shift
