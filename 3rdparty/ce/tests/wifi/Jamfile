@@ -1,7 +1,8 @@
 SubDir HAIKU_TOP 3rdparty ce tests wifi ;
 
-# Wi-Fi without a Wi-Fi card (F-34): on Renga images, wpa_supplicant
-# being there.
+# Wi-Fi without a Wi-Fi card (F-34): the network list grouped by name
+# (WirelessNetworkGroups.h, used by NetworkStatus and the Network
+# preferences) and, on Renga images, wpa_supplicant being there.
 UsePrivateHeaders net ;
 Application wifi_test :
 	wifi_test.cpp

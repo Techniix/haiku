@@ -51,6 +51,8 @@
 #include "RadioView.h"
 #include "WirelessNetworkMenuItem.h"
 
+#include <WirelessNetworkGroups.h>
+
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "NetworkStatusView"
@@ -259,10 +261,15 @@ NetworkStatusView::MessageReceived(BMessage* message)
 			const char* name;
 			BNetworkAddress address;
 			if (message->FindString("device", &deviceName) == B_OK
-				&& message->FindString("name", &name) == B_OK
-				&& message->FindFlat("address", &address) == B_OK) {
+				&& message->FindString("name", &name) == B_OK) {
 				BNetworkDevice device(deviceName);
-				status_t status = device.JoinNetwork(address);
+				// Renga: a network shown once for all its access points is
+				// joined by name; wpa_supplicant chooses the access point
+				// (WirelessNetworkGroups.h). With "Show each access point"
+				// the entry carries that access point's address.
+				status_t status = message->FindFlat("address", &address)
+						== B_OK
+					? device.JoinNetwork(address) : device.JoinNetwork(name);
 				if (status != B_OK) {
 					BString text
 						= B_TRANSLATE("Could not join wireless network:\n");
@@ -410,16 +417,29 @@ NetworkStatusView::MouseDown(BPoint point)
 		uint32 networksCount = 0;
 		wireless_network* networks = NULL;
 		device.GetNetworks(networks, networksCount);
-		for (uint32 i = 0; i < networksCount; i++) {
-			const wireless_network& network = networks[i];
+		// Renga: one entry per network name and security, not per access
+		// point, unless "Show each access point" is on (Network
+		// preferences; WirelessNetworkGroups.h).
+		bool eachAccessPoint = BPrivate::wireless_show_access_points();
+		std::vector<BPrivate::wireless_network_group> entries;
+		if (eachAccessPoint) {
+			BPrivate::ungrouped_wireless_networks(networks, networksCount,
+				associated, entries);
+		} else {
+			BPrivate::group_wireless_networks(networks, networksCount,
+				associated, entries);
+		}
+		for (size_t i = 0; i < entries.size(); i++) {
+			const wireless_network& network = entries[i].network;
 			BMessage* message = new BMessage(kMsgJoinNetwork);
 			message->AddString("device", wifiInterface);
 			message->AddString("name", network.name);
-			message->AddFlat("address", &network.address);
+			if (eachAccessPoint || network.name[0] == '\0')
+				message->AddFlat("address", &network.address);
 
 			BMenuItem* item = new WirelessNetworkMenuItem(network, message);
 			menu->AddItem(item);
-			if (associated.find(network.address) != associated.end())
+			if (entries[i].associated)
 				item->SetMarked(true);
 		}
 		delete[] networks;

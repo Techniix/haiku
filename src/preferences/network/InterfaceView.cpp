@@ -28,10 +28,14 @@
 #include "MediaTypes.h"
 #include "WirelessNetworkMenuItem.h"
 
+#include <CheckBox.h>
+#include <WirelessNetworkGroups.h>
+
 
 static const uint32 kMsgInterfaceToggle = 'onof';
 static const uint32 kMsgInterfaceRenegotiate = 'redo';
 static const uint32 kMsgJoinNetwork = 'join';
+static const uint32 kMsgShowAccessPoints = 'shap';
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -77,6 +81,18 @@ InterfaceView::InterfaceView()
 	fNetworkMenuField->SetAlignment(B_ALIGN_RIGHT);
 	fNetworkMenuField->Menu()->SetLabelFromMarked(true);
 
+	// Renga: networks are listed once per name and security; this shows
+	// every access point (BSSID) instead (WirelessNetworkGroups.h).
+	fShowAccessPoints = new BCheckBox("show access points",
+		B_TRANSLATE("Show each access point"),
+		new BMessage(kMsgShowAccessPoints));
+	fShowAccessPoints->SetValue(BPrivate::wireless_show_access_points()
+		? B_CONTROL_ON : B_CONTROL_OFF);
+	fShowAccessPoints->SetToolTip(B_TRANSLATE("A network with several access "
+		"points (a mesh, or a router with two radios) is shown once, and "
+		"joining it lets the system choose the access point. Turn this on "
+		"to see and choose each access point."));
+
 	// Construct the BButtons
 	fToggleButton = new BButton("onoff", B_TRANSLATE("Disable"),
 		new BMessage(kMsgInterfaceToggle));
@@ -90,14 +106,15 @@ InterfaceView::InterfaceView()
 			.Add(statusLabel, 0, 0)
 			.Add(fStatusField, 1, 0)
 			.AddMenuField(fNetworkMenuField, 0, 1, B_ALIGN_RIGHT, 1, 2)
-			.Add(macAddressLabel, 0, 2)
-			.Add(fMacAddressField, 1, 2)
-			.Add(linkSpeedLabel, 0, 3)
-			.Add(fLinkSpeedField, 1, 3)
-			.Add(linkTxLabel, 0, 4)
-			.Add(fLinkTxField, 1, 4)
-			.Add(linkRxLabel, 0, 5)
-			.Add(fLinkRxField, 1, 5)
+			.Add(fShowAccessPoints, 1, 2)
+			.Add(macAddressLabel, 0, 3)
+			.Add(fMacAddressField, 1, 3)
+			.Add(linkSpeedLabel, 0, 4)
+			.Add(fLinkSpeedField, 1, 4)
+			.Add(linkTxLabel, 0, 5)
+			.Add(fLinkTxField, 1, 5)
+			.Add(linkRxLabel, 0, 6)
+			.Add(fLinkRxField, 1, 6)
 		.End()
 		.AddGlue()
 		.AddGroup(B_HORIZONTAL)
@@ -128,6 +145,7 @@ InterfaceView::AttachedToWindow()
 
 	fToggleButton->SetTarget(this);
 	fRenegotiateButton->SetTarget(this);
+	fShowAccessPoints->SetTarget(this);
 }
 
 
@@ -139,16 +157,29 @@ InterfaceView::MessageReceived(BMessage* message)
 		{
 			const char* name;
 			BNetworkAddress address;
-			if (message->FindString("name", &name) == B_OK
-				&& message->FindFlat("address", &address) == B_OK) {
+			if (message->FindString("name", &name) == B_OK) {
 				BNetworkDevice device(fInterface.Name());
-				status_t status = device.JoinNetwork(address);
+				// Renga: by name unless the entry is one access point
+				status_t status = message->FindFlat("address", &address)
+						== B_OK
+					? device.JoinNetwork(address) : device.JoinNetwork(name);
 				if (status != B_OK) {
 					// This does not really matter, as it's stored this way,
 					// anyway.
 				}
 				// TODO: store value
 			}
+			break;
+		}
+		case kMsgShowAccessPoints:
+		{
+			BPrivate::set_wireless_show_access_points(
+				fShowAccessPoints->Value() == B_CONTROL_ON);
+			// rebuild the list in the new form
+			BMenu* menu = fNetworkMenuField->Menu();
+			while (BMenuItem* item = menu->RemoveItem((int32)0))
+				delete item;
+			_Update();
 			break;
 		}
 		case kMsgInterfaceToggle:
@@ -234,10 +265,14 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 	// TODO: move the wireless info to a separate tab. We should have a
 	// BListView of available networks, rather than a menu, to make them more
 	// readable and easier to browse and select.
-	if (fNetworkMenuField->IsHidden(fNetworkMenuField) && isWireless)
+	if (fNetworkMenuField->IsHidden(fNetworkMenuField) && isWireless) {
 		fNetworkMenuField->Show();
-	else if (!fNetworkMenuField->IsHidden(fNetworkMenuField) && !isWireless)
+		fShowAccessPoints->Show();
+	} else if (!fNetworkMenuField->IsHidden(fNetworkMenuField)
+		&& !isWireless) {
 		fNetworkMenuField->Hide();
+		fShowAccessPoints->Hide();
+	}
 
 	if (isWireless && updateWirelessNetworks) {
 		// Rebuild network menu
@@ -273,6 +308,7 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 		wireless_network* networks = NULL;
 		uint32 networksCount = 0;
 		device.GetNetworks(networks, networksCount);
+		uint32 scanned = networksCount;
 
 		if ((fPulseCount % 15) == 0 && networksCount == 0) {
 			// We don't seem to know of any networks, and it's been long
@@ -293,6 +329,23 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 
 		ArrayDeleter<wireless_network> networksDeleter(networks);
 
+		// Renga: one entry per network name and security, unless "Show
+		// each access point" is on (WirelessNetworkGroups.h)
+		bool eachAccessPoint = fShowAccessPoints->Value() == B_CONTROL_ON;
+		std::vector<BPrivate::wireless_network_group> entries;
+		if (eachAccessPoint) {
+			BPrivate::ungrouped_wireless_networks(networks, scanned,
+				associated, entries);
+		} else {
+			BPrivate::group_wireless_networks(networks, scanned, associated,
+				entries);
+		}
+		std::vector<wireless_network> shown;
+		for (size_t i = 0; i < entries.size(); i++)
+			shown.push_back(entries[i].network);
+		networksCount = shown.size();
+		const wireless_network* list = shown.empty() ? NULL : &shown[0];
+
 		// go through menu items and remove networks that have dropped out
 		for (int32 index = 0; index < count; index++) {
 			WirelessNetworkMenuItem* networkItem =
@@ -303,7 +356,7 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 
 			bool networkFound = false;
 			for (uint32 i = 0; i < networksCount; i++) {
-				if (networkItem->Network() == networks[i]) {
+				if (networkItem->Network() == list[i]) {
 					networkFound = true;
 					break;
 				}
@@ -317,7 +370,8 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 
 		// go through networks and add new ones to menu
 		for (uint32 i = 0; i < networksCount; i++) {
-			const wireless_network& network = networks[i];
+			const wireless_network& network = list[i];
+			bool marked = entries[i].associated;
 
 			bool networkFound = false;
 			for (int32 index = 0; index < count; index++) {
@@ -330,7 +384,7 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 				if (networkItem->Network() == network) {
 					// found it
 					networkFound = true;
-					if (associated.find(network.address) != associated.end())
+					if (marked)
 						networkItem->SetMarked(true);
 					break;
 				}
@@ -340,11 +394,12 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 				BMessage* message = new BMessage(kMsgJoinNetwork);
 				message->AddString("device", fInterface.Name());
 				message->AddString("name", network.name);
-				message->AddFlat("address", &network.address);
+				if (eachAccessPoint || network.name[0] == '\0')
+					message->AddFlat("address", &network.address);
 				BMenuItem* item = new WirelessNetworkMenuItem(network,
 					message);
 				menu->AddItem(item);
-				if (associated.find(network.address) != associated.end())
+				if (marked)
 					item->SetMarked(true);
 			}
 

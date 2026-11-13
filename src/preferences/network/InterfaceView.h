@@ -21,6 +21,9 @@ class BMessage;
 class BStringView;
 
 
+class BCheckBox;
+
+
 class InterfaceView : public BGroupView {
 public:
 								InterfaceView();
@@ -47,6 +50,7 @@ private:
 			BStringView*		fLinkRxField;
 
 			BMenuField*			fNetworkMenuField;
+			BCheckBox*			fShowAccessPoints;
 
 			BButton*			fToggleButton;
 			BButton*			fRenegotiateButton;
