@@ -63,6 +63,8 @@ updates this file in the same commit.
 | UDP options for QUIC: `IP_RECVTOS`, `IP_PKTINFO`, `IP_MTU_DISCOVER`, `IPV6_RECVTCLASS`, `IPV6_TCLASS`, `IPV6_DONTFRAG`, `IPV6_MTU_DISCOVER`; `sendmsg()` with `IP_TOS`/`IP_TTL`/`IPV6_TCLASS`/`IPV6_HOPLIMIT`; `MSG_CTRUNC` | `<netinet/in.h>` | libnetwork (nothing extra) | Missing; any `sendmsg()` control message failed with `EOPNOTSUPP` | Available |
 | `madvise(MADV_DONTNEED)` zero-fill of private memory (V8, PartitionAlloc) | `<sys/mman.h>` | libroot (nothing extra) | Accepted, did nothing | Available |
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
+| Gamepads as Linux evdev devices (`/dev/input/event*`, FF rumble), virtual devices (`/dev/input/uinput`), raw HID for game controllers (`/dev/hidraw*`) | `<linux/input.h>`, `<linux/uinput.h>`, `<linux/hidraw.h>` (gnu) | (nothing extra) | Missing (BJoystick only, 360 pads read-only) | Available (not yet tried with real pads) |
+| `BGamepad`: standard layout, SDL mapping database, rumble, player number, battery, hot-plug | `<Gamepad.h>` | libdevice | Missing | Available |
 
 All descriptors below are real file descriptors: they work with `select()`,
 `poll()` and `wait_for_objects()`, are inherited by `fork()`, and honour
@@ -1321,6 +1323,67 @@ during drags).
 
 Since: `aa1cd0da`. Tests: `hw_cursor_test.cpp` (every image, with a
 stand-in hardware cursor in test images only).
+
+### Gamepads (evdev, uinput, hidraw, BGamepad)
+
+Roadmap F-42. Every game controller is a Linux evdev device,
+`/dev/input/event<N>`, with Linux button and axis codes, so SDL's Linux
+joystick back end, Chromium's gamepad code and libevdev work with little or
+no change. Headers: `<linux/input.h>`, `<linux/input-event-codes.h>`,
+`<linux/uinput.h>`, `<linux/hidraw.h>`, `<linux/ioctl.h>` in the `gnu`
+header directory; nothing to link.
+
+- **Drivers.** `xinput` (Xbox 360 wired and wireless, Xbox One/Series GIP,
+  and third-party pads speaking those protocols, such as the 8BitDo
+  Ultimate 2C in X-input mode) uses xpad's names, codes and quirks;
+  `usb_hid` maps HID joysticks and gamepads the way Linux's hid-input does.
+  SDL builds the same GUID from them as on Linux, so the SDL mapping
+  database's Linux entries apply.
+- **evdev.** `EVIOCGVERSION`, `EVIOCGID`, `EVIOCGNAME`/`PHYS`/`UNIQ`,
+  `EVIOCGPROP`, `EVIOCGBIT`, `EVIOCGKEY`, `EVIOCGABS`, `EVIOCGRAB`,
+  `EVIOCSFF`/`EVIOCRMFF`/`EVIOCGEFFECTS`; `read()` gives whole packets,
+  `SYN_DROPPED` when a reader falls behind (512 events), `poll()`/`epoll`
+  work; an unplugged pad answers `ENODEV`. Force feedback is memoryless:
+  `FF_RUMBLE` (and `FF_PERIODIC`/`FF_CONSTANT` played as rumble), replay
+  length and delay, `FF_GAIN`. Not supported: `EVIOCSABS`, `EVIOCREVOKE`,
+  `EVIOCGMASK`/`EVIOCSMASK`, key remapping ioctls.
+- **Renga additions** (read-only for programs): `EVIOC_RENGA_GPLAYER` (the
+  pad's player number, 1-8, shown on its LEDs), `EVIOC_RENGA_GBATTERY`
+  (`struct renga_input_battery`). The Gamepads preferences set the player
+  number with `EVIOC_RENGA_SPLAYER`.
+- **Hot-plug.** Nodes appear and disappear in `/dev/input`: `inotify`
+  (SDL without udev) and node monitoring both see them; `BGamepad`'s
+  `StartWatching()` sends `B_GAMEPAD_ADDED`/`B_GAMEPAD_REMOVED`. There is
+  no udev and no sysfs: build SDL with its inotify/scan fallback.
+- **uinput.** `/dev/input/uinput` (not `/dev/uinput`) makes virtual
+  devices (`UI_SET_*BIT`, `UI_DEV_SETUP`, `UI_ABS_SETUP`, the old
+  `uinput_user_dev` write, `UI_DEV_CREATE`/`DESTROY`, `UI_GET_SYSNAME`
+  gives `input<N>` for `event<N>`). Force feedback uploads are answered by
+  the system: the program reads `EV_FF` play/stop events and can ask for
+  the combined strength with `UI_RENGA_GET_RUMBLE`; `UI_BEGIN_FF_UPLOAD`
+  requests never come. A device goes away when its program closes the
+  node.
+- **hidraw.** `/dev/hidraw<N>` for game controllers only (never keyboards,
+  mice or tablets), while "Raw controller access" is on in the Gamepads
+  preferences (default on; it applies to pads connected after a change).
+  `read()` returns one report (report ID first when numbered), `write()`
+  sends an output report (first byte the report ID, 0 if none);
+  `HIDIOCGRDESCSIZE`, `HIDIOCGRDESC`, `HIDIOCGRAWINFO`, `HIDIOCGRAWNAME`,
+  `HIDIOCGRAWPHYS`, `HIDIOCGRAWUNIQ`, `HIDIOCS/GFEATURE`,
+  `HIDIOCS/GINPUT`, `HIDIOCS/GOUTPUT`; `poll()` works. SDL's HIDAPI needs a
+  Haiku back end for hidapi that opens these nodes (there is no libudev).
+- **BJoystick** keeps working: XInput pads also get
+  `/dev/joystick/gamepad/<N>`; HID pads keep their `joystick/usb` node.
+- **BGamepad** (`<Gamepad.h>`, libdevice): the standard layout (SDL's
+  button and axis names), SDL-format mappings from the shipped community
+  database (`/boot/system/data/gamepad/gamecontrollerdb.txt`), the user's
+  file (`~/config/settings/Gamepads/mappings`) and `AddMapping()`; rumble,
+  player number, battery, hot-plug messages. Pads not in the database that
+  report the standard Linux gamepad codes get a default mapping.
+- **C++ callers**: Haiku's C++ `ioctl()` takes a pointer as its third
+  argument, so integer arguments (`UI_SET_EVBIT`, `EVIOCGRAB`,
+  `EVIOCRMFF`) need a cast: `ioctl(fd, EVIOCGRAB, (void*)(addr_t)1)`. C
+  code compiles unchanged.
 
 ### Drivers in non-packaged
 

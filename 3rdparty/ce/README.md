@@ -905,6 +905,21 @@ of a 1 GiB guest was, so the bounce path went untested.
   and sample sizes from the sink's ELD (CEA-861 basic audio without one),
   and the choice of pin. QEMU emulates no HDMI codec: the verbs reaching a
   real codec need hardware.
+- **gamepad** (`gamepad_test`): virtual pads through `/dev/input/uinput`
+  set up like an 8BitDo Ultimate 2C in X-input mode: evdev ioctls,
+  packets, `SYN_DROPPED`, grab, force feedback timing, player numbers,
+  battery, unplug, inotify and `BGamepad` hot-plug, the database mapping,
+  the BJoystick node, and no hidraw node for QEMU's USB tablet (roadmap
+  F-42).
+- **gamepad_protocol** (`gamepad_protocol_test`): the xinput driver's
+  XInput/GIP code, usb_hid's HID-to-evdev mapping (built with
+  `USERLAND_HID`) and the SDL mappings, with recorded and constructed
+  packets; QEMU has no game controller.
+- **gamepad_ui** (renga-* images, `gamepad_ui_test`): the Gamepads
+  preferences' icon, window and switches (`Gamepads --get/--set`), and
+  the agent's guide-button overlay (short press nothing, long press shown,
+  switched off nothing); minimum images only report that the application
+  is absent.
 - **uvc**: the UVC payload code of the usb_webcam media add-on
   (`addons/uvc/UVCPayload.cpp`) with replayed payloads: frames split into
   1024-byte payloads with 12-byte headers, the FID toggling, EOF set or

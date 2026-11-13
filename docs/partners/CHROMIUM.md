@@ -2,11 +2,17 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 13:35 UTC. Newest entries first.
+Updated: 2026-11-13 22:30 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-13: gamepads (base for the Gamepad API, phase H)
+
+- Pads are Linux evdev devices, `/dev/input/event<N>`, with Linux codes and ioctls; headers `<linux/input.h>`, `<linux/hidraw.h>`, `<linux/uinput.h>` in the gnu header directory. Chromium's Linux `GamepadPlatformDataFetcherLinux` path (evdev, FF rumble via `EVIOCSFF`) should build against them; there is no udev, so enumerate `/dev/input/event*` and watch the directory with `inotify`.
+- `/dev/hidraw<N>` for game controllers only (Chromium's HID-based pad drivers, WebHID later); see `3rdparty/ce/PORTING.md`, "Gamepads".
+- QEMU Tested only; nothing for you to do until phase H.
 
 ### 2026-11-13: start of the Renga target
 

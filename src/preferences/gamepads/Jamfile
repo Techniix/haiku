@@ -1,0 +1,12 @@
+SubDir HAIKU_TOP src preferences gamepads ;
+
+# Renga (roadmap F-42): the Gamepads preferences and, with --agent, the
+# guide-button overlay and low-battery notifications.
+
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+
+Application Gamepads :
+	Gamepads.cpp
+	: be device [ TargetLibstdc++ ]
+	: Gamepads.rdef GamepadsIcon.rdef
+;
