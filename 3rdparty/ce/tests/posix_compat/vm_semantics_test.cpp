@@ -19,6 +19,9 @@
 	 - madvise(MADV_FREE) accepted (V8's DiscardSystemPages());
 	 - munmap() of sub-ranges (V8's OS::Release()).
 
+	And one Renga kernel behaviour: memory below 16 MiB stays available
+	after the boot (lomem_area, see test_low_memory()).
+
 	Memory use is read from get_system_info()'s needed_memory (committed
 	memory); limits are generous because other programs run meanwhile.
 	Output format: see 3rdparty/ce/README.md.
@@ -412,6 +415,30 @@ test_free()
 }
 
 
+/*!	Memory below 16 MiB is still there after the boot and the tests before
+	(Renga, roadmap F-61's flaky-check fixes): the kernel keeps those pages
+	at the end of its free queues, so that devices with 24-bit DMA and
+	B_LOMEM areas find them. Before, the boot used them up first, and on
+	UEFI boots the LinuxKPI edu device's 24-bit coherent allocation failed
+	(linuxkpi.edu_*). A 1 MiB B_LOMEM area is made (the kernel puts it
+	below 16 MiB, physically contiguous, or fails) and written.
+*/
+static void
+test_low_memory()
+{
+	const size_t size = 1 * kMiB;
+	void* address = NULL;
+	area_id area = create_area("ce lomem", &address, B_ANY_ADDRESS, size,
+		B_LOMEM, B_READ_AREA | B_WRITE_AREA);
+	if (area >= 0)
+		memset(address, 0x5a, size);
+	report("lomem_area", area >= 0, "create_area(B_LOMEM, 1 MiB): %s",
+		strerror(area >= 0 ? B_OK : area));
+	if (area >= 0)
+		delete_area(area);
+}
+
+
 int
 main()
 {
@@ -423,6 +450,7 @@ main()
 	test_map_fixed();
 	test_dontneed();
 	test_free();
+	test_low_memory();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

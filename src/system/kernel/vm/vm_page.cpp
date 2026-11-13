@@ -1500,6 +1500,36 @@ page_queue_for(vm_page* page, uint8 state)
 }
 
 
+
+/*!	Renga (roadmap F-61, flaky-check fixes; F-26): the free and clear queues
+	keep the pages below 16 MiB at their end, every other page goes to the
+	front. Pages are allocated from the front, so ordinary allocations use
+	the low pages only when nothing else is left, and the little memory that
+	devices with 24-bit DMA (ISA-era sound cards, B_LOMEM areas, QEMU's edu
+	device with dma_mask=0xffffff in the harness) can reach stays free.
+
+	Before, the free queue was built in ascending address order and freed
+	pages went back to its front, so the low 16 MiB were the first memory
+	the boot used up. On UEFI, where the boot loader's memory lies high and
+	is not given back in the low range, a 24-bit coherent allocation then
+	found no free or cached page below 16 MiB on some boots
+	(vm_page_allocate_page_run() "Failed to allocate run of length 1 (0
+	3839)", the linuxkpi.edu_* checks). No change for anything else: the
+	order of the queues is not part of any interface, and the cost is one
+	comparison per freed page.
+*/
+static const page_num_t kLowPageLimit = 16 * 1024 * 1024 / B_PAGE_SIZE;
+
+
+static inline void
+insert_free_page(VMPageQueue& queue, vm_page* page)
+{
+	if (page->physical_page_number < kLowPageLimit)
+		queue.AppendUnlocked(page);
+	else
+		queue.PrependUnlocked(page);
+}
+
 static void
 free_page(vm_page* page, bool clear)
 {
@@ -1533,10 +1563,10 @@ free_page(vm_page* page, bool clear)
 
 	if (clear) {
 		page->SetState(PAGE_STATE_CLEAR);
-		sClearPageQueue.PrependUnlocked(page);
+		insert_free_page(sClearPageQueue, page);
 	} else {
 		page->SetState(PAGE_STATE_FREE);
-		sFreePageQueue.PrependUnlocked(page);
+		insert_free_page(sFreePageQueue, page);
 		sFreePageCondition.NotifyAll();
 	}
 
@@ -1748,7 +1778,7 @@ page_scrubber(void *unused)
 			page[i]->SetState(PAGE_STATE_CLEAR);
 			page[i]->busy = false;
 			DEBUG_PAGE_ACCESS_END(page[i]);
-			sClearPageQueue.PrependUnlocked(page[i]);
+			insert_free_page(sClearPageQueue, page[i]);
 		}
 
 		locker.Unlock();
@@ -1905,7 +1935,7 @@ free_cached_pages(uint32 pagesToFree, bool dontWait)
 			ReadLocker locker(sFreePageQueuesLock);
 			page->SetState(PAGE_STATE_FREE);
 			DEBUG_PAGE_ACCESS_END(page);
-			sFreePageQueue.PrependUnlocked(page);
+			insert_free_page(sFreePageQueue, page);
 			locker.Unlock();
 
 			TA(StolenPage());
@@ -2478,14 +2508,20 @@ vm_page_init(kernel_args *args)
 		" (size %#" B_PRIxPHYSADDR ")\n", sPages, sNumPages,
 		(phys_addr_t)(sNumPages * sizeof(vm_page))));
 
-	// initialize the free page table
+	// initialize the free page table: in ascending order, but the pages
+	// below 16 MiB last (Renga, see insert_free_page())
 	for (uint32 i = 0; i < sNumPages; i++) {
 		new(&sPages[i]) vm_page(sPhysicalPageOffset + i);
-		sFreePageQueue.Append(&sPages[i]);
+		if (sPhysicalPageOffset + i >= kLowPageLimit)
+			sFreePageQueue.Append(&sPages[i]);
 
 #if VM_PAGE_ALLOCATION_TRACKING_AVAILABLE
 		sPages[i].allocation_tracking_info.Clear();
 #endif
+	}
+	for (uint32 i = 0; i < sNumPages
+			&& sPhysicalPageOffset + i < kLowPageLimit; i++) {
+		sFreePageQueue.Append(&sPages[i]);
 	}
 
 	sUnreservedFreePages = sNumPages;
@@ -2807,14 +2843,14 @@ allocate_page_run_cleanup(VMPageQueue::PageList& freePages,
 		page->busy = false;
 		page->SetState(PAGE_STATE_FREE);
 		DEBUG_PAGE_ACCESS_END(page);
-		sFreePageQueue.PrependUnlocked(page);
+		insert_free_page(sFreePageQueue, page);
 	}
 
 	while (vm_page* page = clearPages.RemoveTail()) {
 		page->busy = false;
 		page->SetState(PAGE_STATE_CLEAR);
 		DEBUG_PAGE_ACCESS_END(page);
-		sClearPageQueue.PrependUnlocked(page);
+		insert_free_page(sClearPageQueue, page);
 	}
 
 	sFreePageCondition.NotifyAll();

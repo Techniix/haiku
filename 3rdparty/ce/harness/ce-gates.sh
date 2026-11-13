@@ -28,7 +28,7 @@
 
 set -u
 
-KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|sound_settings\.output_device_back|linuxkpi\.edu_dma_|linuxkpi\.edu_|linuxkpi\.reload_results|linuxkpi\.no_errors|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared'
+KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared'
 
 [ $# -ge 2 ] || { sed -n '2,12p' "$0" >&2; exit 2; }
 label=$1; shift
