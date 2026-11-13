@@ -26,7 +26,7 @@ Application LinuxKPIManager :
 	SettingsWindow.cpp
 	: liblinuxkpi_manage.a libcolumnlistview.a be tracker bnetapi network localestub
 		[ TargetLibstdc++ ] [ TargetLibsupc++ ]
-	: LinuxKPIManager.rdef
+	: LinuxKPIManager.rdef LinuxKPIManagerIcon.rdef
 	;
 
 DoCatalogs LinuxKPIManager :

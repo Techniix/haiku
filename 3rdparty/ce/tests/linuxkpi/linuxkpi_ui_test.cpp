@@ -11,7 +11,8 @@
 	- LinuxKPI Manager: the window opens, its overview names the known
 	  driver, "--tab <name>" switches tabs (also on a running instance), and
 	  the harness saves a screenshot of the Overview, Drivers, Hardware and
-	  Compatibility tabs (screen-linuxkpi_<tab>.png).
+	  Compatibility tabs (screen-linuxkpi_<tab>.png). It has its own vector
+	  icon, which draws (manager_icon; Renga icon rule, roadmap).
 	- System logs: kernel lines of FreeBSD/LinuxKPI drivers
 	  ("[lkpi_pcitest] (lkpi) ...", from the boot-time load of the test
 	  driver against QEMU's edu device) are filed under their driver as
@@ -25,7 +26,11 @@
 */
 
 
+#include <AppFileInfo.h>
 #include <Application.h>
+#include <Bitmap.h>
+#include <File.h>
+#include <IconUtils.h>
 #include <Messenger.h>
 #include <OS.h>
 #include <Roster.h>
@@ -180,6 +185,40 @@ test_cli()
 }
 
 
+//!	The application's vector icon draws, and in colour (not a placeholder).
+static void
+test_manager_icon()
+{
+	BFile file(kManager, B_READ_ONLY);
+	BAppFileInfo info(&file);
+	uint8* data = NULL;
+	size_t size = 0;
+	status_t status = info.InitCheck() == B_OK
+		? info.GetIcon(&data, &size) : info.InitCheck();
+	int32 opaque = 0;
+	int32 green = 0;
+	if (status == B_OK) {
+		BBitmap bitmap(BRect(0, 0, 31, 31), B_RGBA32);
+		status = BIconUtils::GetVectorIcon(data, size, &bitmap);
+		const uint8* bits = (const uint8*)bitmap.Bits();
+		for (int32 i = 0; status == B_OK && i < (int32)bitmap.BitsLength();
+				i += 4) {
+			// B_RGBA32 is B, G, R, A in memory
+			if (bits[i + 3] > 0x80) {
+				opaque++;
+				if (bits[i + 1] > bits[i + 2] + 20 && bits[i + 1] > bits[i] + 20)
+					green++;
+			}
+		}
+	}
+	delete[] data;
+	report("manager_icon", status == B_OK && opaque > 200 && green > 50,
+		"vector icon: %s, %" B_PRIuSIZE " bytes; at 32 x 32 %" B_PRId32
+		" opaque pixels, %" B_PRId32 " of them green", strerror(status), size,
+		opaque, green);
+}
+
+
 static void
 test_manager()
 {
@@ -187,6 +226,7 @@ test_manager()
 		report("manager_installed", false, "%s missing", kManager);
 		return;
 	}
+	test_manager_icon();
 	BString command;
 	command << kManager << " &";
 	system(command.String());
