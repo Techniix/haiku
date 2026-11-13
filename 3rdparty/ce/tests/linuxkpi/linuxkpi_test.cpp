@@ -32,12 +32,13 @@
 	- selftest_<n>: "linuxkpi: selftest <n> ...: OK" of the first load
 	- load_cycles: every load ran the test to the end and detached again
 	- reload_results: the later loads passed the same checks
-	- no_area_leak: the kernel team's area count after the last load is not
-	  above the count after the second one (LinuxKPI page allocations are
-	  areas, so a leak per load shows here). The first comparison point is
-	  the second load: between the first and the second the count grew once
-	  by about 17 and then stayed (seen in QEMU; other boot activity runs
-	  then), which is not a per-load leak
+	- no_area_leak: no area leak per load (LinuxKPI page allocations are
+	  areas, so a leak per load shows here): LinuxKPI's own kernel areas
+	  (contig:*, *lkpi*, *linux*) are not more after the last load than
+	  after the first, and the kernel team's total grew after at most half
+	  of the later loads. Other activity can add areas once at any time (a
+	  growth of about 17 areas was seen between loads, F-61); a leak grows
+	  them every time
 	- no_errors: no "linuxkpi"/"lkpi" line says FAIL, panic or leak
 	- mt7921e_packaged, firmware_packaged, data_packaged: the system
 	  package carries the MT7921/MT7922 driver with its dev/net link, the
@@ -71,7 +72,7 @@
 #define SUITE "linuxkpi"
 
 static const char* kSyslog = "/boot/system/var/log/syslog";
-static const int LOAD_CYCLES = 4;
+static const int LOAD_CYCLES = 5;
 
 static int sFailures = 0;
 
@@ -142,13 +143,25 @@ count_lines(const std::vector<std::string>& lines, const char* text)
 
 
 static int32
-kernel_area_count()
+kernel_area_count(int32* linuxKPI = NULL)
 {
 	int32 count = 0;
+	int32 own = 0;
 	ssize_t cookie = 0;
 	area_info info;
-	while (get_next_area_info(B_SYSTEM_TEAM, &cookie, &info) == B_OK)
+	while (get_next_area_info(B_SYSTEM_TEAM, &cookie, &info) == B_OK) {
 		count++;
+		// LinuxKPI's own: contiguous allocations (freebsd_network's
+		// contigmalloc() names them "contig:<file>:<line>"), ioremap() and
+		// the LinuxKPI zones
+		if (strncmp(info.name, "contig:", 7) == 0
+			|| strstr(info.name, "lkpi") != NULL
+			|| strstr(info.name, "linux") != NULL) {
+			own++;
+		}
+	}
+	if (linuxKPI != NULL)
+		*linuxKPI = own;
 	return count;
 }
 
@@ -257,6 +270,7 @@ main()
 
 	std::vector<std::vector<std::string> > loads;
 	std::vector<int32> areas;
+	std::vector<int32> ownAreas;
 	int ended = 0;
 	for (int cycle = 0; cycle < LOAD_CYCLES; cycle++) {
 		bool done;
@@ -266,10 +280,12 @@ main()
 		// let the unload and LinuxKPI's deferred frees (30 s grace for
 		// thread records is not waited for; areas go at once) settle
 		usleep(300000);
-		areas.push_back(kernel_area_count());
+		int32 own;
+		areas.push_back(kernel_area_count(&own));
+		ownAreas.push_back(own);
 		printf("CE-INFO linuxkpi: load %d: %zu lines, ended %d, %" B_PRId32
-			" kernel areas\n", cycle + 1, loads.back().size(), done,
-			areas.back());
+			" kernel areas, %" B_PRId32 " of them LinuxKPI's\n", cycle + 1,
+			loads.back().size(), done, areas.back(), own);
 		fflush(stdout);
 	}
 
@@ -337,16 +353,32 @@ main()
 		"%d results in the later loads, %d failed", laterResults,
 		laterFailures);
 
-	std::string counts;
+	// A leak per load grows the counts on every load. Other kernel activity
+	// (the boot, other drivers) can add areas once at any time: the total
+	// may grow on at most half of the later loads, LinuxKPI's own areas not
+	// at all after the first load (nothing else makes them). Before (F-61),
+	// a one-time growth of about 17 areas between the second and the last
+	// load failed the check.
+	std::string counts, ownCounts;
+	int growths = 0;
 	for (size_t i = 0; i < areas.size(); i++) {
-		char number[16];
+		char number[32];
 		snprintf(number, sizeof(number), "%s%" B_PRId32, i > 0 ? " " : "",
 			areas[i]);
 		counts += number;
+		snprintf(number, sizeof(number), "%s%" B_PRId32, i > 0 ? " " : "",
+			ownAreas[i]);
+		ownCounts += number;
+		if (i > 0 && areas[i] > areas[i - 1])
+			growths++;
 	}
 	report("no_area_leak", areas.size() == (size_t)LOAD_CYCLES
-			&& areas.back() <= areas[1] + 1,
-		"kernel areas after each load: %s", counts.c_str());
+			&& ownAreas.back() <= ownAreas[0]
+			&& growths <= (LOAD_CYCLES - 1) / 2,
+		"kernel areas after each load: %s (grew after %d of %d loads, at most "
+		"%d); LinuxKPI's: %s (want none more than after the first)",
+		counts.c_str(), growths, LOAD_CYCLES - 1, (LOAD_CYCLES - 1) / 2,
+		ownCounts.c_str());
 
 	int errors = 0;
 	std::string firstError;
