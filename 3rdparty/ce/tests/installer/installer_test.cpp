@@ -42,10 +42,12 @@
 #include <File.h>
 #include <Node.h>
 #include <Partition.h>
+#include <Directory.h>
 #include <Path.h>
 #include <String.h>
 #include <StringList.h>
 #include <TypeConstants.h>
+#include <Volume.h>
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -428,10 +430,31 @@ phase_upgrade(const char* root)
 		&& own_system_package() == newSystem,
 		"upgrading /boot from itself: exit %d", status);
 
+	// F-59: named exactly "Haiku", the volume gets the distribution's
+	// name with the upgrade (any other name stays; the mode window offers
+	// the rename only then)
+	BVolume volume;
+	volume.SetTo(dev_for_path(root));
+	volume.SetName("Haiku");
+	// The mount point follows the volume's name; the target is given by
+	// mount point (the running system's volume may be named "Haiku" too).
+	BDirectory volumeRoot;
+	BPath mountPoint;
+	if (volume.GetRootDirectory(&volumeRoot) != B_OK
+		|| mountPoint.SetTo(&volumeRoot, NULL) != B_OK)
+		mountPoint.SetTo(root);
 	command = "";
-	command << kInstaller << " --unattended --target OldHaiku --mode upgrade";
+	command << kInstaller << " --unattended --target \""
+		<< mountPoint.Path() << "\" --mode upgrade";
 	status = run(command);
 	report("upgrade_runs", status == 0, "exit status %d", status);
+	char renamed[B_FILE_NAME_LENGTH] = "";
+	volume.GetName(renamed);
+	report("upgrade_renames_haiku", strcmp(renamed, "Renga") == 0,
+		"the volume named \"Haiku\" is now \"%s\" (want \"Renga\")",
+		renamed);
+	volume.SetName("OldHaiku");
+		// and the mount point is root again
 
 	BStringList after = packages_in(packages);
 	report("upgrade_system_package", after.HasString(newSystem)

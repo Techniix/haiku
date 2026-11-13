@@ -940,9 +940,15 @@ def installer_checks(setup, boots, oldstate_log):
 GOOD_SETUP = "OldHaiku and OldHaiku2: 25 packages, ..."
 GOOD_BOOTS = {"upgraded": {"status": "exited", "runner_finished": True},
 	"oldstate": {"status": "exited", "runner_finished": True}}
-CHOSEN = 'boot menu: package state "2026-11-11 01:46:09" chosen\n'
+CHOSEN = ('boot menu: volume "Renga"\n'
+	'boot menu: volume "OldHaiku - Renga"\n'
+	'boot menu: package state "2026-11-11 01:46:09" chosen\n')
 results = installer_checks(GOOD_SETUP, GOOD_BOOTS, CHOSEN)
 expect("installer: a good run passes", all(results.values()), str(results))
+results = installer_checks(GOOD_SETUP, GOOD_BOOTS,
+	CHOSEN.replace("OldHaiku - Renga", "OldHaiku"))
+expect("installer: a volume listed without its system fails (F-59)",
+	not results["installer.boot_menu_system"])
 results = installer_checks("bfs_shell: error", GOOD_BOOTS, CHOSEN)
 expect("installer: failed disk setup fails", not results["installer.setup"])
 results = installer_checks(GOOD_SETUP, {"upgraded": {"status": "exited",

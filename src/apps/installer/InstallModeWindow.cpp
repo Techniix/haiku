@@ -7,6 +7,7 @@
 #include "InstallModeWindow.h"
 
 #include <Button.h>
+#include <CheckBox.h>
 #include <Catalog.h>
 #include <LayoutBuilder.h>
 #include <RadioButton.h>
@@ -37,13 +38,15 @@ note(const char* text)
 
 
 InstallModeWindow::InstallModeWindow(const char* volumeName,
-	const InstallationInfo& existing)
+	const InstallationInfo& existing, bool* renameVolume)
 	:
 	BWindow(BRect(0, 0, 100, 100), B_TRANSLATE("Installation mode"),
 		B_MODAL_WINDOW, B_NOT_ZOOMABLE | B_NOT_RESIZABLE
 			| B_AUTO_UPDATE_SIZE_LIMITS | B_CLOSE_ON_ESCAPE),
 	fDone(create_sem(0, "install mode")),
-	fResult(INSTALL_MODE_CANCEL)
+	fResult(INSTALL_MODE_CANCEL),
+	fRename(NULL),
+	fRenameVolume(renameVolume)
 {
 	BString heading;
 	if (existing.found) {
@@ -67,6 +70,13 @@ InstallModeWindow::InstallModeWindow(const char* volumeName,
 	eraseNote.SetToFormat(B_TRANSLATE("Everything on \"%s\" is deleted. You "
 		"will be asked once more."), volumeName);
 
+	// F-59: a volume named exactly "Haiku" would keep that name
+	BString renameLabel;
+	renameLabel.SetToFormat(B_TRANSLATE("Rename the volume to \"%s\""),
+		DISTRO_NAME);
+	fRename = new BCheckBox("rename", renameLabel, NULL);
+	fRename->SetValue(renameVolume != NULL && *renameVolume);
+
 	BButton* cancel = new BButton("cancel", B_TRANSLATE("Cancel"),
 		new BMessage(kMsgCancel));
 	BButton* proceed = new BButton("continue", B_TRANSLATE("Continue"),
@@ -84,6 +94,7 @@ InstallModeWindow::InstallModeWindow(const char* volumeName,
 			.Add(note(B_TRANSLATE("you installed stay. The old system stays "
 				"bootable: \"Select boot volume/state\"")))
 			.Add(note(B_TRANSLATE("in the boot menu.")))
+			.Add(fRename)
 		.End()
 		.Add(fReplace)
 		.AddGroup(B_VERTICAL, 0)
@@ -112,6 +123,9 @@ InstallModeWindow::InstallModeWindow(const char* volumeName,
 		fUpgrade->SetEnabled(false);
 		fReplace->SetValue(B_CONTROL_ON);
 	}
+	// Offered for a volume named "Haiku" only: other names are the user's.
+	if (renameVolume == NULL || !*renameVolume || !existing.found)
+		fRename->Hide();
 	proceed->MakeDefault(true);
 	CenterOnScreen();
 }
@@ -128,6 +142,8 @@ InstallModeWindow::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
 		case kMsgContinue:
+			if (fRenameVolume != NULL)
+				*fRenameVolume = fRename->Value() == B_CONTROL_ON;
 			if (fUpgrade->Value() == B_CONTROL_ON)
 				fResult = INSTALL_MODE_UPGRADE;
 			else if (fReplace->Value() == B_CONTROL_ON)

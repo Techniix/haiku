@@ -214,6 +214,7 @@ WorkerThread::WorkerThread(const BMessenger& owner)
 	fCancelSemaphore(-1),
 	fMode(INSTALL_MODE_ASK),
 	fUnattended(false),
+	fRenameVolume(-1),
 	fHadInstallerLink(false)
 {
 	Run();
@@ -817,6 +818,9 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 		_SaveLog(targetDirectory);
 		return _InstallationError(err);
 	}
+
+	if (mode == INSTALL_MODE_UPGRADE)
+		_RenameVolume(targetDirectory);
 
 	_Log("finished");
 	_SaveLog(targetDirectory);

@@ -312,6 +312,15 @@ if $(TARGET_ARCH) = x86_64 {
 	AddFilesToPackage data linuxkpi drivers : $(lkpiDrivers) ;
 }
 
+# Renga (F-59): the distribution's name, which the boot menu shows next to
+# a volume's name (the package names stay Haiku's). Not in official builds.
+if $(HAIKU_DISTRO_COMPATIBILITY) != official {
+	local distroName = <data!distro>name ;
+	SEARCH on $(distroName)
+		= [ FDirName $(HAIKU_TOP) data system data distro ] ;
+	AddFilesToPackage data distro : $(distroName) ;
+}
+
 local fontDir = [ FDirName $(HAIKU_TOP) data system data fonts ] ;
 local psFonts = [ Glob $(fontDir)/psfonts : *.afm *.pfb ] ;
 AddFilesToPackage data fonts psfonts : $(psFonts) ;

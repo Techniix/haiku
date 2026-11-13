@@ -52,6 +52,10 @@ public:
 									const char* eraseConfirmation = NULL);
 			void				SetUnattended(bool unattended)
 									{ fUnattended = unattended; }
+			// F-59: after an upgrade, rename the volume to DISTRO_NAME:
+			// -1 (default) if its name is exactly "Haiku", 0 no, 1 yes
+			void				SetRenameVolume(int32 rename)
+									{ fRenameVolume = rename; }
 
 private:
 			status_t			_WriteBootSector(BPath& path);
@@ -76,6 +80,7 @@ private:
 									const BPath& target);
 			status_t			_UpdateEFILoaders(partition_id disk);
 			void				_Log(const char* format, ...);
+			void				_RenameVolume(const BPath& target);
 			void				_SaveLog(const BPath& target);
 			status_t			_InstallationError(status_t error);
 			status_t			_MirrorIndices(const BPath& srcDirectory,
@@ -102,6 +107,7 @@ private:
 			install_mode		fMode;
 			BString				fEraseConfirmation;
 			bool				fUnattended;
+			int32				fRenameVolume;
 			bool				fHadInstallerLink;
 			BString				fLogText;
 };

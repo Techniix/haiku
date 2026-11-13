@@ -72,6 +72,8 @@
 #include "CopyEngine.h"
 #include "InstallModeWindow.h"
 
+#include <distro_name.h>
+
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "InstallProgress"
@@ -149,8 +151,40 @@ WorkerThread::_ChooseMode(const BPath& targetDirectory,
 	char name[B_FILE_NAME_LENGTH] = "";
 	if (volume.SetTo(dev_for_path(targetDirectory.Path())) == B_OK)
 		volume.GetName(name);
-	InstallModeWindow* window = new InstallModeWindow(name, existing);
-	return window->Go();
+	bool rename = strcmp(name, "Haiku") == 0;
+	InstallModeWindow* window = new InstallModeWindow(name, existing,
+		&rename);
+	install_mode mode = window->Go();
+	if (mode == INSTALL_MODE_UPGRADE && fRenameVolume < 0)
+		fRenameVolume = rename ? 1 : 0;
+	return mode;
+}
+
+
+/*!	Renga (F-59): an upgraded volume keeps its name, and one named "Haiku"
+	keeps showing as "Haiku" in the boot menu and the Tracker. Unless told
+	otherwise (the mode window's check box, --rename-volume no), a volume
+	named exactly "Haiku" is renamed to the distribution's name. Any other
+	name is the user's own: the window does not offer the rename for it,
+	and only an explicit --rename-volume yes renames it.
+*/
+void
+WorkerThread::_RenameVolume(const BPath& targetDirectory)
+{
+	BVolume volume;
+	char name[B_FILE_NAME_LENGTH] = "";
+	if (volume.SetTo(dev_for_path(targetDirectory.Path())) != B_OK
+		|| volume.GetName(name) != B_OK)
+		return;
+	bool rename = fRenameVolume > 0
+		|| (fRenameVolume < 0 && strcmp(name, "Haiku") == 0);
+	if (!rename || strcmp(name, DISTRO_NAME) == 0) {
+		_Log("volume name \"%s\" kept", name);
+		return;
+	}
+	status_t status = volume.SetName(DISTRO_NAME);
+	_Log("volume \"%s\" renamed to \"%s\": %s", name, DISTRO_NAME,
+		strerror(status));
 }
 
 

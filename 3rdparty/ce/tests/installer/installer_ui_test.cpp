@@ -13,7 +13,9 @@
 	- "Installer --target CETarget --begin" opens the window with that
 	  destination chosen and presses Begin: the installation mode window
 	  comes up and waits (screenshot installer_modes: the heading names
-	  the installation, upgrade is chosen);
+	  the installation, upgrade is chosen; F-59: the volume is named
+	  "Haiku" for this, so "Rename the volume to \"Renga\"" is offered,
+	  checked);
 	- the Installer is then killed: the volume is unchanged.
 	The disk is a snapshot; nothing it gets is kept.
 */
@@ -24,6 +26,8 @@
 #include <OS.h>
 #include <Roster.h>
 #include <String.h>
+#include <Volume.h>
+#include <fs_info.h>
 
 #include <signal.h>
 #include <stdarg.h>
@@ -127,11 +131,18 @@ main()
 	// mode window comes up over it. (Talking to the Installer through
 	// messengers and scripting hung this test in three attempts; the cause
 	// was not found, so it does without.)
-	printf("CE-INFO starting %s --target CETarget --begin\n", kInstaller);
+	// F-59: the volume is named "Haiku" for this, so the window also
+	// offers to rename it (an upgraded volume keeps its name otherwise);
+	// the mount point follows the name.
+	BVolume volume;
+	volume.SetTo(dev_for_path("/CETarget"));
+	status_t renamed = volume.SetName("Haiku");
+	printf("CE-INFO CETarget named \"Haiku\": %s\n", strerror(renamed));
+	printf("CE-INFO starting %s --target Haiku --begin\n", kInstaller);
 	fflush(stdout);
 	team_id team = fork();
 	if (team == 0) {
-		execl(kInstaller, kInstaller, "--target", "CETarget", "--begin",
+		execl(kInstaller, kInstaller, "--target", "Haiku", "--begin",
 			(char*)NULL);
 		_exit(127);
 	}
@@ -146,6 +157,7 @@ main()
 		kill(team, SIGKILL);
 		waitpid(team, NULL, 0);
 	}
+	volume.SetName("CETarget");
 	bool kept = stat("/CETarget/home/Documents/letter.txt", &st) == 0
 		&& stat("/CETarget/system/packages/"
 			"haiku-r1~beta5_hrev57937-1-x86_64.hpkg", &st) == 0;

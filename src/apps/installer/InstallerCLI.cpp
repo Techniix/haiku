@@ -13,7 +13,7 @@
 	      has: "<name>\t<device>\t<valid|invalid>\t<installation>"
 	  Installer --unattended --target <mount point or volume name>
 	      [--source <mount point>] [--mode upgrade|replace|erase]
-	      [--confirm-erase <volume name>]
+	      [--confirm-erase <volume name>] [--rename-volume yes|no]
 	      installs; a destination that is not empty needs --mode, and
 	      "erase" needs the volume's name again in --confirm-erase.
 	      Nothing asks: whatever the window would ask about (the running
@@ -206,7 +206,7 @@ usage()
 		"usage: Installer --list-targets\n"
 		"       Installer --unattended --target <mount point|volume name>\n"
 		"           [--source <mount point>] [--mode upgrade|replace|erase]\n"
-		"           [--confirm-erase <volume name>]\n"
+		"           [--confirm-erase <volume name>] [--rename-volume yes|no]\n"
 		"       Installer [--target <volume name> [--begin]]   (the window)\n");
 	return 2;
 }
@@ -247,6 +247,7 @@ installer_command_line(int argc, char** argv)
 	const char* target = NULL;
 	const char* modeName = NULL;
 	const char* confirmation = NULL;
+	int32 rename = -1;
 	for (int i = 2; i < argc; i++) {
 		if (i + 1 >= argc)
 			return usage();
@@ -258,6 +259,8 @@ installer_command_line(int argc, char** argv)
 			modeName = argv[++i];
 		else if (strcmp(argv[i], "--confirm-erase") == 0)
 			confirmation = argv[++i];
+		else if (strcmp(argv[i], "--rename-volume") == 0)
+			rename = strcmp(argv[++i], "no") == 0 ? 0 : 1;
 		else
 			return usage();
 	}
@@ -281,6 +284,7 @@ installer_command_line(int argc, char** argv)
 	WorkerThread* worker = new WorkerThread(BMessenger(reporter));
 	worker->SetUnattended(true);
 	worker->SetInstallMode(mode, confirmation);
+	worker->SetRenameVolume(rename);
 	worker->StartInstall(sourceID, targetID);
 	status_t result = reporter->Wait();
 

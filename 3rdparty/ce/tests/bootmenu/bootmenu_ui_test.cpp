@@ -42,6 +42,8 @@ static const char* kSignature = "application/x-vnd.Renga-BootMenu";
 static const char* kSettings
 	= "/boot/home/config/settings/kernel/drivers/kernel";
 static const uint32 kMsgSetTimeout = 'stmo';
+static const uint32 kMsgVolumeSystem = 'vsys';
+static const uint32 kMsgDefaults = 'rdfl';
 static const uint32 kMsgSetDefault = 'sdfl';
 
 static int sFailures = 0;
@@ -244,9 +246,33 @@ main()
 		"checkbox %" B_PRId32 ", spinner %" B_PRId32 " (want 1, 4)", show,
 		seconds);
 
+	// F-59: "Show the system on each volume", off and on
+	BMessage volumeSystem(kMsgVolumeSystem);
+	volumeSystem.AddBool("show", false);
+	messenger.SendMessage(&volumeSystem);
+	snooze(1000000);
+	text = read_file(kSettings);
+	int32 volumeBox = control_value(messenger, "volumeSystem");
+	report("window_volume_system", volumeBox == 0
+			&& text.FindFirst("\nboot_menu_volume_system false\n") >= 0
+			&& text.FindFirst("boot_menu_timeout 4") >= 0,
+		"checkbox %" B_PRId32 ", file %s \"boot_menu_volume_system false\"",
+		volumeBox, text.FindFirst("boot_menu_volume_system false") >= 0
+			? "has" : "lacks");
+
 	printf("CE-HOST screenshot bootmenu_preferences\n");
 	fflush(stdout);
 	snooze(1500000);
+
+	messenger.SendMessage(kMsgDefaults);
+	snooze(1000000);
+	text = read_file(kSettings);
+	report("window_defaults", control_value(messenger, "volumeSystem") == 1
+			&& control_value(messenger, "show") == 0
+			&& text.FindFirst("\nboot_menu_") < 0
+			&& other_lines_kept(original, text),
+		"after Restore defaults: %s", text.FindFirst("\nboot_menu_") < 0
+			? "no boot menu lines" : "boot menu lines left");
 
 	messenger.SendMessage(B_QUIT_REQUESTED);
 	snooze(500000);

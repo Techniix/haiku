@@ -1529,6 +1529,14 @@ def check_installer_boots(args, results_dir, report):
 			text = serial.read()
 	except OSError:
 		text = ""
+	# F-59: "Select boot volume" names what the volume holds; the
+	# upgraded OldHaiku holds Renga
+	listed = re.findall(r'boot menu: volume "([^"]*)"\r?$', text,
+		re.MULTILINE)
+	checks.append({"name": "installer.boot_menu_system",
+		"pass": any(name.startswith("OldHaiku - Renga") for name in listed),
+		"detail": "volumes listed: %s" % (", ".join(sorted(set(listed)))
+			or "none")})
 	chosen = re.search(r'boot menu: package state "([^"]*)" chosen', text)
 	checks.append({"name": "installer.old_state_chosen",
 		"pass": chosen is not None and chosen.group(1) != "Latest state",

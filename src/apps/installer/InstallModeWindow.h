@@ -12,6 +12,7 @@
 
 
 class BButton;
+class BCheckBox;
 class BRadioButton;
 
 
@@ -25,7 +26,8 @@ class BRadioButton;
 class InstallModeWindow : public BWindow {
 public:
 								InstallModeWindow(const char* volumeName,
-									const InstallationInfo& existing);
+									const InstallationInfo& existing,
+									bool* renameVolume = NULL);
 	virtual						~InstallModeWindow();
 
 	virtual	void				MessageReceived(BMessage* message);
@@ -39,6 +41,8 @@ private:
 			BRadioButton*		fErase;
 			sem_id				fDone;
 			install_mode		fResult;
+			BCheckBox*			fRename;		// F-59
+			bool*				fRenameVolume;
 };
 
 

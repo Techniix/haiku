@@ -1310,6 +1310,84 @@ add_boot_volume_item(Menu* menu, Directory* volume, const char* name)
 }
 
 
+/*!	Renga (F-59): the name of the system \a volume holds, into \a name:
+	the distribution's name from the system package (data/distro/name,
+	Renga builds since F-59), "Renga" for the Renga packages before that
+	(they have the Screen recording preferences, like the Installer tells
+	them apart), "Haiku" for any other packaged system. False if it holds
+	none. The boot volume's packagefs is mounted already; another volume's
+	system package is mounted for the look and unmounted again.
+*/
+static bool
+volume_system_name(Directory* volume, char* name, size_t size)
+{
+	BootVolume temporary;
+	Directory* system = NULL;
+	if (volume == sBootVolume->RootDirectory()) {
+		if (!sBootVolume->IsPackaged())
+			return false;
+		system = sBootVolume->SystemDirectory();
+	} else {
+		if (temporary.SetTo(volume) != B_OK || !temporary.IsPackaged())
+			return false;
+		system = temporary.SystemDirectory();
+	}
+	if (system == NULL)
+		return false;
+
+	int fd = open_from(system, "data/distro/name", O_RDONLY);
+	if (fd >= 0) {
+		ssize_t bytes = read(fd, name, size - 1);
+		close(fd);
+		if (bytes > 0) {
+			name[bytes] = '\0';
+			// the first line only (the loader's libc has no strpbrk())
+			for (char* end = name; *end != '\0'; end++) {
+				if (*end == '\r' || *end == '\n') {
+					*end = '\0';
+					break;
+				}
+			}
+			if (name[0] != '\0')
+				return true;
+		}
+	}
+	fd = open_from(system, "preferences/ScreenRecording", O_RDONLY);
+	if (fd >= 0) {
+		close(fd);
+		strlcpy(name, "Renga", size);
+		return true;
+	}
+	strlcpy(name, "Haiku", size);
+	return true;
+}
+
+
+/*!	Renga (F-59): whether the volume menu shows the system each volume holds
+	("boot_menu_volume_system" in the kernel settings file, see
+	boot_menu_timeout(); on unless it says "false"). The Boot menu
+	preferences write it.
+*/
+static bool
+boot_menu_volume_system()
+{
+	if (!sBootVolume->IsValid())
+		return true;
+	int fd = open_from(sBootVolume->RootDirectory(),
+		"home/config/settings/kernel/drivers/kernel", O_RDONLY);
+	if (fd < 0)
+		return true;
+	void* settings = load_driver_settings_file(fd);
+	close(fd);
+	if (settings == NULL)
+		return true;
+	bool show = get_driver_boolean_parameter(settings,
+		"boot_menu_volume_system", true, true);
+	unload_driver_settings(settings);
+	return show;
+}
+
+
 static Menu*
 add_boot_volume_menu()
 {
@@ -1318,6 +1396,7 @@ add_boot_volume_menu()
 	void* cookie;
 	int32 count = 0;
 
+	bool showSystem = boot_menu_volume_system();
 	if (gRoot->Open(&cookie, O_RDONLY) == B_OK) {
 		Directory* volume;
 		while (gRoot->GetNextNode(cookie, (Node**)&volume) == B_OK) {
@@ -1327,6 +1406,19 @@ add_boot_volume_menu()
 
 			char name[B_FILE_NAME_LENGTH];
 			if (volume->GetName(name, sizeof(name)) == B_OK) {
+				// Renga (F-59): "Haiku - Renga", what is on it, for a
+				// volume whose name does not say (an upgraded volume
+				// keeps its name). The text console has no dashes but
+				// "-".
+				char system[64];
+				if (showSystem && volume_system_name(volume, system,
+						sizeof(system))
+					&& strcasecmp(name, system) != 0) {
+					size_t length = strlen(name);
+					snprintf(name + length, sizeof(name) - length, " - %s",
+						system);
+				}
+				dprintf("boot menu: volume \"%s\"\n", name);
 				add_boot_volume_item(menu, volume, name);
 
 				count++;

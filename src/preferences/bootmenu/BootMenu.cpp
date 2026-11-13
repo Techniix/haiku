@@ -41,6 +41,7 @@
 #include <Alert.h>
 #include <Application.h>
 #include <Catalog.h>
+#include <Button.h>
 #include <CheckBox.h>
 #include <Directory.h>
 #include <DiskDevice.h>
@@ -92,6 +93,10 @@ static const uint32 kMsgDefault = 'dflt';
 // From other programs: "seconds" (int32, 0 = off), "name" (string).
 static const uint32 kMsgSetTimeout = 'stmo';
 static const uint32 kMsgSetDefault = 'sdfl';
+static const uint32 kMsgVolumeSystem = 'vsys';
+	// F-59: "Show the system on each volume"; also from other programs
+	// with a bool "show"
+static const uint32 kMsgDefaults = 'rdfl';
 
 static const int32 kDefaultTimeout = 5;
 static const int32 kMaxTimeout = 600;
@@ -104,6 +109,7 @@ static const int32 kMaxTimeout = 600;
 struct BootMenuSettings {
 	int32	timeout;	// 0: no menu unless a key is held
 	BString	defaultName;	// empty: this system
+	bool	volumeSystem;	// F-59: "Haiku - Renga" in the volume menu
 };
 
 
@@ -120,7 +126,7 @@ settings_path(BPath& path)
 static BootMenuSettings
 read_settings()
 {
-	BootMenuSettings settings = { 0, "" };
+	BootMenuSettings settings = { 0, "", true };
 	BPath path;
 	if (settings_path(path) != B_OK)
 		return settings;
@@ -140,6 +146,8 @@ read_settings()
 	if (name != NULL && strcasecmp(name, "renga") != 0
 		&& strcasecmp(name, "haiku") != 0)
 		settings.defaultName = name;
+	settings.volumeSystem = get_driver_boolean_parameter(handle,
+		"boot_menu_volume_system", true, true);
 	unload_driver_settings(handle);
 	return settings;
 }
@@ -190,7 +198,8 @@ write_settings(const BootMenuSettings& settings)
 	for (int32 i = 0; i < lines.CountStrings(); i++) {
 		BString line = lines.StringAt(i);
 		if (is_setting_line(line, "boot_menu_timeout")
-			|| is_setting_line(line, "boot_menu_default"))
+			|| is_setting_line(line, "boot_menu_default")
+			|| is_setting_line(line, "boot_menu_volume_system"))
 			continue;
 		if (i == lines.CountStrings() - 1 && line.IsEmpty())
 			break;
@@ -206,6 +215,12 @@ write_settings(const BootMenuSettings& settings)
 			name.CharacterEscape("\"\\", '\\');
 			output << "boot_menu_default \"" << name << "\"\n";
 		}
+	}
+	if (!settings.volumeSystem) {
+		// F-59: the default (on) is not written
+		if (!output.IsEmpty() && !output.EndsWith("\n"))
+			output << "\n";
+		output << "boot_menu_volume_system false\n";
 	}
 
 	BString temporary(path.Path());
@@ -459,6 +474,13 @@ public:
 		fDefaultField = new BMenuField("default",
 			B_TRANSLATE("Default entry:"), fDefaultMenu);
 
+		// F-59
+		fVolumeSystem = new BCheckBox("volumeSystem", B_TRANSLATE(
+			"Show the system on each volume (\"Haiku - Renga\") in "
+			"\"Select boot volume\""), new BMessage(kMsgVolumeSystem));
+		fDefaults = new BButton("defaults", B_TRANSLATE("Restore defaults"),
+			new BMessage(kMsgDefaults));
+
 		BStringView* note = new BStringView("note", B_TRANSLATE(
 			"Without this, hold Shift or Space while the computer starts."));
 		BStringView* note2 = new BStringView("note2", B_TRANSLATE(
@@ -475,10 +497,15 @@ public:
 				.Add(fDefaultField->CreateLabelLayoutItem(), 0, 1)
 				.Add(fDefaultField->CreateMenuBarLayoutItem(), 1, 1)
 			.End()
+			.Add(fVolumeSystem)
 			.Add(new BSeparatorView(B_HORIZONTAL))
 			.Add(fFound)
 			.Add(note)
 			.Add(note2)
+			.AddGroup(B_HORIZONTAL)
+				.Add(fDefaults)
+				.AddGlue()
+			.End()
 		.End();
 
 		fSettings = read_settings();
@@ -515,6 +542,25 @@ public:
 				_Apply();
 				break;
 			}
+			case kMsgVolumeSystem:
+			{
+				// F-59; with a bool "show" (other programs, tests) the
+				// check box is set to it first
+				bool show;
+				if (message->FindBool("show", &show) == B_OK)
+					fVolumeSystem->SetValue(show);
+				fSettings.volumeSystem
+					= fVolumeSystem->Value() == B_CONTROL_ON;
+				_Apply();
+				break;
+			}
+			case kMsgDefaults:
+				fSettings.timeout = 0;
+				fSettings.defaultName = "";
+				fSettings.volumeSystem = true;
+				_FillDefaultMenu();
+				_Apply();
+				break;
 			case kMsgSetDefault:
 				fSettings.defaultName = message->GetString("name", "");
 				if (fSettings.defaultName.ICompare("renga") == 0)
@@ -580,6 +626,10 @@ private:
 		fTimeout->SetValue(show ? fSettings.timeout : kDefaultTimeout);
 		fTimeout->SetEnabled(show);
 		fDefaultField->SetEnabled(show);
+		fVolumeSystem->SetValue(fSettings.volumeSystem ? B_CONTROL_ON
+			: B_CONTROL_OFF);
+		fDefaults->SetEnabled(fSettings.timeout != 0
+			|| !fSettings.defaultName.IsEmpty() || !fSettings.volumeSystem);
 
 		for (int32 i = 0; i < fDefaultMenu->CountItems(); i++) {
 			BMenuItem* item = fDefaultMenu->ItemAt(i);
@@ -604,12 +654,16 @@ private:
 				B_STOP_ALERT);
 			alert->Go(NULL);
 		} else {
-			printf("BootMenu: saved timeout %" B_PRId32 ", default \"%s\"\n",
-				fSettings.timeout, fSettings.defaultName.String());
+			printf("BootMenu: saved timeout %" B_PRId32 ", default \"%s\", "
+				"volume system %s\n", fSettings.timeout,
+				fSettings.defaultName.String(),
+				fSettings.volumeSystem ? "on" : "off");
 		}
 	}
 
 	BCheckBox*			fShowMenu;
+	BCheckBox*			fVolumeSystem;
+	BButton*			fDefaults;
 	BSpinner*			fTimeout;
 	BPopUpMenu*			fDefaultMenu;
 	BMenuField*			fDefaultField;
@@ -639,6 +693,8 @@ public:
 		switch (message->what) {
 			case kMsgSetTimeout:
 			case kMsgSetDefault:
+			case kMsgVolumeSystem:
+			case kMsgDefaults:
 				if (fWindow != NULL)
 					fWindow->PostMessage(message);
 				break;
@@ -656,7 +712,7 @@ static int
 usage()
 {
 	fprintf(stderr, "usage: BootMenu [--list | --show | --set-timeout "
-		"<seconds> | --set-default <name>]\n");
+		"<seconds> | --set-default <name> | --set-volume-system on|off]\n");
 	return 1;
 }
 
@@ -676,15 +732,18 @@ main(int argc, char** argv)
 			return 0;
 		}
 		if (strcmp(argv[1], "--show") == 0 && argc == 2) {
-			printf("timeout %" B_PRId32 "\ndefault %s\n", settings.timeout,
-				settings.defaultName.IsEmpty() ? "renga"
-					: settings.defaultName.String());
+			printf("timeout %" B_PRId32 "\ndefault %s\nvolume_system %s\n",
+				settings.timeout, settings.defaultName.IsEmpty() ? "renga"
+					: settings.defaultName.String(),
+				settings.volumeSystem ? "on" : "off");
 			return 0;
 		}
 		if (strcmp(argv[1], "--set-timeout") == 0 && argc == 3) {
 			int32 seconds = strtol(argv[2], NULL, 10);
 			settings.timeout = seconds < 0 ? 0
 				: seconds > kMaxTimeout ? kMaxTimeout : seconds;
+		} else if (strcmp(argv[1], "--set-volume-system") == 0 && argc == 3) {
+			settings.volumeSystem = strcmp(argv[2], "off") != 0;
 		} else if (strcmp(argv[1], "--set-default") == 0 && argc == 3) {
 			settings.defaultName = strcasecmp(argv[2], "renga") == 0
 				? "" : argv[2];
