@@ -53,8 +53,8 @@ feature bluetooth	missing		"Bluetooth (separate USB function)"
 tunable compat.linuxkpi.80211.hw_crypto {
 	type		bool
 	default		0
-	label		"Hardware encryption"
-	description	"Let the card encrypt and decrypt (CCMP) instead of the CPU. Also allows A-MPDU in both directions."
+	label		"Card does the encryption"
+	description	"Let the card encrypt and decrypt (CCMP) instead of the CPU. Also allows A-MPDU in both directions, which may improve speed, mostly on mesh networks and fast routers. Not yet tested on real hardware; turn it off again if the connection stops working."
 	risk		experimental
 }
 tunable compat.linuxkpi.mt7921_pci_disable_aspm {
