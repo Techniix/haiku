@@ -1210,6 +1210,18 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Recommended next action | Start after LinuxKPI integration (`F-26`); bring the maintainer's patched `usb_hid` XInput driver in first |
 | Links | Audit "Gamepad API with SDL mapping database" |
 
+**Design (maintainer, 2026-11-13; built with Chromium phases C/D):**
+- Driver: an XInput handler in `usb_hid` built from Linux `xpad` (device table, Xbox 360 protocol and the Xbox One/Series GIP protocol, the start-up packet that keeps 8BitDo pads from switching themselves off, rumble, LEDs and player numbers); D-input pads stay on the HID path. The maintainer's earlier patched driver could not be found (the Stardew port's README only documents the switch-off symptom); `xpad` covers it.
+- A Linux-style `evdev` gamepad device (`/dev/input/event*`, Linux button and axis codes, `EVIOCG*` ioctls, force feedback), so SDL's Linux joystick code, Chromium's Gamepad API and Linux games under Renguin use it with little or no porting.
+- Raw HID (`hidraw`, with access control) for SDL's HIDAPI back end: Switch Pro and Joy-Con (gyro, HD rumble), DualSense (gyro, touchpad, lightbar, haptics, adaptive triggers), the 8BitDo in Switch mode.
+- A native `BGamepad` class (standard layout, rumble, LEDs, battery, hot-plug messages); `BJoystick` keeps working.
+- SDL-format mappings with the community database built in; the configurator writes the same format.
+- Hot-plug everywhere: devices appear and disappear at runtime in every interface, SDL gets its add and remove events, player numbers and LEDs are reassigned, and per-game profiles apply on connect.
+- "Gamepads" Control Panel page: device list with battery, live tester, remapping, dead zones and response curves, trigger thresholds, rumble test, player LED, per-game profiles; its own icon.
+- A virtual gamepad device (`uinput`-style) for the harness (button, axis, hot-plug and rumble checks in QEMU) and for remapping tools.
+- Polish (defaults by the maintainer, 2026-11-13): guide-button overlay with battery and player number on (a long press opens it; a short press still goes to the game); low-battery notification on; desktop pointer control with the gamepad off.
+- Test hardware the maintainer has: 8BitDo Ultimate 2C (X-input, D-input, Switch mode, dongle), Switch Pro, Xbox, DualSense and generic pads. Bluetooth pads wait for the Bluetooth stack.
+
 **Also required (Eglantine port, 2026-11-09):** the 8BitDo Ultimate 2C requirement above is unchanged.
 
 - [ ] Raw HID access for SDL3's HIDAPI back end on Haiku (a `hidraw`-style device for HID interfaces, with access control), so Pro Controller and Joy-Con work with gyro, rumble and HD rumble.
