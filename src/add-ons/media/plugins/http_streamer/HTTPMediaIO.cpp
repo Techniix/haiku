@@ -27,6 +27,7 @@ public:
 			fRequest(NULL),
 			fAdapterIO(owner),
 			fInitSem(-1),
+			fInitReleased(0),
 			fRunning(false)
 		{
 			fInputAdapter = fAdapterIO->BuildInputAdapter();
@@ -36,6 +37,7 @@ public:
 		virtual ~FileListener()
 		{
 			_ReleaseInit();
+			delete_sem(fInitSem);
 		}
 
 		bool ConnectionSuccessful() const
@@ -71,9 +73,11 @@ public:
 
 		ssize_t Write(const void* data, size_t size)
 		{
+			// Renga (F-61, html5_media.webm_kit_audio "No handler"): the
+			// data first, so that the opener finds it when it goes on.
+			ssize_t written = fInputAdapter->Write(data, size);
 			_ReleaseInit();
-
-			return fInputAdapter->Write(data, size);
+			return written;
 		}
 
 		status_t LockOnInit(bigtime_t timeout)
@@ -87,19 +91,26 @@ public:
 		}
 
 private:
+		/*!	Renga (roadmap F-61): releases the opener once and keeps the
+			semaphore until the listener goes. It used to be deleted right
+			after the release: when the first data came before Open() had
+			got to LockOnInit() (a fast server, such as one on the same
+			machine), acquire_sem_etc() found no semaphore, Open() failed
+			with B_BAD_SEM_ID, and the URL was "not handled" (B_MEDIA_NO_
+			HANDLER) by any streamer. Seen once in the harness
+			(html5_media.webm_kit_audio).
+		*/
 		void _ReleaseInit()
 		{
-			if (fInitSem != -1) {
+			if (atomic_or(&fInitReleased, 1) == 0)
 				release_sem(fInitSem);
-				delete_sem(fInitSem);
-				fInitSem = -1;
-			}
 		}
 
 		BUrlRequest*	fRequest;
 		HTTPMediaIO*	fAdapterIO;
 		BInputAdapter*	fInputAdapter;
 		sem_id			fInitSem;
+		int32			fInitReleased;
 		bool			fRunning;
 };
 

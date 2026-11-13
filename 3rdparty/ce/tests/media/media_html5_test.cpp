@@ -17,6 +17,8 @@
 	  server);
 	- BMediaFile on each clip's http:// URL (the HTTP streamer): both
 	  tracks open and decode;
+	- the same URL opened 20 times, each open finding the audio track
+	  (url_open_repeated; the streamer's start-up race, F-61);
 	- WebKit's audio path without WebKit: the decoded format handed to a
 	  BSoundPlayer, one ReadFrames() per callback; the loopback recording
 	  must hold both tones cleanly, without gaps.
@@ -730,6 +732,45 @@ player_callback(void* cookie, void* buffer, size_t size,
 }
 
 
+/*!	Renga (roadmap F-61): the HTTP streamer's start-up race. When the first
+	data came before BMediaFile's open had got to waiting for it, the open
+	failed with "No handler" (html5_media.webm_kit_audio, once). The local
+	server answers at once, so opening the clip again and again makes that
+	order likely; every open must find the audio track.
+*/
+static void
+check_repeated_open(const char* clip)
+{
+	BString url;
+	url.SetToFormat("http://127.0.0.1:%u/%s", kPort, clip);
+	const int kOpens = 20;
+	int good = 0;
+	status_t firstError = B_OK;
+	for (int i = 0; i < kOpens; i++) {
+		BMediaFile file(BUrl(url.String(), false));
+		bool audio = false;
+		for (int32 t = 0; file.InitCheck() == B_OK && t < file.CountTracks();
+				t++) {
+			BMediaTrack* track = file.TrackAt(t);
+			media_format decoded;
+			if (track != NULL && track->DecodedFormat(&decoded) == B_OK
+				&& decoded.IsAudio())
+				audio = true;
+			if (track != NULL)
+				file.ReleaseTrack(track);
+		}
+		if (audio)
+			good++;
+		else if (firstError == B_OK)
+			firstError = file.InitCheck() != B_OK ? file.InitCheck() : B_ERROR;
+	}
+	report("url_open_repeated", good == kOpens, "%d of %d opens of %s found "
+		"the audio track%s%s", good, kOpens, clip,
+		firstError != B_OK ? "; first failure: " : "",
+		firstError != B_OK ? strerror(firstError) : "");
+}
+
+
 static void
 check_webkit_audio_path(const char* name, const char* clip)
 {
@@ -896,6 +937,7 @@ main()
 		check_loopback_address();
 		check_media_url("webm", "clip.webm");
 		check_media_url("mp4", "clip.mp4");
+		check_repeated_open("clip.webm");
 		check_webkit_audio_path("webm", "clip.webm");
 		check_webkit_audio_path("mp4", "clip.mp4");
 		play_page("webm", "webm.html", true);
