@@ -7,6 +7,7 @@
 
 
 #include <SupportDefs.h>
+#include <Select.h>
 
 
 #define PROTOCOL_HANDLER_COOKIE_FLAG_CLOSED		0x80000000
@@ -45,6 +46,17 @@ public:
 
 	virtual	status_t			Control(uint32 *cookie, uint32 op, void *buffer,
 									size_t length);
+
+	// Renga (F-42): select() support; by default always ready, as before.
+	virtual	status_t			Select(uint32 *cookie, uint8 event,
+									selectsync *sync)
+									{ return notify_select_event(sync, event); }
+	virtual	status_t			Deselect(uint32 *cookie, uint8 event,
+									selectsync *sync) { return B_OK; }
+
+	// Renga (F-42): the device was unplugged (before the handler is
+	// deleted, which only happens once every descriptor is closed).
+	virtual	void				DeviceRemoved() {}
 
 			int32				RingBufferReadable();
 			status_t			RingBufferRead(void *buffer, size_t length);

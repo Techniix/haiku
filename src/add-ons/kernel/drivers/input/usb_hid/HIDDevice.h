@@ -12,6 +12,7 @@
 
 
 class ProtocolHandler;
+class HidrawProtocolHandler;
 
 
 class HIDDevice {
@@ -39,6 +40,15 @@ public:
 			status_t			SendReport(HIDReport *report);
 
 			HIDParser &			Parser() { return fParser; }
+
+			// Renga (F-42)
+			usb_device			USBDevice() const { return fDevice; }
+			bool				HasOutputPipe() const
+									{ return fOutputPipe != 0; }
+			status_t			SendRawOutput(const uint8 *data,
+									size_t length);
+			size_t				InterfaceIndex() const
+									{ return fInterfaceIndex; }
 			ProtocolHandler *	ProtocolHandlerAt(uint32 index) const;
 
 			// only to be used for the kernel debugger information
@@ -69,8 +79,18 @@ private:
 
 			HIDParser			fParser;
 
+
 			uint32				fProtocolHandlerCount;
 			ProtocolHandler *	fProtocolHandlerList;
+
+			// Renga (F-42): raw access for game controllers
+			usb_pipe			fOutputPipe;
+			HidrawProtocolHandler *fHidraw;
+			sem_id				fOutputDone;
+			status_t			fOutputStatus;
+	static	void				_OutputCallback(void *cookie,
+									status_t status, void *data,
+									size_t actualLength);
 };
 
 

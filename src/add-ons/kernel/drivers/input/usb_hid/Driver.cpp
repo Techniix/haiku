@@ -295,6 +295,24 @@ usb_hid_control(void *_cookie, uint32 op, void *buffer, size_t length)
 }
 
 
+// Renga (F-42): select() for handlers that support it (hidraw); the others
+// report "ready" as devfs did without these hooks.
+static status_t
+usb_hid_select(void *_cookie, uint8 event, uint32 ref, selectsync *sync)
+{
+	device_cookie *cookie = (device_cookie *)_cookie;
+	return cookie->handler->Select(&cookie->cookie, event, sync);
+}
+
+
+static status_t
+usb_hid_deselect(void *_cookie, uint8 event, selectsync *sync)
+{
+	device_cookie *cookie = (device_cookie *)_cookie;
+	return cookie->handler->Deselect(&cookie->cookie, event, sync);
+}
+
+
 static status_t
 usb_hid_close(void *_cookie)
 {
@@ -432,8 +450,8 @@ find_device(const char *name)
 		usb_hid_control,
 		usb_hid_read,
 		usb_hid_write,
-		NULL,				/* select */
-		NULL				/* deselect */
+		usb_hid_select,		/* select (Renga, F-42) */
+		usb_hid_deselect	/* deselect */
 	};
 
 	TRACE("find_device(%s)\n", name);

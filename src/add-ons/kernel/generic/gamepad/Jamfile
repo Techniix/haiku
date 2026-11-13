@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP src add-ons kernel generic gamepad ;
+
+# Renga (roadmap F-42): the gamepad core, Linux evdev devices for gamepads.
+
+UsePrivateKernelHeaders ;
+UsePrivateHeaders drivers device ;
+SubDirSysHdrs $(HAIKU_TOP) headers compatibility gnu ;
+
+KernelAddon gamepad :
+	gamepad.cpp
+;

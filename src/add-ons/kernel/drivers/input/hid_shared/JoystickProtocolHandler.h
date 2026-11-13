@@ -16,6 +16,7 @@
 
 class HIDCollection;
 class HIDReportItem;
+class GamepadEvdevBridge;
 
 
 class JoystickProtocolHandler : public ProtocolHandler {
@@ -38,6 +39,8 @@ public:
 	virtual	status_t				Control(uint32 *cookie, uint32 op,
 										void *buffer, size_t length);
 
+	virtual	void					DeviceRemoved();
+
 private:
 	static	int32					_UpdateThread(void *data);
 			status_t				_Update();
@@ -58,6 +61,9 @@ private:
 			uint32					fOpenCount;
 			mutex					fUpdateLock;
 			thread_id				fUpdateThread;
+
+			// Renga (F-42): the same report as /dev/input/event<N>
+			GamepadEvdevBridge*		fGamepadBridge;
 };
 
 #endif // USB_JOYSTICK_PROTOCOL_HANDLER_H

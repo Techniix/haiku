@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP src add-ons kernel drivers input uinput ;
+
+# Renga (roadmap F-42): virtual input devices through the gamepad core.
+
+UsePrivateKernelHeaders ;
+UsePrivateHeaders drivers ;
+SubDirSysHdrs $(HAIKU_TOP) headers compatibility gnu ;
+
+KernelAddon uinput :
+	uinput.cpp
+;

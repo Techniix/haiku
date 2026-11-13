@@ -1,0 +1,12 @@
+SubDir HAIKU_TOP src add-ons kernel drivers input xinput ;
+
+# Renga (roadmap F-42): Xbox 360, Xbox 360 wireless and Xbox One/Series pads.
+
+UsePrivateKernelHeaders ;
+UsePrivateHeaders drivers ;
+SubDirSysHdrs $(HAIKU_TOP) headers compatibility gnu ;
+
+KernelAddon xinput :
+	xinput.cpp
+	XInputProtocol.cpp
+;

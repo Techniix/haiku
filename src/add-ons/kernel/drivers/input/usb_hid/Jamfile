@@ -1,11 +1,14 @@
 SubDir HAIKU_TOP src add-ons kernel drivers input usb_hid ;
 
-SubDirC++Flags -fno-rtti -DKEYBOARD_SUPPORTS_KDL -DUSB_KDL ;
+SubDirC++Flags -fno-rtti -DKEYBOARD_SUPPORTS_KDL -DUSB_KDL -DHID_GAMEPAD_EVDEV ;
 
 SubDirSysHdrs $(HAIKU_TOP) headers os drivers ;
 SubDirSysHdrs $(HAIKU_TOP) src add-ons kernel drivers input hid_shared ;
 UsePrivateHeaders [ FDirName kernel util ] input drivers device ;
 UsePrivateKernelHeaders ;
+# Renga (F-42): <linux/input.h> and <linux/hidraw.h> for the evdev bridge
+# and hidraw
+SubDirSysHdrs $(HAIKU_TOP) headers compatibility gnu ;
 
 SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src add-ons kernel drivers input hid_shared ] ;
 
@@ -28,4 +31,9 @@ KernelAddon usb_hid :
 	KeyboardProtocolHandler.cpp
 	MouseProtocolHandler.cpp
 	TabletProtocolHandler.cpp
+
+	# Renga (F-42)
+	GamepadEvdevBridge.cpp
+	GamepadIdentity.cpp
+	HidrawProtocolHandler.cpp
 ;

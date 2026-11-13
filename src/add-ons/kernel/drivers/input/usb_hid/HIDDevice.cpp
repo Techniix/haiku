@@ -13,6 +13,7 @@
 #include "HIDWriter.h"
 #include "ProtocolHandler.h"
 #include "QuirkyDevices.h"
+#include "HidrawProtocolHandler.h"
 
 #include <usb/USB_hid.h>
 
@@ -21,6 +22,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <new>
+
+#include <AutoDeleter.h>
 
 
 HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
@@ -36,7 +39,11 @@ HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
 		fRemoved(false),
 		fParser(this),
 		fProtocolHandlerCount(0),
-		fProtocolHandlerList(NULL)
+		fProtocolHandlerList(NULL),
+		fOutputPipe(0),
+		fHidraw(NULL),
+		fOutputDone(-1),
+		fOutputStatus(B_OK)
 {
 	uint8 *reportDescriptor = NULL;
 	size_t descriptorLength = 0;
@@ -149,6 +156,17 @@ HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
 
 	status_t result = fParser.ParseReportDescriptor(reportDescriptor,
 		descriptorLength);
+
+	// Renga (F-42): keep the descriptor for a hidraw node
+	uint8 *rawDescriptor = NULL;
+	size_t rawDescriptorLength = descriptorLength;
+	if (result == B_OK) {
+		rawDescriptor = (uint8 *)malloc(descriptorLength);
+		if (rawDescriptor != NULL)
+			memcpy(rawDescriptor, reportDescriptor, descriptorLength);
+	}
+	MemoryDeleter rawDescriptorDeleter(rawDescriptor);
+
 	if (!hasFixedDescriptor)
 		free(reportDescriptor);
 
@@ -211,6 +229,33 @@ HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
 
 	ProtocolHandler::AddHandlers(*this, fProtocolHandlerList,
 		fProtocolHandlerCount);
+
+	// Renga (F-42): an interrupt OUT pipe for hidraw output reports, and
+	// the hidraw node itself for game controllers
+	for (size_t i = 0; i < interface->endpoint_count; i++) {
+		usb_endpoint_descriptor *descriptor = interface->endpoint[i].descr;
+		if ((descriptor->endpoint_address & USB_ENDPOINT_ADDR_DIR_IN) == 0
+			&& (descriptor->attributes & USB_ENDPOINT_ATTR_MASK)
+				== USB_ENDPOINT_ATTR_INTERRUPT) {
+			fOutputPipe = interface->endpoint[i].handle;
+			break;
+		}
+	}
+	if (rawDescriptor != NULL
+		&& HidrawProtocolHandler::IsAllowed(*this,
+			deviceDescriptor->vendor_id)) {
+		fHidraw = new(std::nothrow) HidrawProtocolHandler(*this,
+			rawDescriptor, rawDescriptorLength, fTransferBufferSize);
+		if (fHidraw != NULL && fHidraw->InitCheck() == B_OK) {
+			fHidraw->SetNextHandler(fProtocolHandlerList);
+			fProtocolHandlerList = fHidraw;
+			fProtocolHandlerCount++;
+			fOutputDone = create_sem(0, "hid raw output");
+		} else {
+			delete fHidraw;
+			fHidraw = NULL;
+		}
+	}
 	fStatus = B_OK;
 }
 
@@ -225,6 +270,8 @@ HIDDevice::~HIDDevice()
 	}
 
 	free(fTransferBuffer);
+	if (fOutputDone >= 0)
+		delete_sem(fOutputDone);
 }
 
 
@@ -259,6 +306,12 @@ HIDDevice::Removed()
 {
 	fRemoved = true;
 	gUSBModule->cancel_queued_transfers(fInterruptPipe);
+
+	// Renga (F-42): handlers with nodes outside usb_hid (the evdev gamepads)
+	// remove them now rather than when the last descriptor is closed
+	for (ProtocolHandler* handler = fProtocolHandlerList; handler != NULL;
+			handler = handler->NextHandler())
+		handler->DeviceRemoved();
 }
 
 
@@ -342,5 +395,55 @@ HIDDevice::_TransferCallback(void *cookie, status_t status, void *data,
 	}
 
 	atomic_set(&device->fTransferScheduled, 0);
+
+	// Renga (F-42): raw reports for hidraw, which keeps the pipe busy while
+	// it is open
+	HidrawProtocolHandler *hidraw = device->fHidraw;
+	if (hidraw != NULL)
+		hidraw->RawReport(status, device->fTransferBuffer, actualLength);
+
 	device->fParser.SetReport(status, device->fTransferBuffer, actualLength);
+
+	if (hidraw != NULL && hidraw->IsReading() && !device->fRemoved
+		&& status == B_OK)
+		device->MaybeScheduleTransfer(NULL);
+		// after a cancel, the next read() or select() starts it again
+}
+
+
+status_t
+HIDDevice::SendRawOutput(const uint8 *data, size_t length)
+{
+	if (fOutputPipe == 0 || fOutputDone < 0)
+		return B_NOT_SUPPORTED;
+	if (fRemoved)
+		return B_DEV_NOT_READY;
+
+	uint8 *buffer = (uint8 *)malloc(length);
+	if (buffer == NULL)
+		return B_NO_MEMORY;
+	memcpy(buffer, data, length);
+
+	status_t status = gUSBModule->queue_interrupt(fOutputPipe, buffer, length,
+		_OutputCallback, this);
+	if (status == B_OK) {
+		status = acquire_sem_etc(fOutputDone, 1, B_RELATIVE_TIMEOUT, 1000000);
+		if (status == B_TIMED_OUT) {
+			gUSBModule->cancel_queued_transfers(fOutputPipe);
+			acquire_sem(fOutputDone);
+		} else if (status == B_OK)
+			status = fOutputStatus;
+	}
+	free(buffer);
+	return status;
+}
+
+
+void
+HIDDevice::_OutputCallback(void *cookie, status_t status, void *data,
+	size_t actualLength)
+{
+	HIDDevice *device = (HIDDevice *)cookie;
+	device->fOutputStatus = status;
+	release_sem(device->fOutputDone);
 }

@@ -205,7 +205,7 @@ elecom_build_descriptor(HIDWriter &writer)
 }
 
 
-static status_t
+static status_t __attribute__((unused))
 xbox360_build_descriptor(HIDWriter &writer)
 {
 	writer.BeginCollection(COLLECTION_APPLICATION,
@@ -261,16 +261,11 @@ usb_hid_quirky_device gQuirkyDevices[] = {
 		// report descriptor. Construct a report descriptor including all 6 buttons.
 		0x056e, 0x00fd, USB_INTERFACE_CLASS_HID, 0, 0,
 		NULL, elecom_build_descriptor
-	},
-
-	{
-		// XBOX 360 controllers aren't really HID (marked vendor specific).
-		// They therefore don't provide a HID/report descriptor either. The
-		// input stream is HID-like enough though. We therefore claim support
-		// and build a report descriptor of our own.
-		0, 0, 0xff /* vendor specific */, 0x5d /* XBOX controller */, 0x01,
-		NULL, xbox360_build_descriptor
 	}
+
+	// Renga (F-42): Xbox 360 pads (vendor class 0xff/0x5d/0x01) are
+	// handled by the xinput driver now, with their set-up request, LEDs
+	// and rumble; xbox360_build_descriptor() is kept for reference.
 };
 
 int32 gQuirkyDeviceCount

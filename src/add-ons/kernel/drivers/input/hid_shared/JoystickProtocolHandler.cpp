@@ -14,6 +14,9 @@
 #include "HIDDevice.h"
 #include "HIDReport.h"
 #include "HIDReportItem.h"
+#ifdef HID_GAMEPAD_EVDEV
+#	include "GamepadEvdevBridge.h"
+#endif
 
 #include <new>
 #include <string.h>
@@ -35,7 +38,8 @@ JoystickProtocolHandler::JoystickProtocolHandler(HIDReport &report)
 	fMaxButton(0),
 	fButtons(NULL),
 	fOpenCount(0),
-	fUpdateThread(-1)
+	fUpdateThread(-1),
+	fGamepadBridge(NULL)
 {
 	mutex_init(&fUpdateLock, "joystick update lock");
 	memset(&fJoystickModuleInfo, 0, sizeof(joystick_module_info));
@@ -119,6 +123,9 @@ JoystickProtocolHandler::JoystickProtocolHandler(HIDReport &report)
 
 JoystickProtocolHandler::~JoystickProtocolHandler()
 {
+#ifdef HID_GAMEPAD_EVDEV
+	delete fGamepadBridge;
+#endif
 	free(fCurrentValues.data);
 	free(fAxis);
 	free(fHats);
@@ -171,16 +178,33 @@ JoystickProtocolHandler::AddHandlers(HIDDevice &device,
 		if (!foundAxis)
 			continue;
 
-		ProtocolHandler *newHandler
+		JoystickProtocolHandler *newHandler
 			= new(std::nothrow) JoystickProtocolHandler(*inputReport);
 		if (newHandler == NULL) {
 			TRACE("failed to allocated joystick protocol handler\n");
 			continue;
 		}
 
+#ifdef HID_GAMEPAD_EVDEV
+		// Renga (F-42): also an evdev gamepad for SDL, Chromium and Linux
+		// programs; BJoystick keeps using the joystick node published here
+		newHandler->fGamepadBridge = GamepadEvdevBridge::Create(device,
+			*inputReport, collection.UsageID());
+#endif
+
 		newHandler->SetNextHandler(handlerList);
 		handlerList = newHandler;
 	}
+}
+
+
+void
+JoystickProtocolHandler::DeviceRemoved()
+{
+#ifdef HID_GAMEPAD_EVDEV
+	if (fGamepadBridge != NULL)
+		fGamepadBridge->Unregister();
+#endif
 }
 
 
