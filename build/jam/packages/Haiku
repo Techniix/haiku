@@ -90,6 +90,7 @@ AddFilesToPackage add-ons kernel generic :
 	ata_adapter
 	bios@x86,x86_64
 	dpc
+	gamepad
 	mpu401
 	scsi_periph
 	smbios@x86,x86_64
@@ -195,8 +196,10 @@ AddDriversToPackage graphics
 	: $(SYSTEM_ADD_ONS_DRIVERS_GRAPHICS) ;
 AddDriversToPackage input :
 	ps2_hid
+	uinput
 	usb_hid
 	wacom
+	xinput
 	;
 AddDriversToPackage misc :
 	<driver>poke
@@ -320,6 +323,12 @@ if $(HAIKU_DISTRO_COMPATIBILITY) != official {
 		= [ FDirName $(HAIKU_TOP) data system data distro ] ;
 	AddFilesToPackage data distro : $(distroName) ;
 }
+
+# Renga (F-42): the SDL game controller mapping database BGamepad reads.
+local gamepadDatabase = <data!gamepad>gamecontrollerdb.txt ;
+SEARCH on $(gamepadDatabase)
+	= [ FDirName $(HAIKU_TOP) data system data gamepad ] ;
+AddFilesToPackage data gamepad : $(gamepadDatabase) ;
 
 local fontDir = [ FDirName $(HAIKU_TOP) data system data fonts ] ;
 local psFonts = [ Glob $(fontDir)/psfonts : *.afm *.pfb ] ;

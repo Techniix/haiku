@@ -1,6 +1,8 @@
 SubDir HAIKU_TOP src kits device ;
 
-UsePrivateHeaders device ;
+UsePrivateHeaders device shared ;
+# Renga (F-42): <linux/input.h> for BGamepad
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
 
 # for usb_raw.h that defines the ioctl protocol used by the USB classes
 UseHeaders [ FDirName $(HAIKU_TOP) src add-ons kernel drivers bus usb ] : true ;
@@ -12,6 +14,8 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			A2D.cpp
 			D2A.cpp
 			DigitalPort.cpp
+			Gamepad.cpp
+			GamepadMapping.cpp
 			Joystick.cpp
 			JoystickTweaker.cpp
 			SerialPort.cpp
