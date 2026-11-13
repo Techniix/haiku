@@ -43,6 +43,7 @@ MixerInput::MixerInput(MixerCore* core, const media_input& input,
 	fRtmPool(NULL),
 	fUserOverridesChannelDestinations(false),
 	fTeam(-1),
+	fTransientLoopbackOnly(false),
 	fSink(NULL),
 	fLowLatency(false),
 	fPreviousSink(NULL)
@@ -801,7 +802,7 @@ MixerInput::SetRoute(const char* deviceName)
 bool
 MixerInput::LoopbackOnly() const
 {
-	return fRoute == RENGA_LOOPBACK_ONLY_ROUTE;
+	return fTransientLoopbackOnly || fRoute == RENGA_LOOPBACK_ONLY_ROUTE;
 }
 
 

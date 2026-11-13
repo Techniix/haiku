@@ -3459,6 +3459,9 @@ def analyze_media_usb_audio(results_dir, report):
 # on the default output.
 ROUTING_SILENT_TONE = 5250
 ROUTING_AUDIBLE_TONE = 5350
+# F-58 batch 2 (O-18): D, loopback-only by team for now from before its
+# stream started, plays this tone (left) on no card.
+ROUTING_TRANSIENT_TONE = 5700
 # The Output menus with "None (loopback only)": the Audio preferences'
 # Applications page and the Media preferences.
 ROUTING_SCREENSHOTS = ["routing_loopback_only", "routing_loopback_only_media"]
@@ -3522,6 +3525,29 @@ def analyze_loopback_only_audio(results_dir, report):
 			"%d Hz: %s" % (ROUTING_AUDIBLE_TONE, audible,
 			ROUTING_SILENT_TONE, ", ".join(heard) if heard
 				else "on no card")})
+	# F-58 batch 2 (O-18): D's tone, loopback-only by team from before its
+	# stream connected, on no card at all (not even its first buffers).
+	heard = []
+	read = []
+	for name, reader in (("audio.wav", read_wav),
+			("sdl-out.raw", read_raw_audio)):
+		try:
+			_, _, segments = media_segments(os.path.join(results_dir, name),
+				reader, [ROUTING_TRANSIENT_TONE, ROUTING_AUDIBLE_TONE],
+				spread=TONE_SPREAD if name == "sdl-out.raw" else 0.0)
+		except (OSError, ValueError, struct.error):
+			continue
+		read.append(name)
+		for segment in segments:
+			if segment["key"][0] == ROUTING_TRANSIENT_TONE \
+					and segment["seconds"] >= 0.2:
+				heard.append("%.1fs in %s" % (segment["seconds"], name))
+	checks.append({"name": "media_routing_audio.transient_silent",
+		"pass": bool(read) and not heard,
+		"detail": "D's %d Hz (loopback only by team before it started): %s"
+			% (ROUTING_TRANSIENT_TONE, ", ".join(heard) if heard
+				else "on no card (%s read)" % ", ".join(read) if read
+				else "no recording read")})
 
 
 def zero_runs(samples, start, end, minimum):

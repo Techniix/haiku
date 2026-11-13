@@ -17,6 +17,8 @@
 #include <Message.h>
 #include <StringList.h>
 
+#include <set>
+
 
 class BLocker;
 class MixerCore;
@@ -146,6 +148,7 @@ private:
 			void				_IdentifyApplication(MixerInput* input,
 									const media_source& producer);
 			void				_UpdateLoopbackSources();
+			void				_PruneLoopbackOnlyTeams();
 			void				_WakeRouter();
 	static	status_t			_RouterThreadEntry(void* data);
 			void				_RouterThread();
@@ -173,6 +176,9 @@ private:
 			// The output devices (flavor names) routes can choose, as the
 			// parameter web lists them; fCore's lock.
 			BStringList			fOutputDevices;
+			// F-58 batch 2 (OBS Studio's O-18): teams whose streams are
+			// loopback only for now, not remembered; fCore's lock.
+			std::set<team_id>	fLoopbackOnlyTeams;
 			thread_id			fRouterThread;
 			sem_id				fRouterSem;
 			volatile bool		fRouterQuit;

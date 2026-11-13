@@ -22,11 +22,19 @@
 	  the n-th output device (Renga mixers only),
 	- a discrete parameter of kind "renga:low_latency" "Low latency": 0 off,
 	  1 on (Renga mixers only; LowLatencyAudio.h),
+	- a hidden null parameter of kind "renga:app_team" named after the team
+	  the stream comes from, in decimal (Renga mixers only, F-58 batch 2,
+	  OBS Studio's O-17; absent for streams of media add-ons),
 	The mixer's own hidden text parameter of kind "renga:routes" (Renga
 	mixers only, F-58) lists every stream's route by device name, a line
 	"<input id> <device name>" each ("" for the default output), and takes
 	one such line to set a route; any name can be set, also of a device
 	that is not there.
+	The mixer's hidden text parameter of kind "renga:loopback_only_teams"
+	(Renga mixers only, F-58 batch 2, O-18) lists the teams whose streams
+	are loopback only for now, one id per line, and takes "<team> 1" or
+	"<team> 0" to add or remove one. It is not remembered (see
+	SetTeamLoopbackOnly()).
 	The stream's mixer input id is the parameters' id >> 16, as the mixer
 	encodes them. The loopback ("What you hear") is a flavor of the mixer
 	add-on; StartLoopback() instantiates one and selects whose streams it
@@ -53,6 +61,9 @@ namespace BPrivate {
 #define RENGA_APP_SIGNATURE_KIND		"renga:app_signature"
 #define RENGA_LOOPBACK_FLAVOR_NAME		"What you hear (loopback)"
 #define RENGA_ROUTES_KIND				"renga:routes"
+// F-58 batch 2 (OBS Studio's O-17, O-18)
+#define RENGA_APP_TEAM_KIND				"renga:app_team"
+#define RENGA_LOOPBACK_ONLY_TEAMS_KIND	"renga:loopback_only_teams"
 // F-58 (OBS Studio's O-2): the route of a stream heard on no output and
 // recorded only by loopbacks of its application or team; the "Output"
 // menu calls it "None (loopback only)".
@@ -84,6 +95,13 @@ struct AudioStream {
 								// RENGA_LOOPBACK_ONLY_ROUTE for none
 	bool		hasRoute;		// the mixer offers routes by name (F-58)
 	bool		loopbackOnly;	// heard nowhere, in its own loopbacks only
+	// F-58 batch 2 (added at the end; this header is compiled into its
+	// users, there is no library side):
+	team_id		team;			// the team it comes from (O-17); -1 unknown
+	bool		transientLoopbackOnly;
+								// loopbackOnly because its team asked for
+								// it with SetTeamLoopbackOnly() (O-18); not
+								// remembered, route keeps the stored choice
 };
 
 
@@ -132,6 +150,7 @@ public:
 		for (int32 i = 0; i < fWeb->CountGroups(); i++)
 			_ScanGroup(fWeb->GroupAt(i));
 		_ReadRoutes();
+		_ReadLoopbackOnlyTeams();
 		return B_OK;
 	}
 
@@ -237,6 +256,76 @@ public:
 	status_t SetLoopbackOnly(int32 id, bool on)
 	{
 		return SetRoute(id, on ? RENGA_LOOPBACK_ONLY_ROUTE : "");
+	}
+
+	/*!	F-58 batch 2 (OBS Studio's O-17): the first stream of \a team, or
+		NULL.
+	*/
+	const AudioStream* FindStream(team_id team) const
+	{
+		for (int32 i = 0; i < CountStreams(); i++) {
+			if (StreamAt(i)->team == team)
+				return StreamAt(i);
+		}
+		return NULL;
+	}
+
+	/*!	F-58 batch 2 (OBS Studio's O-18): plays the streams of \a team on
+		no output, recorded only by loopbacks of its application or team
+		(\a on), or as their own settings say again. Unlike
+		SetLoopbackOnly() it is not remembered: nothing is saved, it ends
+		when the team quits, and the streams' remembered "Output" choice is
+		left alone. Call it before the team's stream starts and not even
+		its first buffer reaches an output; streams already playing switch
+		at once. A choice the user makes in a stream's "Output" menu wins
+		for that stream. B_BAD_VALUE for a team that does not exist.
+		Needs Update() first (it uses the web read there).
+	*/
+	status_t SetTeamLoopbackOnly(team_id team, bool on)
+	{
+		BParameter* parameter = _FindKind(RENGA_LOOPBACK_ONLY_TEAMS_KIND);
+		if (parameter == NULL)
+			return B_ENTRY_NOT_FOUND;
+		if (team <= 0)
+			return B_BAD_VALUE;
+		char line[32];
+		snprintf(line, sizeof(line), "%" B_PRId32 " %d", team, on ? 1 : 0);
+		status_t status = parameter->SetValue(line, strlen(line) + 1,
+			system_time());
+		if (status != B_OK)
+			return status;
+		// The mixer ignores an unknown team; read back to tell.
+		if (on) {
+			BString teams;
+			if (GetLoopbackOnlyTeams(teams) == B_OK) {
+				char number[16];
+				snprintf(number, sizeof(number), "%" B_PRId32, team);
+				BStringList list;
+				teams.Split("\n", true, list);
+				if (!list.HasString(number))
+					return B_BAD_VALUE;
+			}
+		}
+		return B_OK;
+	}
+
+	/*!	F-58 batch 2 (O-18): the teams set with SetTeamLoopbackOnly() that
+		still run, one id per line.
+	*/
+	status_t GetLoopbackOnlyTeams(BString& teams)
+	{
+		BParameter* parameter = _FindKind(RENGA_LOOPBACK_ONLY_TEAMS_KIND);
+		if (parameter == NULL)
+			return B_ENTRY_NOT_FOUND;
+		char text[1025];
+		size_t size = sizeof(text) - 1;
+		bigtime_t when;
+		status_t status = parameter->GetValue(text, &size, &when);
+		if (status != B_OK)
+			return status;
+		text[min_c(size, sizeof(text) - 1)] = '\0';
+		teams = text;
+		return B_OK;
 	}
 
 	//!	Records only the streams of \a team (0: by signature again; O-3).
@@ -397,6 +486,8 @@ private:
 		stream.hasLowLatency = false;
 		stream.hasRoute = false;
 		stream.loopbackOnly = false;
+		stream.team = -1;
+		stream.transientLoopbackOnly = false;
 		bool isStream = false;
 
 		for (int32 i = 0; i < group->CountParameters(); i++) {
@@ -410,6 +501,8 @@ private:
 				isStream = true;
 			} else if (strcmp(kind, RENGA_APP_SIGNATURE_KIND) == 0)
 				stream.signature = parameter->Name();
+			else if (strcmp(kind, RENGA_APP_TEAM_KIND) == 0)
+				stream.team = atoi(parameter->Name());
 			else if (strcmp(kind, "renga:low_latency") == 0
 				&& parameter->Type() == BParameter::B_DISCRETE_PARAMETER) {
 				int32 value = 0;
@@ -511,6 +604,40 @@ private:
 			}
 		}
 		free(text);
+	}
+
+	/*!	F-58 batch 2 (O-18): marks the streams of the mixer's loopback-only
+		teams. The mixer has the input's own flag, but the teams' list is
+		one read for all streams (see _ReadRoutes()).
+	*/
+	void _ReadLoopbackOnlyTeams()
+	{
+		BString text;
+		if (GetLoopbackOnlyTeams(text) != B_OK || text.Length() == 0)
+			return;
+		BStringList teams;
+		text.Split("\n", true, teams);
+		for (int32 i = 0; i < fStreams.CountItems(); i++) {
+			AudioStream* stream = (AudioStream*)fStreams.ItemAt(i);
+			if (stream->team < 0)
+				continue;
+			char number[16];
+			snprintf(number, sizeof(number), "%" B_PRId32, stream->team);
+			if (!teams.HasString(number))
+				continue;
+			// A choice made in the stream's "Output" menu wins over the
+			// team's request (the mixer clears it for that stream; the menu
+			// then shows the choice). The menu's "None (loopback only)" is
+			// its last shared item, after the default output and the
+			// devices. A stream routed there itself is not transient.
+			if (stream->route == RENGA_LOOPBACK_ONLY_ROUTE)
+				continue;
+			if (!stream->hasOutput
+				|| stream->output == fOutputs.CountStrings() - 1) {
+				stream->transientLoopbackOnly = true;
+				stream->loopbackOnly = true;
+			}
+		}
 	}
 
 	BParameter* _Find(int32 id, const char* kind, bool discrete)

@@ -87,6 +87,14 @@ public:
 	// plays on no output and is left out of loopbacks of every stream, but
 	// recorded by loopbacks of its application or team.
 			bool				LoopbackOnly() const;
+	// F-58 batch 2 (OBS Studio's O-18): loopback only for now, because the
+	// stream's team was asked for that (AudioMixer's
+	// "renga:loopback_only_teams"); not saved with the stream's settings,
+	// Route() keeps the remembered choice. LoopbackOnly() includes it.
+			bool				TransientLoopbackOnly() const
+									{ return fTransientLoopbackOnly; }
+			void				SetTransientLoopbackOnly(bool on)
+									{ fTransientLoopbackOnly = on; }
 			MixerTap*			Sink() const { return fSink; }
 	// Low-latency mode (LowLatencyAudio.h): the default output runs with
 	// short periods while such a stream is connected.
@@ -162,6 +170,7 @@ private:
 			BString				fAppName;
 			team_id				fTeam;
 			BString				fRoute;
+			bool				fTransientLoopbackOnly;
 			MixerTap*			fSink;
 			bool				fLowLatency;
 			MixerTap*			fPreviousSink;

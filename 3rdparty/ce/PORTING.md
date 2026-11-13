@@ -26,7 +26,7 @@ updates this file in the same commit.
 | USB Audio Class 1 and 2 devices (headsets, DACs) | (driver `usb_audio`, hmulti) | | UAC1 only, broken at 44.1 kHz on xhci | Available (UAC2 not yet tried on hardware) |
 | UVC webcams (YUY2, MJPEG) as Media Kit video sources | (Media Kit, `usb_webcam` add-on) | libmedia (nothing extra) | Missing (UVC class not built) | Available (not yet tried on hardware) |
 | Screen, window or region capture (damage-based, timestamped, with the user's permission and an indicator); a capture session with system audio, one application's audio and the microphone, writing a file or feeding the port | `<ScreenCapture.h>`, `<CaptureSession.h>` (private headers) | libbe, libmedia (nothing extra) | Only `BScreen::ReadBitmap()` (whole frames, no damage, no consent) | Available |
-| Leaving applications out of a loopback; a "loopback only" output; loopbacks of one process (team); routing a stream to a device by name, kept while it is absent | (mixer parameters `renga:loopback_exclude`, `renga:loopback_team`, `renga:routes`; `AudioStreamControl.h`, private header) | libmedia (nothing extra) | Missing | Available |
+| Leaving applications out of a loopback; a "loopback only" output; loopbacks of one process (team); routing a stream to a device by name, kept while it is absent; each stream's team; loopback only by team, not remembered | (mixer parameters `renga:loopback_exclude`, `renga:loopback_team`, `renga:routes`, `renga:app_team`, `renga:loopback_only_teams`; `AudioStreamControl.h`, private header) | libmedia (nothing extra) | Missing | Available |
 | Camera mode lists (sizes, rates, encodings); `field_rate` honoured | (parameter `renga:video_modes`) | libmedia (nothing extra) | Missing; UVC always 30 fps | Available (UVC side not yet tried on hardware) |
 | A virtual camera fed by one program (OBS's "Start Virtual Camera") | `<VirtualCamera.h>` (private header) | libmedia, `-lgnu`, libnetwork | Missing | Available |
 | Screen capture: asynchronous permission request, `B_TIMED_OUT`, frame notification, window visibility flags | `<ScreenCapture.h>` (private header) | libbe (nothing extra) | Missing | Available |
@@ -825,6 +825,31 @@ plain Media Kit calls:
   plays on no card and is left out of "every stream" loopbacks, but is
   recorded by loopbacks that select its application or team.
   `AudioStreamControl::SetLoopbackOnly(id, true)`.
+- **Each stream's team.** A stream's group has a hidden null parameter
+  of kind `renga:app_team` named after the team it comes from, in
+  decimal (none for streams of media add-ons): `AudioStream::team`,
+  `AudioStreamControl::FindStream(team)`. With it a loopback by team
+  (`renga:loopback_team`) can be chosen for exactly the process that
+  plays, without matching signatures or names. (F-58 batch 2, O-17.)
+- **Loopback only for now, by team.** The system mixer's hidden text
+  parameter of kind `renga:loopback_only_teams` lists teams whose streams
+  are loopback only (as "None (loopback only)" above) without anything
+  being remembered: write "<team> 1" to add a team, "<team> 0" to remove
+  it; reading gives the teams, one per line. Set it before the team's
+  stream starts and not even its first buffer reaches a card (the mixer
+  applies it while the connection is made); streams already playing
+  switch at once. Nothing is saved: the streams' remembered "Output"
+  choice is left alone, the team is forgotten when it quits, and the
+  application's next process plays as its settings say. A choice the
+  user makes in a stream's "Output" menu (or a route set by name) wins
+  for that stream. `AudioStreamControl::SetTeamLoopbackOnly(team, on)`
+  (`B_BAD_VALUE` for a team that does not run; call `Update()` first),
+  `GetLoopbackOnlyTeams()`; such a stream reads `loopbackOnly` and
+  `transientLoopbackOnly` true, and its "Output" menu shows "None
+  (loopback only)". For a program's own helper processes (OBS's browser
+  sources): with the team of each stream known (above), there is no need
+  for a second application signature to keep their sound off the
+  speakers. (F-58 batch 2, O-18.)
 - **Routes by device name.** The system mixer's hidden text parameter of
   kind `renga:routes` lists "<input id> <device name>" per stream;
   writing one such line routes that stream to the device of that flavor
@@ -836,7 +861,8 @@ plain Media Kit calls:
 
 Since: the commits that added `MixerTap` to the mixer add-on; exclusions,
 teams, loopback only and routes by name in F-58 (`d97f5a34`,
-`805d2929`, `34526255`). Tests: `media_test.cpp`, `media_routing_test.cpp`
+`805d2929`, `34526255`); streams' teams and loopback only by team in F-58
+batch 2. Tests: `media_test.cpp`, `media_routing_test.cpp`
 (renga-* images).
 
 ### Sound cards and cameras that come and go
@@ -895,7 +921,19 @@ nothing to restart, and nothing changed in the public API:
   scales them to the size its consumer connected with. A second feeder
   gets `B_BUSY`; without one the camera sends dark grey. Its hidden text
   parameter `renga:virtual_camera` says who feeds it ("<team>
-  <w>x<h> <received> <sent>", or "none"). (`d6f1bc7b`)
+  <w>x<h> <received> <sent>": the feeder's team, the fed size, frames
+  received from the feeder and buffers sent to the consumer; or "none").
+  (`d6f1bc7b`)
+  F-58 batch 2 (O-20): `WriteFrame(bits, bytesPerRow, time, timeout)`
+  waits at most `timeout` for the node to take frames: 0 does not wait
+  (`B_WOULD_BLOCK` when the node has not read the previous frames),
+  another value returns `B_TIMED_OUT` when it is up, `B_INFINITE_TIMEOUT`
+  waits as long as it takes (as the three-argument `WriteFrame()` always
+  did and still does). A frame that could not be announced is dropped
+  before it is copied; the feed stays connected. `Disconnect()` never
+  waits for the node (it shuts the socket down first), also when
+  media_addon_server stopped reading. `ConnectTo(path, ...)` connects to
+  a node on another socket (the tests use it).
 - **HDMI/DisplayPort audio**: a display audio codec (Intel, AMD, NVIDIA
   graphics) is a sound card named after the monitor ("HDMI: <monitor>",
   "DisplayPort: <monitor>"), playing stereo LPCM in the rates and sample
@@ -947,7 +985,15 @@ the mixer's loopback.
   `SCREEN_CAPTURE_PERMISSION_ANSWER` ('ScPa') message with "status"
   (`B_OK`, `B_NOT_ALLOWED`, or `B_CANCELED` when the prompt was closed
   unanswered), "request" and "sources". A known answer is sent at once.
-  Then `Start...()` starts without asking. The Screen recording
+  Then `Start...()` starts without asking. An answer belongs to the
+  request it was given for (F-58 batch 2, O-16): after a "no" that was
+  not remembered ("Don't allow" without "Remember my decision", or the
+  prompt closed) has been delivered, the application's next
+  `RequestPermission()` or `Start...()` shows the prompt again instead of
+  being told "no" at once, so a "Try again" button needs one click. A
+  `Start...()` that is waiting when the user answers still gets that
+  answer; a "yes" without "remember" holds until the application quits,
+  as before. The Screen recording
   preferences (`/boot/system/preferences/ScreenRecording`) list the
   decisions and the running captures; `ScreenRecording --set <signature>
   allow|deny|ask` and `--list` do the same from scripts. While any capture

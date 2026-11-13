@@ -729,6 +729,31 @@ expect("loopback only: no phase at all fails", not check["pass"],
 	check["detail"])
 
 
+# media_routing_test's transient loopback-only team (F-58 batch 2, O-18):
+# D's tone must be on no card; a nearby tone (D's next process, 5550 Hz) is
+# not mistaken for it.
+def transient_recordings(leak=0.0):
+	directory = tempfile.mkdtemp()
+	wav = silence(0.3) + usb_tone(5550, ce_test.ROUTING_AUDIBLE_TONE, 1.5,
+		1.0)
+	if leak:
+		wav += usb_tone(ce_test.ROUTING_TRANSIENT_TONE,
+			ce_test.ROUTING_AUDIBLE_TONE, leak, 1.0)
+	write_wav(os.path.join(directory, "audio.wav"), wav + silence(0.3))
+	report = {}
+	ce_test.analyze_loopback_only_audio(directory, report)
+	return [c for c in report["host_checks"]
+		if c["name"] == "media_routing_audio.transient_silent"][0]
+
+
+check = transient_recordings()
+expect("transient loopback only: D on no card passes", check["pass"],
+	check["detail"])
+check = transient_recordings(leak=0.3)
+expect("transient loopback only: D's first 0.3 s on the card fails",
+	not check["pass"], check["detail"])
+
+
 # media_sound_test's phases (SOUND_PHASES): the Audio preferences'
 # master volume, mute, output menu and per-application output menu.
 def sound_recordings(master=None, mute_leaks=False, stays_default=False):

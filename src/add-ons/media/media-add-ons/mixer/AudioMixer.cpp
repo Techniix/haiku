@@ -82,6 +82,12 @@
 // Renga: a stream's low-latency switch (LowLatencyAudio.h)
 #define PARAM_LOW_LATENCY(id)				(((id) << 16) | 0xd)
 #define PARAM_IS_LOW_LATENCY(id)			(((id) & 0xf) == 0xd)
+// Renga (F-58 batch 2, OBS Studio's O-17): the team a stream comes from, a
+// hidden null parameter of kind "renga:app_team" named after the team id in
+// decimal (like "renga:app_signature": no value, so reading the web costs
+// no extra round trip per stream).
+#define PARAM_APP_TEAM(id)					(((id) << 16) | 0xe)
+#define RENGA_APP_TEAM_KIND					"renga:app_team"
 // Renga: the signatures in low-latency mode (hidden text, read only)
 #define PARAM_ETC_LOW_LATENCY_APPS			100
 // Renga (F-58, OBS Studio's O-4): the streams' routes by device name, one
@@ -96,6 +102,20 @@
 // periods on the card in every run after the routing tests.
 #define PARAM_ETC_ROUTES					110
 #define RENGA_ROUTES_KIND					"renga:routes"
+// Renga (F-58 batch 2, OBS Studio's O-18): teams whose streams play on no
+// output and are recorded only by loopbacks of their application or team,
+// for now: a hidden text parameter of the mixer, kind
+// "renga:loopback_only_teams". Read: the team ids, one per line. Write:
+// "<team> 1" (or "<team>") to add a team, "<team> 0" to remove it. Not
+// remembered: nothing is saved, and a team is forgotten when it quits.
+// Set before a stream of the team connects, the stream never reaches an
+// output, not even for its first buffer: the mixer applies it while the
+// connection is made (Connected()), before any buffer arrives. Its
+// streams that are already there switch at once. The user's own choice
+// in a stream's "Output" menu (or a route set by name) wins over it for
+// that stream.
+#define PARAM_ETC_LOOPBACK_ONLY_TEAMS		111
+#define RENGA_LOOPBACK_ONLY_TEAMS_KIND		"renga:loopback_only_teams"
 // How long the default output keeps short periods after the last
 // low-latency stream went (a program that closes and opens its player again
 // does not make the device switch back and forth).
@@ -611,6 +631,14 @@ AudioMixer::Connected(const media_source &producer,
 	// remembered by signature.
 	_IdentifyApplication(input, producer);
 	fCore->Settings()->LoadConnectionSettings(input);
+	// F-58 batch 2 (O-18): loopback only from its first buffer if its team
+	// asked for it; not part of the settings just loaded or saved later.
+	_PruneLoopbackOnlyTeams();
+	if (input->Team() >= 0
+		&& fLoopbackOnlyTeams.find(input->Team())
+			!= fLoopbackOnlyTeams.end()) {
+		input->SetTransientLoopbackOnly(true);
+	}
 	fCore->UpdateRouting();
 
 	if (fAutoStop && fCore->CountInputs() == 1)
@@ -1531,6 +1559,22 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 				*ioSize = list.Length() + 1;
 				break;
 			}
+			case PARAM_ETC_LOOPBACK_ONLY_TEAMS:
+			{
+				// F-58 batch 2 (O-18): the teams, one per line
+				_PruneLoopbackOnlyTeams();
+				BString list;
+				for (std::set<team_id>::const_iterator it
+						= fLoopbackOnlyTeams.begin();
+						it != fLoopbackOnlyTeams.end(); it++) {
+					list << *it << "\n";
+				}
+				if (*ioSize < (size_t)list.Length() + 1)
+					goto err;
+				memcpy(value, list.String(), list.Length() + 1);
+				*ioSize = list.Length() + 1;
+				break;
+			}
 			case PARAM_ETC_LOW_LATENCY_APPS:
 			{
 				// Renga: the signatures in low-latency mode, one per line
@@ -1813,12 +1857,67 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 				}
 				if (input == NULL)
 					goto err;
+				// F-58 batch 2 (O-18): a route chosen for the stream wins
+				// over its team's loopback-only request
+				if (input->TransientLoopbackOnly()) {
+					input->SetTransientLoopbackOnly(false);
+					fCore->UpdateRouting();
+					wakeRouter = true;
+					update = true;
+				}
 				if (route != input->Route()) {
 					input->SetRoute(route.String());
 					fCore->UpdateRouting();
 					fCore->Settings()->SaveConnectionSettings(input);
 					wakeRouter = true;
 					// the "Output" menu gets or loses its "(not available)"
+					update = true;
+				}
+				break;
+			}
+			case PARAM_ETC_LOOPBACK_ONLY_TEAMS:
+			{
+				// "<team> 1" or "<team>": add; "<team> 0": remove (F-58
+				// batch 2, O-18)
+				BString line((const char*)value,
+					strnlen((const char*)value, min_c(size, (size_t)64)));
+				line.RemoveAll("\n");
+				line.Trim();
+				char* end = NULL;
+				long team = strtol(line.String(), &end, 10);
+				if (line.Length() == 0 || end == line.String() || team <= 0)
+					goto err;
+				while (*end == ' ')
+					end++;
+				bool on;
+				if (*end == '\0' || strcmp(end, "1") == 0)
+					on = true;
+				else if (strcmp(end, "0") == 0)
+					on = false;
+				else
+					goto err;
+				_PruneLoopbackOnlyTeams();
+				team_info info;
+				if (on && get_team_info(team, &info) != B_OK)
+					goto err;
+				if (on)
+					fLoopbackOnlyTeams.insert(team);
+				else
+					fLoopbackOnlyTeams.erase(team);
+				// the team's streams that are already there
+				bool changed = false;
+				for (int32 i = 0; MixerInput* input = fCore->Input(i); i++) {
+					if (input->Team() != team
+						|| input->TransientLoopbackOnly() == on) {
+						continue;
+					}
+					input->SetTransientLoopbackOnly(on);
+					changed = true;
+				}
+				if (changed) {
+					fCore->UpdateRouting();
+					wakeRouter = true;
+					// the "Output" menus show "None (loopback only)"
 					update = true;
 				}
 				break;
@@ -1924,6 +2023,12 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 			if (size != sizeof(int32))
 				goto err;
 			int32 index = static_cast<const int32 *>(value)[0];
+			// F-58 batch 2 (O-18): the user's choice for this stream wins
+			// over its team's loopback-only request
+			if (input->TransientLoopbackOnly()) {
+				input->SetTransientLoopbackOnly(false);
+				update = true;
+			}
 			if (index == 0)
 				input->SetRoute("");
 			else if (index - 1 < fOutputDevices.CountStrings())
@@ -2106,6 +2211,14 @@ AudioMixer::UpdateParameterWeb()
 				in->AppSignature(), "renga:app_signature")
 					->SetFlags(B_HIDDEN_PARAMETER);
 		}
+		if (in->Team() >= 0) {
+			// F-58 batch 2 (O-17)
+			char team[16];
+			snprintf(team, sizeof(team), "%" B_PRId32, in->Team());
+			group->MakeNullParameter(PARAM_APP_TEAM(in->ID()),
+				B_MEDIA_RAW_AUDIO, team, RENGA_APP_TEAM_KIND)
+					->SetFlags(B_HIDDEN_PARAMETER);
+		}
 		group->MakeNullParameter(PARAM_STR2(in->ID()), B_MEDIA_RAW_AUDIO,
 			StringForFormat(buf, in), B_GENERIC);
 		group->MakeDiscreteParameter(PARAM_MUTE(in->ID()), B_MEDIA_RAW_AUDIO,
@@ -2257,6 +2370,9 @@ AudioMixer::UpdateParameterWeb()
 		RENGA_LOW_LATENCY_APPS_KIND, 4096)->SetFlags(B_HIDDEN_PARAMETER);
 	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_ROUTES), B_MEDIA_RAW_AUDIO,
 		"Routes", RENGA_ROUTES_KIND, 8192)->SetFlags(B_HIDDEN_PARAMETER);
+	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_LOOPBACK_ONLY_TEAMS),
+		B_MEDIA_RAW_AUDIO, "Loopback-only teams",
+		RENGA_LOOPBACK_ONLY_TEAMS_KIND, 1024)->SetFlags(B_HIDDEN_PARAMETER);
 
 	dp = group->MakeDiscreteParameter(PARAM_ETC(70), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Resampling algorithm:"), B_INPUT_MUX);
@@ -2311,6 +2427,24 @@ AudioMixer::_IdentifyApplication(MixerInput* input,
 			appInfo.ref.name);
 	} else
 		input->SetApplication(portInfo.team, "", "");
+}
+
+
+/*!	F-58 batch 2 (O-18): forgets the loopback-only teams that have quit, so
+	that the list stays short and a later team never inherits an entry.
+	fCore's lock held.
+*/
+void
+AudioMixer::_PruneLoopbackOnlyTeams()
+{
+	for (std::set<team_id>::iterator it = fLoopbackOnlyTeams.begin();
+			it != fLoopbackOnlyTeams.end();) {
+		team_info info;
+		if (get_team_info(*it, &info) != B_OK)
+			fLoopbackOnlyTeams.erase(it++);
+		else
+			it++;
+	}
 }
 
 

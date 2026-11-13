@@ -30,6 +30,7 @@
 #include <ParameterWeb.h>
 #include <SoundPlayer.h>
 #include <String.h>
+#include <StringList.h>
 
 #include <AudioStreamControl.h>
 
@@ -54,6 +55,9 @@ static const char* kSignatureA = "application/x-vnd.Renga-routing-test-a";
 static const char* kSignatureB = "application/x-vnd.Renga-routing-test-b";
 // Two processes of one application (OBS's browser helpers): O-3.
 static const char* kSignatureC = "application/x-vnd.Renga-routing-test-c";
+// A browser helper that OBS makes loopback-only by team for now (F-58
+// batch 2, O-17 and O-18).
+static const char* kSignatureD = "application/x-vnd.Renga-routing-test-d";
 static const float kAmplitude = 0.25f;
 // A level below this is silence (a stream left out of a recording).
 static const double kSilence = 0.005;
@@ -119,12 +123,23 @@ play_buffer(void* cookie, void* buffer, size_t size,
 
 
 /*!	A child: plays "tone <left Hz> <right Hz>" read from stdin until "quit"
-	or the end of input. "team" prints its team id on stdout.
+	or the end of input. "team" prints its team id on stdout. With \a wait
+	(F-58 batch 2) it connects to the mixer only after a line "start", so
+	that the parent can set things up for its team first.
 */
 static int
-run_player(const char* signature)
+run_player(const char* signature, bool wait = false)
 {
 	BApplication app(signature);
+
+	char line[128];
+	if (wait) {
+		while (fgets(line, sizeof(line), stdin) != NULL
+			&& strncmp(line, "start", 5) != 0) {
+			if (strncmp(line, "quit", 4) == 0)
+				return 0;
+		}
+	}
 
 	media_raw_audio_format format = media_raw_audio_format::wildcard;
 	format.format = media_raw_audio_format::B_AUDIO_FLOAT;
@@ -144,7 +159,6 @@ run_player(const char* signature)
 	player.Start();
 	player.SetHasData(true);
 
-	char line[128];
 	while (fgets(line, sizeof(line), stdin) != NULL) {
 		float left, right;
 		if (sscanf(line, "tone %f %f", &left, &right) == 2) {
@@ -169,10 +183,12 @@ struct Player {
 
 
 static bool
-start_player(Player& player, const char* self, const char* signature)
+start_player(Player& player, const char* self, const char* signature,
+	bool wait = false)
 {
 	BString command;
-	command << "'" << self << "' player " << signature;
+	command << "'" << self << "' " << (wait ? "player-wait" : "player")
+		<< " " << signature;
 	player.pipe = popen(command.String(), "w");
 	player.signature = signature;
 	return player.pipe != NULL;
@@ -916,11 +932,168 @@ test_teams(const char* self)
 }
 
 
+//!	The team of the one running \a signature, or -1 (waits up to 10 s).
+static team_id
+team_of(const char* signature)
+{
+	for (int i = 0; i < 50; i++) {
+		BList teams;
+		be_roster->GetAppList(signature, &teams);
+		if (teams.CountItems() == 1)
+			return (team_id)(addr_t)teams.ItemAt(0);
+		snooze(200000);
+	}
+	return -1;
+}
+
+
+/*!	Whether \a teams (one id per line, as GetLoopbackOnlyTeams() gives
+	them) lists \a team.
+*/
+static bool
+lists_team(const BString& teams, team_id team)
+{
+	BString number;
+	number << team;
+	BStringList list;
+	teams.Split("\n", true, list);
+	return list.HasString(number);
+}
+
+
+/*!	F-58 batch 2 (OBS Studio's O-17 and O-18): each stream names its team;
+	a team made loopback-only for now before its stream starts is on no
+	output from the first buffer (the harness checks that its 5700 Hz is
+	on no card, media_routing_audio.transient_silent), is recorded by its
+	team's loopback and by no loopback of every stream, is not
+	remembered (the application's next process plays normally) and is
+	forgotten when the team quits. Streams already playing switch both
+	ways.
+*/
+static void
+test_transient(const char* self, Player& a, Player& b)
+{
+	tone(a, 0, 0);
+	tone(b, 0, 5300);
+
+	Player d = { NULL, kSignatureD };
+	bool started = start_player(d, self, kSignatureD, true);
+	team_id teamD = started ? team_of(kSignatureD) : -1;
+	AudioStreamControl control;
+	status_t updated = control.Update();
+	status_t status = teamD >= 0 ? control.SetTeamLoopbackOnly(teamD, true)
+		: B_ERROR;
+	BString teams;
+	status_t read = control.GetLoopbackOnlyTeams(teams);
+	report("transient_set", updated == B_OK && status == B_OK
+			&& read == B_OK && lists_team(teams, teamD),
+		"team %" B_PRId32 " (not connected yet): SetTeamLoopbackOnly %s; "
+		"read back \"%s\" (%s)", teamD, strerror(status),
+		BString(teams).ReplaceAll("\n", ",").String(), strerror(read));
+
+	// Now it connects and plays.
+	if (d.pipe != NULL) {
+		fprintf(d.pipe, "start\n");
+		fflush(d.pipe);
+	}
+	tone(d, 5700, 0);
+	AudioStream streamD;
+	bool found = find_stream(control, kSignatureD, streamD);
+	AudioStream streamA;
+	team_id teamA = team_of(kSignatureA);
+	bool foundA = find_stream(control, kSignatureA, streamA);
+	const AudioStream* byTeam = found ? control.FindStream(teamD) : NULL;
+	report("app_team", found && foundA && streamD.team == teamD
+			&& streamA.team == teamA && teamA >= 0 && byTeam != NULL
+			&& byTeam->id == streamD.id,
+		"streams' teams: D %" B_PRId32 " (want %" B_PRId32 "), A %" B_PRId32
+		" (want %" B_PRId32 "); FindStream(team) %s", found ? streamD.team
+			: -2, teamD, foundA ? streamA.team : -2, teamA,
+		byTeam != NULL ? "found it" : "found nothing");
+	report("transient_listed", found && streamD.loopbackOnly
+			&& streamD.transientLoopbackOnly
+			&& streamD.route != RENGA_LOOPBACK_ONLY_ROUTE,
+		"D's stream: loopbackOnly %d, transient %d, remembered route \"%s\" "
+		"(want not the loopback-only route), Output index %" B_PRId32 " of %"
+		B_PRId32, found && streamD.loopbackOnly,
+		found && streamD.transientLoopbackOnly, streamD.route.String(),
+		streamD.output, control.Outputs().CountStrings());
+
+	snooze(800000);
+	ChannelCheck left, right;
+	status = record(NULL, NULL, 1.5, 5700, 5300, left, right);
+	report("transient_not_in_all", status == B_OK && absent(left)
+			&& present(right),
+		"%s; every stream: L (D) %.4f, R (B) %.3f", strerror(status),
+		left.amplitude, right.amplitude);
+
+	LoopbackRecorder own;
+	status = own.Create(kSignatureD);
+	if (status == B_OK)
+		status = AudioStreamControl::SetLoopbackTeam(own.node, teamD);
+	if (status == B_OK)
+		status = own.Start();
+	if (status == B_OK)
+		snooze(1200000);
+	own.Stop();
+	left = check_channel(own.recording, false, 0.3, 5700);
+	report("transient_in_own_team", status == B_OK && present(left),
+		"%s; D's team's loopback: L %.3f purity >= %.3f", strerror(status),
+		left.amplitude, left.minPurity);
+
+	// The team quits: forgotten. The next process of the application plays
+	// as its settings say (nothing was remembered).
+	stop_player(d);
+	snooze(500000);
+	control.Update();
+	read = control.GetLoopbackOnlyTeams(teams);
+	bool forgotten = read == B_OK && !lists_team(teams, teamD);
+	Player d2 = { NULL, kSignatureD };
+	started = start_player(d2, self, kSignatureD);
+	tone(d2, 5550, 0);
+	AudioStream stream2;
+	found = find_stream(control, kSignatureD, stream2);
+	snooze(800000);
+	status = record(NULL, NULL, 1.2, 5550, 5300, left, right);
+	report("transient_not_remembered", forgotten && started && found
+			&& !stream2.loopbackOnly && stream2.route == ""
+			&& status == B_OK && present(left),
+		"after the team quit: listed %s; next process: loopbackOnly %d, "
+		"route \"%s\"; every stream: L %.3f", forgotten ? "no" : "yes",
+		found && stream2.loopbackOnly, stream2.route.String(),
+		left.amplitude);
+
+	// A stream already playing switches, and back.
+	team_id team2 = team_of(kSignatureD);
+	status = team2 >= 0 ? control.SetTeamLoopbackOnly(team2, true) : B_ERROR;
+	snooze(600000);
+	ChannelCheck onLeft, onRight;
+	status_t recordedOn = record(NULL, NULL, 1.2, 5550, 5300, onLeft,
+		onRight);
+	status_t cleared = control.SetTeamLoopbackOnly(team2, false);
+	snooze(600000);
+	status_t recordedOff = record(NULL, NULL, 1.2, 5550, 5300, left, right);
+	report("transient_live_switch", status == B_OK && cleared == B_OK
+			&& recordedOn == B_OK && recordedOff == B_OK && absent(onLeft)
+			&& present(left),
+		"on: %s, every stream L %.4f; off: %s, L %.3f", strerror(status),
+		onLeft.amplitude, strerror(cleared), left.amplitude);
+	stop_player(d2);
+
+	status = control.SetTeamLoopbackOnly(0x7ffffff0, true);
+	report("transient_bad_team", status == B_BAD_VALUE,
+		"a team that does not exist: %s (want %s)", strerror(status),
+		strerror(B_BAD_VALUE));
+}
+
+
 int
 main(int argc, char** argv)
 {
 	if (argc >= 3 && strcmp(argv[1], "player") == 0)
 		return run_player(argv[2]);
+	if (argc >= 3 && strcmp(argv[1], "player-wait") == 0)
+		return run_player(argv[2], true);
 
 	signal(SIGPIPE, SIG_IGN);
 	BApplication app("application/x-vnd.Renga-media-routing-test");
@@ -955,6 +1128,7 @@ main(int argc, char** argv)
 		test_routes(a);
 		test_loopback_only(a, b);
 		test_teams(argv[0]);
+		test_transient(argv[0], a, b);
 	}
 
 	stop_player(a);
