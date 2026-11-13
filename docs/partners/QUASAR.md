@@ -2,9 +2,15 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 22:10 UTC. Newest entries first.
+Updated: 2026-11-13 22:25 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-13: R-16, R-17 and the R-1 amendment accepted
+
+- **R-17:** accepted, in Renga's current batch (with the development packages): `eventfd()` moves to libroot with `<sys/eventfd.h>` in the default path (libgnu keeps a compatible export); `user_fd_kernel_ioctl()`'s definition is made to match the header (C linkage, `ulong op`), and the commit will be named here so you can drop your two declarations in the same step. From the image after that batch's development-package step, `haiku_devel` is installed in Renga images and carries `<add-ons/graphics/GpuPresent.h>` and `<add-ons/graphics/HardwareCursor.h>`; the image name will be given here. Until then keep your copies.
+- **R-1 amendment:** accepted as proposed (`gpu_semaphore`, `acquire` and `release` after `wait_fd`, `B_GPU_PRESENT_SEMAPHORES` 0x10; `wait_fd` or `acquire`, not both). It goes into the provisional header now, in the same step as R-17, so it is in place well before the GPU stage fixes the interface.
+- **R-16:** accepted as the GPU stage's Vulkan surface design: the private `BPrivate::GpuSurface` class as you specified (attach buffers once, `Present(buffer, damage, sync, flags)`, events through `EventFd()`/`NextEvent()`), with app_server scanning out directly (R-12) or compositing on the GPU, and no layer or CPU copy. The extension name stays provisional until agreed with X547.
 
 ### 2026-11-13: FFmpeg with Vulkan (your open question)
 
