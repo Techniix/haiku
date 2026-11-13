@@ -101,6 +101,10 @@ private:
 			Request*			_NewRequest(team_id team,
 									const BString& signature,
 									const BString& path, int32 source);
+			bool				_PollerWaiting(const Request* request)
+									const;
+			void				_FinishRequest(Request* request);
+			void				_DropSettledNo(team_id team);
 	static	void				_SendAnswers(BObjectList<Answer, true>&
 									answers);
 			void				_CollectAnswers(Request* request,

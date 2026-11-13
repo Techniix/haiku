@@ -1043,6 +1043,162 @@ test_permission_requests()
 }
 
 
+// #pragma mark - "Try again" (F-58 batch 2, O-16)
+
+
+static bool
+wait_for_agent_window_gone(const char* title, bigtime_t timeout)
+{
+	bigtime_t deadline = system_time() + timeout;
+	while (system_time() < deadline) {
+		if (!agent_window_exists(title))
+			return true;
+		snooze(100000);
+	}
+	return false;
+}
+
+
+//!	Closes the prompt: its QuitRequested() answers "no", not remembered.
+static bool
+close_prompt()
+{
+	BMessenger prompt = agent_window("Screen recording");
+	if (!prompt.IsValid())
+		return false;
+	return prompt.SendMessage(B_QUIT_REQUESTED) == B_OK;
+}
+
+
+struct OwnStartArgs {
+	BScreenCapture*	capture;
+	status_t		status;
+};
+
+
+static status_t
+own_start_thread(void* data)
+{
+	OwnStartArgs* args = (OwnStartArgs*)data;
+	args->status = args->capture->StartScreen(0, 20000000);
+	return B_OK;
+}
+
+
+/*!	O-16 of OBS Studio's requests (F-58 batch 2): an answer belongs to the
+	request it was given for. A "no" that is not remembered (the prompt
+	closed, "Don't allow" without "Remember my decision") or a prompt that
+	went away must not answer the application's next RequestPermission()
+	or Start...(): those prompt again. Before the fix the old request
+	stayed in app_server and answered the next one "no" at once (request
+	-1, no prompt), so OBS's "Try again" needed two clicks. A Start...()
+	that is polling when the user answers still gets that answer.
+*/
+static void
+test_try_again()
+{
+	run_agent(BString("--set ").Append(kSignature).Append(" ask").String());
+	wait_for_agent_window_gone("Screen recording", 10000000);
+
+	AnswerLooper* looper = new AnswerLooper;
+	looper->Run();
+	BMessenger target(looper);
+
+	// The first request, answered "no" (not remembered).
+	status_t status = BScreenCapture::RequestPermission(target,
+		BPrivate::SCREEN_CAPTURE_SCREEN_MASK);
+	bool prompted = wait_for_agent_window("Screen recording", 20000000);
+	bool closed = prompted && close_prompt();
+	int32 request = 0;
+	status_t first = looper->Wait(10000000, &request);
+	report("try_again_first_no", status == B_OK && prompted && closed
+			&& first == B_NOT_ALLOWED && request > 0,
+		"RequestPermission %s; prompt %s, closed %s; answer %s (want %s), "
+		"request %" B_PRId32, strerror(status), prompted ? "up" : "missing",
+		closed ? "yes" : "no", strerror(first), strerror(B_NOT_ALLOWED),
+		request);
+
+	// "Try again": a prompt of its own, no answer before it.
+	bool gone = wait_for_agent_window_gone("Screen recording", 10000000);
+	status = BScreenCapture::RequestPermission(target,
+		BPrivate::SCREEN_CAPTURE_SCREEN_MASK);
+	int32 early = 0;
+	status_t earlyAnswer = looper->Wait(1500000, &early);
+	team_id promptTeam = -1;
+	prompted = wait_for_agent_window("Screen recording", 20000000,
+		&promptTeam);
+	report("try_again_prompts", gone && status == B_OK
+			&& earlyAnswer == B_TIMED_OUT && prompted,
+		"second request: %s; answered at once: %s (request %" B_PRId32
+		"; the old request answered it \"no\" with request -1); prompt %s",
+		strerror(status), earlyAnswer == B_TIMED_OUT ? "no"
+			: strerror(earlyAnswer), early, prompted ? "up" : "missing");
+
+	// The prompt goes away without an answer: the asker hears B_CANCELED,
+	// and the next request prompts again.
+	status_t killed = promptTeam >= 0 ? kill_team(promptTeam) : B_ERROR;
+	status_t cancelled = looper->Wait(10000000, &request);
+	gone = wait_for_agent_window_gone("Screen recording", 10000000);
+	status = BScreenCapture::RequestPermission(target,
+		BPrivate::SCREEN_CAPTURE_SCREEN_MASK);
+	earlyAnswer = looper->Wait(1500000, &early);
+	prompted = wait_for_agent_window("Screen recording", 20000000);
+	report("prompt_gone_prompts_again", killed == B_OK
+			&& cancelled == B_CANCELED && gone && status == B_OK
+			&& earlyAnswer == B_TIMED_OUT && prompted,
+		"prompt killed: %s; answer %s (want %s); next request answered at "
+		"once: %s; prompt %s", strerror(killed), strerror(cancelled),
+		strerror(B_CANCELED), earlyAnswer == B_TIMED_OUT ? "no"
+			: strerror(earlyAnswer), prompted ? "up" : "missing");
+
+	// A Start...() after a delivered "no" prompts as well: it times out
+	// waiting instead of being refused at once.
+	closed = close_prompt();
+	status_t delivered = looper->Wait(10000000);
+	gone = wait_for_agent_window_gone("Screen recording", 10000000);
+	BScreenCapture capture;
+	bigtime_t start = system_time();
+	status = capture.StartScreen(0, 3000000);
+	bigtime_t took = system_time() - start;
+	bool startPrompted = agent_window_exists("Screen recording");
+	report("start_after_no_prompts", closed && delivered == B_NOT_ALLOWED
+			&& gone && status == B_TIMED_OUT && took >= 2500000
+			&& startPrompted,
+		"after a delivered no (%s): StartScreen %s after %.1f s (want %s: "
+		"waiting on a prompt of its own; refused at once before); prompt "
+		"%s", strerror(delivered), strerror(status), took / 1000000.0,
+		strerror(B_TIMED_OUT), startPrompted ? "up" : "missing");
+	capture.Stop();
+
+	// A Start...() polling when the user says no still gets its answer.
+	BScreenCapture own;
+	OwnStartArgs args = { &own, B_ERROR };
+	thread_id thread = spawn_thread(own_start_thread, "own start",
+		B_NORMAL_PRIORITY, &args);
+	if (thread >= 0)
+		resume_thread(thread);
+	snooze(1000000);
+	if (!agent_window_exists("Screen recording"))
+		wait_for_agent_window("Screen recording", 10000000);
+	closed = close_prompt();
+	start = system_time();
+	status_t threadResult;
+	if (thread >= 0)
+		wait_for_thread(thread, &threadResult);
+	took = system_time() - start;
+	report("start_gets_own_no", thread >= 0 && closed
+			&& args.status == B_NOT_ALLOWED && took < 5000000,
+		"prompt closed while StartScreen waited: %s after %.1f s (want %s)",
+		strerror(args.status), took / 1000000.0, strerror(B_NOT_ALLOWED));
+	own.Stop();
+	wait_for_agent_window_gone("Screen recording", 10000000);
+
+	run_agent(BString("--set ").Append(kSignature).Append(" allow").String());
+	if (looper->Lock())
+		looper->Quit();
+}
+
+
 // #pragma mark - frame notification and window visibility (F-58)
 
 
@@ -1402,6 +1558,8 @@ run_tests(PatternWindow* window)
 
 	// Asking without blocking (F-58).
 	test_permission_requests();
+	// An answer belongs to its own request (F-58 batch 2, O-16).
+	test_try_again();
 
 	// The Media Kit node.
 	test_media_node(region);

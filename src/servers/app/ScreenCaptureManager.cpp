@@ -98,14 +98,27 @@ struct ScreenCaptureManager::Request {
 	BObjectList<BMessenger, true> waiters;
 		// F-58: whom to tell the answer (RequestPermission())
 	uint32		sources;	// what they asked for (SCREEN_CAPTURE_*_MASK)
+	bigtime_t	lastPoll;
+		// F-58 batch 2 (OBS Studio's O-16): when a Start...() last asked
+		// about this request and was told to wait (B_WOULD_BLOCK); 0 if
+		// none did. The answer is kept for such a poller only.
 
 	Request()
 		:
 		waiters(2),
-		sources(0)
+		sources(0),
+		lastPoll(0)
 	{
 	}
 };
+
+
+/*!	F-58 batch 2 (O-16): how long after its last poll a Start...() still
+	counts as waiting for its request. BScreenCapture asks every 100 ms;
+	the margin covers a slow (emulated) machine. A poller that gave up
+	(B_TIMED_OUT) stops counting after this.
+*/
+static const bigtime_t kPollerGrace = 1500000;
 
 
 struct ScreenCaptureManager::Answer {
@@ -210,13 +223,19 @@ ScreenCaptureManager::ApplicationQuit(team_id team)
 {
 	BObjectList<Answer, true> answers(4);
 	BAutolock locker(fLock);
-	for (int32 i = 0; Request* request = fRequests.ItemAt(i); i++) {
+	for (int32 i = fRequests.CountItems() - 1; i >= 0; i--) {
+		Request* request = fRequests.ItemAt(i);
 		// F-58: a prompt that went away without an answer (closed,
-		// crashed); its request stays until the next Start...() takes it
-		// as a no for now, as before.
+		// crashed). Those who asked asynchronously get B_CANCELED now.
+		// F-58 batch 2 (O-16): the request stays only while a Start...()
+		// polls for it (it takes it as a no for now, as before); otherwise
+		// it is done, so the application's next request prompts again
+		// instead of being told "no" by this one.
 		if (request->prompt == team
 			&& request->answer == SCREEN_CAPTURE_PERMISSION_UNKNOWN) {
 			_CollectAnswers(request, B_CANCELED, answers);
+			if (!_PollerWaiting(request))
+				delete fRequests.RemoveItemAt(i);
 		}
 	}
 	for (int32 i = fSessions.CountItems() - 1; i >= 0; i--) {
@@ -307,6 +326,10 @@ ScreenCaptureManager::HandleMessage(ServerApp* app, int32 code,
 	(NULL if there is none yet). An answered request is used up here: an
 	answer without "remember" holds for this run of the application if it
 	was yes, and for this one call if it was no.
+	F-58 batch 2 (O-16): a request is only still here answered (or with
+	its prompt gone) when a Start...() was polling for it at the time; an
+	answer delivered to RequestPermission() callers alone is used up when
+	it is delivered (see _FinishRequest()).
 */
 int32
 ScreenCaptureManager::_Decide(team_id team, const BString& signature,
@@ -385,6 +408,65 @@ ScreenCaptureManager::_NewRequest(team_id team, const BString& signature,
 }
 
 
+/*!	F-58 batch 2 (O-16): whether a Start...() of the application is
+	polling for \a request (it was told B_WOULD_BLOCK recently); fLock held.
+*/
+bool
+ScreenCaptureManager::_PollerWaiting(const Request* request) const
+{
+	return request->lastPoll > 0
+		&& system_time() - request->lastPoll < kPollerGrace;
+}
+
+
+/*!	F-58 batch 2 (O-16): \a request was answered and the answer delivered
+	to everybody who asked; fLock held. A yes without "remember" holds for
+	this run of the application (as when a Start...() takes it), a no is
+	used up: it answered this request only. Deletes \a request.
+*/
+void
+ScreenCaptureManager::_FinishRequest(Request* request)
+{
+	if (request->answer == SCREEN_CAPTURE_PERMISSION_ALLOWED) {
+		BString teamKey;
+		teamKey << request->team;
+		bool known = false;
+		for (int32 i = 0; i < fAllowedOnce.CountItems(); i++) {
+			if (*fAllowedOnce.ItemAt(i) == teamKey)
+				known = true;
+		}
+		if (!known)
+			fAllowedOnce.AddItem(new(std::nothrow) BString(teamKey));
+	}
+	fRequests.RemoveItem(request, true);
+}
+
+
+/*!	F-58 batch 2 (O-16): before a new RequestPermission() of \a team's
+	application, drops its request if that one is already settled as a no
+	(answered "Don't allow" without "remember", or its prompt went away)
+	and was only kept for a Start...() that polled for it. The new request
+	is the user's "Try again": it gets a prompt of its own. fLock held.
+*/
+void
+ScreenCaptureManager::_DropSettledNo(team_id team)
+{
+	for (int32 i = fRequests.CountItems() - 1; i >= 0; i--) {
+		Request* request = fRequests.ItemAt(i);
+		if (request->team != team)
+			continue;
+		bool settledNo = request->answer == SCREEN_CAPTURE_PERMISSION_DENIED;
+		team_info info;
+		if (request->answer == SCREEN_CAPTURE_PERMISSION_UNKNOWN
+			&& request->prompt >= 0
+			&& get_team_info(request->prompt, &info) != B_OK)
+			settledNo = true;
+		if (settledNo)
+			delete fRequests.RemoveItemAt(i);
+	}
+}
+
+
 //!	Moves \a request's waiters into \a answers, with \a status; fLock held.
 void
 ScreenCaptureManager::_CollectAnswers(Request* request, status_t status,
@@ -451,6 +533,9 @@ ScreenCaptureManager::_RequestPermission(ServerApp* app, LinkReceiver& link,
 
 	BObjectList<Answer, true> answers(1);
 	BAutolock locker(fLock);
+	// O-16: an earlier "no" (not remembered) answered its own request; this
+	// one is asked anew.
+	_DropSettledNo(team);
 	Request* request = NULL;
 	int32 permission = _Decide(team, signature, &request);
 	if (permission == SCREEN_CAPTURE_PERMISSION_UNKNOWN && request == NULL)
@@ -533,6 +618,9 @@ ScreenCaptureManager::_Start(ServerApp* app, LinkReceiver& link,
 				return;
 			}
 		}
+		// O-16: a Start...() waits for this request; its answer is kept
+		// for it (see _AnswerRequest()).
+		request->lastPoll = system_time();
 		reply.StartMessage(B_WOULD_BLOCK);
 		reply.Attach<int32>(request->id);
 		return;
@@ -995,9 +1083,16 @@ ScreenCaptureManager::_AnswerRequest(ServerApp* app, LinkReceiver& link,
 			_SetPermissionLocked(request->signature, request->name,
 				request->answer);
 		}
-		// F-58: tell those who asked asynchronously. The answer stays in
-		// the request for the application's next Start...().
+		// F-58: tell those who asked asynchronously.
 		_CollectAnswers(request, allow ? B_OK : B_NOT_ALLOWED, answers);
+		// F-58 batch 2 (OBS Studio's O-16): the answer belongs to this
+		// request only. It stays for a Start...() that is polling for it;
+		// otherwise it has been delivered and the request is done, so a
+		// "no" does not answer the application's next request (OBS's "Try
+		// again" needed two clicks: the first was answered "no" at once by
+		// the old request). A yes still holds for this run.
+		if (!_PollerWaiting(request))
+			_FinishRequest(request);
 		reply.StartMessage(B_OK);
 		locker.Unlock();
 		_SendAnswers(answers);
