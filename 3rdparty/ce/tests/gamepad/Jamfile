@@ -1,0 +1,47 @@
+SubDir HAIKU_TOP 3rdparty ce tests gamepad ;
+
+# Gamepads (roadmap F-42): evdev, uinput, BGamepad and BJoystick on virtual
+# pads (gamepad_test), and the XInput, HID and SDL mapping code with
+# recorded packets (gamepad_protocol_test).
+
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+UsePrivateHeaders device drivers shared ;
+UseHeaders [ FDirName $(HAIKU_TOP) headers private kernel ] : true ;
+
+Application gamepad_test :
+	gamepad_test.cpp
+	: be device libgnu.so [ TargetLibstdc++ ]
+;
+
+local xinputDir = [ FDirName $(HAIKU_TOP) src add-ons kernel drivers input
+	xinput ] ;
+local hidSharedDir = [ FDirName $(HAIKU_TOP) src add-ons kernel drivers input
+	hid_shared ] ;
+local usbHidDir = [ FDirName $(HAIKU_TOP) src add-ons kernel drivers input
+	usb_hid ] ;
+local hidDecodeDir = [ FDirName $(HAIKU_TOP) src bin hid_decode ] ;
+
+ObjectC++Flags [ FGristFiles HIDCollection.cpp HIDParser.cpp HIDReport.cpp
+	HIDReportItem.cpp GamepadEvdevBridge.cpp gamepad_protocol_test.cpp ]
+	: [ FDefines USERLAND_HID ] ;
+ObjectHdrs [ FGristFiles HIDCollection.cpp HIDParser.cpp HIDReport.cpp
+	HIDReportItem.cpp GamepadEvdevBridge.cpp gamepad_protocol_test.cpp
+	XInputProtocol.cpp ]
+	: $(xinputDir) $(hidSharedDir) $(usbHidDir) $(hidDecodeDir) ;
+SEARCH_SOURCE += $(xinputDir) $(hidSharedDir) ;
+
+Application gamepad_protocol_test :
+	gamepad_protocol_test.cpp
+	XInputProtocol.cpp
+	GamepadEvdevBridge.cpp
+	HIDCollection.cpp
+	HIDParser.cpp
+	HIDReport.cpp
+	HIDReportItem.cpp
+	: be device [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: gamepad_test gamepad_protocol_test ;
+}
