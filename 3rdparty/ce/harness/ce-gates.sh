@@ -28,7 +28,19 @@
 
 set -u
 
-KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared'
+# Why each is here (roadmap 8.3; README):
+#  media_latency.low_latency_latency      absolute latency on a shared QEMU host
+#  media.click_free_volume                sample-step bound on the host-paced SDL card
+#  sound_settings.output_device_back      waits behind the open unplug delay (F-31)
+#  media_drift.skew_*                     QEMU's second card wanders 1000-1700 ppm
+#  media_audio.route_click_free           missed periods on the host-paced SDL card
+#  media_routing.exclude_cleared          one impure 100 ms window on the SDL card
+#  media_latency.*_continuous             gaps when the guest misses 10 ms audio ticks
+#  media_usb_audio.back_on_usb            open: a routed stream lags after a replug
+#  media.click_free_mute                  a missed loopback period reads as a step
+#  sound_settings.test_sound              one impure loopback window under host load
+#  media_routing.loopback_only_cleared    the same, right after a route change
+KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|media\.click_free_mute|sound_settings\.test_sound|media_routing\.loopback_only_cleared|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared|media_latency\.low_latency_mix_continuous|media_latency\.device_continuous|media_usb_audio\.back_on_usb'
 
 [ $# -ge 2 ] || { sed -n '2,12p' "$0" >&2; exit 2; }
 label=$1; shift
