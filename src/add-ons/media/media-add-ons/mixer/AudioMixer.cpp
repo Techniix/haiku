@@ -547,8 +547,39 @@ AudioMixer::_AutoStart()
 }
 
 
+/*!	Renga (F-61): whether the node behind \a port belongs to a device its
+	add-on no longer offers (an unplugged USB device whose node is being
+	released). Asks the media_server only, never the node.
+*/
+bool
+AudioMixer::_DeviceGone(port_id port)
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_node_id id = roster->NodeIDFor(port);
+	media_node node;
+	if (id < 0 || roster->GetNodeFor(id, &node) != B_OK)
+		return true;
+	dormant_node_info info;
+	status_t status = roster->GetDormantNodeFor(node, &info);
+	roster->ReleaseNode(node);
+	if (status != B_OK || info.addon <= 0)
+		return false;
+	dormant_node_info infos[64];
+	int32 count = 64;
+	if (roster->GetDormantNodes(infos, &count, NULL, NULL, NULL, 0, 0)
+			!= B_OK) {
+		return false;
+	}
+	for (int32 i = 0; i < count; i++) {
+		if (infos[i].addon == info.addon && infos[i].flavor_id == info.flavor_id)
+			return false;
+	}
+	return true;
+}
+
+
 void
-AudioMixer::_AutoStop()
+AudioMixer::_AutoStop(bool stopDevice)
 {
 	// Renga: loopbacks and sinks get the (silent) mix while nothing plays,
 	// so that a recording of "what you hear" keeps its timing.
@@ -556,6 +587,18 @@ AudioMixer::_AutoStop()
 		return;
 
 	fCore->Stop();
+
+	// Renga (roadmap F-61): not when the output is being disconnected
+	// because its device is gone (Disconnect(), _DeviceGone()): the node
+	// of an unplugged device is being released by media_addon_server and
+	// no longer answers, so asking it whether it records and stopping it,
+	// synchronously, in the control thread and with the core locked,
+	// waited for the 15 s port timeout, twice, and held up every request to
+	// the mixer meanwhile (the default output's fallback after an unplug
+	// took 19-56 s). A device that is only switched away from is stopped
+	// as before.
+	if (!stopDevice)
+		return;
 
 	MixerOutput* mixerOutput = fCore->Output();
 	if (mixerOutput == NULL)
@@ -1232,7 +1275,7 @@ AudioMixer::Disconnect(const media_source& what, const media_destination& where)
 	fDefaultFormat.u.raw_audio.channel_count = 2;
 
 	if (fAutoStop)
-		_AutoStop();
+		_AutoStop(!_DeviceGone(where.port));
 
 	fCore->RemoveOutput();
 	fCore->SetTimingInfo(NULL, 0);

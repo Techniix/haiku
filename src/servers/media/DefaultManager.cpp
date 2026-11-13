@@ -16,8 +16,11 @@
 #include <TimeSource.h>
 #include <string.h>
 
+#include "DataExchange.h"
 #include "MediaDebug.h"
+#include "MediaRosterEx.h"
 #include "DormantNodeManager.h"
+#include "Notifications.h"
 #include "media_server.h"
 #include "NodeManager.h"
 
@@ -691,9 +694,20 @@ DefaultManager::_CheckDevices()
 			"gone\n", fPhysicalAudioOut);
 		if (_NodeExists(fPhysicalAudioOut)
 			&& fPhysicalAudioOutFromMixer.node != media_node::null) {
-			// as when the default output is switched
-			fRoster->Disconnect(fMixerToPhysicalAudioOut,
+			// Only the mixer's side (roadmap F-61, the fallback delay):
+			// BMediaRoster::Disconnect() also asks the consumer, and the
+			// node of an unplugged device is being released by
+			// media_addon_server; its control thread no longer answers, so
+			// each such query waited for the full 15 s port timeout
+			// (19-56 s to the fallback after a USB device was pulled out).
+			// The add-on server disconnects the node's inputs itself when
+			// it releases it.
+			bigtime_t start = system_time();
+			status_t status = _DisconnectProducer(fMixerToPhysicalAudioOut,
 				fPhysicalAudioOutFromMixer);
+			printf("DefaultManager: the mixer is disconnected from the gone "
+				"output in %" B_PRIdBIGTIME " ms: %s\n",
+				(system_time() - start) / 1000, strerror(status));
 		}
 		if (fTimeSource == fPhysicalAudioOut
 			|| (fTimeSource != -1 && !_NodeExists(fTimeSource))) {
@@ -728,6 +742,36 @@ DefaultManager::_CheckDevices()
 			fAudioOutFallback = false;
 		}
 	}
+}
+
+
+/*!	Renga (F-61): disconnects \a output from \a input on the producer's
+	side only, as BMediaRoster::Disconnect() does it, but without asking the
+	consumer, whose node is gone or going (an unplugged device). The
+	producer's outputs are published again and the connection's end is
+	announced, like BMediaRoster::Disconnect() does.
+*/
+status_t
+DefaultManager::_DisconnectProducer(const media_output& output,
+	const media_input& input)
+{
+	producer_disconnect_request request;
+	producer_disconnect_reply reply;
+	request.source = output.source;
+	request.destination = input.destination;
+	status_t status = QueryPort(output.source.port, PRODUCER_DISCONNECT,
+		&request, sizeof(request), &reply, sizeof(reply));
+
+	media_node producer;
+	if (fRoster->GetNodeFor(output.node.node, &producer) == B_OK) {
+		List<media_output> outputs;
+		if (MediaRosterEx(fRoster)->GetAllOutputs(producer, &outputs) == B_OK)
+			MediaRosterEx(fRoster)->PublishOutputs(producer, &outputs);
+		fRoster->ReleaseNode(producer);
+	}
+	BPrivate::media::notifications::ConnectionBroken(output.source,
+		input.destination);
+	return status;
 }
 
 

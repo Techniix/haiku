@@ -66,6 +66,9 @@ private:
 									BMessage* saved);
 			media_node_id		_FindSavedAudioOut();
 			void				_CheckDevices();
+			status_t			_DisconnectProducer(
+									const media_output& output,
+									const media_input& input);
 			void				_MoveSlaves(media_node_id from,
 									media_node_id to);
 

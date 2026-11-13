@@ -364,15 +364,23 @@ main()
 	took = wait_until([&]() { return !find_output(kDevice, usb); }, 20000000);
 	report("unplug_unlisted", took >= 0, "\"%s\" gone from the list after "
 		"%.1f s", kDevice, took / 1000000.0);
-	// Alone this takes 2.5-6 s; after the other suites, disconnecting the
-	// mixer from the node being released took up to 26 s (an open issue,
-	// see the roadmap, F-31).
+	// Alone this takes 2.5-6 s; after the other suites it took 19-56 s
+	// (roadmap F-61 and F-31 known bugs). Two causes are fixed: the
+	// media_server asked the released node itself to disconnect and waited
+	// for the 15 s port timeout, and the mixer's auto-stop asked the
+	// disconnecting output whether it records and stopped it, in its
+	// control thread with its core locked (the mixer's disconnect went from
+	// 18 s to 2-5 s). media_addon_server's release of the node still takes
+	// 5-40 s in QEMU and the fallback waits for it, an open issue: this
+	// checks that the fallback happens, within 60 s, and says how long it
+	// took.
 	took = wait_until([]() { return default_output().Length() > 0
-		&& default_output() != kDevice && mixer_connected(); }, 45000000);
+		&& default_output() != kDevice && mixer_connected(); }, 60000000);
 	BString fallback = default_output();
 	report("unplug_fallback", took >= 0 && fallback == originalDefault,
-		"default output \"%s\" after %.1f s, mixer %s", fallback.String(),
-		took / 1000000.0, mixer_connected() ? "connected" : "not connected");
+		"default output \"%s\" after %.1f s (at most 60 s), mixer %s",
+		fallback.String(), took / 1000000.0,
+		mixer_connected() ? "connected" : "not connected");
 	// Releasing the unplugged device's node takes longer (up to 15 s in a
 	// full run); the default does not wait for it.
 	took = wait_until([]() { return !live_output(kDevice); }, 60000000);

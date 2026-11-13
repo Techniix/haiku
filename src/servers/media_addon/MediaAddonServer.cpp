@@ -779,7 +779,12 @@ MediaAddonServer::_UpdatePhysicalNodes(AddOnInfo& info)
 			info.id, node.node);
 		info.flavor_of.erase(flavor);
 		info.active_flavors.erase(info.active_flavors.begin() + i);
+		bigtime_t start = system_time();
 		_DestroyNode(node);
+		// Renga (F-61): how long the release took, for the fallback delay
+		printf("media_addon_server: node %" B_PRId32 " stopped and "
+			"disconnected in %" B_PRIdBIGTIME " ms\n", node.node,
+			(system_time() - start) / 1000);
 		// The node unregisters itself from the media_server when it is
 		// deleted, which happens after the last release is processed;
 		// the defaults must not be looked at before (they would still

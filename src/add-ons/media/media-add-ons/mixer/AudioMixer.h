@@ -143,7 +143,8 @@ protected:
 
 private:
 			void				_AutoStart();
-			void				_AutoStop();
+			void				_AutoStop(bool stopDevice = true);
+			bool				_DeviceGone(port_id port);
 
 			void				_IdentifyApplication(MixerInput* input,
 									const media_source& producer);
