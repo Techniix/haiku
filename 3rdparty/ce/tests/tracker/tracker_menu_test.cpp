@@ -166,8 +166,10 @@ main(int argc, char** argv)
 			i++) {
 		snooze(250000);
 	}
+	bool started = false;
 	if (!be_roster->IsRunning(kTrackerSignature)) {
 		printf("CE-INFO tracker_menu: starting Tracker\n");
+		started = true;
 		be_roster->Launch(kTrackerSignature);
 		for (int32 i = 0; i < 120
 				&& !be_roster->IsRunning(kTrackerSignature); i++) {
@@ -317,6 +319,20 @@ main(int argc, char** argv)
 	BString command;
 	command.SetToFormat("rm -rf \"%s\"", folder.Path());
 	system(command.String());
+
+	// Tracker started here goes again: the later suites run on a desktop
+	// without it (its desktop window and its work would change what they
+	// measure, e.g. window captures and audio timing).
+	if (started) {
+		BMessenger(kTrackerSignature).SendMessage(B_QUIT_REQUESTED);
+		for (int32 i = 0; i < 40 && be_roster->IsRunning(kTrackerSignature);
+				i++) {
+			snooze(250000);
+		}
+		printf("CE-INFO tracker_menu: Tracker %s\n",
+			be_roster->IsRunning(kTrackerSignature) ? "still running"
+				: "quit again");
+	}
 
 	printf("CE-SUITE %s DONE failures=%d\n", SUITE, sFailures);
 	return sFailures == 0 ? 0 : 1;

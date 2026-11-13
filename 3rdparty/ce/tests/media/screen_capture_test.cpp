@@ -1339,7 +1339,15 @@ run_tests(PatternWindow* window)
 				&& !has_elapsed_time(without) && has_elapsed_time(restored),
 			"\"%s\"; time off: \"%s\"; defaults: \"%s\"",
 			before.String(), without.String(), restored.String());
+		settings.SendMessage(B_QUIT_REQUESTED);
 		BMessenger(NULL, settingsTeam).SendMessage(B_QUIT_REQUESTED);
+		// The window comparison below reads the screen: the settings
+		// window must be gone from it first.
+		bigtime_t gone = system_time() + 5000000;
+		while (agent_window_exists("Screen recording")
+			&& system_time() < gone)
+			snooze(100000);
+		snooze(500000);
 	} else
 		report("settings_shown", false, "could not launch %s", kAgent);
 	capture.Stop();
