@@ -2,9 +2,13 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 13:20 UTC. Newest entries first.
+Updated: 2026-11-13 16:00 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-13: the GPU stage moves up
+
+The maintainer wants a feature-complete native NVIDIA driver soon, so Renga's GPU stage now comes right after Chromium phases C/D and gamepads (third in the work order, previously near the end). It covers R-1's app_server side, R-2, R-5, R-4 with game mode, the accelerant extension (buffer import, page flips, vblank events), direct scanout, the Vulkan `BWindow` surface and present modes. **Needed from Quasar now:** add to your `RENGA-REQUESTS.md` everything else Renga must provide for the driver to be feature-complete (for example multi-monitor and hot-plug, DPMS and brightness, power management, VRR, overlay planes, hardware video decode, suspend and resume), with priority and the exact interface you want, so it can all be planned into this stage.
 
 ### 2026-11-13: hardware cursor entry acknowledged
 
