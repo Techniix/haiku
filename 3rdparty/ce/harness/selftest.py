@@ -1090,6 +1090,77 @@ expect("crashlog: no entry answered with Alt+SysRq+B fails", not kdl_hint([
 expect("crashlog: no debugger entries fail", not kdl_hint([]))
 
 
+# The revision (F-59): build/scripts/determine_haiku_revision in a scratch
+# repository with an hrev tag; build-handover-image --check-only there.
+def revision_checks():
+	import subprocess
+	top = os.path.dirname(os.path.dirname(os.path.dirname(
+		os.path.dirname(os.path.abspath(__file__)))))
+	script = os.path.join(top, "build", "scripts", "determine_haiku_revision")
+	handover = os.path.join(top, "3rdparty", "ce", "build",
+		"build-handover-image")
+	repo = tempfile.mkdtemp()
+	# the build output, outside the repository (as generated.* is ignored)
+	outDir = tempfile.mkdtemp()
+	out = os.path.join(outDir, "haiku-revision")
+	env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+		GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+		GIT_AUTHOR_DATE="2026-11-12T10:00:00", GIT_COMMITTER_DATE=
+			"2026-11-12T10:00:00")
+
+	def git(*words):
+		subprocess.run(["git", "-C", repo] + list(words), env=env,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+	def revision():
+		subprocess.run(["sh", script, repo, out], env=env,
+			stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		with open(out) as revisionFile:
+			return revisionFile.read().strip()
+
+	def handover_ok():
+		return subprocess.run(["sh", handover, "--check-only"], cwd=repo,
+			env=env, stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL).returncode == 0
+
+	git("init", "-q")
+	with open(os.path.join(repo, "file"), "w") as f:
+		f.write("1\n")
+	git("add", "file")
+	git("commit", "-q", "-m", "base")
+	git("tag", "hrev100")
+	with open(os.path.join(repo, "file"), "w") as f:
+		f.write("2\n")
+	git("commit", "-q", "-a", "-m", "renga")
+	commit = subprocess.run(["git", "-C", repo, "rev-parse", "--short=8",
+		"HEAD"], capture_output=True, text=True).stdout.strip()
+
+	clean = revision()
+	expect("revision: names the commit and its date", clean
+		== "hrev100+1 (Renga %s 2026-11-12)" % commit, clean)
+	expect("revision handover: a clean tree passes", handover_ok())
+	with open(os.path.join(repo, "file"), "w") as f:
+		f.write("3\n")
+	modified = revision()
+	expect("revision: a modified tree says so (same HEAD, cache dropped)",
+		modified.endswith(", modified)"), modified)
+	expect("revision handover: a modified tree is refused", not handover_ok())
+	git("checkout", "-q", "file")
+	again = revision()
+	expect("revision: clean again, the cache follows", again == clean, again)
+	with open(os.path.join(repo, "untracked"), "w") as f:
+		f.write("x\n")
+	expect("revision handover: an untracked file is refused",
+		not handover_ok())
+	shutil.rmtree(repo)
+	shutil.rmtree(outDir)
+
+try:
+	revision_checks()
+except (OSError, Exception) as error:
+	expect("revision checks ran", False, str(error))
+
+
 def linuxkpi_clamp(serial):
 	directory = tempfile.mkdtemp()
 	with open(os.path.join(directory, "serial.log"), "w") as serialFile:

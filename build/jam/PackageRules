@@ -136,7 +136,9 @@ rule PreprocessPackageOrRepositoryInfo target : source : architecture
 
 actions PreprocessPackageOrRepositoryInfo1
 {
-	revision=`cat $(2[2]) | sed 's/[+-]/_/g'`
+	# Renga (F-59): only the first word (the hrev part); the revision may
+	# go on with " (Renga <commit> <date>)", which is not a package version
+	revision=`cat $(2[2]) | cut -d' ' -f1 | sed 's/[+-]/_/g'`
 	version=$(HAIKU_VERSION)_${revision}
 	sed $(HAIKU_SED_REPLACEMENTS) \
 			-e s,%HAIKU_VERSION%,${version}-1, \

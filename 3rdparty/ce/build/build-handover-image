@@ -1,0 +1,52 @@
+#!/bin/sh
+# Renga (F-59): builds the images handed over for real-hardware
+# testing, from a clean tree only, with a freshly determined revision.
+#
+#   3rdparty/ce/build/build-handover-image [--check-only] [<profile>...]
+#
+# Run from the root of the Haiku tree, after configure created
+# generated.<arch> (the build output directory is taken from
+# HAIKU_OUTPUT_DIR, default generated.x86_64). Profiles default to
+# renga-anyboot and renga-raw.
+#
+# Refuses (exit status 1) when "git status --porcelain" lists anything:
+# modified, staged or untracked files, since any of them can end up in an
+# image without being in the commit the image names. Then it removes the
+# cached revision (haiku-revision, last-built-revision), so the revision is
+# determined again from HEAD, builds the profiles and prints the revision
+# the images carry. --check-only stops after the check (the harness's
+# selftest uses it).
+
+checkOnly=no
+if [ "$1" = "--check-only" ]; then
+	checkOnly=yes
+	shift
+fi
+profiles="$*"
+[ -n "$profiles" ] || profiles="renga-anyboot renga-raw"
+
+top=`git rev-parse --show-toplevel 2>/dev/null`
+if [ -z "$top" ]; then
+	echo "build-handover-image: not in a git tree" >&2
+	exit 1
+fi
+
+status=`git -C "$top" status --porcelain`
+if [ -n "$status" ]; then
+	echo "build-handover-image: the tree is not clean; commit or remove" >&2
+	echo "these first (handover images name a commit):" >&2
+	echo "$status" | head -20 >&2
+	exit 1
+fi
+echo "build-handover-image: clean at `git -C "$top" rev-parse --short=8 HEAD`"
+[ "$checkOnly" = yes ] && exit 0
+
+output=${HAIKU_OUTPUT_DIR:-$top/generated.x86_64}
+rm -f "$output/build/haiku-revision" "$output/build/last-built-revision"
+
+cd "$output" || exit 1
+for profile in $profiles; do
+	echo "build-handover-image: building @$profile"
+	jam -q -sHAIKU_INCLUDE_3RDPARTY=1 "@$profile" || exit 1
+done
+echo "build-handover-image: revision `cat "$output/build/haiku-revision"`"

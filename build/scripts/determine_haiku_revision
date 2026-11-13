@@ -24,12 +24,22 @@ export LC_ALL=C
 
 localRev=`git rev-parse HEAD`
 
+# Renga (F-59): whether tracked files differ from HEAD is part of the cache
+# key, so a build after the tree was cleaned up does not keep reporting the
+# changes of an earlier build at the same HEAD (and the other way round).
+if [ -n "`git status --porcelain --untracked-files=no 2>/dev/null`" ]; then
+	modified=yes
+else
+	modified=no
+fi
+cacheKey="$localRev $modified"
+
 # only determine the haiku-revision if anything has changed from the
 # last build
-if [ -z "$revision" -o "$lastBuiltRevision" != "$localRev" ]; then
+if [ -z "$revision" -o "$lastBuiltRevision" != "$cacheKey" ]; then
 	# the revision we use is the description of HEAD with respect to the
 	# last reachable hrev-(haiku-revision-)tag
-	revision=`git describe --dirty --tags --match=hrev* --abbrev=1`
+	revision=`git describe --tags --match=hrev* --abbrev=1`
 	if [ -z "$revision" ]; then
 		# failed to find any hrev tags, bail out
 		echo "Error: you are using a Haiku clone without tags, please set"
@@ -38,11 +48,21 @@ if [ -z "$revision" -o "$lastBuiltRevision" != "$localRev" ]; then
 	fi
 
 	revision=`echo $revision | sed 's/-g[0-9a-z]\+//' | sed 's/-/+/g'`
-	if echo "$revision" | grep -- '-' >/dev/null; then
-		# HEAD is not directly a changeset from Haiku's central repo, so we
-		# add the current branch name as additional info
-		branchName=`git branch | grep '*' | cut -b 3-`
-		revision="$revision [$branchName]"
+	if echo "$revision" | grep -- '+' >/dev/null; then
+		# HEAD is not directly a changeset from Haiku's central repo.
+		# Renga (F-59): name the commit and its date, instead of the
+		# branch, e.g. "hrev57937+412 (Renga 1a2b3c4d 2026-11-12)"; and
+		# say so plainly when tracked files were modified (instead of
+		# git's "-dirty").
+		commit=`git rev-parse --short=8 HEAD`
+		date=`git log -1 --format=%cd --date=format:%Y-%m-%d HEAD`
+		if [ "$modified" = yes ]; then
+			revision="$revision (Renga $commit $date, modified)"
+		else
+			revision="$revision (Renga $commit $date)"
+		fi
+	elif [ "$modified" = yes ]; then
+		revision="$revision (modified)"
 	fi
 fi
 
@@ -52,5 +72,5 @@ if [ -z "$revision" ]; then
 	revision=0
 fi
 
-echo $localRev >${lastBuiltRevisionFile}
+echo $cacheKey >${lastBuiltRevisionFile}
 echo $revision >${revisionFile}
