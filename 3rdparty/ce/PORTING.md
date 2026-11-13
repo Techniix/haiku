@@ -1268,8 +1268,14 @@ Tests: `shortcut_keys_test.cpp`.
   are closed; Linux delivers those that fit). Before, `recvmsg()` failed
   and the message was lost.
 - A datagram queue holds at most 4096 messages.
+- A message larger than the receiver's whole buffer (its `SO_RCVBUF`,
+  at most 128 KiB; 64 KiB for `SOCK_DGRAM`) fails with `EMSGSIZE` at
+  once, blocking or not, as on Linux; so does a sender waiting for room
+  when the receiver shrinks its buffer below the message. Before, such a
+  send waited forever (F-58 batch 2, O-19). A message that fits but has
+  no room yet still waits (`EAGAIN` with `MSG_DONTWAIT`).
 
-Since: `fcac2cd7`. Tests: `seqpacket_test.cpp` (every image).
+Since: `fcac2cd7`; `EMSGSIZE` in F-58 batch 2. Tests: `seqpacket_test.cpp` (every image).
 
 ### Passing descriptors to app_server; GPU presentation (for drivers)
 

@@ -163,6 +163,7 @@ private:
 	status_t _Write(UnixRequest& request, bigtime_t timeout);
 	status_t _WriteNonBlocking(UnixRequest& request);
 	size_t _MinimumWritableSize(const UnixRequest& request) const;
+	bool _MessageTooLarge(const UnixRequest& request) const;
 
 private:
 	mutex				fLock;

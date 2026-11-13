@@ -555,6 +555,15 @@ UnixFifo::Write(const iovec* vecs, size_t vecCount,
 
 	UnixRequest request(vecs, vecCount, ancillaryData,
 		(struct sockaddr_storage*)address);
+
+	// Renga (F-58 batch 2, OBS Studio's O-19): a message (SOCK_SEQPACKET,
+	// SOCK_DGRAM) is written whole or not at all, so one larger than the
+	// receiver's whole buffer can never be written: EMSGSIZE at once, as
+	// Linux and the BSDs answer, instead of waiting forever for room that
+	// cannot come (or B_WOULD_BLOCK forever with MSG_DONTWAIT).
+	if (_MessageTooLarge(request))
+		RETURN_ERROR(EMSGSIZE);
+
 	fWriters.Add(&request);
 	fWriteRequested += request.TotalSize();
 
@@ -627,7 +636,9 @@ UnixFifo::SetBufferCapacity(size_t capacity)
 	if (error != B_OK)
 		return error;
 
-	// wake up waiting writers, if the capacity increased
+	// wake up waiting writers, if the capacity increased (and, F-58 batch
+	// 2, O-19: if it decreased, so that a message that no longer fits gets
+	// EMSGSIZE instead of waiting forever)
 	if (!fWriters.IsEmpty() && !IsWriteShutdown())
 		fWriteCondition.NotifyAll();
 
@@ -742,6 +753,12 @@ UnixFifo::_Write(UnixRequest& request, bigtime_t timeout)
 
 			if (error != B_OK)
 				RETURN_ERROR(error);
+
+			// F-58 batch 2 (O-19): the receiver may have made its buffer
+			// smaller than the message meanwhile (SO_RCVBUF;
+			// SetBufferCapacity() wakes us).
+			if (_MessageTooLarge(request))
+				RETURN_ERROR(EMSGSIZE);
 		}
 
 		if (IsWriteShutdown())
@@ -776,6 +793,18 @@ UnixFifo::_WriteNonBlocking(UnixRequest& request)
 
 	// Write as much as we can.
 	RETURN_ERROR(fBuffer.Write(request));
+}
+
+
+/*!	F-58 batch 2 (O-19): whether \a request is a message that does not fit
+	into the buffer even when it is empty. Streams are written in parts and
+	never are.
+*/
+bool
+UnixFifo::_MessageTooLarge(const UnixRequest& request) const
+{
+	return fType == UnixFifoType::Datagram
+		&& (uint64)request.TotalSize() > (uint64)fBuffer.Capacity();
 }
 
 

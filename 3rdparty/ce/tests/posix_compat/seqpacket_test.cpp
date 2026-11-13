@@ -18,13 +18,20 @@
 	  is seen by the sender); MSG_CTRUNC when the receiver's control buffer
 	  is too small, and the descriptors that did not fit are not leaked;
 	- socketpair() and bind/listen/accept/connect on a path;
-	- the peer's close: the next receive returns 0.
+	- the peer's close: the next receive returns 0;
+	- a message that can never fit the receiver's buffer (F-58 batch 2,
+	  OBS Studio's O-19): EMSGSIZE at once, blocking or not, also for
+	  SOCK_DGRAM and when the receiver shrinks its buffer (SO_RCVBUF)
+	  while a sender waits; a message that fits but has no room yet still
+	  waits (EAGAIN with MSG_DONTWAIT). Before, such a send waited forever.
 
 	Output format: see 3rdparty/ce/README.md.
 */
 
 
 #include <sys/mman.h>
+
+#include <OS.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -358,6 +365,151 @@ test_listen()
 }
 
 
+// #pragma mark - messages too large (F-58 batch 2, O-19)
+
+
+//!	send() with its time and errno.
+struct SendResult {
+	ssize_t		result;
+	int			error;
+	bigtime_t	took;
+};
+
+
+static SendResult
+timed_send(int socket, const void* data, size_t size, int flags)
+{
+	SendResult result;
+	bigtime_t start = system_time();
+	errno = 0;
+	result.result = send(socket, data, size, flags);
+	result.error = result.result < 0 ? errno : 0;
+	result.took = system_time() - start;
+	return result;
+}
+
+
+//!	A send that would wait forever before the fix returns after this.
+static void
+limit_send_wait(int socket)
+{
+	timeval timeout = { 3, 0 };
+	setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+}
+
+
+struct ShrinkArgs {
+	int			socket;
+	const char*	data;
+	size_t		size;
+	SendResult	result;
+};
+
+
+static status_t
+send_thread(void* data)
+{
+	ShrinkArgs* args = (ShrinkArgs*)data;
+	args->result = timed_send(args->socket, args->data, args->size, 0);
+	return B_OK;
+}
+
+
+static void
+test_too_large()
+{
+	static char data[256 * 1024];
+	memset(data, 'x', sizeof(data));
+	static char buffer[256 * 1024];
+
+	int pair[2];
+	if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair) != 0) {
+		report("too_large", false, "socketpair: %s", strerror(errno));
+		return;
+	}
+	limit_send_wait(pair[0]);
+
+	// 256 KiB: more than any UNIX socket buffer holds (128 KiB at most).
+	SendResult big = timed_send(pair[0], data, sizeof(data), 0);
+	report("too_large_emsgsize", big.result < 0 && big.error == EMSGSIZE
+			&& big.took < 1000000,
+		"256 KiB message: %zd, %s after %" B_PRIdBIGTIME " us (want %s at "
+		"once; it used to wait forever)", big.result, strerror(big.error),
+		big.took, strerror(EMSGSIZE));
+	big = timed_send(pair[0], data, sizeof(data), MSG_DONTWAIT);
+	report("too_large_dontwait", big.result < 0 && big.error == EMSGSIZE,
+		"with MSG_DONTWAIT: %zd, %s (want %s, not %s)", big.result,
+		strerror(big.error), strerror(EMSGSIZE), strerror(EAGAIN));
+
+	// The receiver's buffer made small: what does not fit is refused, what
+	// fits goes through, and a fitting message without room waits.
+	int size = 8192;
+	int set = setsockopt(pair[1], SOL_SOCKET, SO_RCVBUF, &size,
+		sizeof(size));
+	SendResult over = timed_send(pair[0], data, 16384, 0);
+	SendResult fits = timed_send(pair[0], data, 6000, 0);
+	SendResult full = timed_send(pair[0], data, 6000, MSG_DONTWAIT);
+	ssize_t got = recv(pair[1], buffer, sizeof(buffer), MSG_DONTWAIT);
+	ssize_t none = recv(pair[1], buffer, sizeof(buffer), MSG_DONTWAIT);
+	report("too_large_rcvbuf", set == 0 && over.result < 0
+			&& over.error == EMSGSIZE && fits.result == 6000 && got == 6000,
+		"SO_RCVBUF 8 KiB (%s): 16 KiB message %s; 6000 bytes: %zd, "
+		"received %zd", set == 0 ? "set" : strerror(errno),
+		over.result < 0 ? strerror(over.error) : "sent", fits.result, got);
+	report("fits_but_full_waits", full.result < 0 && (full.error == EAGAIN
+			|| full.error == EWOULDBLOCK) && none < 0,
+		"a 6000-byte message with 6000 bytes queued in 8 KiB, "
+		"MSG_DONTWAIT: %s (want %s: it fits once there is room)",
+		full.result < 0 ? strerror(full.error) : "sent", strerror(EAGAIN));
+
+	// A sender waits for room; the receiver then shrinks its buffer below
+	// the message (but not below what is queued): EMSGSIZE, no hang.
+	size = 65536;
+	setsockopt(pair[1], SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+	SendResult queued = timed_send(pair[0], data, 40000, 0);
+	ShrinkArgs args = { pair[0], data, 50000, { 0, 0, 0 } };
+	thread_id thread = spawn_thread(send_thread, "sender",
+		B_NORMAL_PRIORITY, &args);
+	resume_thread(thread);
+	snooze(300000);
+	size = 45000;
+	set = setsockopt(pair[1], SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+	bigtime_t shrunk = system_time();
+	status_t exitValue;
+	wait_for_thread(thread, &exitValue);
+	bigtime_t after = system_time() - shrunk;
+	report("too_large_after_shrink", queued.result == 40000 && set == 0
+			&& args.result.result < 0 && args.result.error == EMSGSIZE
+			&& after < 1000000,
+		"40000 queued (%zd); 50000 waiting, then SO_RCVBUF 45000 (%s): "
+		"%s %" B_PRIdBIGTIME " us later (want %s)", queued.result,
+		set == 0 ? "set" : strerror(errno), args.result.result < 0
+			? strerror(args.result.error) : "sent", after,
+		strerror(EMSGSIZE));
+	close(pair[0]);
+	close(pair[1]);
+
+	// SOCK_DGRAM: the same (its receive buffer is 64 KiB).
+	if (socketpair(AF_UNIX, SOCK_DGRAM, 0, pair) != 0) {
+		report("too_large_dgram", false, "socketpair(SOCK_DGRAM): %s",
+			strerror(errno));
+		return;
+	}
+	limit_send_wait(pair[0]);
+	big = timed_send(pair[0], data, 70000, 0);
+	SendResult small = timed_send(pair[0], data, 1000, 0);
+	got = recv(pair[1], buffer, sizeof(buffer), MSG_DONTWAIT);
+	report("too_large_dgram", big.result < 0 && big.error == EMSGSIZE
+			&& big.took < 1000000 && small.result == 1000 && got == 1000,
+		"SOCK_DGRAM 70000 bytes: %s after %" B_PRIdBIGTIME " us (want %s); "
+		"1000 bytes: %zd, received %zd", big.result < 0
+			? strerror(big.error) : "sent", big.took, strerror(EMSGSIZE),
+		small.result, got);
+	close(pair[0]);
+	close(pair[1]);
+}
+
+
 int
 main()
 {
@@ -366,6 +518,7 @@ main()
 	test_boundaries();
 	test_rights();
 	test_listen();
+	test_too_large();
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);
 	return sFailures == 0 ? 0 : 1;

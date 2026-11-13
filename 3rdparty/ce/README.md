@@ -750,7 +750,11 @@ of a 1 GiB guest was, so the bounce path went untested.
   parameter names the feeding team and size; a second feeder gets
   `B_BUSY`; `CodyCam --camera "Virtual Camera"` previews it (screenshot
   `virtual_camera_codycam`, `virtual_camera.screenshots`); after the
-  feeder disconnects, grey frames and "none" again.
+  feeder disconnects, grey frames and "none" again. F-58 batch 2: the
+  status has its five values (`status_fields`); against a node of the
+  test's own that stops reading, `WriteFrame()` with a timeout of 0
+  returns `B_WOULD_BLOCK`, with 300 ms `B_TIMED_OUT`, the feed stays
+  connected and `Disconnect()` returns at once (`stalled_*`, O-20).
 - **media_codec** (`media_codec_test`, renga-* images): the encode/decode
   API (`headers/private/media/MediaCodec.h`, roadmap F-31 phase 4) and the
   FFmpeg plug-in's encoders behind it. `MediaWriter` writes two seconds of
@@ -853,7 +857,13 @@ of a 1 GiB guest was, so the bounce path went untested.
   application's own loopback; the host finds its 5250 Hz on no card,
   `media_routing_audio.loopback_only_silent`) and loopbacks by team
   (`renga:loopback_team`: two processes of one signature told apart; 0
-  selects by signature). Screenshots `routing_loopback_only` (Audio
+  selects by signature). F-58 batch 2 (O-17, O-18): each stream's team
+  (`app_team`), and a team made loopback only for now before its stream
+  connects (`transient_*`: listed, out of "every stream", in its team's
+  loopback, forgotten when the team quits and not remembered for the
+  next process, switching a playing stream both ways, an unknown team
+  refused); the host finds its 5700 Hz on no card,
+  `media_routing_audio.transient_silent`. Screenshots `routing_loopback_only` (Audio
   preferences) and `routing_loopback_only_media` (Media preferences),
   `media_routing.screenshots`.
 - **media_latency** (`sound_latency_test`, renga-* images, last of the
@@ -934,7 +944,12 @@ of a 1 GiB guest was, so the bounce path went untested.
   (a memfd shared, both ends of a pipe usable), room for 1 of 3
   descriptors (the message, `MSG_CTRUNC`, nothing leaked), descriptors
   with 0 bytes, and a bound listener with `connect()`/`accept()` passing
-  a memfd.
+  a memfd. F-58 batch 2 (O-19): a message that can never fit the
+  receiver's buffer gets `EMSGSIZE` at once (`too_large_emsgsize`,
+  `too_large_dontwait`, `too_large_rcvbuf` with SO_RCVBUF 8 KiB,
+  `too_large_after_shrink` for a sender waiting while the receiver
+  shrinks its buffer, `too_large_dgram` for SOCK_DGRAM), while a message
+  that fits but has no room yet still waits (`fits_but_full_waits`).
 - **appserver_fd** (every image, `appserver_fd_test`; roadmap F-58, the
   Quasar driver's R-1 prerequisite): descriptors sent to app_server with
   `BPrivate::app_server_send_fd()` (`headers/private/app/
