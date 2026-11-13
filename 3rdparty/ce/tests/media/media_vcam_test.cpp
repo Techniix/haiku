@@ -21,6 +21,19 @@
 	- feeder_gone: after the feeder disconnects, the frames are "no signal"
 	  again
 	- codycam: CodyCam previews it (screenshot virtual_camera_codycam)
+	- status_fields: the parameter has the five values VirtualCamera.h
+	  describes (F-58 batch 2: the comment listed three)
+	- stalled_would_block, stalled_timed_out, stalled_stays_connected,
+	  stalled_disconnect (F-58 batch 2, OBS Studio's O-20): against a node
+	  of this test's own that stops reading, WriteFrame() with a timeout of
+	  0 returns B_WOULD_BLOCK once the queue is full, with a timeout
+	  B_TIMED_OUT after it, the feed stays connected, and Disconnect()
+	  returns at once
+
+	Threads (F-58 batch 2, "not thread safe"): the feeding thread is
+	always joined before the feeder is disconnected or destroyed, on every
+	path (FeedingThread below), and a failed fork() never reaches
+	waitpid() or kill() with -1.
 */
 
 
@@ -35,11 +48,15 @@
 #include <ParameterWeb.h>
 #include <String.h>
 
+#include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -180,6 +197,213 @@ feed_thread(void* data)
 }
 
 
+/*!	The feeding thread, joined before the feeder it uses is disconnected
+	or destroyed: Join() where the test needs the result, and the
+	destructor on any other way out. Declared after the feeder, so it is
+	destroyed (joined) first.
+*/
+struct FeedingThread {
+	thread_id	thread;
+	status_t	result;
+
+	FeedingThread() : thread(-1), result(B_NO_INIT) {}
+	~FeedingThread() { Join(); }
+
+	status_t Start(FeedArgs* args)
+	{
+		thread = spawn_thread(feed_thread, "feed", B_NORMAL_PRIORITY, args);
+		if (thread < 0)
+			return result = thread;
+		status_t status = resume_thread(thread);
+		if (status != B_OK) {
+			kill_thread(thread);
+			thread = -1;
+			result = status;
+		}
+		return status;
+	}
+
+	status_t Join()
+	{
+		if (thread >= 0) {
+			status_t exitValue = B_ERROR;
+			if (wait_for_thread(thread, &exitValue) == B_OK)
+				result = exitValue;
+			thread = -1;
+		}
+		return result;
+	}
+};
+
+
+// #pragma mark - a node that stops reading (F-58 batch 2, O-20)
+
+
+struct StalledNode {
+	BString		path;
+	int			listener;
+	int			client;
+	sem_id		done;
+	thread_id	thread;
+	status_t	status;
+
+	StalledNode()
+		:
+		listener(-1),
+		client(-1),
+		done(create_sem(0, "stalled node")),
+		thread(-1),
+		status(B_NO_INIT)
+	{
+		path << "/tmp/virtual_camera_stalled_" << getpid();
+	}
+
+	~StalledNode()
+	{
+		Stop();
+		delete_sem(done);
+	}
+
+	status_t Start()
+	{
+		unlink(path.String());
+		listener = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+		if (listener < 0)
+			return errno;
+		sockaddr_un address = {};
+		address.sun_family = AF_UNIX;
+		strlcpy(address.sun_path, path.String(), sizeof(address.sun_path));
+		if (bind(listener, (sockaddr*)&address, sizeof(address)) != 0
+			|| listen(listener, 1) != 0)
+			return errno;
+		thread = spawn_thread(_Serve, "stalled node", B_NORMAL_PRIORITY,
+			this);
+		if (thread < 0)
+			return thread;
+		return resume_thread(thread);
+	}
+
+	void Stop()
+	{
+		if (thread >= 0) {
+			release_sem(done);
+			status_t exitValue;
+			wait_for_thread(thread, &exitValue);
+			thread = -1;
+		}
+		if (client >= 0)
+			close(client);
+		client = -1;
+		if (listener >= 0)
+			close(listener);
+		listener = -1;
+		unlink(path.String());
+	}
+
+	//!	Answers the configure message like the node, then reads nothing.
+	static status_t _Serve(void* data)
+	{
+		StalledNode* node = (StalledNode*)data;
+		// Poll, so that Stop() also ends a thread nobody connected to.
+		while (true) {
+			if (acquire_sem_etc(node->done, 1, B_RELATIVE_TIMEOUT, 0) == B_OK)
+				return B_OK;
+			pollfd entry = { node->listener, POLLIN, 0 };
+			if (poll(&entry, 1, 200) > 0)
+				break;
+		}
+		int client = accept(node->listener, NULL, NULL);
+		if (client < 0) {
+			node->status = errno;
+			return B_OK;
+		}
+		node->client = client;
+		BPrivate::virtual_camera_configure configure;
+		char control[CMSG_SPACE(sizeof(int))];
+		iovec iov = { &configure, sizeof(configure) };
+		msghdr message = {};
+		message.msg_iov = &iov;
+		message.msg_iovlen = 1;
+		message.msg_control = control;
+		message.msg_controllen = sizeof(control);
+		ssize_t received = recvmsg(client, &message, 0);
+		cmsghdr* cmsg = CMSG_FIRSTHDR(&message);
+		if (cmsg != NULL && cmsg->cmsg_type == SCM_RIGHTS) {
+			int fd;
+			memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
+			close(fd);
+		}
+		BPrivate::virtual_camera_reply reply = { B_OK, 0 };
+		if (received != (ssize_t)sizeof(configure)
+			|| configure.what != VIRTUAL_CAMERA_CONFIGURE)
+			reply.status = B_BAD_VALUE;
+		send(client, &reply, sizeof(reply), 0);
+		node->status = reply.status;
+		// Stop reading: the frame messages pile up.
+		acquire_sem(node->done);
+		return B_OK;
+	}
+};
+
+
+static void
+test_stalled_node()
+{
+	StalledNode node;
+	status_t status = node.Start();
+	VirtualCameraFeeder feeder;
+	if (status == B_OK)
+		status = feeder.ConnectTo(node.path.String(), 64, 48, 30);
+	std::vector<uint32> pixels(64 * 48);
+	fill(pixels, 0x804020);
+
+	// Non-blocking: frames go until the queue is full.
+	int written = 0;
+	status_t last = B_OK;
+	bigtime_t start = system_time();
+	bigtime_t slowest = 0;
+	while (status == B_OK && written < 200000) {
+		bigtime_t before = system_time();
+		last = feeder.WriteFrame(pixels.data(), 64 * 4, before, 0);
+		slowest = max_c(slowest, system_time() - before);
+		if (last != B_OK)
+			break;
+		written++;
+	}
+	report("stalled_would_block", status == B_OK && last == B_WOULD_BLOCK
+			&& written > 0 && slowest < 200000,
+		"ConnectTo: %s; %d frames, then %s (want %s) after %.2f s; slowest "
+		"call %" B_PRIdBIGTIME " us", strerror(status), written,
+		strerror(last), strerror(B_WOULD_BLOCK),
+		(system_time() - start) / 1000000.0, slowest);
+
+	start = system_time();
+	status_t timed = status == B_OK
+		? feeder.WriteFrame(pixels.data(), 64 * 4, start, 300000) : B_ERROR;
+	bigtime_t took = system_time() - start;
+	report("stalled_timed_out", timed == B_TIMED_OUT && took >= 280000
+			&& took < 1500000,
+		"with a 300 ms timeout: %s after %" B_PRIdBIGTIME " us (want %s)",
+		strerror(timed), took, strerror(B_TIMED_OUT));
+
+	bool connected = feeder.IsConnected();
+	status_t again = connected
+		? feeder.WriteFrame(pixels.data(), 64 * 4, system_time(), 0)
+		: B_ERROR;
+	report("stalled_stays_connected", connected && again == B_WOULD_BLOCK,
+		"connected after the dropped frames: %s; next frame %s",
+		connected ? "yes" : "no", strerror(again));
+
+	start = system_time();
+	feeder.Disconnect();
+	took = system_time() - start;
+	report("stalled_disconnect", took < 500000 && !feeder.IsConnected(),
+		"Disconnect() with the node not reading: %" B_PRIdBIGTIME " us",
+		took);
+	node.Stop();
+}
+
+
 int
 main()
 {
@@ -314,6 +538,19 @@ main()
 	report("status", during.StartsWith(expected.String()),
 		"\"%s\" (want \"%s ...\")", during.String(), expected.String());
 
+	// F-58 batch 2: "<team> <w>x<h> <received> <sent>", five values
+	int32 team = -1;
+	uint32 statusWidth = 0, statusHeight = 0;
+	long long received = -1, sent = -1;
+	int fields = sscanf(during.String(), "%" B_SCNd32 " %" B_SCNu32 "x%"
+		B_SCNu32 " %lld %lld", &team, &statusWidth, &statusHeight, &received,
+		&sent);
+	report("status_fields", fields == 5 && team == getpid()
+			&& statusWidth == 160 && statusHeight == 120 && received >= 0
+			&& sent >= 0,
+		"\"%s\": %d values (want 5: team, size, received, sent)",
+		during.String(), fields);
+
 	VirtualCameraFeeder second;
 	status_t busy = second.Connect(64, 64, 30);
 	report("second_feeder_busy", busy == B_BUSY,
@@ -323,39 +560,45 @@ main()
 	// recorder lets go of it meanwhile).
 	recorder.Stop();
 	recorder.Disconnect();
-	VirtualCameraFeeder* feederPointer = &feeder;
-	FeedArgs args = { feederPointer, 0x2060c0, 9.0 };
-	thread_id feeding = spawn_thread(feed_thread, "feed", B_NORMAL_PRIORITY,
-		&args);
-	resume_thread(feeding);
-	pid_t codycam = fork();
-	if (codycam == 0) {
-		execl(kCodyCam, kCodyCam, "--camera", VIRTUAL_CAMERA_FLAVOR_NAME,
-			(char*)NULL);
-		_exit(127);
-	}
-	snooze(6000000);
-	printf("CE-HOST screenshot virtual_camera_codycam\n");
-	fflush(stdout);
-	snooze(1500000);
-	BMessenger(NULL, codycam).SendMessage(B_QUIT_REQUESTED);
-	int exitStatus = -1;
-	// CodyCam stops and disconnects the camera node before it quits; the
-	// node lives in media_addon_server, so give it time.
-	for (int i = 0; i < 120; i++) {
-		if (waitpid(codycam, &exitStatus, WNOHANG) == codycam)
-			break;
-		snooze(250000);
-		if (i == 119) {
-			kill(codycam, SIGKILL);
-			waitpid(codycam, &exitStatus, 0);
+	FeedArgs args = { &feeder, 0x2060c0, 9.0 };
+	{
+		// Declared after the feeder: joined before it is disconnected or
+		// destroyed, whichever way this block is left.
+		FeedingThread feeding;
+		status_t spawned = feeding.Start(&args);
+		pid_t codycam = spawned == B_OK ? fork() : -1;
+		if (codycam == 0) {
+			execl(kCodyCam, kCodyCam, "--camera", VIRTUAL_CAMERA_FLAVOR_NAME,
+				(char*)NULL);
+			_exit(127);
 		}
+		int exitStatus = -1;
+		if (codycam > 0) {
+			snooze(6000000);
+			printf("CE-HOST screenshot virtual_camera_codycam\n");
+			fflush(stdout);
+			snooze(1500000);
+			BMessenger(NULL, codycam).SendMessage(B_QUIT_REQUESTED);
+			// CodyCam stops and disconnects the camera node before it
+			// quits; the node lives in media_addon_server, so give it time.
+			for (int i = 0; i < 120; i++) {
+				if (waitpid(codycam, &exitStatus, WNOHANG) == codycam)
+					break;
+				snooze(250000);
+				if (i == 119) {
+					kill(codycam, SIGKILL);
+					waitpid(codycam, &exitStatus, 0);
+				}
+			}
+		}
+		status_t feedResult = feeding.Join();
+		report("codycam", codycam > 0 && WIFEXITED(exitStatus)
+				&& feedResult == B_OK,
+			"feeding thread: %s; CodyCam --camera \"%s\" %s (status 0x%x); "
+			"feeding %s", strerror(spawned), VIRTUAL_CAMERA_FLAVOR_NAME,
+			codycam > 0 ? "ran and quit" : "not started", exitStatus,
+			strerror(feedResult));
 	}
-	status_t feedResult;
-	wait_for_thread(feeding, &feedResult);
-	report("codycam", WIFEXITED(exitStatus) && feedResult == B_OK,
-		"CodyCam --camera \"%s\" ran and quit (status 0x%x); feeding %s",
-		VIRTUAL_CAMERA_FLAVOR_NAME, exitStatus, strerror(feedResult));
 
 	feeder.Disconnect();
 	snooze(1000000);
@@ -383,6 +626,10 @@ main()
 		backToGrey ? "grey" : "not grey", after.String());
 
 	roster->ReleaseNode(node);
+
+	// O-20: a node that stops reading (this test's own, so that the media
+	// services are not disturbed).
+	test_stalled_node();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

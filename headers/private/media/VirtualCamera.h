@@ -25,6 +25,12 @@
 	VirtualCameraFeeder below does all of it (header-only; link with -lgnu
 	for memfd_create(), and libnetwork).
 
+	F-58 batch 2 (OBS Studio's O-20): WriteFrame() with a timeout never
+	waits longer than asked if the node stops reading (media_addon_server
+	busy, stopped or hung): B_WOULD_BLOCK at once with a timeout of 0,
+	B_TIMED_OUT after the timeout otherwise; the frame is dropped and the
+	feed stays connected. Disconnect() never waits for the node.
+
 	A slot's sequence is odd while the feeder writes it; the node copies a
 	slot whose sequence is even and the same before and after the copy.
 */
@@ -35,6 +41,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -47,7 +54,9 @@
 #define VIRTUAL_CAMERA_SOCKET		VIRTUAL_CAMERA_SOCKET_DIRECTORY \
 	"/virtual_camera"
 // The node's hidden text parameter: "<feeder team> <width>x<height> <frames
-// received>", or "none".
+// received> <frames sent>" (five values: the feeder's team, the fed size,
+// the frames received from the feeder and the buffers the node sent to its
+// consumer), or "none" without a feeder.
 #define VIRTUAL_CAMERA_STATUS_KIND	"renga:virtual_camera"
 
 #define VIRTUAL_CAMERA_MAGIC		'RVcm'
@@ -132,7 +141,20 @@ public:
 	status_t Connect(uint32 width, uint32 height, float fieldRate,
 		uint32 slotCount = 3)
 	{
+		return ConnectTo(VIRTUAL_CAMERA_SOCKET, width, height, fieldRate,
+			slotCount);
+	}
+
+	/*!	Connect() to the node listening on \a socketPath instead of the
+		system's virtual camera (F-58 batch 2: the tests use it with a node
+		of their own that stops reading).
+	*/
+	status_t ConnectTo(const char* socketPath, uint32 width, uint32 height,
+		float fieldRate, uint32 slotCount = 3)
+	{
 		Disconnect();
+		if (socketPath == NULL)
+			return B_BAD_VALUE;
 		if (width == 0 || height == 0 || width > VIRTUAL_CAMERA_MAX_SIZE
 			|| height > VIRTUAL_CAMERA_MAX_SIZE || slotCount < 2
 			|| slotCount > VIRTUAL_CAMERA_MAX_SLOTS)
@@ -164,8 +186,7 @@ public:
 		fcntl(fSocket, F_SETFD, FD_CLOEXEC);
 		sockaddr_un address = {};
 		address.sun_family = AF_UNIX;
-		strlcpy(address.sun_path, VIRTUAL_CAMERA_SOCKET,
-			sizeof(address.sun_path));
+		strlcpy(address.sun_path, socketPath, sizeof(address.sun_path));
 		if (connect(fSocket, (sockaddr*)&address, sizeof(address)) != 0)
 			return _Fail(errno == ENOENT || errno == ECONNREFUSED
 				? B_NO_INIT : errno);
@@ -210,10 +231,18 @@ public:
 		return fSocket >= 0;
 	}
 
+	/*!	Ends the feed. Never waits for the node (F-58 batch 2, O-20): the
+		socket is shut down before it is closed, which also wakes a
+		WriteFrame() blocked in another thread (the class is not thread
+		safe otherwise: do not call it while another thread is inside
+		WriteFrame() copying a frame).
+	*/
 	void Disconnect()
 	{
-		if (fSocket >= 0)
+		if (fSocket >= 0) {
+			shutdown(fSocket, SHUT_RDWR);
 			close(fSocket);
+		}
 		fSocket = -1;
 		if (fMapped != NULL)
 			munmap(fMapped, fSize);
@@ -224,12 +253,38 @@ public:
 	}
 
 	/*!	Copies a B_RGB32 frame of the configured size (\a bytesPerRow per
-		row) into the next slot and announces it.
+		row) into the next slot and announces it. Waits as long as it takes
+		if the node is not reading; see the overload with a timeout.
 	*/
 	status_t WriteFrame(const void* bits, uint32 bytesPerRow, bigtime_t time)
 	{
+		return WriteFrame(bits, bytesPerRow, time, B_INFINITE_TIMEOUT);
+	}
+
+	/*!	WriteFrame() that waits at most \a timeout (F-58 batch 2, OBS
+		Studio's O-20) for room to announce the frame: 0 does not wait
+		(B_WOULD_BLOCK if the node has not taken the previous frames yet),
+		B_INFINITE_TIMEOUT waits as long as it takes (as the other
+		overload), anything else returns B_TIMED_OUT once it is up. The
+		check comes first, so a frame that cannot be announced is not
+		copied and costs nothing; it is dropped, the feed stays connected
+		and the next WriteFrame() tries again. Other errors (the node went
+		away) disconnect, as before.
+	*/
+	status_t WriteFrame(const void* bits, uint32 bytesPerRow, bigtime_t time,
+		bigtime_t timeout)
+	{
 		if (fSocket < 0 || fMapped == NULL)
 			return B_NO_INIT;
+		bigtime_t deadline = timeout == B_INFINITE_TIMEOUT
+			? B_INFINITE_TIMEOUT
+			: system_time() + (timeout > 0 ? timeout : 0);
+		status_t ready = _WaitWritable(timeout);
+		if (ready != B_OK) {
+			if (ready != B_WOULD_BLOCK && ready != B_TIMED_OUT)
+				Disconnect();
+			return ready;
+		}
 		uint32 slot = fNext;
 		fNext = (fNext + 1) % fSlotCount;
 		virtual_camera_memory* header = (virtual_camera_memory*)fMapped;
@@ -245,16 +300,55 @@ public:
 		atomic_add(&info.sequence, 1);
 
 		virtual_camera_frame frame = { VIRTUAL_CAMERA_FRAME, slot, time };
-		if (send(fSocket, &frame, sizeof(frame), 0) != (ssize_t)sizeof(frame))
-		{
+		int flags = timeout == B_INFINITE_TIMEOUT ? 0 : MSG_DONTWAIT;
+		while (send(fSocket, &frame, sizeof(frame), flags)
+				!= (ssize_t)sizeof(frame)) {
 			status_t status = errno;
-			Disconnect();
-			return status;
+			if (status == EINTR)
+				continue;
+			if (status != EAGAIN && status != EWOULDBLOCK) {
+				Disconnect();
+				return status;
+			}
+			// poll() saw some room, but not enough for the message (or it
+			// was taken meanwhile): try again until the time is up
+			bigtime_t left = deadline - system_time();
+			if (timeout == 0)
+				return B_WOULD_BLOCK;
+			if (left <= 0)
+				return B_TIMED_OUT;
+			snooze(min_c(left, (bigtime_t)2000));
 		}
 		return B_OK;
 	}
 
 private:
+	//!	Waits until a frame message can be sent, at most \a timeout.
+	status_t _WaitWritable(bigtime_t timeout)
+	{
+		if (timeout == B_INFINITE_TIMEOUT)
+			return B_OK;
+		bigtime_t deadline = system_time() + (timeout > 0 ? timeout : 0);
+		while (true) {
+			bigtime_t left = deadline - system_time();
+			// poll() counts in milliseconds; round up so that a short
+			// timeout still waits
+			int milliseconds = left <= 0 ? 0
+				: (int)min_c((left + 999) / 1000, (bigtime_t)0x7fffffff);
+			pollfd entry = { fSocket, POLLOUT, 0 };
+			int result = poll(&entry, 1, milliseconds);
+			if (result > 0) {
+				if ((entry.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+					return B_ERROR;
+				if ((entry.revents & POLLOUT) != 0)
+					return B_OK;
+			} else if (result < 0 && errno != EINTR)
+				return errno;
+			if (system_time() >= deadline)
+				return timeout <= 0 ? B_WOULD_BLOCK : B_TIMED_OUT;
+		}
+	}
+
 	status_t _Fail(status_t status)
 	{
 		Disconnect();
