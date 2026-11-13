@@ -1,0 +1,13 @@
+SubDir HAIKU_TOP 3rdparty ce tests wifi ;
+
+# Wi-Fi without a Wi-Fi card (F-34): on Renga images, wpa_supplicant
+# being there.
+UsePrivateHeaders net ;
+Application wifi_test :
+	wifi_test.cpp
+	: be bnetapi [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : wifi_test ;
+}

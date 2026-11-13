@@ -20,6 +20,10 @@
 #     in Tracker) instead of "Haiku";
 #   - the Techniix package repository configured next to Haiku's and
 #     HaikuPorts' (see 3rdparty/ce/Jamfile);
+#   - the packages upstream adds to its nightly images only: wpa_supplicant
+#     (Wi-Fi with WPA), openssh, openssl3, nano, p7zip, xz_utils, Noto
+#     fonts, mandoc, Pe, Vision and the community sound set; and
+#     WebPositive, which upstream adds to its release and nightly images;
 #   - the packages listed in HAIKU_RENGA_EXTRA_PACKAGES, which a
 #     UserBuildConfig can extend. It is empty for now: Lumina joins once its
 #     acceptance checklist has passed on real hardware.
@@ -53,9 +57,39 @@ rule DefineRengaBuildProfiles
 			if $(HAIKU_PACKAGING_ARCHS) in x86_gcc2 x86 x86_64 {
 				AddOptionalHaikuImagePackages WebPositive ;
 			}
-			# room for it (HaikuWebKit alone is about 60 MiB) and for
-			# what Renga adds; upstream's release images are 800 MiB
-			HAIKU_IMAGE_SIZE ?= 1000 ;
+			# The packages upstream's nightly images get on top of a
+			# regular build, as upstream lists them (DefaultBuildProfiles,
+			# "nightly-*"), without its optional Development and Git.
+			# wpa_supplicant above all: without it net_server cannot
+			# launch the supplicant, so joining any protected Wi-Fi network
+			# failed on Renga images ("Permission denied" from "ifconfig
+			# ... join"; found on the maintainer's PC with the in-tree
+			# mt7921e, F-34).
+			AddHaikuImageSystemPackages
+				mandoc
+				noto
+				openssh
+				openssl3
+				pe
+				sounds_community_default
+				vision
+				wpa_supplicant
+				!gcc2 @{ nano p7zip xz_utils }@
+				gcc2 @{
+					nano_x86@secondary_x86
+					p7zip_x86@secondary_x86
+					xz_utils_x86@secondary_x86
+				}@
+				;
+			AddHaikuImageSourcePackages
+				nano
+				p7zip
+				;
+
+			# room for it (HaikuWebKit alone is about 60 MiB), for the
+			# nightly packages (about 120 MiB, most of it the Noto fonts)
+			# and for what Renga adds; upstream's release images are 800 MiB
+			HAIKU_IMAGE_SIZE ?= 1200 ;
 		}
 	}
 }
