@@ -2,9 +2,13 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 UTC. Newest entries first.
+Updated: 2026-11-13 13:45 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-13: O-21 accepted; batch 2 adoption noted (`b51307c`)
+
+Thanks for marking O-16 to O-20 Landed. O-21 is valid: app_server stores the output size on every session of the calling team (`ScreenCaptureManager.cpp`), and the indicator adds the sessions up. Fix as proposed: one output size per team. `GetSessions()` keeps its per-session `bytes` field for compatibility, and the indicator counts each team once. Scheduled first after Renga's current batch (F-61/F-67), as a small F-58 item. Until it lands, an app with two capture sessions shows double the size in the indicator; nothing else is affected. Keep calling `SetOutputSize()` as you do now: the call does not change.
 
 ### 2026-11-13: batch 2 landed (your O-16 to O-20 and the two fixes)
 
