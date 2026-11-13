@@ -2,9 +2,61 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 03:58 UTC. Newest entries first.
+Updated: 2026-11-13 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-13: batch 2 landed (your O-16 to O-20 and the two fixes)
+
+Every item below is on `ce/main` of Techniix/haiku. Please mark each one Landed in your `RENGA-REQUESTS.md` with its commit. The commit messages have the full detail. Gate results are at the end.
+
+**O-16, "Try again" needs one click: Landed, [`a1378d54`](https://github.com/Techniix/haiku/commit/a1378d54).**
+- An answer now belongs only to the request it was given for. After a "no" that was not remembered ("Don't allow" without "Remember my decision", or the prompt closed or gone) has reached you, the next `RequestPermission()` or `Start...()` shows the prompt again. It is no longer answered "no" at once with request -1.
+- A `Start...()` that is waiting when the user answers still gets that answer. A "yes" without "remember" still holds until OBS quits.
+- No interface change. Your "Try again" button can call `RequestPermission()` once.
+
+**O-17, the team of each mixer stream: Landed, [`cbd2a2c8`](https://github.com/Techniix/haiku/commit/cbd2a2c8).**
+- Each stream's group in the system mixer's web has a hidden null parameter of kind `renga:app_team`. Its name is the team id in decimal. Streams of media add-ons have none.
+- In `AudioStreamControl.h`: `AudioStream::team` (-1 if unknown) and `AudioStreamControl::FindStream(team_id)`. Both are add-only, at the end of the struct.
+
+**O-18, loopback only by team, not remembered: Landed, [`cbd2a2c8`](https://github.com/Techniix/haiku/commit/cbd2a2c8).**
+- The system mixer has a hidden text parameter of kind `renga:loopback_only_teams`. Write "<team> 1" to add a team and "<team> 0" to remove it. Reading it gives the teams, one per line.
+- How to use it: `control.Update(); control.SetTeamLoopbackOnly(helperTeam, true);` **before** the helper's stream starts. Not even its first buffer reaches a card. You get `B_BAD_VALUE` for a team that does not run.
+- Streams that are already playing switch at once. A stream set this way reads `loopbackOnly` and `transientLoopbackOnly` true, and its Output menu shows "None (loopback only)".
+- Nothing is remembered. The stream's stored Output choice is kept, the team is forgotten when it quits, and the application's next process plays as its settings say. If the user picks another output in a stream's Output menu, that choice wins for that stream.
+- With O-17, you can find each helper's stream by team and drop the second signature your browser helpers use. Record each helper with `SetLoopbackTeam(node, helperTeam)` (O-3), as before.
+
+**O-19, oversized UNIX messages: Landed, [`a220f582`](https://github.com/Techniix/haiku/commit/a220f582).**
+- A `SOCK_SEQPACKET` or `SOCK_DGRAM` send of a message larger than the receiver's whole buffer now fails at once with `EMSGSIZE`, as on Linux. That holds blocking or with `MSG_DONTWAIT`.
+- The buffer is the receiver's `SO_RCVBUF`: at most 128 KiB, and 64 KiB for `SOCK_DGRAM`. A sender that is waiting also gets `EMSGSIZE` if the receiver shrinks its buffer below the message.
+- A message that fits but has no room yet still waits (`EAGAIN` with `MSG_DONTWAIT`).
+- Your browser IPC can split or refuse large frames on `EMSGSIZE` instead of guarding against a hang.
+
+**O-20, virtual camera writes that cannot hang: Landed, [`677afa3d`](https://github.com/Techniix/haiku/commit/677afa3d).**
+- New overload: `VirtualCameraFeeder::WriteFrame(bits, bytesPerRow, time, bigtime_t timeout)`.
+  - A timeout of 0 does not wait. It returns `B_WOULD_BLOCK` when the node has not taken the previous frames.
+  - Any other value returns `B_TIMED_OUT` when it is up.
+  - `B_INFINITE_TIMEOUT` waits, like the three-argument call, which is unchanged.
+- A dropped frame is not copied, and the feed stays connected. Other errors still disconnect.
+- `Disconnect()` never waits for the node, also when media_addon_server stopped reading. It shuts the socket down first.
+- How to use it: call `WriteFrame(..., 0)` from OBS's output thread and count `B_WOULD_BLOCK` as a dropped frame. Or pass about one frame interval as the timeout.
+- New for tests: `ConnectTo(path, ...)` connects to a node on another socket.
+
+**Fixes you found: Landed, [`677afa3d`](https://github.com/Techniix/haiku/commit/677afa3d).**
+- `VirtualCamera.h`'s comment on `renga:virtual_camera` now lists the five values: `<team> <w>x<h> <received> <sent>`, or "none". The test checks all five.
+- `media_vcam_test.cpp`: the feeding thread is now joined before the feeder is disconnected or destroyed on every path, through a small RAII joiner. A failed `fork()` can no longer reach `waitpid(-1)` or `kill(-1, ...)`.
+
+**Tests and gates.** Every fix has a regression test, and each test was shown to fail on the old code where that is possible.
+- Suites: `capture` +5 (`try_again_*`, `prompt_gone_prompts_again`, `start_*`), `media_routing` +8 plus the host check `media_routing_audio.transient_silent`, `virtual_camera` +5, `seqpacket` +6.
+- O-16, O-17/O-18 and O-20 were gated together:
+  - default 929/929, `--smp 2` 928/928 and UEFI 926/926 passed;
+  - renga-raw passed every check of the changed suites, but had known host-timing failures in other media checks each run (`media_drift.skew_*`; `media_latency` continuity; `media_usb.unplug_fallback`, an old delay).
+  - The baseline mixer fails the drift checks on this host too.
+- O-19 was gated on its own, on the final tree (this was also the end-of-batch sweep):
+  - default 935/935, `--smp 2` 934/934 and UEFI 932/932 (on the retry after the known-flaky `linuxkpi.edu_*`) passed;
+  - renga-raw 1291/1292: one QEMU USB-audio replug check failed (`media_usb_audio.back_on_usb`), unrelated.
+- All of this is QEMU Tested only, nothing on real hardware yet.
+- Worth trying on your PC: the virtual camera with a busy system, and browser sources with O-18.
 
 ### 2026-11-12: screen capture reads main memory; the pointer no longer stutters while recording ([`a22d9aba`](https://github.com/Techniix/haiku/commit/a22d9aba))
 
