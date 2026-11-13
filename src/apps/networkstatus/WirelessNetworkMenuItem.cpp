@@ -8,6 +8,9 @@
 
 #include <string.h>
 
+#include <algorithm>
+
+#include <Bitmap.h>
 #include <Catalog.h>
 #include <String.h>
 
@@ -19,10 +22,11 @@
 
 
 WirelessNetworkMenuItem::WirelessNetworkMenuItem(wireless_network network,
-	BMessage* message)
+	BMessage* message, const BBitmap* lockIcon)
 	:
 	BMenuItem(network.name, message),
-	fNetwork(network)
+	fNetwork(network),
+	fLockIcon(lockIcon)
 {
 	// Append authentication mode to label
 	BString label = B_TRANSLATE("%name% (%authenticationMode%)");
@@ -83,6 +87,16 @@ WirelessNetworkMenuItem::GetContentSize(float* width, float* height)
 {
 	BMenuItem::GetContentSize(width, height);
 	*width += *height + 4;
+	if (fLockIcon != NULL)
+		*width += *height + 2;
+}
+
+
+bool
+WirelessNetworkMenuItem::_IsSecured() const
+{
+	return fNetwork.authentication_mode != B_NETWORK_AUTHENTICATION_NONE
+		|| (fNetwork.flags & B_NETWORK_IS_ENCRYPTED) != 0;
 }
 
 
@@ -96,6 +110,19 @@ WirelessNetworkMenuItem::DrawRadioIcon()
 
 	RadioView::Draw(Menu(), bounds, fNetwork.signal_strength,
 		RadioView::DefaultMax());
+
+	// Renga: a padlock (HVIF, NetworkStatusIconsRenga.rdef) left of the
+	// bars for secured networks
+	if (fLockIcon != NULL && _IsSecured()) {
+		BRect lock = fLockIcon->Bounds();
+		float size = std::min(bounds.Height(), lock.Height());
+		BRect target(bounds.left - 2 - size, bounds.top, bounds.left - 2,
+			bounds.top + size);
+		Menu()->PushState();
+		Menu()->SetDrawingMode(B_OP_ALPHA);
+		Menu()->DrawBitmap(fLockIcon, lock, target, B_FILTER_BITMAP_BILINEAR);
+		Menu()->PopState();
+	}
 }
 
 

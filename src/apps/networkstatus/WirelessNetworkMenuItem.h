@@ -10,11 +10,15 @@
 #include <NetworkDevice.h>
 
 
+class BBitmap;
+
+
 class WirelessNetworkMenuItem : public BMenuItem {
 public:
 								WirelessNetworkMenuItem(
 									wireless_network network,
-									BMessage* message);
+									BMessage* message,
+									const BBitmap* lockIcon = NULL);
 	virtual						~WirelessNetworkMenuItem();
 
 			wireless_network	Network() const { return fNetwork; }
@@ -31,7 +35,10 @@ protected:
 			void				DrawRadioIcon();
 
 private:
+			bool				_IsSecured() const;
+
 			wireless_network	fNetwork;
+			const BBitmap*		fLockIcon;
 };
 
 

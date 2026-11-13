@@ -1,18 +1,23 @@
 SubDir HAIKU_TOP src apps networkstatus ;
 
-UsePrivateHeaders interface net ;
+UsePrivateHeaders interface net storage ;
 UseLibraryHeaders agg ;
+
+# WirelessFrequency.cpp: the net80211 ioctl headers (as libnetapi uses them)
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network ] : true ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_wlan ] : true ;
 
 Application NetworkStatus :
 	NetworkStatusWindow.cpp
 	NetworkStatusView.cpp
 	NetworkStatus.cpp
 	RadioView.cpp
+	WirelessFrequency.cpp
 	WirelessNetworkMenuItem.cpp
 
 	: be shared localestub $(TARGET_NETWORK_LIBS)
 		libbnetapi.so [ TargetLibstdc++ ]
-	: NetworkStatus.rdef NetworkStatusIcons.rdef
+	: NetworkStatus.rdef NetworkStatusIcons.rdef NetworkStatusIconsRenga.rdef
 ;
 
 DoCatalogs NetworkStatus :

@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+#
+# Copyright 2026, Renga contributors.
+# Distributed under the terms of the MIT License.
+#
+"""Writes the Renga NetworkStatus icons (src/apps/networkstatus/
+NetworkStatusIconsRenga.rdef): HVIF vector icons, so that they scale for
+HiDPI like every other Haiku icon.
+
+    3rdparty/ce/tools/make_network_icons.py > \\
+        src/apps/networkstatus/NetworkStatusIconsRenga.rdef
+
+The icons are made of filled polygons on HVIF's 64x64 grid (arcs as many
+short segments), written in HVIF's flat format by hvif.py. Icon-O-Matic
+opens them, so they can be refined by hand later; then keep the .rdef and
+retire this script.
+
+  wifi_0 .. wifi_4   the Wi-Fi fan, 0 to 4 bars lit
+  wifi_off           the fan crossed out (Wi-Fi switched off)
+  wired, wired_dim   an Ethernet plug, normal and greyed
+  tether, tether_dim a phone (USB tethering), normal and greyed
+  badge_noinet       "!" in an orange circle (connected, no internet)
+  badge_lock         a padlock (a VPN or tunnel carries the default route)
+  badge_cross        a red cross (disconnected)
+  lock               a full-size padlock (secured networks in the menu)
+
+IDs: headers/private/net/NetworkStatusIcon.h (kNetworkIcon*).
+"""
+
+import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hvif
+
+# colours (RGBA): the active parts in a mid blue and the inactive ones
+# in a translucent grey, both readable on light and dark Deskbars
+ACTIVE = (0x1f, 0x6f, 0xc0, 0xff)
+INACTIVE = (0x8a, 0x94, 0xa0, 0x80)
+DIM = (0x8a, 0x94, 0xa0, 0xc0)
+LIGHT = (0xf4, 0xf6, 0xf8, 0xff)
+ORANGE = (0xe8, 0x9a, 0x12, 0xff)
+RED = (0xd2, 0x3b, 0x3b, 0xff)
+WHITE = (0xff, 0xff, 0xff, 0xff)
+GOLD = (0xc9, 0x9a, 0x2e, 0xff)
+
+ICONS = [
+	(1100, "wifi_0"), (1101, "wifi_1"), (1102, "wifi_2"), (1103, "wifi_3"),
+	(1104, "wifi_4"), (1105, "wifi_off"), (1106, "wired"),
+	(1107, "wired_dim"), (1108, "tether"), (1109, "tether_dim"),
+	(1110, "badge_noinet"), (1111, "badge_lock"), (1112, "badge_cross"),
+	(1113, "lock"),
+]
+
+
+def arc_points(cx, cy, radius, start, end, steps):
+	return hvif.arc_points(cx, cy, radius, start, end, steps)
+
+
+def sector(cx, cy, inner, outer, start=225, end=315, steps=12):
+	if inner <= 0:
+		return [(cx, cy)] + arc_points(cx, cy, outer, start, end, steps)
+	return arc_points(cx, cy, outer, start, end, steps) \
+		+ arc_points(cx, cy, inner, end, start, steps)
+
+
+FAN = [(0, 7), (13, 20), (26, 33), (39, 46)]
+FAN_CENTER = (32, 54)
+
+
+def fan(icon, lit, colour_on=ACTIVE, colour_off=INACTIVE):
+	for index, (inner, outer) in enumerate(FAN):
+		icon.polygon(sector(FAN_CENTER[0], FAN_CENTER[1], inner, outer),
+			colour_on if index < lit else colour_off)
+
+
+def bar(x0, y0, x1, y1, width):
+	dx, dy = x1 - x0, y1 - y0
+	length = math.hypot(dx, dy)
+	nx, ny = -dy / length * width / 2, dx / length * width / 2
+	return [(x0 + nx, y0 + ny), (x1 + nx, y1 + ny), (x1 - nx, y1 - ny),
+		(x0 - nx, y0 - ny)]
+
+
+def plug(icon, colour):
+	icon.polygon([(14, 16), (50, 16), (50, 44), (41, 44), (41, 50),
+		(23, 50), (23, 44), (14, 44)], colour)
+	for i in range(6):
+		x = 19 + i * 5
+		icon.polygon([(x, 20), (x + 2, 20), (x + 2, 28), (x, 28)], LIGHT)
+	icon.polygon([(29, 50), (35, 50), (35, 60), (29, 60)], colour)
+
+
+def phone(icon, colour):
+	icon.polygon([(22, 6), (42, 6), (44, 8), (44, 56), (42, 58), (22, 58),
+		(20, 56), (20, 8)], colour)
+	icon.polygon([(24, 12), (40, 12), (40, 48), (24, 48)], LIGHT)
+	icon.polygon([(29, 51), (35, 51), (35, 54), (29, 54)], LIGHT)
+
+
+circle = hvif.circle
+
+
+def build(name):
+	icon = hvif.Icon()
+	if name.startswith("wifi_") and name[-1].isdigit():
+		fan(icon, int(name[-1]))
+	elif name == "wifi_off":
+		fan(icon, 0, colour_off=DIM)
+		icon.polygon(bar(10, 58, 54, 8, 6), RED)
+	elif name == "wired":
+		plug(icon, ACTIVE)
+	elif name == "wired_dim":
+		plug(icon, DIM)
+	elif name == "tether":
+		phone(icon, ACTIVE)
+	elif name == "tether_dim":
+		phone(icon, DIM)
+	elif name == "badge_noinet":
+		icon.polygon(circle(50, 50, 13), ORANGE)
+		icon.polygon([(48, 40), (52, 40), (51.5, 53), (48.5, 53)], WHITE)
+		icon.polygon(circle(50, 57.5, 2, 8), WHITE)
+	elif name == "badge_lock":
+		icon.polygon(sector(50, 46, 4, 8, 180, 360, 10), ACTIVE)
+		icon.polygon([(40, 45), (60, 45), (60, 62), (40, 62)], GOLD)
+		icon.polygon(circle(50, 53, 2.5, 8), ACTIVE)
+	elif name == "lock":
+		icon.polygon(sector(32, 30, 9, 15, 180, 360, 12), ACTIVE)
+		icon.polygon([(12, 29), (52, 29), (52, 60), (12, 60)], GOLD)
+		icon.polygon(circle(32, 42, 4.5, 10), ACTIVE)
+		icon.polygon([(30, 44), (34, 44), (35, 53), (29, 53)], ACTIVE)
+	elif name == "badge_cross":
+		icon.polygon(circle(50, 50, 13), RED)
+		icon.polygon(bar(44, 44, 56, 56, 4), WHITE)
+		icon.polygon(bar(56, 44, 44, 56, 4), WHITE)
+	else:
+		raise ValueError(name)
+	return icon.flat()
+
+
+def rdef():
+	lines = ["/*", " * Copyright 2026, Renga contributors.",
+		" * Distributed under the terms of the MIT License.", " *",
+		" * Generated by 3rdparty/ce/tools/make_network_icons.py; do not edit",
+		" * by hand (see the script). The IDs are kNetworkIcon* in",
+		" * headers/private/net/NetworkStatusIcon.h.", " */", ""]
+	for number, name in ICONS:
+		lines.append(hvif.rdef_array(number, name, build(name)))
+		lines.append("")
+	return "\n".join(lines)
+
+
+if __name__ == "__main__":
+	print(rdef(), end="")

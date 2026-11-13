@@ -632,6 +632,8 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Recommended next action | Maintainer: `WIFI-HARDWARE-TEST.md` |
 | Links | `F-26`; LinuxKPI_HaikuOS `docs/TESTING.md` |
 
+**Wi-Fi fix image (2026-11-13), QEMU and unit tested only, needs hardware:** the first real-hardware run of the in-tree `mt7921e` scanned fine, but joining WPA2 failed ("Permission denied"): Renga images had no `wpa_supplicant` (upstream adds it only in nightly/release profiles); now the nightly packages are in renga-* images (`wifi.wpa_supplicant`). Networks are listed once per name and security (strongest signal, joined by name; "Show each access point" option); `hw_crypto` is "Card does the encryption" in LinuxKPI Manager, off by default; RX A-MPDU clearing left as FreeBSD has it. NetworkStatus shows the link type, bars, state and VPN, with an internet check against `http://detectportal.firefox.com/success.txt` (Mozilla's portal check: non-profit, worldwide, plain HTTP so portals can intercept it; URL configurable, off switch in the Network preferences).
+
 ### Porting APIs
 
 #### F-06 eventfd

@@ -9,6 +9,7 @@
 
 
 #include "NetworkStatus.h"
+#include "NetworkStatusView.h"
 #include "NetworkStatusWindow.h"
 
 #include <Alert.h>
@@ -89,9 +90,32 @@ NetworkStatus::ArgvReceived(int32 argc, char** argv)
 		|| strcmp(argv[1], "-h") == 0) {
 		BString str = B_TRANSLATE("%appname% options:\n"
 			"\t--deskbar\tautomatically add replicant to Deskbar\n"
+			"\t--state\t\tprint what the icon shows and exit\n"
 			"\t--help\t\tprint this info and exit");
 		str.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("NetworkStatus"));
 		puts(str.String());
+		fQuitImmediately = true;
+		return;
+	}
+
+	if (strcmp(argv[1], "--state") == 0) {
+		// Renga: print what the icon, its tooltip and its menu show (for
+		// the tests; the internet check runs first)
+		NetworkStatusView view(BRect(0, 0, 15, 15), B_FOLLOW_NONE);
+		BMessage state;
+		view.GetState(state);
+		printf("icon %" B_PRId32 " %" B_PRId32 "\n", state.GetInt32("base", 0),
+			state.GetInt32("badge", 0));
+		printf("state %s\n", state.GetString("state", ""));
+		printf("interface %s\n", state.GetString("interface", ""));
+		printf("check %s %s\n", state.GetBool("check") ? "on" : "off",
+			state.GetString("url", ""));
+		BString toolTip = state.GetString("tooltip", "");
+		toolTip.ReplaceAll("\n", "\ntooltip ");
+		printf("tooltip %s\n", toolTip.String());
+		const char* label;
+		for (int32 i = 0; state.FindString("menu", i, &label) == B_OK; i++)
+			printf("menu %s\n", label);
 		fQuitImmediately = true;
 		return;
 	}

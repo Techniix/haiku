@@ -25,6 +25,7 @@
 #include <Deskbar.h>
 #include <Directory.h>
 #include <LayoutBuilder.h>
+#include <NetworkConnectivity.h>
 #include <NetworkDevice.h>
 #include <NetworkInterface.h>
 #include <NetworkNotifications.h>
@@ -55,6 +56,7 @@ static const uint32 kMsgProfileManage = 'mngp';
 static const uint32 kMsgProfileNew = 'newp';
 static const uint32 kMsgRevert = 'rvrt';
 static const uint32 kMsgToggleReplicant = 'trep';
+static const uint32 kMsgToggleConnectivityCheck = 'tcon';
 static const uint32 kMsgItemSelected = 'ItSl';
 
 BMessenger gNetworkWindow;
@@ -123,6 +125,22 @@ NetworkWindow::NetworkWindow()
 		BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
 	showReplicantCheckBox->SetValue(_IsReplicantInstalled());
 
+	// Renga: the Deskbar icon's internet check (NetworkConnectivity.h)
+	BPrivate::connectivity_settings connectivity;
+	BPrivate::load_connectivity_settings(connectivity);
+	BCheckBox* connectivityCheckBox = new BCheckBox("connectivityCheckBox",
+		B_TRANSLATE("Check internet access"),
+		new BMessage(kMsgToggleConnectivityCheck));
+	connectivityCheckBox->SetExplicitMaxSize(
+		BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
+	connectivityCheckBox->SetValue(connectivity.enabled);
+	BString toolTip = B_TRANSLATE("The network status icon asks %url% "
+		"whenever the connection changes and every few minutes, and shows "
+		"\"!\" when the answer does not come through (no internet, or a "
+		"network that wants you to sign in first).");
+	toolTip.ReplaceFirst("%url%", connectivity.url);
+	connectivityCheckBox->SetToolTip(toolTip.String());
+
 	fListView = new BOutlineListView("list", B_SINGLE_SELECTION_LIST,
 		B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE | B_FRAME_EVENTS | B_NAVIGABLE);
 	fListView->SetSelectionMessage(new BMessage(kMsgItemSelected));
@@ -154,6 +172,7 @@ NetworkWindow::NetworkWindow()
 		.End()
 
 		.Add(showReplicantCheckBox)
+		.Add(connectivityCheckBox)
 		.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
 			.Add(fRevertButton)
 			.AddGlue()
@@ -241,6 +260,17 @@ NetworkWindow::MessageReceived(BMessage* message)
 		{
 			_ShowReplicant(
 				message->GetInt32("be:value", B_CONTROL_OFF) == B_CONTROL_ON);
+			break;
+		}
+
+		case kMsgToggleConnectivityCheck:
+		{
+			// the icon watches the file and follows at once
+			BPrivate::connectivity_settings connectivity;
+			BPrivate::load_connectivity_settings(connectivity);
+			connectivity.enabled = message->GetInt32("be:value",
+				B_CONTROL_ON) == B_CONTROL_ON;
+			BPrivate::save_connectivity_settings(connectivity);
 			break;
 		}
 

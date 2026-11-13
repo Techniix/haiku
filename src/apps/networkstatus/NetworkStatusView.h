@@ -16,9 +16,13 @@
 
 #include <map>
 
+#include <NetworkConnectivity.h>
+#include <NetworkStatusIcon.h>
+
 
 class BMessageRunner;
 class BNetworkInterface;
+class BPopUpMenu;
 
 
 enum {
@@ -50,6 +54,11 @@ class NetworkStatusView : public BView {
 		virtual	void	MouseDown(BPoint where);
 		virtual	void	Draw(BRect updateRect);
 
+				// Renga: what the icon, its tooltip and its menu show, for
+				// "NetworkStatus --state" (the tests); checks the internet
+				// connection first, waiting for the answer.
+				void	GetState(BMessage& state);
+
 	private:
 		void			_AboutRequested();
 		void			_Quit();
@@ -61,11 +70,42 @@ class NetworkStatusView : public BView {
 		void			_Update(bool force = false);
 		void			_OpenNetworksPreferences();
 
+		// Renga: the dynamic icon
+		void			_BuildMenu(BPopUpMenu* menu);
+		void			_UpdateIcon();
+		void			_LoadConnectivitySettings();
+		void			_StartConnectivityCheck();
+		static status_t	_ConnectivityThread(void* data);
+		void			_ToggleWireless(const char* name);
+
 		std::map<BString, int32>
 						fInterfaceStatuses;
 		bool			fInDeskbar;
 		BBitmap*		fTrayIcons[kStatusCount];
 		BBitmap*		fNotifyIcons[kStatusCount];
+
+		BBitmap*		fIcons[BPrivate::kNetworkIconCount];
+		BBitmap*		fMenuLock;
+		BPrivate::network_icon
+						fIcon;
+		BPrivate::network_link_state
+						fState;
+		BPrivate::network_link_state
+						fLinkState;
+							// fState before the internet check
+		BString			fPrimaryInterface;
+		BString			fToolTip;
+		int32			fFrame;
+		BMessageRunner*	fAnimation;
+		BMessageRunner*	fTicker;
+
+		BPrivate::connectivity_settings
+						fConnectivity;
+		int32			fConnectivityResult;
+							// a connectivity_result, or -1: not known
+		int32			fCheckGeneration;
+		thread_id		fCheckThread;
+		bigtime_t		fLastCheck;
 };
 
 #endif	// NETWORK_STATUS_VIEW_H
