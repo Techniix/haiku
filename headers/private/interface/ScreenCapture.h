@@ -99,13 +99,17 @@ public:
 	// software (see ScreenCaptureDefs.h).
 	static	status_t			GetSessions(BMessage* sessions);
 				// "id", "team", "signature", "name", "source" (int32),
-				// "frame" (BRect), "started" (int64), "frames" (int64), one
-				// entry per session
+				// "frame" (BRect), "started" (int64), "frames" (int64),
+				// "bytes" (int64, the session's team's output size), one
+				// entry per session; then "total_team" (int32) and
+				// "total_bytes" (int64), one entry per team (O-21: add
+				// these up, not "bytes", for what all recordings wrote)
 	static	status_t			StopSession(int32 id);
 	static	status_t			SetOutputSize(int64 bytes);
 				// F-59: what the calling team's recording has written so
-				// far, shown by the recording indicator ("bytes" in
-				// GetSessions())
+				// far, shown by the recording indicator ("total_bytes" in
+				// GetSessions()); one size per team, however many
+				// sessions it has
 	static	status_t			GetPermissions(BMessage* permissions);
 				// "signature", "name", "state" (int32), one per application
 	static	status_t			SetPermission(const char* signature,

@@ -1,6 +1,6 @@
 SubDir HAIKU_TOP 3rdparty ce tests media ;
 
-UsePrivateHeaders app interface media ;
+UsePrivateHeaders app interface media shared ;
 
 # Runs in the harness's second phase, with media_server started (see
 # harness/guest/runner.sh), hence its own directory.
@@ -49,7 +49,8 @@ Application media_video_test :
 # Screen capture (F-31 phase 3) and screen recording in Screenshot (F-44).
 Application screen_capture_test :
 	screen_capture_test.cpp
-	: be media [ TargetLibstdc++ ]
+	: be media localestub [ TargetLibstdc++ ]
+		<$(TARGET_PACKAGING_ARCH)>libshared.a
 ;
 
 # The encode/decode API (F-31 phase 4) and the FFmpeg plug-in's encoders.

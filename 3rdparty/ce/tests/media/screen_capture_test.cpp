@@ -61,6 +61,7 @@
 
 #include <CaptureSession.h>
 #include <ScreenCapture.h>
+#include <StringForSize.h>
 #include <WindowInfo.h>
 
 
@@ -1043,6 +1044,78 @@ test_permission_requests()
 }
 
 
+// #pragma mark - one output size per team (F-58 batch 2, O-21)
+
+
+/*!	O-21: SetOutputSize() is per team. A team with two capture sessions
+	(OBS: a screen and a window source) used to have its size stored on
+	both, and the indicator, adding up the sessions, showed twice the size.
+	GetSessions() keeps "bytes" per session (the team's size, as before)
+	and lists each team once in "total_team"/"total_bytes".
+*/
+static void
+test_two_sessions()
+{
+	BScreenCapture first;
+	BScreenCapture second;
+	status_t status = first.StartScreen(0, 5000000);
+	if (status == B_OK)
+		status = second.StartScreen(0, 5000000);
+	const int64 kBytes = 7 * 1024 * 1024 + 300 * 1024;
+	if (status == B_OK)
+		status = BScreenCapture::SetOutputSize(kBytes);
+
+	BMessage sessions;
+	BScreenCapture::GetSessions(&sessions);
+	int32 mine = 0;
+	int32 rightBytes = 0;
+	int32 team;
+	for (int32 i = 0; sessions.FindInt32("team", i, &team) == B_OK; i++) {
+		if (team != getpid())
+			continue;
+		mine++;
+		if (sessions.GetInt64("bytes", i, -1) == kBytes)
+			rightBytes++;
+	}
+	int32 totals = 0;
+	int64 total = -1;
+	for (int32 i = 0; sessions.FindInt32("total_team", i, &team) == B_OK;
+			i++) {
+		if (team == getpid()) {
+			totals++;
+			total = sessions.GetInt64("total_bytes", i, -1);
+		}
+	}
+	report("two_sessions_listed", status == B_OK && mine == 2
+			&& rightBytes == 2 && totals == 1 && total == kBytes,
+		"%s; this team's sessions: %" B_PRId32 ", %" B_PRId32 " with \"bytes\" "
+		"%" B_PRId64 "; \"total_bytes\" entries for the team: %" B_PRId32
+		" (want 1), %" B_PRId64, strerror(status), mine, rightBytes, kBytes,
+		totals, total);
+
+	// The indicator shows the size once (it refreshes every half second).
+	char once[64];
+	char twice[64];
+	string_for_size(kBytes, once, sizeof(once));
+	string_for_size(2 * kBytes, twice, sizeof(twice));
+	BString text;
+	for (int i = 0; i < 30; i++) {
+		text = indicator_text();
+		if (text.FindFirst(once) >= 0 || text.FindFirst(twice) >= 0)
+			break;
+		snooze(200000);
+	}
+	report("two_sessions_indicator", text.FindFirst(once) >= 0
+			&& text.FindFirst(twice) < 0,
+		"indicator \"%s\" (want \"%s\", not \"%s\")", text.String(), once,
+		twice);
+
+	BScreenCapture::SetOutputSize(0);
+	first.Stop();
+	second.Stop();
+}
+
+
 // #pragma mark - "Try again" (F-58 batch 2, O-16)
 
 
@@ -1560,6 +1633,8 @@ run_tests(PatternWindow* window)
 	test_permission_requests();
 	// An answer belongs to its own request (F-58 batch 2, O-16).
 	test_try_again();
+	// One output size per team (F-58 batch 2, O-21).
+	test_two_sessions();
 
 	// The Media Kit node.
 	test_media_node(region);

@@ -314,8 +314,22 @@ BScreenCapture::GetSessions(BMessage* sessions)
 	for (int32 i = 0; i < count; i++) {
 		int64 bytes;
 		if (link.Read<int64>(&bytes) != B_OK)
-			break;
+			return B_OK;
 		sessions->AddInt64("bytes", bytes);
+	}
+	// O-21: each team's size once ("bytes" repeats it for every session of
+	// a team); an older app_server sends none
+	int32 teams;
+	if (count == 0 || link.Read<int32>(&teams) != B_OK)
+		return B_OK;
+	for (int32 i = 0; i < teams; i++) {
+		team_id team;
+		int64 bytes;
+		link.Read<team_id>(&team);
+		if (link.Read<int64>(&bytes) != B_OK)
+			break;
+		sessions->AddInt32("total_team", team);
+		sessions->AddInt64("total_bytes", bytes);
 	}
 	return B_OK;
 }

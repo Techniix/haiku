@@ -6,6 +6,8 @@
 #define SCREEN_CAPTURE_MANAGER_H
 
 
+#include <map>
+
 #include <Locker.h>
 #include <Message.h>
 #include <Messenger.h>
@@ -142,6 +144,9 @@ private:
 			BObjectList<BString, true> fAllowedOnce;
 				// "<team>" of applications allowed until they quit
 			team_id				fIndicatorTeam;
+			std::map<team_id, int64> fOutputBytes;
+				// O-21: what each team's recording wrote (SetOutputSize()),
+				// once per team however many sessions it has
 };
 
 

@@ -70,7 +70,6 @@ struct ScreenCaptureManager::Session {
 	int32		bitmapCount;
 	sem_id		notify;			// F-58 (O-8): released on damage, or -1
 	bool		notified;		// released since the last frame
-	int64		outputBytes;	// F-59: what the recording wrote so far
 
 	Session()
 		:
@@ -78,8 +77,7 @@ struct ScreenCaptureManager::Session {
 		stopped(false),
 		bitmapCount(0),
 		notify(-1),
-		notified(false),
-		outputBytes(0)
+		notified(false)
 	{
 	}
 };
@@ -300,16 +298,21 @@ ScreenCaptureManager::HandleMessage(ServerApp* app, int32 code,
 			break;
 		case AS_SCREEN_CAPTURE_SET_OUTPUT_SIZE:
 		{
-			// F-59: for the indicator; every session of the team
+			// F-59: for the indicator. O-21: one size per team (it was
+			// stored on every session of the team, and the indicator, adding
+			// up the sessions, counted a team with two sessions twice).
 			int64 bytes;
 			if (link.Read<int64>(&bytes) != B_OK) {
 				reply.StartMessage(B_BAD_DATA);
 				break;
 			}
 			BAutolock locker(fLock);
+			// as before, only for a team that has a session
 			for (int32 i = 0; Session* session = fSessions.ItemAt(i); i++) {
-				if (session->team == app->ClientTeam())
-					session->outputBytes = bytes;
+				if (session->team == app->ClientTeam()) {
+					fOutputBytes[app->ClientTeam()] = bytes;
+					break;
+				}
 			}
 			reply.StartMessage(B_OK);
 			break;
@@ -945,7 +948,9 @@ ScreenCaptureManager::_Stop(ServerApp* app, int32 id, bool any,
 
 /*!	AS_SCREEN_CAPTURE_LIST: int32 count, then per session int32 id, team_id,
 	signature, name, int32 source, BRect frame, bigtime_t started, int64
-	frames. Sessions the user stopped are not listed.
+	frames; then per session int64 bytes (F-59); then int32 team count and
+	per team team_id, int64 bytes (O-21). Sessions the user stopped are not
+	listed.
 */
 void
 ScreenCaptureManager::_List(PortLink& reply)
@@ -971,10 +976,25 @@ ScreenCaptureManager::_List(PortLink& reply)
 		reply.Attach<int64>(session->frames);
 	}
 	// F-59, after the sessions (older readers stop before): the bytes each
-	// session's recording wrote, in the same order
+	// session's recording wrote, in the same order (O-21: its team's size,
+	// as before, so existing readers see what they saw)
+	std::map<team_id, int64> teams;
 	for (int32 i = 0; Session* session = fSessions.ItemAt(i); i++) {
-		if (!session->stopped)
-			reply.Attach<int64>(session->outputBytes);
+		if (session->stopped)
+			continue;
+		std::map<team_id, int64>::const_iterator found
+			= fOutputBytes.find(session->team);
+		int64 bytes = found != fOutputBytes.end() ? found->second : 0;
+		reply.Attach<int64>(bytes);
+		teams[session->team] = bytes;
+	}
+	// O-21, after that: each team with a session once, int32 count, then
+	// team_id and int64 bytes; the indicator adds these up
+	reply.Attach<int32>((int32)teams.size());
+	for (std::map<team_id, int64>::const_iterator it = teams.begin();
+			it != teams.end(); ++it) {
+		reply.Attach<team_id>(it->first);
+		reply.Attach<int64>(it->second);
 	}
 }
 
@@ -1190,7 +1210,15 @@ ScreenCaptureManager::_FindSession(int32 id)
 void
 ScreenCaptureManager::_RemoveSession(Session* session)
 {
+	team_id team = session->team;
 	fSessions.RemoveItem(session, true);
+
+	// O-21: the team's size goes with its last session
+	for (int32 i = 0; Session* other = fSessions.ItemAt(i); i++) {
+		if (other->team == team)
+			return;
+	}
+	fOutputBytes.erase(team);
 }
 
 

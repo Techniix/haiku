@@ -389,13 +389,23 @@ private:
 					names << ", ";
 				names << name;
 			}
-			// F-59: the longest-running session's time, every
-			// recording's bytes
+			// F-59: the longest-running session's time
 			bigtime_t sessionStart = sessions.GetInt64("started", i, 0);
 			if (started == 0 || (sessionStart > 0 && sessionStart < started))
 				started = sessionStart;
-			bytes += sessions.GetInt64("bytes", i, 0);
 			count++;
+		}
+		// O-21: every team's recording once ("bytes" repeats a team's size
+		// for each of its sessions); an older app_server only has "bytes"
+		int64 total;
+		if (sessions.FindInt64("total_bytes", 0, &total) == B_OK) {
+			for (int32 i = 0; sessions.FindInt64("total_bytes", i, &total)
+					== B_OK; i++) {
+				bytes += total;
+			}
+		} else {
+			for (int32 i = 0; i < count; i++)
+				bytes += sessions.GetInt64("bytes", i, 0);
 		}
 		if (count == 0) {
 			// Leave once nothing has been recorded for a moment (a recorder
