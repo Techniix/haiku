@@ -1220,6 +1220,7 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 - "Gamepads" Control Panel page: device list with battery, live tester, remapping, dead zones and response curves, trigger thresholds, rumble test, player LED, per-game profiles; its own icon.
 - A virtual gamepad device (`uinput`-style) for the harness (button, axis, hot-plug and rumble checks in QEMU) and for remapping tools.
 - Polish (defaults by the maintainer, 2026-11-13): guide-button overlay with battery and player number on (a long press opens it; a short press still goes to the game); low-battery notification on; desktop pointer control with the gamepad off.
+- Renguin (maintainer, 2026-11-13): gamepads must work flawlessly for Linux programs under Renguin. The `evdev` and `hidraw` devices are the Linux interfaces those programs expect, so Renguin passes them through (with `udev`-style device discovery and hot-plug notification for SDL and libinput users); force feedback, hot-plug and the SDL mapping database behave the same as for native programs; harness checks run a Linux SDL test program under Renguin against the virtual gamepad once Renguin can run it.
 - Test hardware the maintainer has: 8BitDo Ultimate 2C (X-input, D-input, Switch mode, dongle), Switch Pro, Xbox, DualSense and generic pads. Bluetooth pads wait for the Bluetooth stack.
 
 **Also required (Eglantine port, 2026-11-09):** the 8BitDo Ultimate 2C requirement above is unchanged.
