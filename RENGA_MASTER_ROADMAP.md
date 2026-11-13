@@ -364,6 +364,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-65 | Live widgets: replicants for the modern desktop, with Lumina | Designed | None |
 | F-66 | Tracker modernisation | Designed | None |
 | F-67 | Quality engineering: Test Station, bisect, warnings, fuzzing, stress tests | Designed | None |
+| F-68 | First public release readiness: README, polish pass, licence audit, names and trademarks, release engineering | Planned | None |
 | F-45 | RengaPorts (separate ports and package repository) | In Development (repository published; Renga image side pending) | None |
 
 ---
@@ -1765,6 +1766,20 @@ Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal
 - [ ] **Bundles feed the driver database** (approved 2026-11-12): a saved bundle records which devices worked with which driver on real hardware; importing it (by the maintainer, never automatic) adds "tested on this hardware" entries to the `F-26` driver database behind the recommendations.
 - [ ] **Speed regression alarms** (approved 2026-11-12, with `F-61`): the gates store boot time, application launch times and the responsiveness numbers per tree; a check fails when one is more than about 10% slower than the rolling baseline (noise-checked by a rerun before failing), and automatic bisect finds the commit.
 - [ ] **Stress tests** (with `F-61`): memory allocation churn, concurrent disk and network work, program launch and quit loops, USB hotplug, mount and unmount, display mode changes, package install and remove, long unattended runs in QEMU; real-hardware versions in Test Station.
+
+#### F-68 First public release readiness
+
+| Field | Value |
+| --- | --- |
+| Status | **Planned** (maintainer, 2026-11-13: "towards the end", before the first public release; details at my discretion) |
+| Dependencies | Problem reporting (`F-67`), Test Station, the features meant for the release |
+| Risk | Medium (licensing and trademark mistakes are costly after release) |
+
+- [ ] **README rewrite**: what Renga is, who it is for, screenshots, how to install and update; "Renga compared with Haiku" (what is improved, what is completely new, what stays compatible: applications, packages, `haiku_devel`/`renga_devel`); hardware status by device class with Hardware Tested results; how to report problems; licence summary; links to the roadmap, PORTING.md and the partner ports.
+- [ ] **Polish pass over the whole system**: consistent naming and wording in every Renga program and setting, icons (the icon rule), translations for Renga strings, first-boot experience, the About window and boot splash, the installer's texts, release notes.
+- [ ] **Licence audit**: every imported or bundled component listed with its licence and source (LinuxKPI and FreeBSD code, Linux drivers and firmware, mt76 and others, SDL and controller art, RNNoise, WebRTC code, fonts, icons, codecs), compatibility checked (GPL code only where allowed, firmware redistribution terms, no "non-free" files), attribution in a generated `CREDITS`/About list and an SBOM (SPDX) per release; codec decisions recorded (H.264/AAC, `proprietary_codecs`).
+- [ ] **Name and trademark review**: "Haiku" stays only where it means the upstream project or must stay for compatibility (package names, `haiku_devel`, API names, `B_HAIKU_*`); user-visible "Haiku" becomes "Renga" elsewhere; Haiku, Inc.'s trademark guidelines followed (including the logo, which Renga does not use), Be/BeOS names used only descriptively, no third-party logos or product art (controller pictures are Renga's own); "Renga" checked for conflicts.
+- [ ] **Release engineering**: version scheme, signed packages and repository, signed and checksummed images, a release branch, update path from test builds, the self-hosted Sentry live, a website or project page.
 
 #### F-44 Bundled applications (gap review, 2026-11-09)
 
