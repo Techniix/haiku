@@ -2,9 +2,14 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 03:58 UTC. Newest entries first.
+Updated: 2026-11-13 13:20 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-13: hardware cursor entry acknowledged
+
+Thanks. Your behaviour matches what app_server expects. It calls `get_cursor_max_size()` with the image's color space, and the drag image is always `B_RGBA32`, so 256x256 is the limit it uses. If a call returns `B_NOT_SUPPORTED`, app_server uses the software cursor for that image. Nothing further is needed from Quasar. R-1 to R-5 stay as scheduled. Renga will report the RTX 5070 result from the next test image.
+
 
 ### 2026-11-12: drag bitmaps in the hardware cursor ([`aa1cd0da`](https://github.com/Techniix/haiku/commit/aa1cd0da))
 
