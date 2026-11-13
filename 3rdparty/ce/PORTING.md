@@ -31,6 +31,8 @@ updates this file in the same commit.
 | A virtual camera fed by one program (OBS's "Start Virtual Camera") | `<VirtualCamera.h>` (private header) | libmedia, `-lgnu`, libnetwork | Missing | Available |
 | Screen capture: asynchronous permission request, `B_TIMED_OUT`, frame notification, window visibility flags | `<ScreenCapture.h>` (private header) | libbe (nothing extra) | Missing | Available |
 | `SOCK_SEQPACKET` UNIX sockets with `SCM_RIGHTS`; messages of 0 bytes; `MSG_CTRUNC` | `<sys/socket.h>` | libnetwork (nothing extra) | Empty messages lost, a too small control buffer failed `recvmsg()` | Fixed |
+| Screen capture without the front buffer: `BScreen::ReadBitmap()` and `BScreenCapture` read main memory; the pointer no longer stutters while recording | (behaviour) | | Front buffer under the exclusive lock (25-30 ms per frame on real GPUs) | Available (F-59; timing not yet measured on hardware) |
+| Drag bitmaps in the hardware cursor; optional largest-cursor query for accelerants | `<add-ons/graphics/HardwareCursor.h>` (`B_GET_CURSOR_MAX_SIZE`) | | Drag bitmap not shown with a hardware cursor | Available (F-59; not yet tried on hardware) |
 | Passing a file descriptor to app_server; GPU presentation table for accelerants (provisional) | `<ServerFdTransfer.h>` (private), `<add-ons/graphics/GpuPresent.h>` | libbe | Missing | Descriptor passing available; `GpuPresent.h` not used by app_server yet (GPU stage) |
 | HDMI/DisplayPort audio | (driver `hda`) | | Missing | Stereo playback on the monitor's connector, named after it (not yet tried on hardware) |
 | Low-latency audio: small, fixed `BSoundPlayer` buffers and short sound card periods per application | `<SoundPlayer.h>`; `RENGA_AUDIO_LOW_LATENCY=1` | libmedia (nothing extra) | Missing (10 ms player buffers, 21-43 ms card periods) | Available |
@@ -923,8 +925,8 @@ the mixer's loopback.
   and, for windows, `SCREEN_CAPTURE_WINDOW_BORDER`. Then call
   `NextFrame(bitmap, &changed, &damage, &time)` at your frame rate with
   `B_RGB32` bitmaps of `Frame()`'s size: app_server copies only what changed
-  since that bitmap was last filled (from the back buffer, or the front
-  buffer with the cursor hidden), so an idle screen costs one round trip.
+  since that bitmap was last filled (from the back buffer in main memory,
+  see "Reading the screen" below), so an idle screen costs one round trip.
   `damage` is what changed since the previous frame (frame coordinates),
   `time` the `system_time()` of the copy. It never blocks; use two or more
   bitmaps for double buffering. Status codes: `B_NOT_ALLOWED` (the user
@@ -990,9 +992,36 @@ the mixer's loopback.
   is the mask for "the frame does not show the window" (pause or show a
   placeholder). Region and screen sources report 0.
 
+- **Reading the screen (F-59, `a22d9aba`).** `BScreen::ReadBitmap()` and
+  `BScreenCapture` frames are copied from the back buffer in main memory,
+  not from the front buffer (write-combined video memory, about 25-30 ms
+  per 2560x1080 frame on a current NVIDIA card). Only what exists only in
+  the front buffer is read from it: the visible area of a connected
+  `BDirectWindow` and of a `BWindowScreen`, or the whole screen while a
+  team holds the direct screen lock. Windows in the middle of an update
+  (between `BeginUpdate()` and `EndUpdate()`) are captured from their
+  last complete frame, never half drawn. `BScreenCapture` copies under
+  the drawing engine's shared lock, so the pointer and drawing go on
+  while a recorder captures; `ReadBitmap()` keeps the exclusive lock (an
+  exact one-shot screenshot), now only for a copy from main memory.
+  `ReadBitmap(bitmap, false)` no longer contains a software cursor;
+  with `true` the cursor (and a drag bitmap) is drawn into the copy once,
+  whether the cursor is in hardware or software. A moving hardware
+  cursor is reported as damage, so captures that include the cursor
+  update with it. Limitation: a software cursor over a direct window is
+  part of that window's front-buffer pixels. Nothing to change in ports.
+- **File size in the indicator (F-59, `00fae122`).**
+  `BScreenCapture::SetOutputSize(int64 bytes)` (static, add-only) tells
+  app_server how large the calling team's recording is so far; the
+  recording indicator shows it next to the time recorded ("Show the time
+  recorded", "Show the size of the recording" in the Screen recording
+  preferences). Optional: call it every few hundred milliseconds while
+  writing; without it the indicator shows the time only.
+
 Since: the commits that added `ScreenCaptureManager` to app_server,
 `CaptureSession.cpp` to libmedia and recording to Screenshot. Tests:
-`screen_capture_test.cpp` (renga-* images).
+`screen_capture_test.cpp` (renga-* images), `screen_read_test.cpp` (every
+image).
 
 ### Low-latency audio
 
@@ -1218,6 +1247,28 @@ something ports call today.
   accelerant reports in the table.
 
 Since: `744fa9b4`. Tests: `appserver_fd_test.cpp` (every image).
+
+### Hardware cursor during drags (for drivers)
+
+While something is dragged, app_server gives the accelerant the pointer and the drag
+bitmap composited into one `B_RGBA32` image through the existing
+`set_cursor_bitmap()` hook (hot spot moved accordingly), so the drag
+follows the hardware pointer; the image is larger than a plain pointer
+(up to the drag bitmap's size plus the cursor). An accelerant that
+refuses the size returns an error, and only then does app_server draw
+the cursor in software for that drag. Accelerants should accept large
+ARGB images where the hardware allows (NVIDIA: up to 256x256).
+Optional, add-only: `<add-ons/graphics/HardwareCursor.h>` defines the
+feature code `B_GET_CURSOR_MAX_SIZE` (0x52474101) for
+`get_accelerant_hook()`, `status_t get_cursor_max_size(color_space,
+uint16* maxWidth, uint16* maxHeight)`; an accelerant that exports it
+must accept every size up to the limit, and app_server then never
+offers a larger image. The Input preferences' "Show dragged items with
+the hardware pointer" turns the compositing off (software cursor
+during drags).
+
+Since: `aa1cd0da`. Tests: `hw_cursor_test.cpp` (every image, with a
+stand-in hardware cursor in test images only).
 
 ### Drivers in non-packaged
 

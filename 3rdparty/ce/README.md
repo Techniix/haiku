@@ -429,6 +429,9 @@ images; the UEFI framebuffer has one mode) the corners are checked again.
 `CE-HOST screenshot <name>` saves `screen-<name>.png`; the suite saves one
 per device with the pointer at 12.5 %, 87.5 % of the screen. Without a
 desktop the suite prints an INFO line and reports nothing.
+`CE-HOST pointer_button <device> down|up` (F-59) presses or releases the
+left button on that device (QMP `input-send-event` with a `btn` event,
+after `mouse_set`), so tests can start real drags from `MouseDown()`.
 
 ## Audio capture
 
@@ -450,8 +453,9 @@ read (`boot.capture_feed`).
 ## USB audio
 
 Every run attaches an xhci controller (`audiousb`) with no devices on it,
-and five QEMU `wav` audio backends, `usbsnd0` to `usbsnd4` (`usb_audio_test`
-plugs in twice, `media_sound_test` once, `media_usb_test` twice). A test plugs a
+and ten QEMU `wav` audio backends, `usbsnd0` to `usbsnd9`
+(`USB_AUDIO_DEVICES`: `usb_audio_test` plugs in twice, `media_devnotify_test`
+four times, `media_sound_test` once, `media_usb_test` twice). A test plugs a
 QEMU `usb-audio` device in with `CE-HOST usb_audio add` and pulls the one
 plugged in last out with `CE-HOST usb_audio remove` (the harness uses the
 monitor's `device_add` and `device_del`). The n-th device plugged in plays
@@ -514,7 +518,12 @@ keeps its phase in `data/ce-harness/crash-phase`; while it exists, the
 runner runs only `crashlog_test` (as `running`/`exited`, which
 `harness.tests_ran` counts) and powers off. The second boot checks the
 saved report and enters the debugger again with `kernel_debugger()`; the
-third checks that report.
+harness answers that second entry with Alt+SysRq+B (monitor `sendkey
+alt-sysrq-b`) instead of `reboot` (F-59); the third boot checks that
+report. `crashlog.debugger_hint` (host) wants every entry's output to end
+with the closing lines that say how to keep the report ("To keep this
+report, restart with "reboot" (or Alt+SysRq+B, or Ctrl+Alt+Del)") and
+one entry answered with Alt+SysRq+B.
 
 Between the marker line and the next `CE-HARNESS START`, only the expected
 panic and the debugger's welcome are not kernel problems; any other panic
@@ -569,7 +578,10 @@ of a 1 GiB guest was, so the bounce path went untested.
   --begin` (no licence window, Begin pressed after the scan), checks after
   10 s that it is still waiting, takes screenshot `installer_modes`
   (`installer_ui.screenshots`; the mode window over the Installer), kills
-  it and checks that CETarget is unchanged. (Talking to the Installer
+  it and checks that CETarget is unchanged. For the window the volume is
+  named "Haiku" (F-59: the target is `--target Haiku`), so the screenshot
+  also shows "Rename the volume to "Renga"", checked; it is named
+  CETarget again afterwards. (Talking to the Installer
   through messengers and scripting hung the test three times; not
   resolved.)
 - **bootmenu** (renga-* images, `bootmenu_ui_test`): the Boot menu
@@ -578,9 +590,51 @@ of a 1 GiB guest was, so the bounce path went untested.
   and `--show`, `--set-timeout 0` removes the boot menu lines, `--list`
   runs. From the window (the messages its controls send, sent by the test):
   the file gets timeout 4 and the default, and the checkbox and spinner
-  read back through scripting show it. Screenshot `bootmenu_preferences`
-  (`bootmenu.screenshots`). The settings file is put back afterwards.
+  read back through scripting show it. F-59: "Show the system on each
+  volume" off writes `boot_menu_volume_system false` (checkbox read back),
+  and Restore defaults removes every boot menu line and keeps the others.
+  Screenshot `bootmenu_preferences` (`bootmenu.screenshots`). The
+  settings file is put back afterwards.
 
+- **hw_cursor** (every image, `hw_cursor_test`; F-59): drag bitmaps in the
+  hardware cursor. Test images only (the `data/ce-harness` marker) let the
+  test put a stand-in in place of the accelerant's cursor hooks that keeps
+  the image and position it is given, with a size limit, with or without
+  `B_GET_CURSOR_MAX_SIZE`. A real drag (`CE-HOST pointer_button`) keeps the
+  pointer in hardware with the composited image (size, hot spot, pixels),
+  follows the pointer, falls back to the software cursor when the image is
+  refused or over the reported limit, and the Input preferences switch
+  turns it off and on.
+- **screen_read** (every image, `screen_read_test`, `screen_read_direct`;
+  F-59): `BScreen::ReadBitmap()` without the front buffer. A test hook
+  (harness images only, `AS_TEST_SCREEN_READ`) switches back to the old
+  front-buffer read for comparison: the new read equals it except around
+  the pointer; without the cursor the window's pixel is under the
+  pointer, with it the cursor matches the software cursor; a
+  `BDirectWindow`'s content (front buffer only) is read; a window in an
+  update session reads as its last completed frame, and the new frame
+  after `EndUpdate()`; totals per source. The cost of 15 full-screen reads
+  while the host moves the pointer, old and new way (engine locked,
+  pointer waits), is printed as INFO.
+- **tracker_menu** (every image, `tracker_menu_test`; F-59): Tracker's
+  folder menus built ahead of time (`'Tnav'` builds one for the test): on
+  by default; a folder of 400 files and 3 subfolders gives 403 items with
+  and without prefetching; after the first build the next one is a cache
+  hit, and so is a subfolder's first build and the Desktop folder's; a
+  new file shows in the next build; the Tracker preferences switch
+  (screenshot `tracker_prefetch_setting`) turns it off and empties the
+  cache, and Defaults turns it on. Starts Tracker if it is not running
+  (renga-* images) and quits it again at the end, so later suites run on
+  the same desktop as before. Build times are INFO only.
+- **devnotify** (renga-* images, `media_devnotify_test`, before
+  media_usb; F-59): the audio device agent. First run records the devices
+  and asks nothing; QEMU's `usb-audio` plugged in brings the prompt
+  (screenshot `audio_device_prompt`); "Switch to it" makes it the default
+  output; pulled out, the previous one is back; "Not now" changes nothing;
+  "Switch automatically" (screenshot `audio_device_policy`, the Devices
+  page) switches without a prompt and back; "Do nothing" neither asks nor
+  switches; Restore defaults; the default input stays. Leaves "do nothing"
+  for that device, since later suites plug it in and out.
 - **crashlog** (every image, `crashlog_test`): crash reports and System
   logs (roadmap F-51), over three boots of one QEMU session; see "Crash
   reports and planned reboots". Collector on made-up syslogs, an
@@ -950,7 +1004,16 @@ of a 1 GiB guest was, so the bounce path went untested.
 
 ## Revision tags
 
-The build names itself after the nearest upstream `hrev` tag. The
+The build names itself after the nearest upstream `hrev` tag. On Renga
+commits the revision also names the commit and its date, for example
+`hrev57937+412 (Renga 1a2b3c4d 2026-11-12)`, and says `modified` when
+tracked files differ from HEAD (instead of git's `-dirty`); the cached
+revision is determined again when HEAD or that state changes (F-59).
+Images handed over for real-hardware testing are built with
+`3rdparty/ce/build/build-handover-image [<profile>...]` (default
+`renga-anyboot renga-raw`), which refuses a tree with modified, staged or
+untracked files, drops the cached revision and prints the revision the
+images carry; `--check-only` only checks. The
 `Renga hrev tag` workflow (`.github/workflows/ce-hrev-tag.yml`) publishes that
 tag automatically on every push to `ce/main`, so a fresh clone of the fork
 builds without setting `HAIKU_REVISION`. Fetch it with `git fetch --tags

@@ -2,9 +2,20 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-12 14:45 UTC. Newest entries first.
+Updated: 2026-11-13 03:58 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-12: drag bitmaps in the hardware cursor ([`aa1cd0da`](https://github.com/Techniix/haiku/commit/aa1cd0da))
+
+The Tracker drag with a hardware cursor (your `rtx5070-hw-cursor` 0003) is fixed in Renga's app_server, differently from 0003: the pointer stays in hardware for the whole drag.
+- While something is dragged, app_server composites the pointer and the drag bitmap into one premultiplied `B_RGBA32` image and passes it to your existing `set_cursor_bitmap()` hook, with the hot spot moved to match; `move_cursor()` and `show_cursor()` are used as before. The image is the union of the cursor and the drag bitmap, so it can be much larger than a pointer.
+- **Needed from Quasar:** accept large ARGB cursor bitmaps where the hardware allows (NVIDIA: up to 256x256). For a size you cannot take, return an error from `set_cursor_bitmap()`: app_server then draws the cursor in software for that drag only, and goes back to your hardware cursor afterwards.
+- **Optional, add-only:** `<add-ons/graphics/HardwareCursor.h>` defines the feature code `B_GET_CURSOR_MAX_SIZE` (0x52474101) for `get_accelerant_hook()`: `status_t get_cursor_max_size(color_space space, uint16* maxWidth, uint16* maxHeight)`. If you export it, accept every size up to what you report; app_server then never offers a larger image and needs no failed call. Without it, behaviour is as above.
+- **No local app_server patches are needed any more:** drop 0003 from your Renga test builds. Nothing in `Accelerant.h` or any public class changed.
+- The Input preferences have "Show dragged items with the hardware pointer" (on by default); off gives the software cursor during drags, for comparison.
+- QEMU Tested with a stand-in hardware cursor (suite `hw_cursor`, test images only). Not yet tried on the RTX 5070: it will be in the next Renga test image.
+
 
 ### 2026-11-12: GpuPresent.h comments as requested; placement flag added ([`6af51a3a`](https://github.com/Techniix/haiku/commit/6af51a3a))
 

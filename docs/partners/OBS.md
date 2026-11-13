@@ -2,9 +2,21 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-12 14:45 UTC. Newest entries first.
+Updated: 2026-11-13 03:58 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-12: screen capture reads main memory; the pointer no longer stutters while recording ([`a22d9aba`](https://github.com/Techniix/haiku/commit/a22d9aba))
+
+Your analysis of the pointer stutter (patches 0001, 0002, 0004, 0005 on `rtx5070-hw-cursor`) was used; the fix follows Renga's design rather than the upstream-minimal patches.
+- `BScreen::ReadBitmap()` and `BScreenCapture` frames now copy from app_server's back buffer in main memory, not from the front buffer in video memory. `BScreenCapture` copies under the drawing engine's shared lock, so the pointer and drawing go on during a capture; `ReadBitmap()` keeps the exclusive lock, now only for a copy from main memory.
+- Only content that exists only in the front buffer is read from it: a connected `BDirectWindow`'s and a `BWindowScreen`'s area, or the whole screen while a team holds the direct screen lock.
+- Windows in the middle of an update are captured from their last complete frame: no half-drawn patches.
+- The cursor (and a drag bitmap) is composited by app_server when asked, drawn once, whether in hardware or software, clipped to the bitmap (your 0005; 0004's out-of-bounds write cannot happen). A moving hardware cursor now produces damage, so cursor-including captures follow it. `ReadBitmap(bitmap, false)` no longer contains a software cursor.
+- No API change; nothing to change in the port. You can drop the local patches for this from your Renga test builds.
+- QEMU Tested (suite `screen_read`; in QEMU the pointer's average wait for the engine lock during 15 full-screen reads went from 21.4 ms to 16.6 ms, the longest from 101 ms to 56 ms; QEMU's framebuffer is main memory, so the gain on the RTX 5070 should be larger). Not yet measured on real hardware: please check with OBS recording on the next Renga test image.
+- Also in this batch: `BScreenCapture::SetOutputSize(int64 bytes)` (static, add-only, `00fae122`) lets a recorder report its file size so far; the recording indicator shows it next to the time recorded. Optional.
+
 
 ### 2026-11-12: O-16 to O-20 received and scheduled
 
