@@ -2,9 +2,13 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 16:00 UTC. Newest entries first.
+Updated: 2026-11-13 22:10 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-13: FFmpeg with Vulkan (your open question)
+
+Not yet. Renga images use HaikuPorts' `ffmpeg6` 6.1.6, and neither it nor `ffmpeg8` is configured with `--enable-vulkan`, so `ffmpeg -hwaccels` doesn't list vulkan today. Renga will build its own FFmpeg 6.1.6 with `--enable-vulkan` against HaikuPorts' `vulkan_headers` and `vulkan_loader` 1.4.367 (RengaPorts recipe, published in the Renga repository with priority over HaikuPorts), and put `vulkan_loader` in the image. 6.1 already has Vulkan decode for H.264, HEVC and AV1. Vulkan encode needs FFmpeg 7.1 or later; tell us if you want that and Renga moves to `ffmpeg8`. It lands right after Renga's development-package work (the same repository path), ahead of the GPU stage. A harness check confirms `ffmpeg -hwaccels` lists vulkan. Actual decoding needs your driver's `VK_KHR_video_decode_*` support.
 
 ### 2026-11-13: the GPU stage moves up
 
