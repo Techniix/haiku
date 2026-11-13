@@ -46,13 +46,31 @@ Object::PutUSBID(bool waitForIdle)
 }
 
 
+/*!	Waits until only the caller's reference is left: the users that looked
+	the object up before PutUSBID() (a driver's callback queuing the next
+	transfer on another CPU, say) let go of it.
+
+	Renga (roadmap F-61, the xhci isochronous pipe panic in usb_audio_test
+	with two CPUs): this waited 20 times 100 us, 2 ms in all, and then
+	panicked. A user on another CPU can be held up longer than that (an
+	interrupt, a higher-priority thread; in QEMU a virtual CPU the host did
+	not run for a while). And the old check was off by one: an object that
+	became idle exactly at the last retry left the counter at 0 and
+	panicked too. Now it waits up to two seconds, in 1 ms steps after the
+	first millisecond, and panics only if the object is really still in
+	use then.
+*/
 void
 Object::WaitForIdle()
 {
-	int32 retries = 20;
-	while (CountReferences() != 1 && retries--)
-		snooze(100);
-	if (retries <= 0)
+	bigtime_t start = system_time();
+	while (CountReferences() != 1) {
+		bigtime_t waited = system_time() - start;
+		if (waited > 2000000)
+			break;
+		snooze(waited < 1000 ? 100 : 1000);
+	}
+	if (CountReferences() != 1)
 		panic("USB object did not become idle! @! calling -m usb");
 }
 
