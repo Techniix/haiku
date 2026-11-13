@@ -1928,8 +1928,17 @@ class SerialReader(threading.Thread):
 			if self.qmp_path is not None:
 				entry["error"] = qmp_execute(self.qmp_path, "set-action",
 					reboot="reset")
-			if entry["error"] is None and self._send("reboot", 1):
-				entry["answered"] = True
+			# F-59: the second entry restarts with Alt+SysRq+B, the key the
+			# debugger's closing lines name besides "reboot"
+			if len(self.expected_kdls) == 2 and self.monitor_path is not None:
+				entry["answer"] = "alt-sysrq-b"
+				if entry["error"] is None and monitor_command(
+						self.monitor_path, "sendkey alt-sysrq-b"):
+					entry["answered"] = True
+			else:
+				entry["answer"] = "reboot"
+				if entry["error"] is None and self._send("reboot", 1):
+					entry["answered"] = True
 			time.sleep(EXPECTED_KDL_QUIET_SECONDS)
 			if self.qmp_path is not None:
 				error = qmp_execute(self.qmp_path, "set-action",
@@ -2482,7 +2491,7 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 			kdlFile.write(entry.get("text", "").replace("\r", ""))
 		expected.append({"answered": entry["answered"],
 			"error": entry["error"], "message": entry.get("message"),
-			"log": name})
+			"answer": entry.get("answer"), "log": name})
 	bootReport["expected_kdl"] = expected
 	bootReport["expected_kdl_unanswered"] = reader.kdl_expected
 	bootReport["status"] = status
@@ -3590,6 +3599,35 @@ CRASHLOG_SCREENSHOTS = ["crash_notification", "systemlogs_crash",
 CRASHLOG_DEBUGGER_ENTRIES = 2
 
 
+# The kernel debugger's closing lines after a crash report (F-59).
+KDL_KEEP_HINT = "To keep this report, restart with \"reboot\""
+
+
+def check_kdl_hint(results_dir, report):
+	"""crashlog.debugger_hint: every announced debugger entry ended with
+	the lines that say how to keep the crash report (F-59), and the one
+	answered with Alt+SysRq+B restarted (the next runner start is counted
+	by crashlog.debugger_reboots)."""
+	entries = report.get("boot", {}).get("expected_kdl", [])
+
+	def text(entry):
+		try:
+			with open(os.path.join(results_dir, entry.get("log", ""))) as log:
+				return log.read()
+		except OSError:
+			return ""
+
+	hinted = [e for e in entries if KDL_KEEP_HINT in text(e)]
+	keys = [e for e in entries if e.get("answer") == "alt-sysrq-b"]
+	report.setdefault("host_checks", []).append({
+		"name": "crashlog.debugger_hint",
+		"pass": len(entries) > 0 and len(hinted) == len(entries)
+			and len(keys) == 1 and keys[0]["answered"],
+		"detail": "%d of %d debugger entries say how to keep the report; "
+			"%d answered with Alt+SysRq+B" % (len(hinted), len(entries),
+			len(keys))})
+
+
 def check_crashlog(results_dir, report):
 	"""The crashlog suite's debugger entries (F-51): each was announced,
 	answered with "reboot" and followed by a new boot of the guest runner.
@@ -4036,6 +4074,7 @@ def main():
 		if "crashlog_test" in (args.only or available) \
 				and not args.installer_upgrade:
 			check_crashlog(results_dir, report)
+			check_kdl_hint(results_dir, report)
 			if args.profile.startswith("renga-"):
 				check_screenshots(results_dir, report, CRASHLOG_SCREENSHOTS,
 					"crashlog.screenshots")

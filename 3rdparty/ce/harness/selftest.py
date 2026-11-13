@@ -15,6 +15,7 @@ checks the verdicts. Runs on the host in a few seconds:
 import importlib.util
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -1052,6 +1053,35 @@ passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
 	"Welcome to Kernel Debugging Land...\r\nCE-HARNESS END"), ANSWERED)
 expect("crashlog: the same panic outside an announced entry is a problem",
 	len(problems) > 0 and kdl is not None, str(problems))
+
+
+# crashlog.debugger_hint (F-59)
+def kdl_hint(entries):
+	# as main() reports them: the debugger's output in kdl-expected-<n>.log
+	directory = tempfile.mkdtemp()
+	expected = []
+	for index, entry in enumerate(entries):
+		name = "kdl-expected-%d.log" % (index + 1)
+		with open(os.path.join(directory, name), "w") as log:
+			log.write(entry["text"])
+		expected.append({"answered": entry["answered"],
+			"answer": entry["answer"], "log": name})
+	report = {"boot": {"expected_kdl": expected}}
+	ce_test.check_kdl_hint(directory, report)
+	shutil.rmtree(directory)
+	return report["host_checks"][0]["pass"]
+
+HINT = "...\n" + ce_test.KDL_KEEP_HINT + "\n(or Alt+SysRq+B...\nkdebug> "
+expect("crashlog: closing lines and Alt+SysRq+B pass", kdl_hint([
+	{"answered": True, "answer": "reboot", "text": HINT},
+	{"answered": True, "answer": "alt-sysrq-b", "text": HINT}]))
+expect("crashlog: an entry without the closing lines fails", not kdl_hint([
+	{"answered": True, "answer": "reboot", "text": HINT},
+	{"answered": True, "answer": "alt-sysrq-b", "text": "kdebug> "}]))
+expect("crashlog: no entry answered with Alt+SysRq+B fails", not kdl_hint([
+	{"answered": True, "answer": "reboot", "text": HINT},
+	{"answered": True, "answer": "reboot", "text": HINT}]))
+expect("crashlog: no debugger entries fail", not kdl_hint([]))
 
 
 def linuxkpi_clamp(serial):

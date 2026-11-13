@@ -24,6 +24,7 @@
 #include <algorithm>
 
 #include <AutoDeleter.h>
+#include <arch/cpu.h>
 #include <boot/kernel_args.h>
 #include <cpu.h>
 #include <debug.h>
@@ -891,7 +892,8 @@ kernel_debugger_loop(const char* messagePrefix, const char* message,
 
 	// Renga (F-51): keep a crash report in the syslog buffer for the next
 	// boot.
-	crash_report_write(messagePrefix, message, args, cpu);
+	bool reportWritten = crash_report_write(messagePrefix, message, args,
+		cpu);
 
 	if (has_debugger_command("help")) {
 		// Commands are registered already -- execute panic() commands. Do that
@@ -903,6 +905,17 @@ kernel_debugger_loop(const char* messagePrefix, const char* message,
 		execute_panic_commands();
 
 		blue_screen_set_paging(pagingEnabled);
+	}
+
+	if (reportWritten) {
+		// Renga (F-59): the closing lines say how to keep the report. It
+		// is in memory, which a warm restart keeps and switching the
+		// computer off does not.
+		kprintf("\nA crash report was kept in memory. To keep this report, "
+			"restart with \"reboot\"\n(or Alt+SysRq+B, or Ctrl+Alt+Del); do "
+			"not switch the computer off. System logs\nshows it after the "
+			"restart. \"continue\" leaves the debugger, if the system can "
+			"go on.\n");
 	}
 
 	int32 continuableLine = -1;
@@ -1910,6 +1923,15 @@ debug_emergency_key_pressed(char key)
 
 	if (key == 'd') {
 		kernel_debugger("Keyboard Requested Halt.");
+		return true;
+	}
+
+	// Renga (F-59): Alt+SysRq+B restarts from the kernel debugger (as on
+	// Linux), a warm restart that keeps the crash report. Only there: in a
+	// running system it would lose unsaved work.
+	if (key == 'b' && debug_debugger_running()) {
+		kprintf("\nRestarting (Alt+SysRq+B)...\n");
+		arch_cpu_shutdown(true);
 		return true;
 	}
 

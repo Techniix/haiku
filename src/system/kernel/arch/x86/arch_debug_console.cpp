@@ -198,6 +198,7 @@ arch_debug_blue_screen_try_getchar(void)
 	static bool shiftPressed = false;
 	static bool controlPressed = false;
 	static bool altPressed = false;
+	static bool sysReqPressed = false;
 	static uint8 special = 0;
 	static uint8 special2 = 0;
 	uint8 key = 0;
@@ -244,6 +245,9 @@ arch_debug_blue_screen_try_getchar(void)
 			case LEFT_ALT:
 				altPressed = false;
 				return -1;
+			case SYS_REQ:
+				sysReqPressed = false;
+				return -1;
 		}
 	} else {
 		// key down
@@ -259,6 +263,12 @@ arch_debug_blue_screen_try_getchar(void)
 
 			case LEFT_ALT:
 				altPressed = true;
+				return -1;
+
+			case SYS_REQ:
+				// Renga (F-59): Alt+SysRq+B in the debugger, too (the
+				// debugger's closing lines name Alt+SysRq+B to restart)
+				sysReqPressed = true;
 				return -1;
 
 			// start escape sequence for cursor movement
@@ -299,6 +309,11 @@ arch_debug_blue_screen_try_getchar(void)
 				return '\x1b';
 
 			default:
+				if (altPressed && sysReqPressed && kUnshiftedKeymap[key] == 'b'
+					&& debug_emergency_key_pressed('b')) {
+					return -1;
+				}
+
 				if (controlPressed) {
 					char c = kShiftedKeymap[key];
 					if (c >= 'A' && c <= 'Z')

@@ -23,8 +23,9 @@ void debug_crash_report_syslog_write(const char* text, int32 length);
 bool debug_crash_report_syslog_available();
 
 // Implemented in crash_report.cpp. Called by kernel_debugger_loop() once per
-// entry, after the entry message and the stack trace were printed.
-void crash_report_write(const char* messagePrefix, const char* message,
+// entry, after the entry message and the stack trace were printed. Returns
+// whether a report was written (F-59: the debugger then says how to keep it).
+bool crash_report_write(const char* messagePrefix, const char* message,
 	va_list args, int32 cpu);
 
 

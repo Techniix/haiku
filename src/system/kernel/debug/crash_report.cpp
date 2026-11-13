@@ -132,7 +132,7 @@ crash_reason(const char* messagePrefix, const char* message)
 }
 
 
-void
+bool
 crash_report_write(const char* messagePrefix, const char* message,
 	va_list args, int32 cpu)
 {
@@ -141,7 +141,7 @@ crash_report_write(const char* messagePrefix, const char* message,
 	// the debugger: do not write a second report from inside the first.
 	if ((messagePrefix == NULL && message == NULL) || sWriting
 		|| !debug_crash_report_syslog_available()) {
-		return;
+		return false;
 	}
 	sWriting = true;
 
@@ -222,8 +222,7 @@ crash_report_write(const char* messagePrefix, const char* message,
 	kprintf("%s\n", CRASH_REPORT_END);
 
 	set_debug_output_filter(previousFilter);
-	kprintf("A crash report was kept in memory for the next boot "
-		"(after a reboot, not a power-off).\n");
 
 	sWriting = false;
+	return true;
 }

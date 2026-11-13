@@ -234,6 +234,15 @@ debugger_getchar(void)
 
 		uint8 *current = sUSBTransferData;
 		uint8 *compare = sLastTransferData;
+
+		// Renga (F-59): Alt+SysRq+B in the debugger (SysRq is the
+		// Print Screen usage, 0x46); the debugger's closing lines name
+		// Alt+SysRq+B to restart.
+		bool sysReqPressed = false;
+		for (uint32 i = 2; i < sUSBTransferLength; i++) {
+			if (current[i] == 0x46)
+				sysReqPressed = true;
+		}
 		for (uint32 i = 2; i < sUSBTransferLength; i++) {
 			if (current[i] == 0x00 || current[i] == 0x01)
 				continue;
@@ -254,6 +263,11 @@ debugger_getchar(void)
 
 			int result = -1;
 			uint8 key = sKeyTable[current[i]];
+			if ((modifiers & MODIFIER_ALT) != 0 && sysReqPressed
+				&& (key & 0x80) == 0 && kUnshiftedKeymap[key] == 'b'
+				&& debug_emergency_key_pressed('b')) {
+				continue;
+			}
 			if (key & 0x80) {
 				write_key(27);
 				write_key('[');
