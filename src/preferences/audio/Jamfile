@@ -15,11 +15,28 @@ Application Audio :
 	Audio.cpp
 	AudioDevices.cpp
 	AudioSettingsView.cpp
+	AudioDevicePolicy.cpp
 	OutputMenuField.cpp
 	ApplicationVolumesView.cpp
 	MixerControl.cpp
 	: be media localestub [ TargetLibsupc++ ]
 	: Audio.rdef
+;
+
+# The audio device agent (F-59), started by media_server when the devices
+# change; installed in system/servers.
+Application audio_device_agent :
+	audio_device_agent.cpp
+	AudioDeviceAgent.cpp
+	AudioDevicePolicy.cpp
+	AudioDevices.cpp
+	: be media localestub [ TargetLibsupc++ ]
+;
+
+DoCatalogs audio_device_agent :
+	x-vnd.Renga-AudioDeviceAgent
+	:
+	AudioDeviceAgent.cpp
 ;
 
 DoCatalogs Audio :

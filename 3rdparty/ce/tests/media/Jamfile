@@ -28,6 +28,17 @@ Application media_usb_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# A new audio device (F-59): the agent's prompt, switching, switching back
+# and the per-device policies of the Audio preferences.
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src preferences audio ] ;
+ObjectHdrs [ FGristFiles media_devnotify_test$(SUFOBJ) ]
+	: [ FDirName $(HAIKU_TOP) src preferences audio ] ;
+Application media_devnotify_test :
+	media_devnotify_test.cpp
+	AudioDevicePolicy.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 # Camera selection and preview: CodyCam's Camera menu with the synthetic
 # video source (video_producer_demo).
 Application media_video_test :
@@ -122,5 +133,6 @@ if $(CE_HARNESS) {
 		media_video_test
 		screen_capture_test sound_latency_test media_codec_test
 		media_stream_test media_hwvideo_test media_resample_test
-		media_drift_test media_html5_test media_routing_test media_vcam_test ;
+		media_drift_test media_html5_test media_routing_test media_vcam_test
+		media_devnotify_test ;
 }

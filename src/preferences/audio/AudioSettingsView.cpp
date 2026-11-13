@@ -6,6 +6,8 @@
 
 #include "AudioSettingsView.h"
 
+#include "AudioDevicePolicy.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,6 +56,8 @@ enum {
 	kMsgSearch				= 'auSr',
 	kMsgRefresh				= 'auRf',
 	kMsgDevicesChanged		= 'auDv',
+	kMsgDevicePolicy		= 'auDp',
+	kMsgDevicePolicyDefaults = 'auDd',
 	kMsgDevicesSettled		= 'auDs',
 
 	kMsgVolume				= 'auVo',
@@ -1176,6 +1180,10 @@ DevicesPage::DevicesPage(AudioDeviceList& devices)
 	AddKeywords(B_TRANSLATE_COMMENT("devices, sound cards, usb, headset, "
 		"hdmi, displayport, monitor, frame rate, sample rate, hot-plug, "
 		"plug in", "Search words for the Devices page"), false);
+	AddKeywords(B_TRANSLATE_COMMENT("when connected, new device, "
+		"notification, switch automatically, switch back, disconnected, "
+		"ask", "Search words for the Devices page's connection settings"),
+		false);
 	AddKeywords(B_TRANSLATE_COMMENT("buffer size, period, restart media "
 		"services, media server, device settings",
 		"Search words for the Devices page's advanced settings"), true);
@@ -1205,6 +1213,35 @@ DevicesPage::DevicesPage(AudioDeviceList& devices)
 	fRestart = new BButton("restartMedia",
 		B_TRANSLATE("Restart media services"), new BMessage(kMsgRestart));
 
+	// F-59: what happens when the device is connected
+	const char* policyLabels[] = {
+		B_TRANSLATE("Ask"),
+		B_TRANSLATE("Switch to it automatically"),
+		B_TRANSLATE("Do nothing")
+	};
+	BPopUpMenu* outputMenu = new BPopUpMenu("output policy");
+	BPopUpMenu* inputMenu = new BPopUpMenu("input policy");
+	for (int32 i = 0; i < 3; i++) {
+		BMessage* message = new BMessage(kMsgDevicePolicy);
+		message->AddInt32("output", i);
+		outputMenu->AddItem(new BMenuItem(policyLabels[i], message));
+		message = new BMessage(kMsgDevicePolicy);
+		message->AddInt32("input", i);
+		inputMenu->AddItem(new BMenuItem(policyLabels[i], message));
+	}
+	fOutputPolicy = new BMenuField("devicePolicyOutput",
+		B_TRANSLATE("When connected, as output:"), outputMenu);
+	fInputPolicy = new BMenuField("devicePolicyInput",
+		B_TRANSLATE("When connected, as input:"), inputMenu);
+	fSwitchBack = new BCheckBox("deviceSwitchBack",
+		B_TRANSLATE("Switch back when it is disconnected"),
+		new BMessage(kMsgDevicePolicy));
+	fPolicyDefaults = new BButton("devicePolicyDefaults",
+		B_TRANSLATE("Restore defaults"),
+		new BMessage(kMsgDevicePolicyDefaults));
+	fPolicyDefaults->SetToolTip(B_TRANSLATE("Every device: ask when it is "
+		"connected, switch back when it is disconnected"));
+
 	BBox* box = new BBox("devicesBox");
 	box->SetLabel(B_TRANSLATE("Sound cards"));
 	BGroupView* group = new BGroupView(B_VERTICAL, B_USE_SMALL_SPACING);
@@ -1233,8 +1270,26 @@ DevicesPage::DevicesPage(AudioDeviceList& devices)
 	advancedBox->AddChild(group);
 	fAdvancedBox = advancedBox;
 
+	BBox* policyBox = new BBox("devicesPolicy");
+	policyBox->SetLabel(B_TRANSLATE("When this device is connected"));
+	group = new BGroupView(B_VERTICAL, B_USE_SMALL_SPACING);
+	BLayoutBuilder::Group<>(group)
+		.SetInsets(B_USE_DEFAULT_SPACING, B_USE_SMALL_SPACING,
+			B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING)
+		.AddGrid(B_USE_SMALL_SPACING, B_USE_SMALL_SPACING)
+			.AddMenuField(fOutputPolicy, 0, 0)
+			.AddMenuField(fInputPolicy, 0, 1)
+		.End()
+		.Add(fSwitchBack)
+		.AddGroup(B_HORIZONTAL)
+			.AddGlue()
+			.Add(fPolicyDefaults)
+		.End();
+	policyBox->AddChild(group);
+
 	BLayoutBuilder::Group<>(this)
 		.Add(box)
+		.Add(policyBox)
 		.Add(advancedBox)
 		.AddGlue();
 	fAdvancedBox->Hide();
@@ -1248,6 +1303,10 @@ DevicesPage::AttachedToWindow()
 	fList->SetTarget(this);
 	fMoreSettings->SetTarget(this);
 	fRestart->SetTarget(this);
+	fOutputPolicy->Menu()->SetTargetForItems(this);
+	fInputPolicy->Menu()->SetTargetForItems(this);
+	fSwitchBack->SetTarget(this);
+	fPolicyDefaults->SetTarget(this);
 }
 
 
@@ -1258,6 +1317,20 @@ DevicesPage::MessageReceived(BMessage* message)
 		case kMsgDeviceSelected:
 			_ShowDetails();
 			break;
+
+		case kMsgDevicePolicy:
+			_ChangePolicy(message);
+			break;
+
+		case kMsgDevicePolicyDefaults:
+		{
+			AudioDevicePolicies policies;
+			policies.Load();
+			policies.Reset();
+			policies.Save();
+			_ShowDetails();
+			break;
+		}
 
 		case kMsgDeviceBuffer:
 		{
@@ -1369,6 +1442,66 @@ DevicesPage::_ShowDetails()
 	fMoreSettings->SetEnabled(device != NULL);
 	fill_buffer_menu(fBufferSize, device != NULL && device->output ? device
 		: NULL, kMsgDeviceBuffer, this, fBufferKey);
+	_ShowPolicy(device);
+}
+
+
+void
+DevicesPage::SelectDevice(const char* name)
+{
+	for (int32 i = 0; i < fList->CountItems(); i++) {
+		DeviceItem* item = dynamic_cast<DeviceItem*>(fList->ItemAt(i));
+		if (item != NULL && item->Name() == name) {
+			fList->Select(i);
+			fList->ScrollToSelection();
+			break;
+		}
+	}
+	_ShowDetails();
+}
+
+
+//!	F-59: the selected device's "when connected" settings.
+void
+DevicesPage::_ShowPolicy(const AudioDevice* device)
+{
+	AudioDevicePolicies policies;
+	policies.Load();
+	AudioDevicePolicy policy;
+	if (device != NULL)
+		policy = policies.Get(device->name);
+	if (BMenuItem* item = fOutputPolicy->Menu()->ItemAt(policy.output))
+		item->SetMarked(true);
+	if (BMenuItem* item = fInputPolicy->Menu()->ItemAt(policy.input))
+		item->SetMarked(true);
+	fSwitchBack->SetValue(policy.switchBack);
+	fOutputPolicy->SetEnabled(device != NULL && device->output);
+	fInputPolicy->SetEnabled(device != NULL && device->input);
+	fSwitchBack->SetEnabled(device != NULL);
+	fPolicyDefaults->SetEnabled(!policies.IsDefault());
+}
+
+
+void
+DevicesPage::_ChangePolicy(BMessage* message)
+{
+	DeviceItem* item = dynamic_cast<DeviceItem*>(
+		fList->ItemAt(fList->CurrentSelection()));
+	if (item == NULL)
+		return;
+	AudioDevicePolicies policies;
+	policies.Load();
+	AudioDevicePolicy policy = policies.Get(item->Name());
+	int32 value;
+	if (message->FindInt32("output", &value) == B_OK)
+		policy.output = value;
+	else if (message->FindInt32("input", &value) == B_OK)
+		policy.input = value;
+	else
+		policy.switchBack = fSwitchBack->Value() != 0;
+	policies.Set(item->Name(), policy);
+	policies.Save();
+	_ShowPolicy(fDevices.FindDevice(item->Name()));
 }
 
 
@@ -1570,6 +1703,14 @@ AudioSettingsView::MessageReceived(BMessage* message)
 	the user changed something, when the cards changed, and every ten
 	seconds; the device list itself once a second.
 */
+void
+AudioSettingsView::SelectDevice(const char* name)
+{
+	SelectPage("devices");
+	fDevicesPage->SelectDevice(name);
+}
+
+
 void
 AudioSettingsView::_RefreshDevices(bool details)
 {

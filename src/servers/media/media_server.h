@@ -22,4 +22,9 @@ extern MediaFilesManager* gMediaFilesManager;
 extern AddOnManager* gAddOnManager;
 extern FormatManager* gFormatManager;
 
+// Renga (F-59): the audio devices changed; the audio device agent
+// (system/servers/audio_device_agent) is started once they settle
+#define MEDIA_SERVER_AUDIO_DEVICES_CHANGED	'AdCh'
+#define MEDIA_SERVER_AUDIO_DEVICES_SETTLED	'AdSe'
+
 #endif	// MEDIA_SERVER_H

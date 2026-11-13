@@ -29,6 +29,7 @@
 
 #include "NotificationManager.h"
 
+#include <Application.h>
 #include <Autolock.h>
 #include <Locker.h>
 #include <Message.h>
@@ -184,6 +185,14 @@ NotificationManager::SendNotifications(BMessage *msg)
 	msg->what = what;
 
 	TRACE("NotificationManager::SendNotifications what %#lx\n", what);
+
+	// Renga (F-59): the audio device agent looks at the devices once they
+	// settle (media_server.cpp)
+	if (what == B_MEDIA_FLAVORS_CHANGED) {
+		BMessage changed(MEDIA_SERVER_AUDIO_DEVICES_CHANGED);
+		changed.AddBool("new", msg->GetInt32("be:new_count", 1) > 0);
+		be_app->PostMessage(&changed);
+	}
 
 	BAutolock _(fLocker);
 

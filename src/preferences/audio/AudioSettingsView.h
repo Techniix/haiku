@@ -162,9 +162,12 @@ public:
 	virtual	void				Refresh();
 
 			BListView*			List() const { return fList; }
+			void				SelectDevice(const char* name);
 
 private:
 			void				_ShowDetails();
+			void				_ShowPolicy(const AudioDevice* device);
+			void				_ChangePolicy(BMessage* message);
 	static	status_t			_RestartMediaServices(void* data);
 
 			AudioDeviceList&	fDevices;
@@ -177,6 +180,11 @@ private:
 			BButton*			fRestart;
 			BView*				fAdvancedBox;
 			bool				fAdvanced;
+			// F-59: when the device is connected
+			BMenuField*			fOutputPolicy;
+			BMenuField*			fInputPolicy;
+			BCheckBox*			fSwitchBack;
+			BButton*			fPolicyDefaults;
 };
 
 
@@ -189,6 +197,9 @@ class AudioSettingsView : public BGroupView {
 public:
 								AudioSettingsView();
 	virtual						~AudioSettingsView();
+
+			//!	The Devices page, with \a name selected (F-59)
+			void				SelectDevice(const char* name);
 
 	virtual	void				AttachedToWindow();
 	virtual	void				DetachedFromWindow();

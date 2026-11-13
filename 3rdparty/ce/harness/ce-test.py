@@ -186,7 +186,12 @@ CODYCAM_SCREENSHOTS = ["codycam_preview", "codycam_switched"]
 # the permission prompt, the indicator, the Screen recording preferences
 # and Screenshot while it records.
 CAPTURE_SCREENSHOTS = ["capture_prompt", "capture_indicator",
-	"capture_settings", "screenshot_recording"]
+	"capture_settings", "screenshot_recording",
+	"recording_indicator_settings"]
+# A new audio device (F-59): the prompt, and the Devices page's settings.
+DEVNOTIFY_SCREENSHOTS = ["audio_device_prompt", "audio_device_policy"]
+# Tracker's folder menus built ahead of time (F-59): its setting.
+TRACKER_MENU_SCREENSHOTS = ["tracker_prefetch_setting"]
 # The low-latency mode (F-31): the audio settings with a game's "Low
 # latency" switch on, and the default output's page with "Buffer size".
 LATENCY_SCREENSHOTS = ["media_low_latency", "media_buffer_size"]
@@ -303,8 +308,9 @@ POINTER_REL_MAX = 200
 # next add. USB_AUDIO_DEVICES bounds the adds per run: usb_audio_test plugs
 # in twice, media_routing_test (a route by name kept while the device is
 # absent, F-58) once, media_sound_test (the Audio preferences' device list)
-# once, media_usb_test twice.
-USB_AUDIO_DEVICES = 6
+# once, media_usb_test twice, media_devnotify_test (a new device, F-59)
+# four times.
+USB_AUDIO_DEVICES = 10
 USB_AUDIO_CONTROLLER = "audiousb"
 
 # Sources whose TRACE() output --verbose turns on (via -sCE_TRACE=1).
@@ -4059,6 +4065,12 @@ def main():
 			analyze_media_usb_audio(results_dir, report)
 			check_screenshots(results_dir, report, MEDIA_USB_SCREENSHOTS,
 				"media_usb.screenshots")
+		if "media_devnotify_test" in (args.only or available):
+			check_screenshots(results_dir, report, DEVNOTIFY_SCREENSHOTS,
+				"devnotify.screenshots")
+		if "tracker_menu_test" in (args.only or available):
+			check_screenshots(results_dir, report, TRACKER_MENU_SCREENSHOTS,
+				"tracker_menu.screenshots")
 		if "media_vcam_test" in (args.only or available):
 			check_screenshots(results_dir, report, VCAM_SCREENSHOTS,
 				"virtual_camera.screenshots")

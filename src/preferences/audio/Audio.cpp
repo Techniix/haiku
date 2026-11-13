@@ -11,8 +11,9 @@
 	Sound page.
 
 	Command line: Audio [--page output|input|applications|devices]
-	[--advanced] [--search <text>]; given to a running instance, it shows
-	that page there.
+	[--advanced] [--search <text>] [--device <name>]; given to a running
+	instance, it shows that page there (--device selects the device on the
+	Devices page).
 
 	Scripting for tests and automation (the window answers; see
 	3rdparty/ce/README.md, suite sound_settings):
@@ -59,7 +60,8 @@ enum {
 	kMsgState		= 'AuSt',
 	kMsgPage		= 'AuPg',
 	kMsgAdvanced	= 'AuAv',
-	kMsgSearch		= 'AuSe'
+	kMsgSearch		= 'AuSe',
+	kMsgSelectDevice = 'AuDe'
 };
 
 
@@ -113,6 +115,10 @@ public:
 
 			case kMsgSearch:
 				fView->Search(message->GetString("text", ""));
+				break;
+
+			case kMsgSelectDevice:
+				fView->SelectDevice(message->GetString("device", ""));
 				break;
 
 			default:
@@ -200,6 +206,8 @@ public:
 		for (int32 i = 1; i < argc; i++) {
 			if (strcmp(argv[i], "--page") == 0 && i + 1 < argc)
 				fPage = argv[++i];
+			else if (strcmp(argv[i], "--device") == 0 && i + 1 < argc)
+				fDevice = argv[++i];
 			else if (strcmp(argv[i], "--advanced") == 0)
 				fAdvanced = true;
 			else if (strcmp(argv[i], "--search") == 0 && i + 1 < argc)
@@ -250,6 +258,12 @@ private:
 			message.AddString("text", fSearch);
 			fWindow->PostMessage(&message);
 		}
+		if (fDevice.Length() > 0) {
+			BMessage message(kMsgSelectDevice);
+			message.AddString("device", fDevice);
+			fWindow->PostMessage(&message);
+		}
+		fDevice = "";
 		fPage = "";
 		fSearch = "";
 		fAdvanced = false;
@@ -259,6 +273,7 @@ private:
 	AudioWindow*	fWindow;
 	BString			fPage;
 	BString			fSearch;
+	BString			fDevice;
 	bool			fAdvanced = false;
 };
 

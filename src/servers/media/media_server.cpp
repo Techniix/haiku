@@ -42,6 +42,10 @@ char __dont_remove_copyright_from_binary[] = "Copyright (c) 2002, 2003 "
 #include <Roster.h>
 #include <MediaDefs.h>
 #include <MediaFormats.h>
+#include <Entry.h>
+#include <FindDirectory.h>
+#include <MessageRunner.h>
+#include <Path.h>
 #include <Messenger.h>
 #include <Server.h>
 
@@ -67,6 +71,10 @@ NotificationManager* gNotificationManager;
 
 
 #define REPLY_TIMEOUT ((bigtime_t)500000)
+
+
+// Renga (F-59): whether the pending audio device change saw a new device
+static bool* gAudioDevicesNew = NULL;
 
 
 class ServerApp : public BServer {
@@ -941,6 +949,53 @@ ServerApp::MessageReceived(BMessage* msg)
 		case MEDIA_SERVER_RESCAN_COMPLETED:
 			gAppManager->NotifyRosters();
 			break;
+
+		case MEDIA_SERVER_AUDIO_DEVICES_CHANGED:
+		{
+			// Renga (F-59): wait until the flavors stop changing (a card
+			// comes with several, add-ons register one by one). When
+			// devices only went, the agent is started only if a default
+			// was switched to one, and later: the default output falls
+			// back first (that can take a while), and the agent's start
+			// would only compete with it.
+			static BMessageRunner* sSettle = NULL;
+			static bool sNew = false;
+			sNew |= msg->GetBool("new", true);
+			delete sSettle;
+			BMessage settled(MEDIA_SERVER_AUDIO_DEVICES_SETTLED);
+			settled.AddBool("new", sNew);
+			sSettle = new BMessageRunner(BMessenger(this), &settled,
+				sNew ? 3000000 : 10000000, 1);
+			if (msg->what == MEDIA_SERVER_AUDIO_DEVICES_CHANGED)
+				gAudioDevicesNew = &sNew;
+			break;
+		}
+
+		case MEDIA_SERVER_AUDIO_DEVICES_SETTLED:
+		{
+			if (gAudioDevicesNew != NULL)
+				*gAudioDevicesNew = false;
+			if (!msg->GetBool("new", true)) {
+				// Devices only went: the agent has something to do only if
+				// a default was switched to one (its marker file).
+				BPath marker;
+				if (find_directory(B_USER_SETTINGS_DIRECTORY, &marker)
+						!= B_OK
+					|| marker.Append("Media/audio_device_policies.switched")
+						!= B_OK
+					|| !BEntry(marker.Path()).Exists()) {
+					break;
+				}
+			}
+			entry_ref ref;
+			status_t status = get_ref_for_path(
+				"/boot/system/servers/audio_device_agent", &ref);
+			if (status == B_OK)
+				status = be_roster->Launch(&ref);
+			if (status != B_OK && status != B_ALREADY_RUNNING)
+				TRACE("audio device agent: %s\n", strerror(status));
+			break;
+		}
 
 		case B_SOME_APP_QUIT:
 		{
