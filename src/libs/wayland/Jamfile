@@ -1,0 +1,62 @@
+SubDir HAIKU_TOP src libs wayland ;
+
+# libwayland (roadmap F-43 phase C): X547's Haiku fork of the Wayland
+# libraries (github.com/X547/wayland, 149e9d7e, the source of HaikuPorts'
+# wayland-1.21.0~git package), MIT, imported for Renga's Wayland
+# compositor. HaikuPorts' build of it replaces the socket transport with
+# X547's in-process server; Renga builds it with WL_RENGA_SOCKETS, which
+# keeps libwayland's own Unix socket transport (on Renga's epoll, signalfd
+# and timerfd, which libgnu provides), so programs that speak Wayland over
+# a socket, such as Linux programs under Renguin, can connect.
+# WL_RENGA_NO_FFI replaces libffi, whose headers are not in the build's
+# package set, with a direct x86-64 call (src/connection.c).
+#
+# Built here: two static libraries, the server and the client side, with
+# the core protocol's code (protocol/wayland.xml). The protocols/ directory
+# holds the other protocols' XML files (from wayland-protocols 1.49 and
+# HaiWay); WaylandRules generates code from them where it is needed.
+
+include [ FDirName $(HAIKU_TOP) src libs wayland WaylandRules ] ;
+
+SEARCH_SOURCE += [ FDirName $(SUBDIR) src ] ;
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+SubDirSysHdrs $(LOCATE_SOURCE) ;
+SubDirSysHdrs [ FDirName $(SUBDIR) src ] ;
+SubDirCcFlags -DWL_RENGA_SOCKETS -DWL_RENGA_NO_FFI
+	-Wno-sign-compare -Wno-missing-field-initializers ;
+
+WaylandProtocolFile wayland-protocol.c : wayland.xml : private-code ;
+local headers =
+	[ WaylandProtocolFile wayland-server-protocol.h : wayland.xml
+		: server-header ]
+	[ WaylandProtocolFile wayland-client-protocol.h : wayland.xml
+		: client-header ]
+;
+
+local serverSources =
+	connection.c
+	event-loop.c
+	wayland-os.c
+	wayland-server.c
+	wayland-shm.c
+	wayland-util.c
+;
+local clientSources =
+	wayland-client.c
+;
+
+# The objects need the generated headers before they compile.
+Depends [ FGristFiles $(serverSources:S=$(SUFOBJ)) $(clientSources:S=$(SUFOBJ)) ]
+	: $(headers) ;
+
+StaticLibrary libwayland_server_renga.a :
+	$(serverSources)
+	wayland-protocol.c
+;
+StaticLibrary libwayland_client_renga.a :
+	$(clientSources)
+	connection.c
+	wayland-os.c
+	wayland-util.c
+	wayland-protocol.c
+;

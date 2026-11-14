@@ -1,0 +1,17 @@
+# Renga (roadmap F-43 phase C): the Wayland compositor, which shows Wayland
+# programs (native ports and Linux programs under Renguin) as native
+# windows. It listens on $XDG_RUNTIME_DIR/wayland-0 (/tmp/xdg-runtime, see
+# SetupEnvironment). On by default; the switch in the Screen preferences
+# writes "disabled true" into ~/config/settings/Renga/wayland and stops or
+# starts it at once. A service: launch_daemon restarts it if it ends.
+target desktop {
+	service x-vnd.Renga-WaylandCompositor {
+		launch /system/servers/wayland_compositor
+		if {
+			file_exists /system/servers/wayland_compositor
+			not setting ~/config/settings/Renga/wayland disabled
+		}
+		on initial_volumes_mounted
+		no_safemode
+	}
+}

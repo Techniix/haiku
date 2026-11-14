@@ -1,0 +1,76 @@
+# Rules for Wayland protocol code, used by src/libs/wayland and
+# src/servers/wayland (roadmap F-43 phase C). Each directory generates the
+# files it needs into its own LOCATE_SOURCE with the build host's
+# wayland-scanner (src/libs/wayland/scanner).
+
+if ! $(WAYLAND_RULES_INCLUDED) {
+WAYLAND_RULES_INCLUDED = 1 ;
+
+WAYLAND_PROTOCOL_SEARCH = [ FDirName $(HAIKU_TOP) src libs wayland protocol ]
+	[ FDirName $(HAIKU_TOP) src libs wayland protocols ] ;
+
+actions WaylandScanner1
+{
+	$(2[1]) $(WAYLAND_SCANNER_MODE) $(2[2]) $(1)
+}
+
+rule WaylandProtocolFile target : xml : mode
+{
+	# WaylandProtocolFile <generated file> : <protocol XML> : <mode> ;
+	# Returns the gristed target, located in the current directory's
+	# LOCATE_SOURCE; modes: private-code, server-header, client-header,
+	# private-code-cpp, server-header-cpp.
+	target = [ FGristFiles $(target) ] ;
+	MakeLocate $(target) : $(LOCATE_SOURCE) ;
+	local scanner = <build>wayland_scanner ;
+	xml = $(xml:G=wayland-protocol) ;
+	SEARCH on $(xml) = $(WAYLAND_PROTOCOL_SEARCH) ;
+	Depends $(target) : $(scanner) $(xml) ;
+	WAYLAND_SCANNER_MODE on $(target) = $(mode) ;
+	WaylandScanner1 $(target) : $(scanner) $(xml) ;
+	return $(target) ;
+}
+
+rule WaylandProtocols protocols : kinds
+{
+	# WaylandProtocols <xml base names> : <kinds> ;
+	# Generates, for each protocol, the files of the given kinds (c, server,
+	# client, cpp) and returns the generated headers. The .c and .cpp files
+	# are named <name>-protocol.c and <CppName>.cpp; list them as sources.
+	# C++ names: see WAYLAND_CPP_NAME below.
+	local headers ;
+	local name ;
+	for name in $(protocols) {
+		local xml = $(name).xml ;
+		if c in $(kinds) {
+			WaylandProtocolFile $(name)-protocol.c : $(xml) : private-code ;
+		}
+		if server in $(kinds) {
+			headers += [ WaylandProtocolFile $(name)-protocol.h : $(xml)
+				: server-header ] ;
+		}
+		if client in $(kinds) {
+			headers += [ WaylandProtocolFile $(name)-client-protocol.h
+				: $(xml) : client-header ] ;
+		}
+		if cpp in $(kinds) {
+			local cppName = $(WAYLAND_CPP_NAME_$(name)) ;
+			WaylandProtocolFile $(cppName).cpp : $(xml) : private-code-cpp ;
+			headers += [ WaylandProtocolFile $(cppName).h : $(xml)
+				: server-header-cpp ] ;
+		}
+	}
+	return $(headers) ;
+}
+
+WAYLAND_CPP_NAME_wayland = Wayland ;
+WAYLAND_CPP_NAME_xdg-shell = XdgShell ;
+WAYLAND_CPP_NAME_presentation-time = PresentationTime ;
+WAYLAND_CPP_NAME_viewporter = Viewporter ;
+WAYLAND_CPP_NAME_xdg-activation-v1 = XdgActivationV1 ;
+WAYLAND_CPP_NAME_text-input-unstable-v3 = TextInputUnstableV3 ;
+WAYLAND_CPP_NAME_server-decoration = ServerDecoration ;
+WAYLAND_CPP_NAME_fractional-scale-v1 = FractionalScaleV1 ;
+WAYLAND_CPP_NAME_idle-inhibit-unstable-v1 = IdleInhibitUnstableV1 ;
+
+}

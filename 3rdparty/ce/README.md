@@ -986,6 +986,19 @@ of a 1 GiB guest was, so the bounce path went untested.
   (busybox wget from a busybox nc server), `dyn.ip` (busybox ip over
   netlink and ifconfig over SIOCGIF* ioctls), and `dyn.resolv_conf` when
   the machine has a name server.
+- **wayland** (`wayland_test`, x86_64): Renga's Wayland compositor
+  (roadmap F-43 phase C) seen by a native Wayland client on Renga's
+  libwayland over `$XDG_RUNTIME_DIR/wayland-0`: the compositor runs,
+  the socket exists, connect, the globals (compositor, subcompositor,
+  shm, seat, data device manager, xdg_wm_base, viewporter, output), one
+  wl_output per screen with the screen's size, the shm formats, an
+  xdg_toplevel drawn from a memfd wl_shm buffer that appears on the
+  screen (pixels counted with `BScreen::GetBitmap`; the harness saves
+  `screen-wayland_shm_window` and checks `wayland.screenshots`), the
+  clipboard both ways (a Wayland selection becomes `text/plain` on the
+  system clipboard; system clipboard text reaches the client as an
+  offer), and that the same compositor team survives the client's
+  disconnect.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **pointer_logic** (`pointer_logic_test`, no desktop needed): Adaptive
   pointer acceleration gives the same distance at 125, 500, 1000 and

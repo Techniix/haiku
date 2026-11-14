@@ -1,0 +1,15 @@
+SubDir HAIKU_TOP src libs wayland scanner ;
+
+# wayland-scanner (X547's fork, with the C++ wrapper modes HaiWay uses),
+# built for the build host: it turns the protocol XML files into C and C++
+# code for the compositor and the client library (../Jamfile). It needs the
+# host's expat; DTD validation (libxml2) is left out.
+
+SEARCH_SOURCE += [ FDirName $(SUBDIR) $(DOTDOT) src ] ;
+
+BuildPlatformMain <build>wayland_scanner :
+	scanner.c
+	wayland-util.c
+	:
+;
+LINKLIBS on <build>wayland_scanner += -lexpat ;

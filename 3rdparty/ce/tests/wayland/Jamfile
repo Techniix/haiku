@@ -1,0 +1,27 @@
+SubDir HAIKU_TOP 3rdparty ce tests wayland ;
+
+# The Wayland compositor (roadmap F-43 phase C): wayland_test is a native
+# Wayland client on Renga's libwayland (socket transport).
+
+include [ FDirName $(HAIKU_TOP) src libs wayland WaylandRules ] ;
+
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+SubDirSysHdrs $(LOCATE_SOURCE) ;
+SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland src ] ;
+SubDirC++Flags -DWL_RENGA_SOCKETS -Wno-missing-field-initializers ;
+SubDirCcFlags -DWL_RENGA_SOCKETS ;
+
+local headers = [ WaylandProtocols xdg-shell : c client ]
+	[ WaylandProtocolFile wayland-client-protocol.h : wayland.xml
+		: client-header ] ;
+Depends [ FGristFiles wayland_test.o xdg-shell-protocol.o ] : $(headers) ;
+
+Application wayland_test :
+	wayland_test.cpp
+	xdg-shell-protocol.c
+	: be libgnu.so libwayland_client_renga.a network [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : wayland_test ;
+}

@@ -212,6 +212,8 @@ BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
 	"linuxkpi_hardware", "linuxkpi_compatibility",
 	"linuxkpi_settings_mt7921e"]
+# The Wayland compositor showing wayland_test's wl_shm window (F-43 C).
+WAYLAND_SCREENSHOTS = ["wayland_shm_window"]
 # The Installer with a destination that has an installation (F-23).
 INSTALLER_SCREENSHOTS = ["installer_modes"]
 
@@ -231,6 +233,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"Input", "background_agents_test", "gamepad_agent",
 	"crash_report_notifier", "audio_device_agent", "Gamepads",
 	"renguin", "renguin_test", "kernel_x86_64",
+	"wayland_compositor", "wayland_test",
 	"virtio_input", "<input>tablet", "<input>virtio",
 	"usb_audio", "usb", "<usb>xhci", "usb_audio_test",
 	"lkpi_pcitest", "linuxkpi_test", "fbsd_wlantest", "wlan_reload_test",
@@ -4185,6 +4188,9 @@ def main():
 		if "linuxkpi_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, LINUXKPI_SCREENSHOTS,
 				"linuxkpi_ui.screenshots")
+		if "wayland_test" in (args.only or available):
+			check_screenshots(results_dir, report, WAYLAND_SCREENSHOTS,
+				"wayland.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

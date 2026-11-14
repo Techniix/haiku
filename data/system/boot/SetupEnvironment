@@ -85,3 +85,10 @@ export XDG_CACHE_HOME="`finddir B_USER_CACHE_DIRECTORY`"
 # It is supposed to be cleaned up on last log-out.
 # Apps will fall back to /tmp usually anyway.
 #export XDG_RUNTIME_DIR="`finddir B_USER_VAR_DIRECTORY`/tmp"
+# Renga (F-43 phase C): the Wayland compositor's socket lives here, where
+# native and Linux (Renguin) Wayland programs look for it; /tmp is cleared
+# at boot, so it holds only this session's sockets.
+export XDG_RUNTIME_DIR=/tmp/xdg-runtime
+if [ ! -d "$XDG_RUNTIME_DIR" ]; then
+	mkdir -p -m 700 "$XDG_RUNTIME_DIR" 2>/dev/null
+fi

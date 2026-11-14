@@ -279,7 +279,8 @@ SEARCH on $(launchScripts) = [ FDirName $(HAIKU_TOP) data launch ] ;
 AddFilesToPackage data launch : $(launchScripts) ;
 
 local userLaunchScripts = <data!launch>user
-	<data!launch>user_crash_reports <data!launch>user_gamepads ;
+	<data!launch>user_crash_reports <data!launch>user_gamepads
+	<data!launch>user_wayland ;
 SEARCH on $(userLaunchScripts) = [ FDirName $(HAIKU_TOP) data launch ] ;
 AddFilesToPackage data user_launch : $(userLaunchScripts) ;
 

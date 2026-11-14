@@ -236,6 +236,7 @@ SYSTEM_SERVERS = [ FFilterByBuildFeatures
 	power_daemon
 	registrar
 	syslog_daemon
+	wayland_compositor@x86_64
 ] ;
 
 SYSTEM_NETWORK_DEVICES =

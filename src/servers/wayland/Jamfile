@@ -1,0 +1,76 @@
+SubDir HAIKU_TOP src servers wayland ;
+
+# Renga's Wayland compositor (roadmap F-43 phase C): HaiWay, X547's Wayland
+# server over the Haiku API (github.com/X547/wayland-server, 0364da32, the
+# source of HaikuPorts' wayland_server 0.1.20251004, MIT; License.md),
+# imported here and run as one compositor process with a Wayland socket
+# ($XDG_RUNTIME_DIR/wayland-0) on Renga's libwayland (src/libs/wayland),
+# instead of an in-process add-on, so that native programs and Linux
+# programs under Renguin connect to the same server. Each Wayland surface
+# is a native window drawn from shared memory (wl_shm on the client's
+# memfd, zero-copy into a BBitmap); the clipboard is the system clipboard.
+
+include [ FDirName $(HAIKU_TOP) src libs wayland WaylandRules ] ;
+
+UsePrivateHeaders shared interface app kernel ;
+UsePrivateSystemHeaders ;
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+SubDirSysHdrs $(LOCATE_SOURCE) ;
+SubDirSysHdrs [ FDirName $(SUBDIR) ] ;
+SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland src ] ;
+SubDirC++Flags -std=gnu++20 -DWL_RENGA_SOCKETS -Wno-error -Wno-unused-parameter
+	-Wno-unused-variable -Wno-missing-field-initializers ;
+SubDirCcFlags -DWL_RENGA_SOCKETS -Wno-error ;
+
+local protocols =
+	xdg-shell
+	presentation-time
+	viewporter
+	xdg-activation-v1
+	text-input-unstable-v3
+	server-decoration
+;
+local headers = [ WaylandProtocols wayland : server cpp ]
+	[ WaylandProtocols $(protocols) : c server cpp ]
+	[ WaylandProtocolFile wayland-server-protocol.h : wayland.xml
+		: server-header ] ;
+
+local generated = $(protocols)-protocol.c ;
+local name ;
+for name in wayland $(protocols) {
+	generated += $(WAYLAND_CPP_NAME_$(name)).cpp ;
+}
+
+local sources =
+	WaylandServer.cpp
+	WlResource.cpp
+	WlGlobal.cpp
+	HaikuShm.cpp
+	HaikuCompositor.cpp
+	HaikuSubcompositor.cpp
+	HaikuViewporter.cpp
+	HaikuXdgShell.cpp
+	HaikuXdgPositioner.cpp
+	HaikuXdgSurface.cpp
+	HaikuXdgToplevel.cpp
+	HaikuXdgPopup.cpp
+	HaikuServerDecoration.cpp
+	HaikuOutput.cpp
+	HaikuSeat.cpp
+	HaikuTextInput.cpp
+	XkbKeymap.cpp
+	HaikuDataDeviceManager.cpp
+;
+
+Depends [ FGristFiles $(sources:S=$(SUFOBJ)) $(generated:S=$(SUFOBJ)) ]
+	: $(headers) ;
+
+Application wayland_compositor :
+	$(sources)
+	$(generated)
+	:
+	be translation libgnu.so
+	libwayland_server_renga.a network
+	[ TargetLibstdc++ ]
+	: WaylandCompositor.rdef
+;
