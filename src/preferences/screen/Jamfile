@@ -4,7 +4,7 @@ AddSubDirSupportedPlatforms libbe_test ;
 
 UsePrivateHeaders [ FDirName graphics common ] ;
 UsePrivateHeaders [ FDirName graphics radeon ] ;
-UsePrivateHeaders interface preferences ;
+UsePrivateHeaders app interface preferences ;
 
 Application Screen :
 	AlertWindow.cpp
@@ -17,6 +17,7 @@ Application Screen :
 	ScreenSettings.cpp
 	ScreenWindow.cpp
 	Utility.cpp
+	WaylandSwitch.cpp
 	: be [ TargetLibstdc++ ] [ TargetLibsupc++ ] localestub libaccelerantscommon.a
 	: Screen.rdef
 	;

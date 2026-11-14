@@ -1002,7 +1002,12 @@ of a 1 GiB guest was, so the bounce path went untested.
   `linux_clipboard`: the Linux Wayland client `wlclient-musl` (musl,
   Alpine's libwayland-client, through Renguin's sockets) shows its
   window (screenshot `screen-wayland_linux_window`) and its selection
-  reaches the system clipboard.
+  reaches the system clipboard. `switch_off` and `switch_on`: `Screen
+  --wayland off|on` (the Screen preferences' "Show Wayland programs"
+  switch) stops the compositor through the launch daemon (it stays
+  stopped, the socket goes, the settings say disabled) and starts it
+  again (a client connects); screenshot `screen-wayland_switch` shows
+  the switch.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **pointer_logic** (`pointer_logic_test`, no desktop needed): Adaptive
   pointer acceleration gives the same distance at 125, 500, 1000 and

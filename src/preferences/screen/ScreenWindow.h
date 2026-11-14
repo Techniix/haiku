@@ -19,6 +19,7 @@
 
 
 class BBox;
+class BCheckBox;
 class BPopUpMenu;
 class BMenuField;
 class BSlider;
@@ -75,6 +76,7 @@ private:
 
 			BSpinner*		fColumnsControl;
 			BSpinner*		fRowsControl;
+			BCheckBox*		fWaylandCheckBox;
 
 			uint32			fSupportedColorSpaces;
 			BMenuItem*		fUserSelectedColorSpace;

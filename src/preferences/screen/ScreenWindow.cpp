@@ -41,6 +41,7 @@
 #include <Roster.h>
 #include <Screen.h>
 #include <SpaceLayoutItem.h>
+#include <CheckBox.h>
 #include <Spinner.h>
 #include <String.h>
 #include <StringView.h>
@@ -54,6 +55,7 @@
 #include "MonitorView.h"
 #include "ScreenSettings.h"
 #include "Utility.h"
+#include "WaylandSwitch.h"
 
 /* Note, this headers defines a *private* interface to the Radeon accelerant.
  * It's a solution that works with the current BeOS interface that Haiku
@@ -291,11 +293,24 @@ ScreenWindow::ScreenWindow(ScreenSettings* settings)
 			.End()
 		.View());
 
+	// Renga (F-43 phase C): the Wayland compositor, which shows Wayland
+	// programs (native ports and Linux programs) as windows. Applies at once.
+	fWaylandCheckBox = new BCheckBox("wayland",
+		B_TRANSLATE("Show Wayland programs"),
+		new BMessage(kMsgWaylandChanged));
+	fWaylandCheckBox->SetValue(wayland_compositor_enabled()
+		? B_CONTROL_ON : B_CONTROL_OFF);
+	fWaylandCheckBox->SetToolTip(B_TRANSLATE("Runs the Wayland compositor, "
+		"which shows programs that use Wayland, such as Linux programs and "
+		"some ports, in windows of their own. Takes effect immediately."));
+
 	// put workspaces slider in a vertical group with a half space above so
 	// if hidden you won't see the extra space.
 	BView* workspacesView = BLayoutBuilder::Group<>(B_VERTICAL, 0)
 		.AddStrut(B_USE_HALF_ITEM_SPACING)
 		.Add(workspacesBox)
+		.AddStrut(B_USE_HALF_ITEM_SPACING)
+		.Add(fWaylandCheckBox)
 		.View();
 
 	// box on the right with screen resolution, etc.
@@ -1023,6 +1038,18 @@ ScreenWindow::MessageReceived(BMessage* message)
 		case WORKSPACE_CHECK_MSG:
 			_CheckApplyEnabled();
 			break;
+
+		case kMsgWaylandChanged:
+		{
+			bool enabled = fWaylandCheckBox->Value() == B_CONTROL_ON;
+			status_t status = set_wayland_compositor_enabled(enabled);
+			if (status != B_OK) {
+				fprintf(stderr, "Screen: switching the Wayland compositor "
+					"%s failed: %s\n", enabled ? "on" : "off",
+					strerror(status));
+			}
+			break;
+		}
 
 		case kMsgWorkspaceColumnsChanged:
 		{

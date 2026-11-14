@@ -11,6 +11,11 @@
 
 
 #include "ScreenApplication.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#include "WaylandSwitch.h"
 #include "ScreenWindow.h"
 #include "ScreenSettings.h"
 #include "Constants.h"
@@ -66,8 +71,22 @@ ScreenApplication::MessageReceived(BMessage* message)
 
 
 int
-main()
+main(int argc, char** argv)
 {
+	// Renga: "Screen --wayland on|off" switches the Wayland compositor as
+	// the window's check box does, without a window (scripts, the harness).
+	if (argc == 3 && strcmp(argv[1], "--wayland") == 0
+		&& (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0)) {
+		BApplication app("application/x-vnd.Haiku-Screen-switch");
+		status_t status = set_wayland_compositor_enabled(
+			strcmp(argv[2], "on") == 0);
+		if (status != B_OK) {
+			fprintf(stderr, "Screen: %s\n", strerror(status));
+			return 1;
+		}
+		return 0;
+	}
+
 	ScreenApplication app;
 	app.Run();
 

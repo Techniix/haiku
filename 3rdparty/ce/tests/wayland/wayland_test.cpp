@@ -36,6 +36,15 @@
 	                      SCM_RIGHTS through Renguin)
 	  disconnect          the same compositor team keeps running after the
 	                      client and its objects go away
+	  switch_off          "Screen --wayland off" (the Screen preferences'
+	                      "Show Wayland programs" switch) stops the
+	                      compositor through the launch daemon, writes
+	                      "disabled" to ~/config/settings/Renga/wayland and
+	                      the socket goes away
+	  switch_on           "Screen --wayland on" starts it again; a client
+	                      connects; the harness saves a screenshot of the
+	                      Screen preferences with the switch
+	                      (screen-wayland_switch)
 
 	Output format: see 3rdparty/ce/README.md.
 */
@@ -693,6 +702,101 @@ linux_client_test()
 }
 
 
+
+static const char* kScreen = "/boot/system/preferences/Screen";
+
+
+static bool
+wait_for(bool (*condition)(const char*), const char* argument, int seconds)
+{
+	for (int i = 0; i < seconds * 10; i++) {
+		if (condition(argument))
+			return true;
+		snooze(100000);
+	}
+	return condition(argument);
+}
+
+
+static bool
+compositor_stopped(const char*)
+{
+	return !be_roster->IsRunning(kCompositorSignature);
+}
+
+
+static bool
+compositor_listening(const char* socketPath)
+{
+	return be_roster->IsRunning(kCompositorSignature)
+		&& access(socketPath, F_OK) == 0;
+}
+
+
+static void
+switch_test(const std::string& socketPath)
+{
+	if (access(kScreen, X_OK) != 0) {
+		printf("CE-INFO wayland: no Screen preferences on this image; the "
+			"switch is not checked\n");
+		return;
+	}
+	std::string settings = std::string(getenv("HOME") != NULL
+		? getenv("HOME") : "/boot/home") + "/config/settings/Renga/wayland";
+
+	int status = system((std::string(kScreen) + " --wayland off").c_str());
+	bool stopped = wait_for(compositor_stopped, NULL, 10);
+	bool socketGone = access(socketPath.c_str(), F_OK) != 0;
+	std::string text;
+	FILE* file = fopen(settings.c_str(), "r");
+	if (file != NULL) {
+		char buffer[256];
+		size_t bytes = fread(buffer, 1, sizeof(buffer) - 1, file);
+		buffer[bytes] = '\0';
+		text = buffer;
+		fclose(file);
+	}
+	snooze(2000000);
+		// a service the launch daemon still owned would be back by now
+	bool stillStopped = !be_roster->IsRunning(kCompositorSignature);
+	report("switch_off", status == 0 && stopped && stillStopped && socketGone
+			&& text.find("disabled true") != std::string::npos,
+		"exit %d, compositor %s%s, socket %s, settings %s", status,
+		stopped ? "stopped" : "still running",
+		stopped && !stillStopped ? " (but restarted)" : "",
+		socketGone ? "gone" : "still there",
+		text.find("disabled true") != std::string::npos ? "say disabled"
+			: "do not say disabled");
+
+	status = system((std::string(kScreen) + " --wayland on").c_str());
+	bool listening = wait_for(compositor_listening, socketPath.c_str(), 15);
+	bool connected = false;
+	if (listening) {
+		wl_display* display = wl_display_connect(NULL);
+		if (display != NULL) {
+			connected = wl_display_roundtrip(display) >= 0;
+			wl_display_disconnect(display);
+		}
+	}
+	report("switch_on", status == 0 && listening && connected,
+		"exit %d, compositor %s, connect %s", status,
+		listening ? "listening again" : "not back",
+		connected ? "works" : "fails");
+
+	// The switch in its window, for the screenshot.
+	entry_ref ref;
+	if (get_ref_for_path(kScreen, &ref) == B_OK
+		&& be_roster->Launch(&ref) == B_OK) {
+		snooze(3000000);
+		printf("CE-HOST screenshot wayland_switch\n");
+		fflush(stdout);
+		snooze(1000000);
+		BMessenger("application/x-vnd.Haiku-Screen")
+			.SendMessage(B_QUIT_REQUESTED);
+	}
+}
+
+
 // #pragma mark -
 
 
@@ -807,6 +911,8 @@ main()
 	report("disconnect", before >= 0 && after == before,
 		"compositor team %d before, %d after the client went away",
 		(int)before, (int)after);
+
+	switch_test(socketPath);
 
 	printf("CE-SUITE %s DONE failures=%d\n", SUITE, sFailures);
 	fflush(stdout);

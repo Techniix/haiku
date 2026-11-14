@@ -213,7 +213,7 @@ LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
 	"linuxkpi_hardware", "linuxkpi_compatibility",
 	"linuxkpi_settings_mt7921e"]
 # The Wayland compositor showing wayland_test's wl_shm window (F-43 C).
-WAYLAND_SCREENSHOTS = ["wayland_shm_window"]
+WAYLAND_SCREENSHOTS = ["wayland_shm_window", "wayland_switch"]
 # ... and the Linux client's window under Renguin (F-27), x86_64 harness
 # images with the Linux root.
 WAYLAND_LINUX_SCREENSHOTS = ["wayland_linux_window"]
