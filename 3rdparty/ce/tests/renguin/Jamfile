@@ -1,0 +1,80 @@
+SubDir HAIKU_TOP 3rdparty ce tests renguin ;
+
+# Renguin (roadmap F-27): Linux programs run by the renguin personality.
+# The Linux test programs (linux/, from Techniix/Renguin's tests/linux/poc)
+# are built here with the build host's own compiler, which on the harness
+# host is a Linux x86-64 gcc, so no prebuilt binaries are kept in the tree:
+#  - the raw ones use no C library (-nostdlib); they carry no Linux marker,
+#    so the action sets EI_OSABI to 3 (ELFOSABI_LINUX), as FreeBSD's
+#    brandelf does; Linux ignores the byte;
+#  - the libc ones are static glibc programs (the host's libc.a), which
+#    glibc brands itself (an NT_GNU_ABI_TAG note). They exist only inside
+#    harness images, which are never distributed.
+# renguin_test (in Haiku) runs them and compares with linux/expected.txt.
+
+local linuxDir = [ FDirName $(SUBDIR) linux ] ;
+local outputDir = [ FDirName $(HAIKU_OUTPUT_DIR) ce-renguin-tests ] ;
+
+RENGUIN_RAW_FLAGS = -O2 -ffreestanding -fno-stack-protector -fno-pie
+	-nostdlib -static -no-pie -Wl,--build-id=none ;
+
+actions BuildRenguinRawProgram
+{
+	$(HOST_CC) $(RENGUIN_RAW_FLAGS) -I$(2:D) -o $(1) $(2)
+	printf '\003' | dd of=$(1) bs=1 seek=7 conv=notrunc status=none
+}
+
+actions BuildRenguinLibcProgram
+{
+	$(HOST_CC) -O2 $(RENGUIN_LIBC_FLAGS) -o $(1) $(2)
+}
+
+rule RenguinLinuxProgram name : source : kind : flags
+{
+	local target = <renguin-linux>$(name) ;
+	local sourceFile = <renguin-linux-src>$(source) ;
+	SEARCH on $(sourceFile) = $(linuxDir) ;
+	MakeLocate $(target) : $(outputDir) ;
+	Depends $(target) : $(sourceFile) ;
+	if $(kind) = raw {
+		Depends $(target) : <renguin-linux-src>sys.h ;
+		BuildRenguinRawProgram $(target) : $(sourceFile) ;
+	} else {
+		RENGUIN_LIBC_FLAGS on $(target) = $(flags) ;
+		BuildRenguinLibcProgram $(target) : $(sourceFile) ;
+	}
+	return $(target) ;
+}
+
+SEARCH on <renguin-linux-src>sys.h = $(linuxDir) ;
+
+local programs ;
+for name in hello ebadf enosys exit xmm {
+	programs += [ RenguinLinuxProgram $(name) : $(name).S : raw ] ;
+}
+for name in args mem fileio ids proc threads signals {
+	programs += [ RenguinLinuxProgram $(name) : $(name).c : raw ] ;
+}
+programs += [ RenguinLinuxProgram libc : libc.c : libc : -static ] ;
+programs += [ RenguinLinuxProgram libc-pie : libc.c : libc
+	: -static-pie -fPIE ] ;
+programs += [ RenguinLinuxProgram libc-procfs : libc-procfs.c : libc
+	: -static ] ;
+for name in pthread libc-signals libc-fs {
+	programs += [ RenguinLinuxProgram $(name) : $(name).c : libc
+		: -static -pthread ] ;
+}
+
+local expected = <renguin-linux-src>expected.txt ;
+SEARCH on $(expected) = $(linuxDir) ;
+
+Application renguin_test :
+	renguin_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
+	AddFilesToHaikuImage system non-packaged data renguin-tests
+		: $(programs) $(expected) ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test ;
+}

@@ -1,0 +1,49 @@
+Renguin
+=======
+
+Renguin's own source code is licensed under the MIT License (see LICENSE).
+
+This project includes material derived from third-party sources:
+
+1. FreeBSD Linuxulator (BSD-2-Clause)
+   -----------------------------------
+   The following generated headers are produced by tools/gen-abi.py from the
+   FreeBSD source tree (sys/compat/linux and sys/amd64/linux), and are
+   derivative works of BSD-2-Clause-licensed files. Their original copyright
+   notices are preserved in the generated output:
+
+     haiku/src/add-ons/kernel/personalities/renguin/abi/linux_errno.h
+         Copied unmodified from FreeBSD sys/compat/linux/linux_errno.h.
+         Copyright (c) 2020 The FreeBSD Foundation.
+
+     haiku/src/add-ons/kernel/personalities/renguin/abi/linux_errno_table.h
+         Derived from FreeBSD sys/compat/linux/linux_errno.inc.
+
+     haiku/src/add-ons/kernel/personalities/renguin/abi/linux_syscall_names.h
+         Derived from FreeBSD sys/amd64/linux/syscalls.master.
+         Copyright (c) 1994-1996 Soren Schmidt.
+
+   The FreeBSD BSD-2-Clause license text applies to this derived material:
+
+     Redistribution and use in source and binary forms, with or without
+     modification, are permitted provided that the following conditions are
+     met:
+     1. Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+     2. Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+
+     THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS "AS IS" AND ANY
+     EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED. ...
+
+   NOTE: FreeBSD files under BSD-4-Clause (notably sys/compat/linux/linux_futex.h
+   and sys/compat/linprocfs/linprocfs.c) are deliberately NOT used, to keep the
+   advertising clause out of this project.
+
+2. Haiku (MIT)
+   -----------
+   The kernel patch under patches/haiku/ modifies files from the Haiku source
+   tree, which is MIT-licensed. Those modifications are offered under MIT.
+
+No GPL-licensed code is included in Renguin.

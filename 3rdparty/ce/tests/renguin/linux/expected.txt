@@ -1,0 +1,19 @@
+# program|arguments|exit status|stdout (\n between lines, empty for none)
+hello||42|hello
+ebadf||9|
+enosys||38|
+exit||7|
+xmm||0|x
+args|a b|0|a\nb
+mem||0|ok
+fileio||0|ok
+ids||0|ok
+libc|x|3|hello from libc, argc=2 x
+libc-pie|x|3|hello from libc, argc=2 x
+proc||0|exec-ok\nok
+threads||0|ok
+pthread||0|mutex 160000\ncondvar 12502500\ntimedwait ETIMEDOUT\nonce 1\nsemaphore 100\nbarrier 10\ndetached\nrobust EOWNERDEAD\nok
+signals||0|ok
+libc-signals||0|raise 2\nsigqueue 4242\nsegv 0x40\npause EINTR\nsigwait 12\npthread_kill\ncancel\naltstack\nok
+libc-fs||0|statx\nstatfs\nchmod\nutimensat\nlinks\nmkfifo\ntruncate\nsendfile\nflock\nfadvise\npoll\nselect\nppoll\nsysinfo\nok
+libc-procfs|x|0|stat\nstatus\ncmdline\nexe\nfd\nlisting\nsystem\nrelative\nlinks\nerrors\nok

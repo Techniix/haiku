@@ -84,6 +84,13 @@ AddFilesToPackage add-ons kernel debugger :
 	<kdebug>qrencode@libqrencode
 	<kdebug>run_on_exit
 	;
+
+# Renga (roadmap F-27): Renguin, the Linux binary personality. The kernel
+# hands it the Linux executables it claims (foreign_personality.h);
+# native programs never reach it.
+if $(TARGET_ARCH) = x86_64 {
+	AddFilesToPackage add-ons kernel personalities : renguin ;
+}
 AddFilesToPackage add-ons kernel file_systems
 	: $(SYSTEM_ADD_ONS_FILE_SYSTEMS) ;
 AddFilesToPackage add-ons kernel generic :
