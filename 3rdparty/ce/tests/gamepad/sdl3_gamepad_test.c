@@ -393,10 +393,10 @@ opence_child(const char* library)
 	pthread_attr_t attributes;
 	pthread_attr_init(&attributes);
 	size_t stackSize = 8 * 1024 * 1024;
-	// (64 KiB to spare after the stack: with a stack of the program's own,
-	// the kernel writes just past its end when such a thread ends, about
-	// 0x3e00 bytes above it; a separate Renga issue, recorded in the roadmap.
-	// It is not SDL's and showed as "Bad address" faults in the kernel log.)
+	// (64 KiB to spare after the stack: until 2026-11-14 the kernel ran
+	// such threads 16 KiB above the stack they were given, which showed as
+	// "Bad address" faults past its end; fixed in the kernel and checked by
+	// thread_stack_test. The spare room keeps this check about SDL.)
 	void* stack = malloc(stackSize + 65536);
 	pthread_attr_setstack(&attributes, stack, stackSize);
 	pthread_t thread;
@@ -438,9 +438,27 @@ quitrequest_child(const char* library)
 	bool appStays = sdl3_test_be_app_exists();
 	void* window = appStays ? sdl.CreateWindow("after quit request", 320, 240,
 		0) : NULL;
+	// libsdl3 3.4.16-104 logs who sent it, for traces on hardware
+	char wanted[96];
+	snprintf(wanted, sizeof(wanted), "SDL: B_QUIT_REQUESTED from team %d ",
+		(int)getpid());
+	bool logged = false;
+	for (int i = 0; i < 20 && !logged; i++) {
+		FILE* log = fopen("/boot/system/var/log/syslog", "r");
+		char line[512];
+		while (log != NULL && fgets(line, sizeof(line), log) != NULL) {
+			if (strstr(line, wanted) != NULL)
+				logged = true;
+		}
+		if (log != NULL)
+			fclose(log);
+		if (!logged)
+			snooze(100000);
+	}
 	printf("CE-INFO sdl3_gamepad: quit request: SDL_EVENT_QUIT %s, "
-		"BApplication %s, window %s\n", quitEvent ? "seen" : "missing",
-		appStays ? "still there" : "gone", window != NULL ? "made" : "not made");
+		"BApplication %s, window %s, sender %s in the syslog\n",
+		quitEvent ? "seen" : "missing", appStays ? "still there" : "gone",
+		window != NULL ? "made" : "not made", logged ? "named" : "not named");
 	fflush(stdout);
 	if (window != NULL)
 		sdl.DestroyWindow(window);

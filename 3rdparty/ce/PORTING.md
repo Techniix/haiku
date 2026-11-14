@@ -1485,7 +1485,7 @@ header directory; nothing to link.
   `HIDIOCS/GINPUT`, `HIDIOCS/GOUTPUT`; `poll()` works. Enumerate by
   scanning `/dev` for `hidraw<N>` (there is no libudev or sysfs);
   `HIDIOCGRAWPHYS` reads `usb-<device>/input<interface>` like on Linux.
-- **SDL3** (2026-11-14): Renga's `libsdl3` (RengaPorts, 3.4.16-103, soname
+- **SDL3** (2026-11-14): Renga's `libsdl3` (RengaPorts, 3.4.16-104, soname
   `libSDL3.so.0`, part of the renga-* images) replaces HaikuPorts' and
   uses SDL's Linux evdev back end (inotify hot-plug) and HIDAPI on hidraw
   (Switch Pro Controller gyro and rumble, DualSense), so
