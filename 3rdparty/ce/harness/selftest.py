@@ -361,18 +361,21 @@ def repository_priority(priorities, noise=True):
 	return {c["name"]: c["pass"] for c in report["host_checks"]}[
 		"image.repository_priority"]
 
-expect("identity: Techniix 1 over HaikuPorts 2 passes", repository_priority(
-	{"Haiku": 1, "HaikuPorts": 2, "Techniix": 1}))
-expect("identity: Techniix and HaikuPorts both 1 fails",
-	not repository_priority({"Haiku": 1, "HaikuPorts": 1, "Techniix": 1}))
-expect("identity: HaikuPorts better than Techniix fails",
-	not repository_priority({"HaikuPorts": 1, "Techniix": 3}))
-expect("identity: no Techniix fails",
-	not repository_priority({"Haiku": 1, "HaikuPorts": 2}))
+expect("identity: Renga 1 over Haiku 2 and HaikuPorts 2 passes",
+	repository_priority({"Haiku": 2, "HaikuPorts": 2, "Renga": 1}))
+expect("identity: Renga and HaikuPorts both 1 fails",
+	not repository_priority({"Haiku": 2, "HaikuPorts": 1, "Renga": 1}))
+expect("identity: Renga and Haiku both 1 fails (Haiku's nightly would "
+	"replace Renga's system packages)",
+	not repository_priority({"Haiku": 1, "HaikuPorts": 2, "Renga": 1}))
+expect("identity: HaikuPorts better than Renga fails",
+	not repository_priority({"Haiku": 2, "HaikuPorts": 1, "Renga": 3}))
+expect("identity: no Renga fails",
+	not repository_priority({"Haiku": 2, "HaikuPorts": 2}))
 expect("identity: priority after the list (another CE- line) is ignored",
 	not repository_priority({"HaikuPorts": 2}, noise=False)
 	and ce_test.repository_priorities("CE-INFO pkgman list-repos:\r\n"
-		"        Techniix\r\nCE-INFO x\r\n\t\tpriority:  1\r\n") == {})
+		"        Renga\r\nCE-INFO x\r\n\t\tpriority:  1\r\n") == {})
 
 # Pointer devices: every attached device must have been tested in the guest
 # and every pointer request carried out; an image without a desktop skips.

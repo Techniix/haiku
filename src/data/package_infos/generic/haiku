@@ -24,6 +24,9 @@ provides {
 #else
 	haiku=%HAIKU_VERSION% compat>=R1~beta1
 #endif
+	// Renga: packages built for Renga (Techniix/RengaPorts) require it, so
+	// stock Haiku refuses them; the version is the haiku package's
+	renga=%HAIKU_VERSION%
 	cmd:arp
 	cmd:chop
 	cmd:clear

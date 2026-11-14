@@ -56,6 +56,10 @@ public:
 			// -1 (default) if its name is exactly "Haiku", 0 no, 1 yes
 			void				SetRenameVolume(int32 rename)
 									{ fRenameVolume = rename; }
+			// Renga: leave the development packages (haiku_devel, the
+			// compiler and binutils) out of the installed system
+			void				SetLeanInstall(bool lean)
+									{ fLeanInstall = lean; }
 
 private:
 			status_t			_WriteBootSector(BPath& path);
@@ -108,6 +112,7 @@ private:
 			BString				fEraseConfirmation;
 			bool				fUnattended;
 			int32				fRenameVolume;
+			bool				fLeanInstall;
 			bool				fHadInstallerLink;
 			BString				fLogText;
 };

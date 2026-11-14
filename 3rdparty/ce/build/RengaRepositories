@@ -1,0 +1,23 @@
+# Renga images: Haiku's own repository with priority 2, so the Renga
+# repository (priority 1, 3rdparty/ce/Jamfile) wins for haiku and
+# haiku_devel; without it a newer hrev in Haiku's nightly repository would
+# replace Renga's system packages on the next update. Included by the top
+# Jamfile right after build/jam/repositories/Haiku set the repository up,
+# only for Renga images. Same approach as HaikuPorts' priority in
+# 3rdparty/ce/Jamfile: a copy of the generated repository info with another
+# priority line, and the image pointed at its config.
+
+HAIKU_RENGA_HAIKU_PRIORITY ?= 2 ;
+local haikuRepository = <repository>Haiku ;
+local haikuInfo = <repository-info>Haiku-info ;
+local rengaHaikuInfo = <renga-repository-info>Haiku-info ;
+local rengaHaikuConfig = <renga-repository-config>Haiku ;
+local rengaRepositoriesDir = [ FDirName
+	$(HAIKU_PACKAGE_REPOSITORIES_DIR_$(HAIKU_PACKAGING_ARCH)) renga ] ;
+MakeLocate $(rengaHaikuInfo) $(rengaHaikuConfig) : $(rengaRepositoriesDir) ;
+Depends $(rengaHaikuInfo) : $(haikuInfo) ;
+HAIKU_RENGA_PRIORITY on $(rengaHaikuInfo) = $(HAIKU_RENGA_HAIKU_PRIORITY) ;
+RengaRepositoryInfoWithPriority $(rengaHaikuInfo) : $(haikuInfo) ;
+RepositoryConfig $(rengaHaikuConfig) : $(rengaHaikuInfo) ;
+HAIKU_REPOSITORY_CONFIG_FILE on $(haikuRepository) = $(rengaHaikuConfig) ;
+

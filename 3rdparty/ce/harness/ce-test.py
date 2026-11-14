@@ -2772,7 +2772,8 @@ def goertzel_power(samples, rate, hertz):
 
 def check_image_identity(args, results_dir, report):
 	"""For Renga images (renga-* profiles): the boot volume is named Renga and
-	the Techniix package repository is configured, as runner.sh reports."""
+	the Renga package repository is configured, ahead of Haiku's and
+	HaikuPorts', as runner.sh reports."""
 	if not args.profile.startswith("renga-"):
 		return
 	try:
@@ -2791,20 +2792,22 @@ def check_image_identity(args, results_dir, report):
 		text)
 	names = repositories.group(1).split() if repositories else []
 	checks.append({"name": "image.repositories",
-		"pass": "Techniix" in names and "HaikuPorts" in names,
-		"detail": "configured: %s (want Techniix next to HaikuPorts)" % (
+		"pass": "Renga" in names and "HaikuPorts" in names,
+		"detail": "configured: %s (want Renga next to HaikuPorts)" % (
 			" ".join(names) if names else "not reported")})
 
-	# The user's own repository wins over HaikuPorts for a package both
-	# offer: the package solver prefers the lower configured priority.
+	# Renga's repository wins over HaikuPorts and Haiku for a package they
+	# both offer (haiku_devel, Renga builds of ports): the package solver
+	# prefers the lower configured priority.
 	priorities = repository_priorities(text)
-	techniix = priorities.get("Techniix")
+	renga = priorities.get("Renga")
 	haikuports = priorities.get("HaikuPorts")
+	haiku = priorities.get("Haiku")
 	checks.append({"name": "image.repository_priority",
-		"pass": techniix is not None and haikuports is not None
-			and techniix < haikuports,
-		"detail": "priorities: %s (want Techniix lower, i.e. better, than "
-			"HaikuPorts)" % (", ".join("%s %d" % item
+		"pass": renga is not None and haikuports is not None
+			and renga < haikuports and (haiku is None or renga < haiku),
+		"detail": "priorities: %s (want Renga lower, i.e. better, than "
+			"HaikuPorts and Haiku)" % (", ".join("%s %d" % item
 				for item in sorted(priorities.items()))
 			if priorities else "not reported")})
 

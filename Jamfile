@@ -162,6 +162,10 @@ UserBuildConfigRulePostBuildTargets	;
 
 # specify the Haiku repository contents
 include [ FDirName $(HAIKU_BUILD_RULES_DIR) repositories Haiku ] ;
+# Renga: the Haiku repository's priority on Renga images (3rdparty/ce).
+if $(HAIKU_RENGA_IMAGE) {
+	include [ FDirName $(HAIKU_TOP) 3rdparty ce build RengaRepositories ] ;
+}
 
 # specify the actual Haiku image contents
 include [ FDirName $(HAIKU_BUILD_RULES_DIR) images HaikuImage ] ;

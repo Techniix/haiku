@@ -16,7 +16,7 @@ updates this file in the same commit.
 
 | Feature | Header | Link with | Stock Haiku | Status in Renga |
 | --- | --- | --- | --- | --- |
-| `eventfd()` | `<sys/eventfd.h>` | `-lgnu` | Missing | Available |
+| `eventfd()` | `<sys/eventfd.h>` (default path) | libroot (nothing extra; `-lgnu` still links) | Missing | Available |
 | `timerfd_create()` / `_settime()` / `_gettime()` | `<sys/timerfd.h>` | `-lgnu` | Missing | Available |
 | `memfd_create()`, file sealing (`F_ADD_SEALS`, `F_GET_SEALS`) | `<sys/mman.h>`, `<fcntl.h>` | `-lgnu` | Missing | Available |
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
@@ -1323,6 +1323,40 @@ during drags).
 
 Since: `aa1cd0da`. Tests: `hw_cursor_test.cpp` (every image, with a
 stand-in hardware cursor in test images only).
+
+### Development files and cross builds
+
+Renga's `haiku_devel` package is built from Renga's tree, with all of
+Renga's headers (the `gnu` directory's Linux APIs, `<sys/eventfd.h>` in
+the default path, `<Gamepad.h>`, `<add-ons/graphics/GpuPresent.h>`,
+`<add-ons/graphics/HardwareCursor.h>`, and the private capture and virtual
+camera headers) and libraries. It `PROVIDES renga_devel = <version>`, and
+the `haiku` system package `PROVIDES renga = <version>` (the system's
+revision, e.g. `r1~beta6_hrev60381_251`). A recipe that needs Renga's APIs
+declares `BUILD_REQUIRES="renga_devel"` and `REQUIRES="renga"`.
+
+Renga images carry `haiku_devel`, gcc and binutils active, so porters can
+build at once; the Installer's "Lean install" check box (command line:
+`--lean yes`) leaves them out of an installed system. The Renga package
+repository (Techniix/RengaPorts, priority 1; Haiku's and HaikuPorts'
+repositories get 2 on Renga images) carries Renga's `haiku` and
+`haiku_devel` builds, so `pkgman install haiku_devel` gets the development
+files that match the running system.
+
+Cross builds (HaikuPorter's cross mode, the cross-tools): build the sysroot
+package from Renga's tree, `jam -q haiku_cross_devel_sysroot_x86_64.hpkg`
+in `generated.x86_64` (it lands in
+`objects/haiku/x86_64/packaging/packages/`), and point the cross build at
+it like at upstream's (HaikuPorter: put it in the packages directory the
+cross build uses, or extract it into the sysroot with `package extract -C
+<sysroot>/boot/system`). It holds the same Renga headers and libraries as
+`haiku_devel`.
+
+Open: in the harness, gcc started as plain `gcc` (found along `PATH`,
+even with `/boot/system/bin` first) does not find `cc1`; started by its
+full path, `/boot/system/bin/gcc`, it does. Whether a Terminal's `gcc`
+works is on the maintainer's hardware list; until then scripts can call it
+by path.
 
 ### Gamepads (evdev, uinput, hidraw, BGamepad)
 

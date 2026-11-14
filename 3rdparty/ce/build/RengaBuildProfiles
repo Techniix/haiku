@@ -86,10 +86,19 @@ rule DefineRengaBuildProfiles
 				p7zip
 				;
 
+			# The compiler, active next to haiku_devel (3rdparty/ce/Jamfile;
+			# maintainer, 2026-11-13: early users are porters). The
+			# Installer's "Lean install" leaves these out.
+			AddHaikuImageSystemPackages
+				!gcc2 @{ binutils gcc gmp mpc mpfr }@
+				;
+
 			# room for it (HaikuWebKit alone is about 60 MiB), for the
 			# nightly packages (about 120 MiB, most of it the Noto fonts)
-			# and for what Renga adds; upstream's release images are 800 MiB
-			HAIKU_IMAGE_SIZE ?= 1200 ;
+			# and for what Renga adds; upstream's release images are 800 MiB.
+			# 1400 since the development files (haiku_devel, gcc, binutils;
+			# about 180 MiB) are part of the image.
+			HAIKU_IMAGE_SIZE ?= 1400 ;
 		}
 	}
 }

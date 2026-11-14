@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP 3rdparty ce tests devel ;
+
+# Renga's development files on Renga images: haiku_devel, its provides,
+# Renga's headers and the compiler (roadmap: Renga development packaging;
+# Quasar R-17).
+
+Application devel_test :
+	devel_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : devel_test ;
+}

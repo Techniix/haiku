@@ -108,13 +108,14 @@ public:
 	*/
 	EntryFilter(const char* sourceDirectory,
 		const char* targetDirectory = NULL, bool keepExisting = false,
-		bool skipPackages = false)
+		bool skipPackages = false, bool lean = false)
 		:
 		fIgnorePaths(),
 		fSourceDevice(-1),
 		fTargetDirectory(targetDirectory != NULL ? targetDirectory : ""),
 		fKeepExisting(keepExisting && targetDirectory != NULL),
 		fSkipPackages(skipPackages),
+		fLean(lean),
 		fKept(0)
 	{
 		try {
@@ -169,6 +170,11 @@ public:
 		if (fSkipPackages && strcmp(path, "system/packages") == 0)
 			return false;
 
+		if (fLean && _IsDevelopmentPackage(path)) {
+			printf("lean install: leaving out '%s'.\n", path);
+			return false;
+		}
+
 		if (fKeepExisting && path[0] != '\0') {
 			BString target(fTargetDirectory);
 			target << "/" << path;
@@ -190,6 +196,26 @@ public:
 	}
 
 private:
+	// Renga's lean install: the development files Renga images carry
+	// active for porters (roadmap: Renga development packaging)
+	static bool _IsDevelopmentPackage(const char* path)
+	{
+		static const char* const kPrefix = "system/packages/";
+		static const char* const kPackages[] = { "haiku_devel",
+			"haiku_x86_devel", "gcc", "binutils", "mpc", "mpfr", NULL };
+		size_t prefixLength = strlen(kPrefix);
+		if (strncmp(path, kPrefix, prefixLength) != 0)
+			return false;
+		const char* name = path + prefixLength;
+		for (int i = 0; kPackages[i] != NULL; i++) {
+			size_t length = strlen(kPackages[i]);
+			if (strncmp(name, kPackages[i], length) == 0
+				&& name[length] == '-' && strstr(name, ".hpkg") != NULL)
+				return true;
+		}
+		return false;
+	}
+
 	typedef std::set<std::string> StringSet;
 
 			StringSet			fIgnorePaths;
@@ -198,6 +224,7 @@ private:
 			BString				fTargetDirectory;
 			bool				fKeepExisting;
 			bool				fSkipPackages;
+			bool				fLean;
 	mutable	int32				fKept;
 };
 
@@ -215,6 +242,7 @@ WorkerThread::WorkerThread(const BMessenger& owner)
 	fMode(INSTALL_MODE_ASK),
 	fUnattended(false),
 	fRenameVolume(-1),
+	fLeanInstall(false),
 	fHadInstallerLink(false)
 {
 	Run();
@@ -699,7 +727,9 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 	bool keepExisting = mode == INSTALL_MODE_UPGRADE
 		|| mode == INSTALL_MODE_REPLACE;
 	EntryFilter entryFilter(srcDirectory.Path(), targetDirectory.Path(),
-		keepExisting, mode == INSTALL_MODE_UPGRADE);
+		keepExisting, mode == INSTALL_MODE_UPGRADE, fLeanInstall);
+	if (fLeanInstall)
+		_Log("lean install: development files left out");
 	CopyEngine engine(&reporter, &entryFilter);
 	BList unzipEngines;
 

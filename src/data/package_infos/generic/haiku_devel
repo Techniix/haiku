@@ -15,6 +15,9 @@ licenses		"MIT"
 
 provides {
 	haiku_devel = %HAIKU_VERSION% compat >= R1~alpha1
+	// Renga: development files built from Renga's tree (its headers and
+	// libraries); ports that need Renga's APIs build-require it
+	renga_devel = %HAIKU_VERSION%
 }
 
 requires {

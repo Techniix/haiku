@@ -905,6 +905,15 @@ of a 1 GiB guest was, so the bounce path went untested.
   and sample sizes from the sink's ELD (CEA-861 basic audio without one),
   and the choice of pin. QEMU emulates no HDMI codec: the verbs reaching a
   real codec need hardware.
+- **devel** (renga-* images, `devel_test`): `haiku_devel` active and
+  providing `renga_devel`, `haiku` providing `renga`, a package requiring
+  both activating through the package daemon (it waits for the image's
+  first-boot processing, up to 3 minutes), Renga's headers installed,
+  gcc building an epoll program and one with `<sys/eventfd.h>`,
+  `GpuPresent.h` and `HardwareCursor.h` from the default path without
+  `-lgnu`; `ffmpeg -hwaccels` lists vulkan once Renga's ffmpeg6 is
+  installed (reported as not checked before). Minimum images only report
+  that they have no development files.
 - **gamepad** (`gamepad_test`): virtual pads through `/dev/input/uinput`
   set up like an 8BitDo Ultimate 2C in X-input mode: evdev ioctls,
   packets, `SYN_DROPPED`, grab, force feedback timing, player numbers,

@@ -16,6 +16,7 @@
 #include <Autolock.h>
 #include <Box.h>
 #include <Button.h>
+#include <CheckBox.h>
 #include <Catalog.h>
 #include <ColorConversion.h>
 #include <ControlLook.h>
@@ -248,6 +249,12 @@ InstallerWindow::InstallerWindow()
 		B_TRANSLATE("Install progress:  "));
 	fProgressBar->SetMaxValue(100.0);
 
+	// Renga: images carry the development files (headers, libraries,
+	// compiler) for porters; a lean install leaves them out
+	fLeanCheckBox = new BCheckBox("lean", B_TRANSLATE("Lean install: leave "
+		"out the development files (headers, compiler)"), NULL);
+	fLeanCheckBox->SetValue(B_CONTROL_OFF);
+
 	fBeginButton = new BButton("begin_button", B_TRANSLATE("Begin"),
 		new BMessage(BEGIN_MESSAGE));
 	fBeginButton->MakeDefault(true);
@@ -293,6 +300,7 @@ InstallerWindow::InstallerWindow()
 				.Add(BSpaceLayoutItem::CreateVerticalStrut(5), 0, 2, 3)
 			.End()
 			.Add(packagesGroup)
+			.Add(fLeanCheckBox)
 			.AddGroup(B_HORIZONTAL, B_USE_WINDOW_SPACING)
 				.Add(fLaunchDriveSetupButton)
 				.AddGlue()
@@ -400,6 +408,8 @@ InstallerWindow::MessageReceived(BMessage *msg)
 					fPackagesView->GetPackagesToInstall(list, &size);
 					fWorkerThread->SetLock(fCopyEngineCancelSemaphore);
 					fWorkerThread->SetPackagesList(list);
+					fWorkerThread->SetLeanInstall(
+						fLeanCheckBox->Value() == B_CONTROL_ON);
 					fWorkerThread->SetSpaceRequired(size);
 					fInstallStatus = kInstalling;
 					fWorkerThread->StartInstall(srcItem->ID(),
@@ -744,6 +754,7 @@ void
 InstallerWindow::_DisableInterface(bool disable)
 {
 	fLaunchDriveSetupButton->SetEnabled(!disable);
+	fLeanCheckBox->SetEnabled(!disable);
 	fLaunchBootManagerItem->SetEnabled(!disable);
 	fMakeBootableItem->SetEnabled(!disable);
 	fSrcMenuField->SetEnabled(!disable);

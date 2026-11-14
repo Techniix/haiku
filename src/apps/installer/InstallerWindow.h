@@ -17,6 +17,7 @@ namespace BPrivate {
 using namespace BPrivate;
 
 class BButton;
+class BCheckBox;
 class BLayoutItem;
 class BGroupView;
 class BMenu;
@@ -79,6 +80,7 @@ private:
 			BLayoutItem*		fProgressLayoutItem;
 
 			BButton*			fBeginButton;
+			BCheckBox*			fLeanCheckBox;	// Renga
 			BButton*			fLaunchDriveSetupButton;
 			BMenuItem*			fLaunchBootManagerItem;
 			BMenuItem*			fMakeBootableItem;

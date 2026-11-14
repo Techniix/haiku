@@ -14,6 +14,7 @@
 	  Installer --unattended --target <mount point or volume name>
 	      [--source <mount point>] [--mode upgrade|replace|erase]
 	      [--confirm-erase <volume name>] [--rename-volume yes|no]
+	      [--lean yes|no]
 	      installs; a destination that is not empty needs --mode, and
 	      "erase" needs the volume's name again in --confirm-erase.
 	      Nothing asks: whatever the window would ask about (the running
@@ -207,6 +208,7 @@ usage()
 		"       Installer --unattended --target <mount point|volume name>\n"
 		"           [--source <mount point>] [--mode upgrade|replace|erase]\n"
 		"           [--confirm-erase <volume name>] [--rename-volume yes|no]\n"
+		"           [--lean yes|no]\n"
 		"       Installer [--target <volume name> [--begin]]   (the window)\n");
 	return 2;
 }
@@ -248,6 +250,7 @@ installer_command_line(int argc, char** argv)
 	const char* modeName = NULL;
 	const char* confirmation = NULL;
 	int32 rename = -1;
+	bool lean = false;
 	for (int i = 2; i < argc; i++) {
 		if (i + 1 >= argc)
 			return usage();
@@ -261,6 +264,8 @@ installer_command_line(int argc, char** argv)
 			confirmation = argv[++i];
 		else if (strcmp(argv[i], "--rename-volume") == 0)
 			rename = strcmp(argv[++i], "no") == 0 ? 0 : 1;
+		else if (strcmp(argv[i], "--lean") == 0)
+			lean = strcmp(argv[++i], "no") != 0;
 		else
 			return usage();
 	}
@@ -285,6 +290,7 @@ installer_command_line(int argc, char** argv)
 	worker->SetUnattended(true);
 	worker->SetInstallMode(mode, confirmation);
 	worker->SetRenameVolume(rename);
+	worker->SetLeanInstall(lean);
 	worker->StartInstall(sourceID, targetID);
 	status_t result = reporter->Wait();
 
