@@ -124,6 +124,13 @@ status_t	vfs_get_vnode_cache(struct vnode *vnode, struct VMCache **_cache,
 status_t	vfs_set_vnode_cache(struct vnode *vnode, struct VMCache *_cache);
 bool		vfs_vnode_is_write_sealed(struct vnode *vnode);
 				// Renga: memfd F_SEAL_WRITE or F_SEAL_FUTURE_WRITE
+int			vfs_reopen_fd(int fd, int openMode, bool kernel);
+				// Renga: Linux's open("/proc/self/fd/N"): a new open file
+				// description for the file or directory behind FD "fd"
+status_t	vfs_native_proc_open(const char* path, int openMode,
+				int* _fd);
+				// Renga: /dev/fd/N and /proc for native teams; B_OK if
+				// handled (result in *_fd), B_ENTRY_NOT_FOUND if not
 status_t	vfs_get_file_map(struct vnode *vnode, off_t offset, size_t size,
 				struct file_io_vec *vecs, size_t *_count);
 status_t	vfs_get_fs_node_from_path(fs_volume *volume, const char *path,

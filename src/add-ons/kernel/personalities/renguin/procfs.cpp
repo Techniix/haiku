@@ -58,6 +58,7 @@
 #include <real_time_clock.h>
 #include <smp.h>
 #include <vfs.h>
+#include <kimage.h>
 
 
 #define PROC_ROOT				"/proc"
@@ -136,7 +137,8 @@ static const char* const kSysTree[] = {
 	"kernel/ngroups_max", "kernel/cap_last_cap", "kernel/random/",
 	"kernel/random/uuid", "kernel/random/boot_id",
 	"kernel/random/entropy_avail", "vm/", "vm/overcommit_memory",
-	"vm/max_map_count", "fs/", "fs/file-max", "fs/nr_open", NULL
+	"vm/max_map_count", "fs/", "fs/file-max", "fs/nr_open", "fs/inotify/",
+	"fs/inotify/max_user_watches", "fs/inotify/max_queued_events", NULL
 };
 
 
@@ -1288,6 +1290,42 @@ generate_pid_status(proc_buffer& out, team_id pid, thread_id tid)
 /*!	/proc/<pid>/maps from the team's areas, in address order. glibc's
 	pthread_getattr_np() reads it to find the main thread's stack.
 */
+struct map_image {
+	addr_t		textStart, textEnd, dataStart, dataEnd;
+	addr_t		bias;
+	dev_t		device;
+	ino_t		node;
+	char		path[B_PATH_NAME_LENGTH];
+};
+
+struct map_image_list {
+	map_image*	images;
+	int32		count;
+	int32		capacity;
+};
+
+
+//! image_iterate_through_team_images() callback: images with a file path.
+static bool
+collect_map_image(struct image* image, void* cookie)
+{
+	map_image_list* list = (map_image_list*)cookie;
+	const image_info& info = image->info.basic_info;
+	if (info.name[0] != '/' || list->count >= list->capacity)
+		return list->count >= list->capacity;
+	map_image& entry = list->images[list->count++];
+	entry.textStart = (addr_t)info.text;
+	entry.textEnd = entry.textStart + info.text_size;
+	entry.dataStart = (addr_t)info.data;
+	entry.dataEnd = entry.dataStart + info.data_size;
+	entry.bias = (addr_t)image->info.text_delta;
+	entry.device = info.device;
+	entry.node = info.node;
+	strlcpy(entry.path, info.name, sizeof(entry.path));
+	return false;
+}
+
+
 static void
 generate_maps(proc_buffer& out, team_id pid)
 {
@@ -1324,19 +1362,49 @@ generate_maps(proc_buffer& out, team_id pid)
 	renguin_team* data = pid == thread_get_current_thread()->team->id
 		? renguin_current_team() : NULL;
 
+	// The team's images (Linux ELF images Renguin registered, or a native
+	// team's), for the path, device, inode and offset columns.
+	const int32 kMaxImages = 512;
+	map_image* images = (map_image*)malloc(sizeof(map_image) * kMaxImages);
+	map_image_list imageList = { images, 0, images != NULL ? kMaxImages : 0 };
+	if (images != NULL)
+		image_iterate_through_team_images(pid, &collect_map_image, &imageList);
+
 	for (int32 i = 0; i < count; i++) {
 		const area_info& area = areas[i];
 		addr_t start = (addr_t)area.address;
 		const char* name = area.name;
 		if (data != NULL && start == data->brk_start)
 			name = "[heap]";
-		out.Printf("%012" B_PRIxADDR "-%012" B_PRIxADDR " %c%c%cp 00000000"
-			" 00:00 0                          %s\n",
-			start, start + area.size,
+		uint64 offset = 0, inode = 0;
+		uint32 device = 0;
+		for (int32 j = 0; j < imageList.count; j++) {
+			const map_image& image = imageList.images[j];
+			if ((start >= image.textStart && start < image.textEnd)
+				|| (start >= image.dataStart && start < image.dataEnd)) {
+				// Linux's offset is the file offset; for ELF segments that
+				// is (to the page) the virtual address, address - bias.
+				// Symbolizers compute the load base as start - offset.
+				name = image.path;
+				offset = start - image.bias;
+				device = (uint32)image.device;
+				inode = (uint64)image.node;
+				break;
+			}
+		}
+		char line[128];
+		int length = snprintf(line, sizeof(line), "%012" B_PRIxADDR "-%012"
+			B_PRIxADDR " %c%c%cp %08" B_PRIx64 " %02" B_PRIx32 ":%02" B_PRIx32
+			" %" B_PRIu64, start, start + area.size,
 			(area.protection & B_READ_AREA) != 0 ? 'r' : '-',
 			(area.protection & B_WRITE_AREA) != 0 ? 'w' : '-',
-			(area.protection & B_EXECUTE_AREA) != 0 ? 'x' : '-', name);
+			(area.protection & B_EXECUTE_AREA) != 0 ? 'x' : '-', offset,
+			(device >> 8) & 0xff, device & 0xff, inode);
+		// Linux pads the path to column 73.
+		int padding = length < 73 ? 73 - length : 1;
+		out.Printf("%s%*s%s\n", line, padding, "", name);
 	}
+	free(images);
 	free(areas);
 }
 
@@ -1430,6 +1498,13 @@ generate_sys(proc_buffer& out, const char* name)
 		out.Printf("9223372036854775807\n");
 	else if (strcmp(name, "fs/nr_open") == 0)
 		out.Printf("1048576\n");
+	else if (strcmp(name, "fs/inotify/max_user_watches") == 0) {
+		// Renga's limit is per inotify instance (kMaxWatchesPerInstance
+		// in kernel/events/inotify.cpp), Linux's per user; programs with
+		// one instance (Chromium) see the same number.
+		out.Printf("8192\n");
+	} else if (strcmp(name, "fs/inotify/max_queued_events") == 0)
+		out.Printf("16384\n");
 }
 
 
@@ -1945,13 +2020,27 @@ renguin_proc_open(const char* procPath, uint64 flags)
 			return -LX_ELOOP;
 		if (node.kind == KIND_PID_FD
 			&& node.pid == thread_get_current_thread()->team->id) {
-			// Linux reopens the file; a duplicate is the closest Haiku has
-			// (it shares the file position and the access mode).
-			int fd = _user_dup(node.fd);
-			if (fd >= 0 && closeOnExec)
-				_user_fcntl(fd, F_SETFD, FD_CLOEXEC);
-			if (fd >= 0)
-				renguin_proc_dup(node.fd, fd);
+			// Linux reopens the file: a new open file description with
+			// the access mode asked for (vfs_reopen_fd(), Renga). /proc
+			// directory FDs and descriptors that cannot be reopened
+			// (sockets, pipes' other objects) fall back to a duplicate,
+			// which shares the position and the access mode.
+			int fd = ENXIO;
+			if (!renguin_proc_is_dir_fd(node.fd)) {
+				int mode = (int)access
+					| (closeOnExec ? O_CLOEXEC : 0)
+					| ((flags & LX_O_TRUNC) != 0 ? O_TRUNC : 0)
+					| ((flags & LX_O_APPEND) != 0 ? O_APPEND : 0)
+					| ((flags & LX_O_NONBLOCK) != 0 ? O_NONBLOCK : 0);
+				fd = vfs_reopen_fd(node.fd, mode, false);
+			}
+			if (fd == ENXIO) {
+				fd = _user_dup(node.fd);
+				if (fd >= 0 && closeOnExec)
+					_user_fcntl(fd, F_SETFD, FD_CLOEXEC);
+				if (fd >= 0)
+					renguin_proc_dup(node.fd, fd);
+			}
 			return fd >= 0 ? fd : renguin_encode(fd);
 		}
 		if (leads_out(node)) {
@@ -2219,4 +2308,71 @@ renguin_user_proc_path(int dirfd, uint64 userPath, char* procPath,
 		result = renguin_proc_path(dirfd, raw, procPath, procPathSize) ? 1 : 0;
 	free(raw);
 	return result;
+}
+
+
+//	#pragma mark - Renga: /proc for native programs
+
+
+/*!	The /proc files native programs may open (Chromium R-2, R-6), relative
+	to /proc with "self" or the team's own ID already removed for the
+	per-process ones. Everything else stays Linux-only: native programs
+	have Haiku's own interfaces for it, and each file offered here is a
+	promise kept for ports.
+*/
+static const char* const kNativeSelfFiles[] = {
+	"maps", NULL
+};
+
+static const char* const kNativeSysFiles[] = {
+	"sys/fs/inotify/max_user_watches",
+	"sys/fs/inotify/max_queued_events",
+	NULL
+};
+
+
+int
+renguin_native_proc_open(const char* path, int openMode)
+{
+	char normalized[kMaxProcPath];
+	if (!normalize(path, normalized, sizeof(normalized))
+		|| strncmp(normalized, PROC_ROOT "/", 6) != 0) {
+		return B_ENTRY_NOT_FOUND;
+	}
+
+	const char* rest = normalized + 6;
+	char own[16];
+	snprintf(own, sizeof(own), "%" B_PRId32 "/",
+		thread_get_current_thread()->team->id);
+	bool allowed = false;
+	if (strncmp(rest, "self/", 5) == 0 || strncmp(rest, own, strlen(own)) == 0) {
+		const char* name = strchr(rest, '/') + 1;
+		allowed = in_list(kNativeSelfFiles, name);
+	} else
+		allowed = in_list(kNativeSysFiles, rest);
+	if (!allowed)
+		return B_ENTRY_NOT_FOUND;
+
+	if ((openMode & O_RWMASK) != O_RDONLY)
+		return B_PERMISSION_DENIED;
+	if ((openMode & O_DIRECTORY) != 0)
+		return B_NOT_A_DIRECTORY;
+
+	uint64 linuxFlags = LX_O_RDONLY
+		| ((openMode & O_CLOEXEC) != 0 ? LX_O_CLOEXEC : 0);
+	int64 result = renguin_proc_open(normalized, linuxFlags);
+	if (result >= 0)
+		return (int)result;
+	switch (-result) {
+		case LX_EACCES:
+			return B_PERMISSION_DENIED;
+		case LX_ENOMEM:
+			return B_NO_MEMORY;
+		case LX_EFAULT:
+			return B_BAD_ADDRESS;
+		case LX_ENOENT:
+			return B_ENTRY_NOT_FOUND;
+		default:
+			return B_ERROR;
+	}
 }

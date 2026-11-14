@@ -58,7 +58,8 @@ static foreign_personality_module_info sRenguinModule = {
 	renguin_team_released,
 	renguin_team_forked,
 	renguin_thread_entering_userspace,
-	renguin_setup_signal_frame
+	renguin_setup_signal_frame,
+	renguin_native_proc_open
 };
 
 

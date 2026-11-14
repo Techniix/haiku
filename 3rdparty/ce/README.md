@@ -1036,7 +1036,18 @@ of a 1 GiB guest was, so the bounce path went untested.
   waits, get the lock within 3 s of its release, and the lock must be free
   afterwards. A second writer or a reader must wait for an `RWLockManager`
   write lock.
-- **execinfo** (every image, `execinfo_test`; Chromium R-3):
+- **proc** (every image, `proc_test`; Chromium R-1, R-2, R-6): a memfd
+  reopened through `/proc/self/fd/N`, `/proc/<pid>/fd/N` and `/dev/fd/N`
+  (its own access mode, position and close-on-exec flag, the same node,
+  writes refused, `PROT_READ` shared mapping sees the other descriptor's
+  writes, `PROT_WRITE` mapping and `mprotect()` refused, seals shared,
+  `O_TRUNC` refused when sealed), a temporary file reopened read-write,
+  `ENOENT` for a closed descriptor and `ENXIO` for a socket;
+  `/proc/self/maps` in Linux's format with the program's executable line
+  (load base and inode right) and libroot; `/proc/<pid>/maps`;
+  `/proc/sys/fs/inotify/max_user_watches` = 8192 and read-only;
+  `/proc/cpuinfo` absent for native programs.
+, `execinfo_test`; Chromium R-3):
   `backtrace_symbols()` on a program linked with lld's layout (a read-only
   segment before the executable one) at a non-zero image base: a static
   function's frame and an address in the data segment are attributed to

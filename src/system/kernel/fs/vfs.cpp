@@ -43,6 +43,7 @@
 #include <fd.h>
 #include <file_cache.h>
 #include <file_seals_defs.h>
+#include <foreign_personality.h>
 #include <fs/node_monitor.h>
 #include <inotify.h>
 #include <KPath.h>
@@ -9740,6 +9741,139 @@ _user_open_entry_ref(dev_t device, ino_t inode, const char* userName,
 }
 
 
+//	#pragma mark - Renga: /dev/fd and /proc for native programs
+
+
+/*!	Linux's open("/proc/self/fd/N") (and /dev/fd/N): opens the file or
+	directory behind FD "fd" again, giving a new open file description with
+	its own access mode, position and status flags (dup() would share
+	them). Chromium uses it to get a read-only descriptor for a memfd
+	(R-1). Permissions are those of the file (the FS's open hook checks
+	them), as on Linux; seals stay with the file. Only file and directory
+	descriptors can be reopened (sockets and others: ENXIO, as Linux).
+*/
+int
+vfs_reopen_fd(int fd, int openMode, bool kernel)
+{
+	struct file_descriptor* descriptor
+		= get_fd(get_current_io_context(kernel), fd);
+	if (descriptor == NULL)
+		return B_ENTRY_NOT_FOUND;
+			// Linux: the /proc/self/fd entry does not exist
+	FileDescriptorPutter descriptorPutter(descriptor);
+	struct vnode* vnode = fd_vnode(descriptor);
+	if (vnode == NULL)
+		return ENXIO;
+			// sockets and other objects without a node
+
+	bool isDirectory = descriptor->ops == &sDirectoryOps;
+	if (descriptor->ops != &sFileOps && !isDirectory)
+		return ENXIO;
+	if (S_ISDIR(vnode->Type()) && (openMode & O_RWMASK) != O_RDONLY)
+		return B_IS_A_DIRECTORY;
+	if ((openMode & O_TRUNC) != 0
+		&& (vnode_seals(vnode) & (F_SEAL_SHRINK | F_SEAL_WRITE
+			| F_SEAL_FUTURE_WRITE)) != 0) {
+		// the FS's open hook truncates without asking the seals
+		return B_NOT_ALLOWED;
+	}
+
+	inc_vnode_ref_count(vnode);
+	int newFD;
+	if (isDirectory || S_ISDIR(vnode->Type())) {
+		newFD = open_dir_vnode(vnode, kernel);
+		if (newFD >= 0 && (openMode & O_CLOEXEC) == 0) {
+			// open_dir_vnode() always sets close-on-exec
+			io_context* context = get_current_io_context(kernel);
+			rw_lock_write_lock(&context->lock);
+			fd_set_close_on_exec(context, newFD, false);
+			rw_lock_write_unlock(&context->lock);
+		}
+	} else {
+		newFD = open_vnode(vnode,
+			openMode & ~(O_CREAT | O_EXCL | O_NOFOLLOW | O_NOTRAVERSE),
+			kernel);
+	}
+	if (newFD < 0)
+		put_vnode(vnode);
+	return newFD;
+}
+
+
+//!	Parses a decimal FD number that makes up the rest of the path.
+static bool
+parse_fd_number(const char* text, int* _fd)
+{
+	if (*text < '0' || *text > '9')
+		return false;
+	int value = 0;
+	for (; *text >= '0' && *text <= '9'; text++) {
+		value = value * 10 + (*text - '0');
+		if (value > 1000000)
+			return false;
+	}
+	if (*text != '\0')
+		return false;
+	*_fd = value;
+	return true;
+}
+
+
+/*!	Renga (Chromium R-1, R-2, R-6): native programs get the parts of Linux's
+	/proc that ports need, without a /proc directory or file system:
+	- /dev/fd/N, /proc/self/fd/N, /proc/<own team>/fd/N: vfs_reopen_fd();
+	- other /proc paths: the foreign personality's /proc generator
+	  (Renguin's), which offers a few files to native teams (self/maps,
+	  sys/fs/inotify/...).
+	Only absolute paths given to open() are handled (what ports use).
+	Returns B_ENTRY_NOT_FOUND when the path is not one of these, so that the
+	normal lookup goes on.
+*/
+status_t
+vfs_native_proc_open(const char* path, int openMode, int* _fd)
+{
+	if (path[0] != '/' || (strncmp(path, "/proc/", 6) != 0
+			&& strncmp(path, "/dev/fd/", 8) != 0)) {
+		return B_ENTRY_NOT_FOUND;
+	}
+	Team* team = thread_get_current_thread()->team;
+	if (team->personality != NULL)
+		return B_ENTRY_NOT_FOUND;
+			// foreign teams have their personality's own /proc
+
+	int fd;
+	if (strncmp(path, "/dev/fd/", 8) == 0) {
+		if (!parse_fd_number(path + 8, &fd))
+			return B_ENTRY_NOT_FOUND;
+		*_fd = vfs_reopen_fd(fd, openMode, false);
+		return B_OK;
+	}
+
+	const char* rest = path + 6;
+	char own[16];
+	snprintf(own, sizeof(own), "%" B_PRId32 "/", team->id);
+	if (strncmp(rest, "self/", 5) == 0)
+		rest += 5;
+	else if (strncmp(rest, own, strlen(own)) == 0)
+		rest += strlen(own);
+	else
+		rest = NULL;
+	if (rest != NULL && strncmp(rest, "fd/", 3) == 0
+		&& parse_fd_number(rest + 3, &fd)) {
+		*_fd = vfs_reopen_fd(fd, openMode, false);
+		return B_OK;
+	}
+
+	if ((openMode & O_CREAT) != 0)
+		return B_ENTRY_NOT_FOUND;
+	int result = foreign_personality_native_proc_open(path, openMode);
+	if (result == B_ENTRY_NOT_FOUND)
+		return B_ENTRY_NOT_FOUND;
+	*_fd = result;
+	return B_OK;
+}
+
+
 int
 _user_open(int fd, const char* userPath, int openMode, int perms)
 {
@@ -9754,6 +9888,12 @@ _user_open(int fd, const char* userPath, int openMode, int perms)
 	status_t status = user_copy_name(buffer, userPath, B_PATH_NAME_LENGTH);
 	if (status != B_OK)
 		return status;
+
+	// Renga: /dev/fd/N and /proc for native programs
+	int procFD;
+	if (buffer[0] == '/'
+		&& vfs_native_proc_open(buffer, openMode, &procFD) == B_OK)
+		return procFD;
 
 	if ((openMode & O_CREAT) != 0)
 		return file_create(fd, buffer, openMode, perms, false);

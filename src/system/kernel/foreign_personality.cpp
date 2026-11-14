@@ -353,3 +353,30 @@ foreign_personality_user_atomic_test_and_set(int32* value, int32 newValue,
 	*_oldValue = oldValue;
 	return B_OK;
 }
+
+
+int
+foreign_personality_native_proc_open(const char* path, int openMode)
+{
+	// Renga: native programs reach the personality's /proc generator here
+	// (Chromium R-1, R-2, R-6). Personality modules stay loaded once
+	// scanned, so the pointers copied under the lock remain valid.
+	const foreign_personality_module_info* personalities[kMaxPersonalities];
+	int32 count;
+	{
+		MutexLocker locker(sLock);
+		if (sLastScan < 0)
+			scan_personality_modules_locked();
+		count = sPersonalityCount;
+		memcpy(personalities, sPersonalities, count * sizeof(personalities[0]));
+	}
+
+	for (int32 i = 0; i < count; i++) {
+		if (personalities[i]->native_proc_open == NULL)
+			continue;
+		int result = personalities[i]->native_proc_open(path, openMode);
+		if (result != B_ENTRY_NOT_FOUND)
+			return result;
+	}
+	return B_ENTRY_NOT_FOUND;
+}

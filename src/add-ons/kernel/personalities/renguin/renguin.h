@@ -291,6 +291,8 @@ void		renguin_cancel_restart();
 	// kept for the restarted call (renguin_restarted_deadline())
 bool		renguin_restarted_deadline(bigtime_t* _deadline);
 	// true, with the saved deadline, if this call is a restart
+int			renguin_native_proc_open(const char* path, int openMode);
+	// Renga: /proc for native programs (foreign_personality.h)
 status_t	renguin_setup_signal_frame(Thread* thread, struct sigaction* action,
 				struct signal_frame_data* data);
 void		renguin_reset_fpu_state(Thread* thread);

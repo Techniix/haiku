@@ -113,6 +113,13 @@ typedef struct foreign_personality_module_info {
 		// restart flags that were in effect). The handler's block mask is
 		// already set. May be NULL: such teams cannot run signal handlers
 		// (they have no commpage for Haiku's handler wrapper).
+
+	int				(*native_proc_open)(const char* path, int openMode);
+		// Renga: opens a /proc path (already normalized, starting with
+		// "/proc/") for a native team, which has no /proc of its own, using
+		// the personality's /proc generator. Returns a new file descriptor
+		// of the current team, a Haiku error, or B_ENTRY_NOT_FOUND for
+		// paths it does not offer to native programs. May be NULL.
 } foreign_personality_module_info;
 
 
@@ -154,6 +161,12 @@ void		foreign_personality_fault_signal(Thread* thread, int number,
 	// Linux and FreeBSD do: if the signal is blocked or ignored, it is
 	// unblocked and its default action restored, so the program ends rather
 	// than faulting again forever, and Haiku's debugger is not called in.
+
+int			foreign_personality_native_proc_open(const char* path,
+				int openMode);
+	// Renga: /proc for native programs (see native_proc_open above):
+	// asks the personality modules that offer it. B_ENTRY_NOT_FOUND if none
+	// does or none knows the path.
 
 status_t	foreign_personality_user_atomic_test_and_set(int32* value,
 				int32 newValue, int32 testAgainst, int32* _oldValue);

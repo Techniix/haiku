@@ -19,6 +19,7 @@ updates this file in the same commit.
 | `eventfd()` | `<sys/eventfd.h>` (default path) | libroot (nothing extra; `-lgnu` still links) | Missing | Available |
 | `timerfd_create()` / `_settime()` / `_gettime()` | `<sys/timerfd.h>` | `-lgnu` | Missing | Available |
 | `memfd_create()`, file sealing (`F_ADD_SEALS`, `F_GET_SEALS`) | `<sys/mman.h>`, `<fcntl.h>` | `-lgnu` | Missing | Available |
+| `open("/proc/self/fd/N")` / `open("/dev/fd/N")` (new open file description), `/proc/self/maps`, `/proc/sys/fs/inotify/max_user_watches` | (paths) | (nothing extra) | Missing (no `/proc`) | Available (`open()` only; see "A small /proc") |
 | POSIX message queues (`mq_*`) | `<mqueue.h>` | libroot (nothing extra) | Missing | Available |
 | `virtio-sound` audio in VMs | (driver) | | Missing | Available (playback and capture) |
 | Per-application volume, mute and output device; loopback ("What you hear", one application) as a Media Kit source | (Media Kit nodes and parameters) | libmedia (nothing extra) | Missing | Available |
@@ -577,6 +578,49 @@ Implementation: `src/libs/gnu/memfd.cpp`; sealing in the kernel
 Since: commit `e671e003`; sealing since the commit that added
 `F_ADD_SEALS` to `<fcntl.h>`. Tests: `memfd_test.cpp` (sealing: 19
 checks).
+
+### A small /proc
+
+Since the 2026-11-14 batch (Chromium R-1, R-2, R-6), native programs can
+`open()` a few Linux `/proc` paths. There is no `/proc` directory or file
+system: the kernel answers these absolute paths in `open()`/`openat()`
+(also through `fopen()`), and only for native teams (Linux programs under
+Renguin have Renguin's full `/proc`).
+
+- `/proc/self/fd/N`, `/proc/<own pid>/fd/N` and `/dev/fd/N`: as on Linux,
+  a **new open file description** for the file behind descriptor `N`, with
+  the access mode and flags asked for (`O_CLOEXEC`, `O_APPEND`, ...), its
+  own position, the same node. The file's permissions decide, not `N`'s
+  mode. Seals stay with the file, so on a memfd opened again `O_RDONLY`,
+  `mmap(PROT_READ, MAP_SHARED)` works and sees writes made through the
+  other descriptor, while `mmap(PROT_WRITE, MAP_SHARED)` fails with
+  `EACCES` and a later `mprotect(PROT_WRITE)` with `EPERM`; `O_TRUNC` on a
+  file sealed against shrinking or writing fails with `EPERM`. A closed
+  `N` gives `ENOENT`; sockets and other objects without a file give
+  `ENXIO`. Directories can be reopened read-only. Chromium's
+  `CreateAnonymousRegion()` can use its Linux path unchanged; `/dev/fd/N`
+  works the same.
+- `/proc/self/maps` (and `/proc/<own pid>/maps`): Linux's format, one line
+  per area: `start-end perms offset dev inode path`. Areas of an image show
+  its path, device and inode; `offset` is the area's address minus the
+  image's load bias, so `start - offset` is the load base symbolizers
+  expect. Other areas show their Haiku area name. `perms` always ends in
+  `p` (Haiku areas do not record shared/private).
+- `/proc/sys/fs/inotify/max_user_watches` (`8192`) and
+  `max_queued_events` (`16384`): Renga's limits are per inotify instance,
+  Linux's per user; with one instance per process the numbers agree.
+- Read-only: writing fails with `EACCES`. Other `/proc` paths give
+  `ENOENT` for native programs.
+- **Not provided:** `stat()`, `access()`, `readlink()` and directory
+  listings of these paths (`/proc/self/fd` cannot be listed; use
+  `close_range()` or `getrlimit()` to close descriptors), relative paths
+  from `/`.
+- Linux programs under Renguin: `/proc/self/fd/N` now also reopens the
+  file (before, a duplicate sharing position and mode); descriptors that
+  cannot be reopened are still duplicated. Renguin's `/proc/<pid>/maps`
+  shows image paths too.
+
+Since: the 2026-11-14 batch. Tests: `proc_test.cpp` (every image).
 
 ### POSIX message queues
 
