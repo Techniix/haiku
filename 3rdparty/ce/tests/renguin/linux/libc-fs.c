@@ -117,16 +117,28 @@ int main(void)
 		"chmod ENOENT");
 	printf("chmod\n");
 
-	// utimensat: explicit times, UTIME_OMIT, futimens
+	// utimensat: explicit times, UTIME_OMIT, futimens. The access time is
+	// either the one set (a file system that stores it) or, as on a Linux
+	// volume mounted with noatime, the modification time: Renguin shows
+	// files on BFS, which stores no access time, that way (renguin's
+	// file.cpp, renguin_linux_atime()). What it must never be is "now",
+	// which BFS itself reports.
 	struct timespec stamps[2] = { { 1000000000, 0 }, { 1234567890, 0 } };
 	CHECK(utimensat(AT_FDCWD, pathA, stamps, 0) == 0 && stat(pathA, &st) == 0
-		&& st.st_mtim.tv_sec == 1234567890 && st.st_atim.tv_sec == 1000000000,
-		"utimensat");
+		&& st.st_mtim.tv_sec == 1234567890
+		&& (st.st_atim.tv_sec == 1000000000
+			|| st.st_atim.tv_sec == st.st_mtim.tv_sec), "utimensat");
 	stamps[0].tv_nsec = UTIME_OMIT;
 	stamps[1].tv_sec = 1300000000;
 	CHECK(utimensat(AT_FDCWD, pathA, stamps, 0) == 0 && stat(pathA, &st) == 0
 		&& st.st_mtim.tv_sec == 1300000000
-		&& st.st_atim.tv_sec == 1000000000, "UTIME_OMIT");
+		&& (st.st_atim.tv_sec == 1000000000
+			|| st.st_atim.tv_sec == st.st_mtim.tv_sec), "UTIME_OMIT");
+	struct statx stx;
+	CHECK(statx(AT_FDCWD, pathA, 0, STATX_ATIME | STATX_MTIME, &stx) == 0
+		&& (stx.stx_atime.tv_sec == 1000000000
+			|| stx.stx_atime.tv_sec == stx.stx_mtime.tv_sec),
+		"statx atime");
 	fd = open(pathA, O_RDONLY);
 	CHECK(fd >= 0 && futimens(fd, NULL) == 0 && fstat(fd, &st) == 0
 		&& st.st_mtim.tv_sec > 1600000000, "futimens");

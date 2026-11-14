@@ -277,6 +277,16 @@ renguin_sys_ioctl(int fd, uint64 cmd, uint64 arg)
 			return renguin_encode(_user_fcntl(fd, F_SETFD, 0));
 
 		default:
+		{
+			// Socket requests (interfaces, SIOCATMARK): net.cpp.
+			if (((uint32)cmd & 0xff00) == 0x8900) {
+				bool handled;
+				int64 result = renguin_net_ioctl(fd, (uint32)cmd, arg,
+					&handled);
+				if (handled)
+					return result;
+			}
+		}
 			// Unknown requests: ENOTTY is what Linux returns for a request
 			// the device does not understand.
 			return -LX_ENOTTY;

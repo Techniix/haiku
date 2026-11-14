@@ -81,14 +81,27 @@ remove_last_component(char* buffer, size_t* _length)
 }
 
 
-status_t
-renguin_resolve_in_root(const char* linuxPath, uint32 flags, char* hostPath,
-	size_t hostPathSize)
+static const int kMaxRestarts = 8;
+
+
+/*!	Walks \a linuxPath one component at a time, following links itself.
+	With \a inRoot, under the Linux root (absolute link targets restart at
+	the Linux root); otherwise through Haiku's own tree, where an absolute
+	link target is resolved again as a new Linux path (Linux root first),
+	so that a link outside the root, such as one in Haiku's /tmp, can lead
+	into /proc or into the root.
+*/
+static status_t
+resolve_walk(const char* linuxPath, uint32 flags, char* hostPath,
+	size_t hostPathSize, bool inRoot, int depth)
 {
 	if (linuxPath == NULL || linuxPath[0] != '/')
 		return B_BAD_VALUE;
+	if (depth > kMaxRestarts)
+		return B_LINK_LIMIT;
 
-	const size_t rootLength = strlen(RENGUIN_LINUX_ROOT);
+	const char* prefix = inRoot ? RENGUIN_LINUX_ROOT : "";
+	const size_t rootLength = strlen(prefix);
 	const size_t kBufferSize = B_PATH_NAME_LENGTH;
 
 	// resolved: the Linux-side path resolved so far ("" == "/").
@@ -153,7 +166,7 @@ renguin_resolve_in_root(const char* linuxPath, uint32 flags, char* hostPath,
 				> kBufferSize) {
 			return B_NAME_TOO_LONG;
 		}
-		memcpy(candidate, RENGUIN_LINUX_ROOT, rootLength);
+		memcpy(candidate, prefix, rootLength);
 		memcpy(candidate + rootLength, resolved, resolvedLength);
 		size_t candidateLength = rootLength + resolvedLength;
 		candidate[candidateLength++] = '/';
@@ -191,14 +204,49 @@ renguin_resolve_in_root(const char* linuxPath, uint32 flags, char* hostPath,
 			// New pending = link target + "/" + rest. Build it in candidate
 			// (no longer needed) and copy back, since rest points into
 			// pending.
+			// (no separator for an empty rest: a link at the end of the
+			// path leaves no trailing slash behind)
 			size_t restLength = strlen(rest);
 			if (linkLength + 1 + restLength + 1 > kBufferSize)
 				return B_NAME_TOO_LONG;
 			memcpy(candidate, link, linkLength);
-			candidate[linkLength] = '/';
-			memcpy(candidate + linkLength + 1, rest, restLength + 1);
+			if (restLength > 0) {
+				candidate[linkLength] = '/';
+				memcpy(candidate + linkLength + 1, rest, restLength + 1);
+			} else
+				candidate[linkLength] = '\0';
 			strlcpy(pending, candidate, pendingSize);
 			p = pending;
+
+			// A target on Haiku's own boot volume (/boot/system/...,
+			// /boot/home/...) is a host path: the Linux root uses such
+			// links to share files with Haiku, such as /etc/resolv.conf ->
+			// /boot/system/settings/network/resolv.conf. Linux roots keep
+			// kernels in /boot, but never these two directories.
+			if (inRoot && (strncmp(link, "/boot/system/", 13) == 0
+				|| strncmp(link, "/boot/home/", 11) == 0)) {
+				size_t hostLength = strlen(candidate);
+				while (hostLength > 1 && candidate[hostLength - 1] == '/')
+					candidate[--hostLength] = '\0';
+				if (strlcpy(hostPath, candidate, hostPathSize)
+						>= hostPathSize) {
+					return B_NAME_TOO_LONG;
+				}
+				TRACE("\"%s\" -> host \"%s\"\n", linuxPath, hostPath);
+				return B_OK;
+			}
+
+			// Outside the Linux root, an absolute target is a new Linux
+			// path: resolved as any other (Linux root first).
+			// (pending holds the target and the rest of the path now)
+			if (!inRoot && link[0] == '/') {
+				status = resolve_walk(pending, flags, hostPath,
+					hostPathSize, true, depth + 1);
+				if (status == B_OK || status == RENGUIN_STATUS_IN_PROC)
+					return status;
+				return resolve_walk(pending, flags, hostPath, hostPathSize,
+					false, depth + 1);
+			}
 
 			// An absolute target restarts at the Linux root; a relative one
 			// is relative to the directory holding the link.
@@ -218,13 +266,23 @@ renguin_resolve_in_root(const char* linuxPath, uint32 flags, char* hostPath,
 			return status;
 	}
 
-	if (rootLength + resolvedLength + 1 > hostPathSize)
+	if (rootLength + resolvedLength + 2 > hostPathSize)
 		return B_NAME_TOO_LONG;
-	memcpy(hostPath, RENGUIN_LINUX_ROOT, rootLength);
+	memcpy(hostPath, prefix, rootLength);
 	memcpy(hostPath + rootLength, resolved, resolvedLength + 1);
+	if (rootLength + resolvedLength == 0)
+		strcpy(hostPath, "/");
 
 	TRACE("\"%s\" -> \"%s\"\n", linuxPath, hostPath);
 	return B_OK;
+}
+
+
+status_t
+renguin_resolve_in_root(const char* linuxPath, uint32 flags, char* hostPath,
+	size_t hostPathSize)
+{
+	return resolve_walk(linuxPath, flags, hostPath, hostPathSize, true, 0);
 }
 
 
@@ -263,6 +321,13 @@ renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
 	if (length < 0)
 		return length;
 
+	return renguin_translate_path(path, pathSize, flags);
+}
+
+
+status_t
+renguin_translate_path(char* path, size_t pathSize, uint32 flags)
+{
 	if (path[0] != '/' || !linux_root_exists())
 		return B_OK;
 
@@ -290,7 +355,40 @@ renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
 		strlcpy(path, translated, pathSize);
 		return status;
 	}
-	// Otherwise use the path unchanged: it refers to Haiku's own tree.
+
+	// Otherwise the path refers to Haiku's own tree, which Haiku's VFS
+	// resolves, unless a link on the way leads where only Renguin can
+	// follow it: into /proc, or into the Linux root (a link in Haiku's
+	// /tmp to /proc/self/mounts). Haiku's tree is walked here only when
+	// Haiku cannot resolve the path and its first directory is not the
+	// Linux root's own (a library search in /lib missing a file is the
+	// common case, and gains nothing from a walk); the result is taken only
+	// if it leads into /proc or the Linux root, so other paths keep their
+	// name (a socket bound at /tmp/x is reported as /tmp/x, not under
+	// /boot/system/cache/tmp, where Haiku's /tmp link points).
+	struct stat st;
+	if (vfs_read_stat(-1, path, (flags & RENGUIN_PATH_FOLLOW_LEAF) != 0, &st,
+			true) == B_OK) {
+		return B_OK;
+	}
+	const char* first = path + 1;
+	size_t firstLength = strcspn(first, "/");
+	if (firstLength == 0 || (size_t)snprintf(translated, B_PATH_NAME_LENGTH,
+			"%s/%.*s", RENGUIN_LINUX_ROOT, (int)firstLength, first)
+				>= B_PATH_NAME_LENGTH
+		|| vfs_read_stat(-1, translated, false, &st, true) == B_OK) {
+		return B_OK;
+	}
+	status = resolve_walk(path, flags, translated, B_PATH_NAME_LENGTH, false,
+		0);
+	if (status == RENGUIN_STATUS_IN_PROC
+		|| (status == B_OK
+			&& strncmp(translated, RENGUIN_LINUX_ROOT, rootLength) == 0
+			&& (translated[rootLength] == '\0'
+				|| translated[rootLength] == '/'))) {
+		strlcpy(path, translated, pathSize);
+		return status;
+	}
 	return B_OK;
 }
 

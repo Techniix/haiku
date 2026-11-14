@@ -326,7 +326,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-24 | Partition manager | Designed | None |
 | F-25 | Lumina, rebuilt into Renga (window management, title bars, panel) | Designed (rework 2026-11-12: merging into Renga; portable core host-tested) | Host unit tests only |
 | F-26 | LinuxKPI_HaikuOS | QEMU Tested (core, in-tree build, Manager and `lkpictl`); `mt7921e` Implemented in Renga, hardware regression check pending | 31 `linuxkpi.*` (every image), 10 `linuxkpi_ui.*` + `linuxkpi_ui.screenshots` (renga-raw) |
-| F-27 | Renguin | In Development (kernel hook and module in Renga, static Linux programs QEMU Tested 2026-11-14) | `renguin` 19 |
+| F-27 | Renguin | In Development (static and dynamic Linux programs, networking QEMU Tested 2026-11-14) | `renguin` 32 |
 | F-28 | Control Panel suite | Not Started | None |
 | F-29 | Upstream bug fixes carried | QEMU Tested | See section 10.2 |
 | F-30 | Periodic NTP sync | Not Started | None |
@@ -788,16 +788,16 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Field | Value |
 | --- | --- |
 | Upstream maturity | E (one syscall dispatcher, no per-team ABI field, no `ptrace`) |
-| Renga maturity | In Renga since 2026-11-14: the kernel's per-team ABI personality and syscall dispatch (`9e1e5fa1`) and the renguin module imported unchanged from `stage5-libc-dynamic` at `6fce79da` (`ee4a05a7`): ELF loader (static, static-PIE, dynamic), about 185 syscalls, process creation, threads and futexes, Linux signals, `/proc`, `poll`/`select`, `/compat/linux`. First boot: 17 of Renguin's 18 test programs pass in QEMU (static raw and static glibc, threads, signals, `/proc`); `libc-fs` stops at a utimensat check BFS cannot pass (no stored access time) |
-| Status | **In Development** (static Linux programs QEMU Tested 2026-11-14) |
+| Renga maturity | In Renga since 2026-11-14: the kernel's per-team ABI personality and syscall dispatch (`9e1e5fa1`) and the renguin module imported unchanged from `stage5-libc-dynamic` at `6fce79da` (`ee4a05a7`): ELF loader (static, static-PIE, dynamic), about 185 syscalls, process creation, threads and futexes, Linux signals, `/proc`, `poll`/`select`, `/compat/linux`. First boot: 17 of Renguin's 18 test programs pass in QEMU (static raw and static glibc, threads, signals, `/proc`); `libc-fs` stops at a utimensat check BFS cannot pass (no stored access time). Later on 2026-11-14 (Renguin foundation): dynamic programs from a Linux root, sockets with read-only netlink, epoll/eventfd/timerfd/signalfd/inotify/memfd on Renga's own, noatime-style access times; 206 of 350 calls (`src/add-ons/kernel/personalities/renguin/COVERAGE.md`) |
+| Status | **In Development** (static and dynamic Linux programs and networking QEMU Tested 2026-11-14) |
 | Completed | Shared groundwork in Renga: Linux-style descriptor objects and APIs (`F-06`-`F-15`, `F-43` phase A) |
 | Remaining | Below |
-| Known bugs/limitations | Not yet on real hardware; dynamic programs need a Linux root (`ld-linux` and libraries) in the harness; `libc-fs` blocked by BFS access times (decide: emulate in Renguin or relax the check) |
+| Known bugs/limitations | Not yet on real hardware; no IPv4-mapped IPv6 (a [::] server misses IPv4 clients); abstract AF_UNIX names, `ptrace`, SysV IPC, POSIX timers not yet (`COVERAGE.md`) |
 | Dependencies | `F-15`, `F-49` (futex), `F-52` (API batch 2); for GUI programs `F-43` phase C (Wayland layer) and phase D (D-Bus, portals); for audio the Media Kit (`F-31`); for GPU programs `F-35`/`F-47` |
 | Difficulty | ABI hook 7; full layer 8-10 |
 | Risk | Medium-high (kernel syscall entry, signals) |
-| Testing status | `renguin` suite (19 checks) on every x86_64 image: Linux test programs built on the build host; dynamic programs and the application ladder not yet |
-| Next milestone | Dynamic programs with an Alpine root in the harness; system-call coverage matrix; Renguin Manager |
+| Testing status | `renguin` suite (32 checks) on every x86_64 harness image: static programs, and since 2026-11-14 dynamic ones from an Alpine 3.24 root (musl and glibc programs, busybox, GNU coreutils, sockets, netlink, `wget`, epoll/eventfd/timerfd/signalfd/inotify/memfd); the ladder above rung 1 not yet |
+| Next milestone | Renguin Manager (roots from Alpine/Debian, GUI); ladder rungs 1-3 (bash, git, python, curl, apk); the next calls in `COVERAGE.md` |
 | Recommended next action | Start after gamepads (work order item 13) |
 | Links | Audit "Ranked ways to multiply available apps"; Renguin `docs/research-report.md`, `docs/TESTING.md` |
 
@@ -2852,6 +2852,7 @@ Upstream behaviours observed and changed for Renga only: upstream adds WebPositi
 | 2026-11-11 | LinuxKPI is carried **in-tree** at LinuxKPI_HaikuOS' own paths, built with the image and tested by the harness; LinuxKPI_HaikuOS stays the upstream of the LinuxKPI layer, the imported FreeBSD/Linux code and the tools (`tools/sync-renga.sh`); its Haiku patches become Renga commits. A Techniix/RengaPorts package was the alternative (rejected: the driver would miss the image, the harness and every boot path, and Renga's `freebsd_network` would still need the patches). Scope (maintainer): integrate what already works and keep it working; no new drivers, no Bluetooth driver, no stage f | `F-26`, `F-34`, `80944266` |
 | 2026-11-13 | Chromium phases C (Wayland layer) and D (desktop services) move up to right after the port-API batch, done together with gamepads; Test Station follows and repeats the 8BitDo test with a bundle. Phase B is port work on Chromium-HaikuOS's new `renga` branch | `F-43`, `F-42`, `F-67` |
 | 2026-11-13 | New work order to fit the remaining plan time: Wi-Fi image, O-21, Chromium C/D with gamepads, the GPU stage for Quasar, boot loader A, Lumina, Renguin; F-61/F-67 remainder deferred; one full sweep per batch | `F-43`, `F-47`, `F-61`, `F-67` |
+| 2026-11-14 | Renguin access times on BFS (no stored atime; BFS reports "now"): Linux programs see atime = mtime, as on a noatime mount, instead of an attribute per file (every stat() would read one); libc-fs accepts either (at discretion) | `F-27`, Renguin `COVERAGE.md` |
 
 ---
 

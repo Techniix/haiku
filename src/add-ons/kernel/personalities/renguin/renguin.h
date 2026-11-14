@@ -366,8 +366,65 @@ uint64		renguin_user_path(struct renguin_scratch* scratch, uint64 userPath,
 				uint32 flags, status_t* _status);
 	// like renguin_get_user_path(), but returns a user-space copy of the
 	// translated path for Haiku's _user_* calls (or userPath unchanged)
+status_t	renguin_translate_path(char* path, size_t pathSize, uint32 flags);
+	// the translation renguin_get_user_path() applies, for a path already
+	// in the kernel (an AF_UNIX socket address)
 void		renguin_host_to_linux_path(char* path);
 	// strips the Linux root prefix from a host path, in place
+
+// net.cpp: sockets on Haiku's network stack, read-only NETLINK_ROUTE
+int64		renguin_sys_socket(int64 family, uint64 type, int64 protocol);
+int64		renguin_sys_socketpair(int64 family, uint64 type, int64 protocol,
+				uint64 fds);
+int64		renguin_sys_bind(int fd, uint64 address, uint64 length);
+int64		renguin_sys_connect(int fd, uint64 address, uint64 length);
+int64		renguin_sys_listen(int fd, int64 backlog);
+int64		renguin_sys_accept4(int fd, uint64 address, uint64 length,
+				uint64 flags);
+int64		renguin_sys_getsockname(int fd, uint64 address, uint64 length);
+int64		renguin_sys_getpeername(int fd, uint64 address, uint64 length);
+int64		renguin_sys_shutdown(int fd, int64 how);
+int64		renguin_sys_sendto(int fd, uint64 buffer, uint64 length,
+				uint64 flags, uint64 address, uint64 addressLength);
+int64		renguin_sys_recvfrom(int fd, uint64 buffer, uint64 length,
+				uint64 flags, uint64 address, uint64 addressLength);
+int64		renguin_sys_sendmsg(int fd, uint64 message, uint64 flags);
+int64		renguin_sys_recvmsg(int fd, uint64 message, uint64 flags);
+int64		renguin_sys_sendmmsg(int fd, uint64 vector, uint64 count,
+				uint64 flags);
+int64		renguin_sys_recvmmsg(int fd, uint64 vector, uint64 count,
+				uint64 flags, uint64 timeout);
+int64		renguin_sys_setsockopt(int fd, int64 level, int64 option,
+				uint64 value, uint64 length);
+int64		renguin_sys_getsockopt(int fd, int64 level, int64 option,
+				uint64 value, uint64 length);
+int64		renguin_net_ioctl(int fd, uint32 command, uint64 arg,
+				bool* _handled);
+int64		renguin_netlink_write(int fd, uint64 buffer, uint64 length,
+				bool vector, bool* _handled);
+
+// fds.cpp: epoll, eventfd, timerfd, signalfd, inotify, memfd on Renga's own
+int64		renguin_sys_epoll_create(int64 size);
+int64		renguin_sys_epoll_create1(uint64 flags);
+int64		renguin_sys_epoll_ctl(int epfd, int64 op, int fd, uint64 event);
+int64		renguin_sys_epoll_pwait(int epfd, uint64 events, int64 maxEvents,
+				int64 timeoutMs, uint64 mask, uint64 maskSize);
+int64		renguin_sys_epoll_pwait2(int epfd, uint64 events, int64 maxEvents,
+				uint64 timeout, uint64 mask, uint64 maskSize);
+int64		renguin_sys_eventfd2(uint64 initialValue, uint64 flags);
+int64		renguin_sys_timerfd_create(int64 clock, uint64 flags);
+int64		renguin_sys_timerfd_settime(int fd, uint64 flags, uint64 newValue,
+				uint64 oldValue);
+int64		renguin_sys_timerfd_gettime(int fd, uint64 value);
+int64		renguin_sys_signalfd4(int fd, uint64 mask, uint64 maskSize,
+				uint64 flags);
+bool		renguin_is_signalfd(int fd);
+int64		renguin_signalfd_read(int fd, uint64 buffer, uint64 count);
+int64		renguin_sys_inotify_init1(uint64 flags);
+int64		renguin_sys_inotify_add_watch(int fd, uint64 path, uint64 mask);
+int64		renguin_sys_inotify_rm_watch(int fd, int64 watch);
+int64		renguin_sys_memfd_create(uint64 name, uint64 flags);
+int64		renguin_fcntl_seals(int fd, bool add, uint64 seals);
 
 // mem.cpp
 int64		renguin_sys_brk(uint64 addr);
@@ -390,6 +447,8 @@ int64		renguin_sys_pwrite64(int fd, uint64 buffer, uint64 count,
 				int64 offset);
 int64		renguin_sys_writev(int fd, uint64 iov, uint64 count);
 int64		renguin_sys_readv(int fd, uint64 iov, uint64 count);
+int64		renguin_sys_preadv(int fd, uint64 iov, uint64 count,
+				int64 position, uint64 flags, bool write, bool variant2);
 int64		renguin_sys_openat(int dirfd, uint64 path, uint64 flags, uint64 mode);
 int64		renguin_sys_close(int fd);
 int64		renguin_sys_lseek(int fd, int64 offset, int whence);
@@ -415,6 +474,8 @@ int64		renguin_sys_renameat(int olddirfd, uint64 oldpath, int newdirfd,
 int64		renguin_sys_fsync(int fd);
 int64		renguin_sys_ftruncate(int fd, int64 length);
 
+void		renguin_linux_atime(const struct stat& st, struct timespec* atime);
+	// the access time shown to Linux programs (mtime on BFS, see file.cpp)
 int64		renguin_stat_at(int dirfd, uint64 path, uint64 flags,
 				struct stat* st);
 	// stat() for newfstatat and statx; 0 or a negative Linux errno

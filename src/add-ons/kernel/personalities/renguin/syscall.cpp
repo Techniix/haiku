@@ -84,6 +84,21 @@ enum {
 	LINUX_setitimer			= 38,
 	LINUX_getpid			= 39,
 	LINUX_sendfile			= 40,
+	LINUX_socket			= 41,
+	LINUX_connect			= 42,
+	LINUX_accept			= 43,
+	LINUX_sendto			= 44,
+	LINUX_recvfrom			= 45,
+	LINUX_sendmsg			= 46,
+	LINUX_recvmsg			= 47,
+	LINUX_shutdown			= 48,
+	LINUX_bind				= 49,
+	LINUX_listen			= 50,
+	LINUX_getsockname		= 51,
+	LINUX_getpeername		= 52,
+	LINUX_socketpair		= 53,
+	LINUX_setsockopt		= 54,
+	LINUX_getsockopt		= 55,
 	LINUX_clone				= 56,
 	LINUX_fork				= 57,
 	LINUX_vfork				= 58,
@@ -189,6 +204,7 @@ enum {
 	LINUX_futex				= 202,
 	LINUX_sched_setaffinity	= 203,
 	LINUX_sched_getaffinity	= 204,
+	LINUX_epoll_create		= 213,
 	LINUX_getdents64		= 217,
 	LINUX_set_tid_address	= 218,
 	LINUX_fadvise64			= 221,
@@ -196,8 +212,13 @@ enum {
 	LINUX_clock_getres		= 229,
 	LINUX_clock_nanosleep	= 230,
 	LINUX_exit_group		= 231,
+	LINUX_epoll_wait		= 232,
+	LINUX_epoll_ctl			= 233,
 	LINUX_tgkill			= 234,
 	LINUX_utimes			= 235,
+	LINUX_inotify_init		= 253,
+	LINUX_inotify_add_watch	= 254,
+	LINUX_inotify_rm_watch	= 255,
 	LINUX_openat			= 257,
 	LINUX_mkdirat			= 258,
 	LINUX_mknodat			= 259,
@@ -217,21 +238,40 @@ enum {
 	LINUX_get_robust_list	= 274,
 	LINUX_sync_file_range	= 277,
 	LINUX_utimensat			= 280,
+	LINUX_epoll_pwait		= 281,
+	LINUX_signalfd			= 282,
+	LINUX_timerfd_create	= 283,
+	LINUX_eventfd			= 284,
 	LINUX_fallocate			= 285,
+	LINUX_timerfd_settime	= 286,
+	LINUX_timerfd_gettime	= 287,
+	LINUX_accept4			= 288,
+	LINUX_signalfd4			= 289,
+	LINUX_eventfd2			= 290,
+	LINUX_epoll_create1		= 291,
 	LINUX_dup3				= 292,
+	LINUX_preadv			= 295,
+	LINUX_pwritev			= 296,
 	LINUX_pipe2				= 293,
+	LINUX_inotify_init1		= 294,
 	LINUX_rt_tgsigqueueinfo	= 297,
+	LINUX_recvmmsg			= 299,
 	LINUX_prlimit64			= 302,
 	LINUX_syncfs			= 306,
+	LINUX_sendmmsg			= 307,
 	LINUX_getcpu			= 309,
 	LINUX_renameat2			= 316,
 	LINUX_getrandom			= 318,
+	LINUX_memfd_create		= 319,
 	LINUX_mlock2			= 325,
+	LINUX_preadv2			= 327,
+	LINUX_pwritev2			= 328,
 	LINUX_copy_file_range	= 326,
 	LINUX_statx				= 332,
 	LINUX_rseq				= 334,
 	LINUX_clone3			= 435,
 	LINUX_faccessat2		= 439,
+	LINUX_epoll_pwait2		= 441,
 	LINUX_fchmodat2			= 452,
 };
 
@@ -310,6 +350,24 @@ renguin_syscall(struct iframe* frame)
 			break;
 		case LINUX_writev:
 			result = renguin_sys_writev((int)a1, a2, a3);
+			break;
+		// x86-64 passes the offset whole in the fourth argument (the
+		// fifth, its high half, is for 32-bit ABIs).
+		case LINUX_preadv:
+			result = renguin_sys_preadv((int)a1, a2, a3, (int64)a4, 0, false,
+				false);
+			break;
+		case LINUX_pwritev:
+			result = renguin_sys_preadv((int)a1, a2, a3, (int64)a4, 0, true,
+				false);
+			break;
+		case LINUX_preadv2:
+			result = renguin_sys_preadv((int)a1, a2, a3, (int64)a4, a6, false,
+				true);
+			break;
+		case LINUX_pwritev2:
+			result = renguin_sys_preadv((int)a1, a2, a3, (int64)a4, a6, true,
+				true);
 			break;
 		case LINUX_lseek:
 			result = renguin_sys_lseek((int)a1, (int64)a2, (int)a3);
@@ -525,6 +583,127 @@ renguin_syscall(struct iframe* frame)
 			break;
 		case LINUX_chroot:
 			result = -LX_EPERM;
+			break;
+
+		// --- Sockets (net.cpp) ---
+		case LINUX_socket:
+			result = renguin_sys_socket((int64)(int32)a1, a2,
+				(int64)(int32)a3);
+			break;
+		case LINUX_socketpair:
+			result = renguin_sys_socketpair((int64)(int32)a1, a2,
+				(int64)(int32)a3, a4);
+			break;
+		case LINUX_bind:
+			result = renguin_sys_bind((int)a1, a2, (uint32)a3);
+			break;
+		case LINUX_connect:
+			result = renguin_sys_connect((int)a1, a2, (uint32)a3);
+			break;
+		case LINUX_listen:
+			result = renguin_sys_listen((int)a1, (int64)(int32)a2);
+			break;
+		case LINUX_accept:
+			result = renguin_sys_accept4((int)a1, a2, a3, 0);
+			break;
+		case LINUX_accept4:
+			result = renguin_sys_accept4((int)a1, a2, a3, a4);
+			break;
+		case LINUX_getsockname:
+			result = renguin_sys_getsockname((int)a1, a2, a3);
+			break;
+		case LINUX_getpeername:
+			result = renguin_sys_getpeername((int)a1, a2, a3);
+			break;
+		case LINUX_shutdown:
+			result = renguin_sys_shutdown((int)a1, (int64)(int32)a2);
+			break;
+		case LINUX_sendto:
+			result = renguin_sys_sendto((int)a1, a2, a3, a4, a5,
+				(uint32)a6);
+			break;
+		case LINUX_recvfrom:
+			result = renguin_sys_recvfrom((int)a1, a2, a3, a4, a5, a6);
+			break;
+		case LINUX_sendmsg:
+			result = renguin_sys_sendmsg((int)a1, a2, a3);
+			break;
+		case LINUX_recvmsg:
+			result = renguin_sys_recvmsg((int)a1, a2, a3);
+			break;
+		case LINUX_sendmmsg:
+			result = renguin_sys_sendmmsg((int)a1, a2, (uint32)a3, a4);
+			break;
+		case LINUX_recvmmsg:
+			result = renguin_sys_recvmmsg((int)a1, a2, (uint32)a3, a4, a5);
+			break;
+		case LINUX_setsockopt:
+			result = renguin_sys_setsockopt((int)a1, (int64)(int32)a2,
+				(int64)(int32)a3, a4, (uint32)a5);
+			break;
+		case LINUX_getsockopt:
+			result = renguin_sys_getsockopt((int)a1, (int64)(int32)a2,
+				(int64)(int32)a3, a4, a5);
+			break;
+
+		// --- Event and memory descriptors on Renga's own (fds.cpp) ---
+		case LINUX_epoll_create:
+			result = renguin_sys_epoll_create((int64)(int32)a1);
+			break;
+		case LINUX_epoll_create1:
+			result = renguin_sys_epoll_create1(a1);
+			break;
+		case LINUX_epoll_ctl:
+			result = renguin_sys_epoll_ctl((int)a1, (int64)(int32)a2,
+				(int)a3, a4);
+			break;
+		case LINUX_epoll_wait:
+			result = renguin_sys_epoll_pwait((int)a1, a2, (int64)(int32)a3,
+				(int64)(int32)a4, 0, 0);
+			break;
+		case LINUX_epoll_pwait:
+			result = renguin_sys_epoll_pwait((int)a1, a2, (int64)(int32)a3,
+				(int64)(int32)a4, a5, a6);
+			break;
+		case LINUX_epoll_pwait2:
+			result = renguin_sys_epoll_pwait2((int)a1, a2, (int64)(int32)a3,
+				a4, a5, a6);
+			break;
+		case LINUX_eventfd:
+			result = renguin_sys_eventfd2(a1, 0);
+			break;
+		case LINUX_eventfd2:
+			result = renguin_sys_eventfd2(a1, a2);
+			break;
+		case LINUX_timerfd_create:
+			result = renguin_sys_timerfd_create((int64)(int32)a1, a2);
+			break;
+		case LINUX_timerfd_settime:
+			result = renguin_sys_timerfd_settime((int)a1, a2, a3, a4);
+			break;
+		case LINUX_timerfd_gettime:
+			result = renguin_sys_timerfd_gettime((int)a1, a2);
+			break;
+		case LINUX_signalfd:
+			result = renguin_sys_signalfd4((int)a1, a2, a3, 0);
+			break;
+		case LINUX_signalfd4:
+			result = renguin_sys_signalfd4((int)a1, a2, a3, a4);
+			break;
+		case LINUX_inotify_init:
+			result = renguin_sys_inotify_init1(0);
+			break;
+		case LINUX_inotify_init1:
+			result = renguin_sys_inotify_init1(a1);
+			break;
+		case LINUX_inotify_add_watch:
+			result = renguin_sys_inotify_add_watch((int)a1, a2, a3);
+			break;
+		case LINUX_inotify_rm_watch:
+			result = renguin_sys_inotify_rm_watch((int)a1, (int64)(int32)a2);
+			break;
+		case LINUX_memfd_create:
+			result = renguin_sys_memfd_create(a1, a2);
 			break;
 
 		// --- Waiting for descriptors (poll.cpp) ---
@@ -888,6 +1067,10 @@ renguin_syscall(struct iframe* frame)
 			case LINUX_creat:
 			case LINUX_flock:
 			case LINUX_sendfile:
+			case LINUX_sendto:
+			case LINUX_recvfrom:
+			case LINUX_sendmsg:
+			case LINUX_recvmsg:
 				renguin_set_restart(RENGUIN_RESTART_SYS, NULL);
 				break;
 		}

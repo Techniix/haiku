@@ -65,6 +65,32 @@ for name in pthread libc-signals libc-fs {
 		: -static -pthread ] ;
 }
 
+# The Linux root for dynamic programs: Alpine's minirootfs with GNU
+# coreutils, the test programs in dyn/ linked against musl and the build
+# host's glibc (root/build-root.sh, which documents it). The pinned Alpine
+# files are downloaded into the download directory once. The archive is
+# extracted into the image's /boot/system/non-packaged/compat/linux, where
+# Renguin looks for the Linux root (RENGUIN_LINUX_ROOT).
+local rootDir = [ FDirName $(SUBDIR) root ] ;
+local dynDir = [ FDirName $(SUBDIR) dyn ] ;
+local linuxRoot = <renguin-linux>renguin-linux-root.tar.gz ;
+MakeLocate $(linuxRoot) : $(outputDir) ;
+local rootInputs = <renguin-root>build-root.sh <renguin-root>alpine.pins ;
+SEARCH on $(rootInputs) = $(rootDir) ;
+local dynSources = <renguin-dyn>hello.c <renguin-dyn>net.c <renguin-dyn>fds.c ;
+SEARCH on $(dynSources) = $(dynDir) ;
+Depends $(linuxRoot) : $(rootInputs) $(dynSources) ;
+RENGUIN_DYN_DIR on $(linuxRoot) = $(dynDir) ;
+RENGUIN_ROOT_CACHE on $(linuxRoot)
+	= [ FDirName $(HAIKU_DOWNLOAD_DIR) renguin-linux-root ] ;
+
+actions BuildRenguinLinuxRoot
+{
+	sh $(2[1]) $(1) "$(HOST_CC)" $(RENGUIN_DYN_DIR) $(2[2]) \
+		$(RENGUIN_ROOT_CACHE)
+}
+BuildRenguinLinuxRoot $(linuxRoot) : $(rootInputs) ;
+
 local expected = <renguin-linux-src>expected.txt ;
 SEARCH on $(expected) = $(linuxDir) ;
 
@@ -77,4 +103,6 @@ if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
 	AddFilesToHaikuImage system non-packaged data renguin-tests
 		: $(programs) $(expected) ;
 	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test ;
+	ExtractArchiveToHaikuImage system non-packaged compat linux
+		: $(linuxRoot) ;
 }

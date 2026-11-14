@@ -968,8 +968,24 @@ of a 1 GiB guest was, so the bounce path went untested.
   ones), installed in `/boot/system/non-packaged/data/renguin-tests`,
   run from `/tmp` and compared with `expected.txt` (exit status and
   output); `module` and `native_after` too. Programs in the test's
-  `kPending` list (now `libc-fs`: BFS stores no access time) are printed
-  as CE-INFO lines, not counted.
+  `kPending` list are printed as CE-INFO lines, not counted (none now).
+  Harness images also carry a Linux root in
+  `/boot/system/non-packaged/compat/linux`, built by
+  `tests/renguin/root/build-root.sh` from Alpine 3.24's minirootfs and a
+  few packages (GNU coreutils), pinned with SHA-256 in `alpine.pins` and
+  downloaded once into the download directory, plus the `dyn/` programs
+  linked dynamically against musl (ld-musl) and the build host's glibc
+  (ld-linux, copied in). Absolute links become relative ones, `/tmp` is
+  Haiku's, `/etc/resolv.conf` links to Haiku's network settings. Checks
+  `root.present`, `dyn.hello_musl`/`_glibc`, `dyn.busybox`,
+  `dyn.busybox_applets`, `dyn.coreutils`, `dyn.net_musl`/`_glibc` (TCP
+  and UDP over IPv4 and IPv6, AF_UNIX, socketpair, SCM_RIGHTS, socket
+  options and timeouts, getaddrinfo, getifaddrs and if_nameindex over
+  netlink, an RTM_GETROUTE dump), `dyn.fds_musl`/`_glibc` (epoll,
+  eventfd, timerfd, signalfd, inotify, memfd with seals), `dyn.wget`
+  (busybox wget from a busybox nc server), `dyn.ip` (busybox ip over
+  netlink and ifconfig over SIOCGIF* ioctls), and `dyn.resolv_conf` when
+  the machine has a name server.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **pointer_logic** (`pointer_logic_test`, no desktop needed): Adaptive
   pointer acceleration gives the same distance at 125, 500, 1000 and

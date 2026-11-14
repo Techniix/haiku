@@ -25,5 +25,7 @@ if $(TARGET_ARCH) = x86_64 {
 		fsops.cpp
 		poll.cpp
 		sysinfo.cpp
+		net.cpp
+		fds.cpp
 	;
 }

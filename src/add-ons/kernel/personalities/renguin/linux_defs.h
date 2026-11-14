@@ -86,6 +86,17 @@
 #define LX_F_SETLK			6
 #define LX_F_SETLKW			7
 #define LX_F_DUPFD_CLOEXEC	1030
+#define LX_F_SETOWN			8
+#define LX_F_GETOWN			9
+#define LX_F_SETSIG			10
+#define LX_F_GETSIG			11
+#define LX_F_OFD_GETLK		36
+#define LX_F_OFD_SETLK		37
+#define LX_F_OFD_SETLKW		38
+#define LX_F_SETPIPE_SZ		1031
+#define LX_F_GETPIPE_SZ		1032
+#define LX_F_ADD_SEALS		1033
+#define LX_F_GET_SEALS		1034
 #define LX_FD_CLOEXEC		1
 
 #define LX_F_RDLCK			0

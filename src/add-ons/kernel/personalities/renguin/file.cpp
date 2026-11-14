@@ -28,6 +28,7 @@
 
 #include <KernelExport.h>
 #include <NodeMonitor.h>
+#include <fs_info.h>
 
 #include <AutoDeleter.h>
 
@@ -99,6 +100,58 @@ open_flags_from_haiku(int flags)
 }
 
 
+/*!	The access time Linux programs are shown for \a source.
+
+	BFS stores no access time: it reports the current time as st_atime
+	(bfs/kernel_interface.cpp), so a file always looks as if it had just
+	been read, and an access time set with utimensat() is not kept. Linux
+	programs that look at access times misbehave with "now": find -atime and
+	-amin match nothing old, tmpreaper and systemd-tmpfiles never see a file
+	as unused, shells and mail readers decide whether an mbox has new mail
+	from mtime > atime, backup and sync tools see every file as changed.
+	Renguin shows such files the way Linux shows them on a volume mounted
+	with noatime: the access time equals the modification time. packagefs
+	already does this for Haiku programs. Volumes that keep an access time
+	(ramfs, the ext2/3/4, FAT and NTFS drivers...) report theirs unchanged.
+
+	Keeping explicitly set access times in an attribute was the other
+	option; it was not taken because every stat() would then have to open
+	and read an attribute (ls -l of a large directory would cost several
+	times as much), and native programs would still see another time.
+	(Decision recorded in the roadmap's F-27 entry, 2026-11-14.)
+*/
+static bool
+volume_stores_access_time(dev_t device)
+{
+	static struct {
+		dev_t	device;
+		bool	stores;
+	} sCache[8];
+	static int32 sNext = 0;
+
+	for (int i = 0; i < 8; i++) {
+		if (sCache[i].device == device && device != 0)
+			return sCache[i].stores;
+	}
+	fs_info info;
+	bool stores = true;
+	if (_kern_read_fs_info(device, &info) == B_OK)
+		stores = strcmp(info.fsh_name, "bfs") != 0;
+	int slot = atomic_add(&sNext, 1) & 7;
+	sCache[slot].device = device;
+	sCache[slot].stores = stores;
+	return stores;
+}
+
+
+void
+renguin_linux_atime(const struct stat& source, struct timespec* _atime)
+{
+	*_atime = volume_stores_access_time(source.st_dev)
+		? source.st_atim : source.st_mtim;
+}
+
+
 //! Translate a Haiku struct stat into the Linux x86-64 layout.
 static void
 stat_to_linux(const struct stat& source, linux_stat& dest)
@@ -116,8 +169,10 @@ stat_to_linux(const struct stat& source, linux_stat& dest)
 	dest.st_size = source.st_size;
 	dest.st_blksize = source.st_blksize;
 	dest.st_blocks = source.st_blocks;
-	dest.st_atime_sec = source.st_atim.tv_sec;
-	dest.st_atime_nsec = source.st_atim.tv_nsec;
+	struct timespec atime;
+	renguin_linux_atime(source, &atime);
+	dest.st_atime_sec = atime.tv_sec;
+	dest.st_atime_nsec = atime.tv_nsec;
 	dest.st_mtime_sec = source.st_mtim.tv_sec;
 	dest.st_mtime_nsec = source.st_mtim.tv_nsec;
 	dest.st_ctime_sec = source.st_ctim.tv_sec;
@@ -177,6 +232,8 @@ renguin_current_umask()
 int64
 renguin_sys_read(int fd, uint64 buffer, uint64 count)
 {
+	if (renguin_is_signalfd(fd))
+		return renguin_signalfd_read(fd, buffer, count);
 	return renguin_encode(_user_read(fd, -1, (void*)(addr_t)buffer,
 		(size_t)count));
 }
@@ -185,6 +242,10 @@ renguin_sys_read(int fd, uint64 buffer, uint64 count)
 int64
 renguin_sys_write(int fd, uint64 buffer, uint64 count)
 {
+	bool handled;
+	int64 result = renguin_netlink_write(fd, buffer, count, false, &handled);
+	if (handled)
+		return result;
 	return renguin_encode(_user_write(fd, -1, (const void*)(addr_t)buffer,
 		(size_t)count));
 }
@@ -213,7 +274,7 @@ renguin_sys_pwrite64(int fd, uint64 buffer, uint64 count, int64 offset)
 //! Linux readv/writev: loop over the iovec in user memory, one _user_* call
 //! each. Partial progress is returned, matching Linux.
 static int64
-do_vector_io(int fd, uint64 iov, uint64 count, bool write)
+do_vector_io(int fd, uint64 iov, uint64 count, bool write, off_t position = -1)
 {
 	if ((int64)count < 0 || count > 1024)	// UIO_MAXIOV
 		return -LX_EINVAL;
@@ -229,9 +290,10 @@ do_vector_io(int fd, uint64 iov, uint64 count, bool write)
 			continue;
 
 		ssize_t done = write
-			? _user_write(fd, -1, (const void*)(addr_t)vec.iov_base,
+			? _user_write(fd, position, (const void*)(addr_t)vec.iov_base,
 				vec.iov_len)
-			: _user_read(fd, -1, (void*)(addr_t)vec.iov_base, vec.iov_len);
+			: _user_read(fd, position, (void*)(addr_t)vec.iov_base,
+				vec.iov_len);
 		if (done < 0) {
 			if (total > 0) {
 				renguin_cancel_restart();
@@ -240,6 +302,8 @@ do_vector_io(int fd, uint64 iov, uint64 count, bool write)
 			return renguin_encode(done);
 		}
 		total += done;
+		if (position >= 0)
+			position += done;
 		if ((uint64)done < vec.iov_len)
 			break;		// short read/write ends the sequence
 	}
@@ -247,9 +311,40 @@ do_vector_io(int fd, uint64 iov, uint64 count, bool write)
 }
 
 
+/*!	preadv(), pwritev() and their "2" variants (glibc's and musl's
+	pwritev() use pwritev2 when available). An offset of -1 in the "2"
+	variants means the current file position. RWF_* flags (hints such as
+	RWF_HIPRI, RWF_DSYNC) are accepted; RWF_NOWAIT and RWF_APPEND are not
+	supported (EOPNOTSUPP), as on file systems without them.
+*/
+int64
+renguin_sys_preadv(int fd, uint64 iov, uint64 count, int64 position,
+	uint64 flags, bool write, bool variant2)
+{
+	const uint64 kNoWait = 0x8, kAppend = 0x10;
+	if ((flags & (kNoWait | kAppend)) != 0)
+		return -LX_EOPNOTSUPP;
+	if (position < 0 && !(variant2 && position == -1))
+		return -LX_EINVAL;
+	if (position >= 0) {
+		// Positioned I/O on a pipe or socket is ESPIPE on Linux.
+		struct stat st;
+		if (vfs_read_stat(fd, NULL, false, &st, false) == B_OK
+			&& (S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode))) {
+			return -LX_ESPIPE;
+		}
+	}
+	return do_vector_io(fd, iov, count, write, position);
+}
+
+
 int64
 renguin_sys_writev(int fd, uint64 iov, uint64 count)
 {
+	bool handled;
+	int64 result = renguin_netlink_write(fd, iov, count, true, &handled);
+	if (handled)
+		return result;
 	return do_vector_io(fd, iov, count, true);
 }
 
@@ -977,6 +1072,40 @@ renguin_sys_fcntl(int fd, uint64 cmd, uint64 arg)
 			return fcntl_lock(fd, F_SETLK, arg);
 		case LX_F_SETLKW:
 			return fcntl_lock(fd, F_SETLKW, arg);
+
+		// Linux's open file description locks lock like POSIX ones here;
+		// the difference (owned by the description, not the process)
+		// matters only to programs sharing a file between their threads.
+		case LX_F_OFD_GETLK:
+			return fcntl_lock(fd, F_GETLK, arg);
+		case LX_F_OFD_SETLK:
+			return fcntl_lock(fd, F_SETLK, arg);
+		case LX_F_OFD_SETLKW:
+			return fcntl_lock(fd, F_SETLKW, arg);
+
+		case LX_F_ADD_SEALS:
+			return renguin_fcntl_seals(fd, true, arg);
+		case LX_F_GET_SEALS:
+			return renguin_fcntl_seals(fd, false, 0);
+
+		// Pipe sizes: Haiku's pipes have a fixed buffer; Linux's default
+		// size is reported and requests are accepted.
+		case LX_F_GETPIPE_SZ:
+		case LX_F_SETPIPE_SZ:
+		{
+			status_t flags = _user_fcntl(fd, F_GETFL, 0);
+			if (flags < 0)
+				return renguin_encode(flags);
+			return 65536;
+		}
+
+		// SIGIO ownership: accepted, never signalled.
+		case LX_F_SETOWN:
+		case LX_F_SETSIG:
+			return 0;
+		case LX_F_GETOWN:
+		case LX_F_GETSIG:
+			return 0;
 
 		default:
 			return -LX_EINVAL;

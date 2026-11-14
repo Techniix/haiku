@@ -227,8 +227,10 @@ renguin_sys_statx(int dirfd, uint64 path, uint64 flags, uint64 mask,
 	out.stx_ino = st.st_ino;
 	out.stx_size = st.st_size;
 	out.stx_blocks = st.st_blocks;
-	out.stx_atime.tv_sec = st.st_atim.tv_sec;
-	out.stx_atime.tv_nsec = st.st_atim.tv_nsec;
+	struct timespec atime;
+	renguin_linux_atime(st, &atime);
+	out.stx_atime.tv_sec = atime.tv_sec;
+	out.stx_atime.tv_nsec = atime.tv_nsec;
 	out.stx_btime.tv_sec = st.st_crtim.tv_sec;
 	out.stx_btime.tv_nsec = st.st_crtim.tv_nsec;
 	out.stx_ctime.tv_sec = st.st_ctim.tv_sec;
