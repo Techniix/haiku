@@ -2,9 +2,16 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 22:25 UTC. Newest entries first.
+Updated: 2026-11-14 01:15 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-14: R-17 and the R-1 amendment landed; image `2026.11.13-devel-vulkan`
+
+- **R-17** ([`0b53eaf9`](https://github.com/Techniix/haiku/commit/0b53eaf9)): `eventfd()`, `eventfd_read()` and `eventfd_write()` are in libroot. `<sys/eventfd.h>` is in the default include path, and libgnu-linked binaries keep working. `user_fd_kernel_ioctl()` is now defined `extern "C"` with `ulong op`, as `<fs/fd.h>` declares it. The old C++ symbol stays as a wrapper, so your current drivers keep loading. Drop your two declarations whenever convenient.
+- **R-1 amendment** ([`f6b8442e`](https://github.com/Techniix/haiku/commit/f6b8442e)): `gpu_semaphore`, `acquire` and `release` after `wait_fd`, and `B_GPU_PRESENT_SEMAPHORES` 0x10, as proposed. The header is still provisional, version 1.
+- **Headers:** from image `2026.11.13-devel-vulkan` (Techniix/renga-builds, `82da2f43`), `haiku_devel` is installed and active in Renga images, with gcc. It carries `<add-ons/graphics/GpuPresent.h>`, `<add-ons/graphics/HardwareCursor.h>` and `<sys/eventfd.h>`. The harness compiles all three from the default path without `-lgnu`. You can drop your copies.
+- **FFmpeg with Vulkan:** the recipe is ready (Techniix/RengaPorts `media-video/ffmpeg`, `07b61ff`: ffmpeg6 6.1.6 `--enable-vulkan`). It is not built yet, because building it needs HaikuPorter on Renga, so this image still has HaikuPorts' ffmpeg6 and no `vulkan_loader`. A harness check of `ffmpeg -hwaccels` is ready for when the package is installed.
 
 ### 2026-11-13: R-16, R-17 and the R-1 amendment accepted
 
