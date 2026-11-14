@@ -232,29 +232,30 @@ HaikuOutputUsableFrame(BRect windowFrame)
 				break;
 		}
 	}
-	// Deskbar takes a strip or a corner of the main screen.
+	// Deskbar takes a strip or a corner of the main screen. Its location
+	// names (and whether it is expanded) do not say reliably which part of
+	// the screen it covers, so go by its frame: a wide bar is a strip at
+	// the top or the bottom, a tall one a column at the left or the right
+	// (the side it is nearer to).
 	BDeskbar deskbar;
-	BRect bar = deskbar.Frame();
-	if (bar.IsValid() && frame.Intersects(bar)) {
-		deskbar_location location = deskbar.Location();
-		switch (location) {
-			case B_DESKBAR_TOP:
-				frame.top = bar.bottom + 1;
-				break;
-			case B_DESKBAR_BOTTOM:
-				frame.bottom = bar.top - 1;
-				break;
-			case B_DESKBAR_LEFT_TOP:
-			case B_DESKBAR_LEFT_BOTTOM:
-				if (deskbar.IsExpanded())
-					frame.left = bar.right + 1;
-				break;
-			case B_DESKBAR_RIGHT_TOP:
-			case B_DESKBAR_RIGHT_BOTTOM:
-				if (deskbar.IsExpanded())
-					frame.right = bar.left - 1;
-				break;
+	BRect bar = deskbar.Frame() & frame;
+	if (bar.IsValid()) {
+		BRect usable = frame;
+		if (bar.Width() >= bar.Height()) {
+			if (bar.top - frame.top <= frame.bottom - bar.bottom)
+				usable.top = bar.bottom + 1;
+			else
+				usable.bottom = bar.top - 1;
+		} else {
+			if (bar.left - frame.left <= frame.right - bar.right)
+				usable.left = bar.right + 1;
+			else
+				usable.right = bar.left - 1;
 		}
+		// Never less than half the screen (an unusual Deskbar setup).
+		if (usable.Width() >= frame.Width() / 2
+			&& usable.Height() >= frame.Height() / 2)
+			frame = usable;
 	}
 	return frame;
 }
