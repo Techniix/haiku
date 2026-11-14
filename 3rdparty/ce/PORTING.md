@@ -65,6 +65,7 @@ updates this file in the same commit.
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 | Gamepads as Linux evdev devices (`/dev/input/event*`, FF rumble), virtual devices (`/dev/input/uinput`), raw HID for game controllers (`/dev/hidraw*`) | `<linux/input.h>`, `<linux/uinput.h>`, `<linux/hidraw.h>` (gnu) | (nothing extra) | Missing (BJoystick only, 360 pads read-only) | Available (not yet tried with real pads) |
 | `BGamepad`: standard layout, SDL mapping database, rumble, player number, battery, hot-plug | `<Gamepad.h>` | libdevice | Missing | Available |
+| A Wayland compositor with a socket (`$XDG_RUNTIME_DIR/wayland-0`, `XDG_RUNTIME_DIR=/tmp/xdg-runtime`): xdg-shell, wl_shm (memfd), subsurfaces, viewporter, xdg-activation, text-input-v3, server-side decorations (KDE protocol), seat, one wl_output, clipboard both ways with the system clipboard | (Wayland protocol over the socket) | a socket-transport libwayland-client (Linux programs: their own) | HaikuPorts' in-process server only (no socket) | Available (x86_64; switch in Screen preferences, on by default) |
 
 All descriptors below are real file descriptors: they work with `select()`,
 `poll()` and `wait_for_objects()`, are inherited by `fork()`, and honour
@@ -1418,6 +1419,46 @@ header directory; nothing to link.
   argument, so integer arguments (`UI_SET_EVBIT`, `EVIOCGRAB`,
   `EVIOCRMFF`) need a cast: `ioctl(fd, EVIOCGRAB, (void*)(addr_t)1)`. C
   code compiles unchanged.
+
+### Wayland compositor (socket)
+
+Renga runs a Wayland compositor, `/boot/system/servers/wayland_compositor`
+(roadmap F-43 phase C), started by launch_daemon in the desktop session.
+It is HaiWay (X547's Wayland server over the Haiku API, the code behind
+HaikuPorts' `wayland_server`) run as one process with a real Wayland socket
+on libwayland's own Unix socket transport, so any Wayland client can
+connect: Linux programs under Renguin with their own libwayland-client,
+and native programs linked against a socket-transport libwayland-client.
+
+- Socket: `$XDG_RUNTIME_DIR/wayland-0`. `SetupEnvironment` sets
+  `XDG_RUNTIME_DIR=/tmp/xdg-runtime` (mode 0700); `WAYLAND_DISPLAY` is not
+  set (libwayland's default is `wayland-0`). Linux programs see the same
+  path: Renguin's Linux root has no `/tmp` of its own.
+- Globals: `wl_compositor`, `wl_subcompositor`, `wl_shm` (ARGB8888,
+  XRGB8888; the pool's descriptor, a memfd for example, is mapped into an
+  area and shown through a `BBitmap` without a copy), `wp_viewporter`,
+  `wl_output` (one, the main screen; version 3), `wl_seat` (pointer,
+  keyboard with an XKB keymap generated from the Haiku keymap),
+  `wl_data_device_manager` (version 3), `zwp_text_input_manager_v3`
+  (Haiku input methods), `xdg_wm_base`, `xdg_activation_v1`,
+  `org_kde_kwin_server_decoration_manager` (a client that asks gets Renga's
+  window frame; one that does not is drawn without a frame).
+- Every `xdg_toplevel` is a native window; popups are native windows too.
+- Clipboard: a client's selection is read at once and put on the system
+  clipboard (`text/plain;charset=utf-8` becomes `text/plain`,
+  `text/uri-list` becomes `refs`); system clipboard changes reach every
+  client as a new selection offer.
+- Native ports: HaikuPorts' `wayland` package is X547's in-process build;
+  ports linked against it keep working as before and do not use this
+  compositor. Renga's socket build of libwayland is not packaged for ports
+  yet (planned with the development files).
+- The switch: Screen preferences, "Show Wayland programs" (or `Screen
+  --wayland on|off`); setting `~/config/settings/Renga/wayland`.
+- Not yet: drag and drop, `wp_fractional_scale_v1`, `zwp_idle_inhibit_v1`,
+  one `wl_output` per screen with hot-plug, `xdg-decoration`,
+  `linux-dmabuf` (GPU stage), a Deskbar entry per Wayland program (the
+  windows belong to the compositor, a background application).
+- x86_64 only (the build replaces libffi with a direct x86-64 call).
 
 ### Drivers in non-packaged
 

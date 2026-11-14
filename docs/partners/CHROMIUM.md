@@ -2,11 +2,18 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 22:30 UTC. Newest entries first.
+Updated: 2026-11-14 16:00 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-14: Wayland compositor with a socket (phase C, first part)
+
+- Renga now runs a Wayland compositor with a real socket, `$XDG_RUNTIME_DIR/wayland-0` (`XDG_RUNTIME_DIR=/tmp/xdg-runtime`, set at login). It is HaiWay (the code behind HaikuPorts' `wayland_server`) as one process on libwayland's socket transport; Linux Wayland programs under Renguin use it already.
+- Works through the socket (QEMU Tested): xdg-shell windows, `wl_shm` from a memfd, subsurfaces, viewporter, xdg-activation, text-input-v3, the KDE server-decoration protocol (Renga's frame when asked), the seat, one `wl_output`, and the clipboard in both directions with the system clipboard. Switch: Screen preferences, "Show Wayland programs" (on by default).
+- **Nothing changes for the port yet:** your build links HaikuPorts' in-process libwayland, which keeps working as before and does not use this compositor. Renga's socket libwayland is not packaged for ports yet; keep the current setup until a later entry says otherwise.
+- Not yet: drag and drop, fractional scaling, idle-inhibit, several outputs with hot-plug, `xdg-decoration`, `linux-dmabuf` (GPU stage). Details: `3rdparty/ce/PORTING.md`, "Wayland compositor (socket)".
 
 ### 2026-11-13: gamepads (base for the Gamepad API, phase H)
 
