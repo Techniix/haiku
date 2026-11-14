@@ -19,7 +19,8 @@ Depends [ FGristFiles wayland_test.o xdg-shell-protocol.o ] : $(headers) ;
 Application wayland_test :
 	wayland_test.cpp
 	xdg-shell-protocol.c
-	: be libgnu.so libwayland_client_renga.a network [ TargetLibstdc++ ]
+	: be libgnu.so libwayland-client-renga.so network [ TargetLibstdc++ ]
+		# the shared library ports get (package renga_wayland)
 ;
 
 if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {

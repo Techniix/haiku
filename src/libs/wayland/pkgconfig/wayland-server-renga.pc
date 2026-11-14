@@ -1,0 +1,11 @@
+# Renga's socket-transport libwayland (server side), package renga_wayland.
+# Installed as develop/lib/pkgconfig/wayland-server-renga.pc.
+prefix=/boot/system
+libdir=${prefix}/develop/lib
+includedir=${prefix}/develop/headers/renga_wayland
+
+Name: wayland-server-renga
+Description: Wayland server library, Renga socket transport
+Version: 1.21.90
+Cflags: -I${includedir} -DWL_RENGA_SOCKETS
+Libs: -L${libdir} -lwayland-server-renga

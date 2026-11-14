@@ -1,0 +1,49 @@
+# Renga: the socket-transport libwayland for ports (F-43 phase C,
+# Chromium's request in the 2026-11-14 batch). x86_64 only, like the
+# compositor (src/libs/wayland: WL_RENGA_NO_FFI calls are x86-64 code).
+if $(HAIKU_PACKAGING_ARCHS[1]) = x86_64 {
+	local renga_waylandPackage = renga_wayland.hpkg ;
+	HaikuPackage $(renga_waylandPackage) ;
+
+	local libs = libwayland-client-renga.so libwayland-server-renga.so ;
+	AddLibrariesToPackage lib : $(libs) ;
+
+	# development files
+	local lib ;
+	for lib in $(libs) {
+		AddSymlinkToPackage develop lib : ../../lib/$(lib).0 : $(lib) ;
+	}
+
+	local waylandSource = [ FDirName $(HAIKU_TOP) src libs wayland src ] ;
+	local headers = wayland-client.h wayland-client-core.h
+		wayland-server.h wayland-server-core.h wayland-util.h
+		wayland-version.h ;
+	headers = $(headers:G=renga-wayland-headers) ;
+	SEARCH on $(headers) = $(waylandSource) ;
+	AddFilesToPackage develop headers renga_wayland : $(headers)
+		<src!libs!wayland>wayland-client-protocol.h
+		<src!libs!wayland>wayland-server-protocol.h ;
+
+	local pkgconfigDir = [ FDirName $(HAIKU_TOP) src libs wayland pkgconfig ] ;
+	local pcFiles = wayland-client-renga.pc wayland-server-renga.pc ;
+	pcFiles = $(pcFiles:G=renga-wayland-pc) ;
+	SEARCH on $(pcFiles) = $(pkgconfigDir) ;
+	AddFilesToPackage develop lib pkgconfig : $(pcFiles) ;
+	local plainPcFiles = wayland-client.pc wayland-server.pc ;
+	plainPcFiles = $(plainPcFiles:G=renga-wayland-plain-pc) ;
+	SEARCH on $(plainPcFiles) = [ FDirName $(pkgconfigDir) plain ] ;
+	AddFilesToPackage data renga_wayland pkgconfig : $(plainPcFiles) ;
+
+	# the core protocol, for wayland-scanner
+	local xml = wayland.xml ;
+	xml = $(xml:G=renga-wayland-xml) ;
+	SEARCH on $(xml) = [ FDirName $(HAIKU_TOP) src libs wayland protocol ] ;
+	AddFilesToPackage data renga_wayland protocols : $(xml) ;
+
+	local license = COPYING ;
+	license = $(license:G=renga-wayland-license) ;
+	SEARCH on $(license) = [ FDirName $(HAIKU_TOP) src libs wayland ] ;
+	AddFilesToPackage data licenses renga_wayland : $(license) ;
+
+	BuildHaikuPackage $(renga_waylandPackage) : renga_wayland ;
+}

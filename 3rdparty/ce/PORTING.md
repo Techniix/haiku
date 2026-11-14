@@ -68,6 +68,7 @@ updates this file in the same commit.
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 | Gamepads as Linux evdev devices (`/dev/input/event*`, FF rumble), virtual devices (`/dev/input/uinput`), raw HID for game controllers (`/dev/hidraw*`) | `<linux/input.h>`, `<linux/uinput.h>`, `<linux/hidraw.h>` (gnu) | (nothing extra) | Missing (BJoystick only, 360 pads read-only) | Available (not yet tried with real pads) |
 | `BGamepad`: standard layout, SDL mapping database, rumble, player number, battery, hot-plug | `<Gamepad.h>` | libdevice | Missing | Available |
+| Socket libwayland for ports (package `renga_wayland`: `libwayland-client-renga`, `libwayland-server-renga`, headers, `.pc` files) | `<wayland-client.h>` in `develop/headers/renga_wayland` | `pkg-config wayland-client-renga` | Missing | Available (x86_64) |
 | A Wayland compositor with a socket (`$XDG_RUNTIME_DIR/wayland-0`, `XDG_RUNTIME_DIR=/tmp/xdg-runtime`): xdg-shell, wl_shm (memfd), subsurfaces, viewporter, xdg-activation, text-input-v3, server-side decorations (KDE protocol), seat, one wl_output, clipboard both ways with the system clipboard | (Wayland protocol over the socket) | a socket-transport libwayland-client (Linux programs: their own) | HaikuPorts' in-process server only (no socket) | Available (x86_64; switch in Screen preferences, on by default) |
 
 All descriptors below are real file descriptors: they work with `select()`,
@@ -1526,8 +1527,32 @@ and native programs linked against a socket-transport libwayland-client.
   client as a new selection offer.
 - Native ports: HaikuPorts' `wayland` package is X547's in-process build;
   ports linked against it keep working as before and do not use this
-  compositor. Renga's socket build of libwayland is not packaged for ports
-  yet (planned with the development files).
+  compositor.
+- **Package `renga_wayland`** (since the 2026-11-14 batch, in every x86_64
+  image): Renga's socket-transport libwayland for ports.
+  - Libraries: `lib/libwayland-client-renga.so.0` and
+    `lib/libwayland-server-renga.so.0` (version 1.21.90, X547's fork built
+    with the socket transport). Their own names, so the package installs
+    next to HaikuPorts' `wayland`; a process must load one or the other,
+    never both (the symbols are the same).
+  - Headers: `develop/headers/renga_wayland/` (`wayland-client.h`,
+    `wayland-client-core.h`, `wayland-client-protocol.h`, the server
+    counterparts, `wayland-util.h`, `wayland-version.h`). Compile with
+    `-DWL_RENGA_SOCKETS` (the `.pc` files add it): it selects the socket
+    declarations in `wayland-server-core.h`.
+  - pkg-config: `wayland-client-renga` and `wayland-server-renga`; and,
+    under the usual names `wayland-client` / `wayland-server`, in
+    `/boot/system/data/renga_wayland/pkgconfig`: put that directory first
+    in `PKG_CONFIG_PATH` to build a port that asks for `wayland-client`
+    against Renga's library without other changes.
+  - Protocol code: generate it with any `wayland-scanner` (HaikuPorts'
+    `wayland_scanner`, or a port's own); generated code does not depend on
+    the transport. The core protocol XML is in
+    `/boot/system/data/renga_wayland/protocols/wayland.xml`.
+    `wayland-protocols` XML files are not in the package.
+  - Not included: `libwayland-cursor`, `libwayland-egl` (GPU stage).
+  - `devel:libwayland_client_renga`, `devel:libwayland_server_renga` and
+    `lib:` provides, for recipes.
 - The switch: Screen preferences, "Show Wayland programs" (or `Screen
   --wayland on|off`); setting `~/config/settings/Renga/wayland`.
 - Not yet: drag and drop, `wp_fractional_scale_v1`, `zwp_idle_inhibit_v1`,

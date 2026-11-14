@@ -35,6 +35,12 @@ if $(HAIKU_BUILD_TYPE) = bootstrap {
 		;
 }
 
+# Renga: the socket libwayland for ports, with its development files
+if $(HAIKU_BUILD_TYPE) != bootstrap && $(HAIKU_PACKAGING_ARCHS[1]) = x86_64 {
+	AddPackageFilesToHaikuImage system packages : renga_wayland.hpkg
+		: nameFromMetaInfo ;
+}
+
 if $(HAIKU_BUILD_TYPE) = test {
 	AddPackageFilesToHaikuImage system packages : haiku_unittests.hpkg ;
 }

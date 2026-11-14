@@ -1,0 +1,36 @@
+name			renga_wayland
+version			%HAIKU_VERSION%
+architecture	%HAIKU_PACKAGING_ARCH%
+summary			"Renga's Wayland libraries with the socket transport"
+
+description		"libwayland-client and libwayland-server as Renga builds them for its
+Wayland compositor: libwayland's own Unix socket transport, so that programs
+talk to the compositor's socket (XDG_RUNTIME_DIR/wayland-0). Includes the headers
+and pkg-config files for building ports against them. The libraries have
+their own names (libwayland-client-renga, libwayland-server-renga) and can
+be installed next to HaikuPorts' wayland package, whose libraries use an
+in-process transport; a program uses one or the other."
+
+packager		"The Haiku build system"
+vendor			"%HAIKU_DISTRO_VENDOR%"
+
+copyrights {
+	"2008-2012 Kristian Hoegsberg"
+	"2010-2012 Intel Corporation"
+	"2011 Benjamin Franzke"
+	"2012 Collabora, Ltd."
+	"2021-2026 X547"
+}
+licenses		"MIT"
+
+provides {
+	renga_wayland = %HAIKU_VERSION%
+	lib:libwayland_client_renga = 0
+	lib:libwayland_server_renga = 0
+	devel:libwayland_client_renga = 0
+	devel:libwayland_server_renga = 0
+}
+
+requires {
+	haiku >= %HAIKU_VERSION%
+}

@@ -12,6 +12,11 @@ local packages = [ FFilterByBuildFeatures
 	]
 	;
 
+# Renga: the socket libwayland for ports (x86_64; see the file)
+if $(HAIKU_BUILD_TYPE) != bootstrap {
+	packages += RengaWayland ;
+}
+
 if $(HAIKU_BUILD_TYPE) = bootstrap {
 	packages += HaikuBootstrap ;
 } else {

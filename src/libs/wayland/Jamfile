@@ -25,7 +25,9 @@ SubDirSysHdrs [ FDirName $(SUBDIR) src ] ;
 SubDirCcFlags -DWL_RENGA_SOCKETS -DWL_RENGA_NO_FFI
 	-Wno-sign-compare -Wno-missing-field-initializers ;
 
-WaylandProtocolFile wayland-protocol.c : wayland.xml : private-code ;
+# public-code, as upstream libwayland builds it: the shared libraries export
+# the core interfaces (wl_seat_interface, ...) that other protocols refer to.
+WaylandProtocolFile wayland-protocol.c : wayland.xml : public-code ;
 local headers =
 	[ WaylandProtocolFile wayland-server-protocol.h : wayland.xml
 		: server-header ]
@@ -59,4 +61,28 @@ StaticLibrary libwayland_client_renga.a :
 	wayland-os.c
 	wayland-util.c
 	wayland-protocol.c
+;
+
+# The same libraries as shared objects, for ports (package renga_wayland,
+# build/jam/packages/RengaWayland). Their names differ from HaikuPorts'
+# libwayland-client.so.0 / libwayland-server.so.0 (in-process transport),
+# so that both can be installed; a process must use one or the other,
+# never both. The .pc files in pkgconfig/ describe them twice: as
+# wayland-client-renga / wayland-server-renga, and under the usual names
+# (wayland-client, wayland-server) in a separate directory a port selects
+# with PKG_CONFIG_PATH.
+SharedLibrary libwayland-client-renga.so :
+	$(clientSources)
+	connection.c
+	wayland-os.c
+	wayland-util.c
+	wayland-protocol.c
+	: libgnu.so network
+	: 0
+;
+SharedLibrary libwayland-server-renga.so :
+	$(serverSources)
+	wayland-protocol.c
+	: libgnu.so network
+	: 0
 ;

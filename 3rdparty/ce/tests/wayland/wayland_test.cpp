@@ -56,6 +56,7 @@
 #include <Entry.h>
 #include <Roster.h>
 #include <Screen.h>
+#include <image.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -800,6 +801,70 @@ switch_test(const std::string& socketPath)
 // #pragma mark -
 
 
+/*!	The package renga_wayland (ports build against it): this test links its
+	shared client library, and the development files are installed.
+*/
+static void
+package_test()
+{
+	bool linked = false;
+	char linkedPath[B_PATH_NAME_LENGTH] = "-";
+	image_info info;
+	int32 cookie = 0;
+	while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
+		if (strstr(info.name, "libwayland-client-renga.so") != NULL) {
+			linked = strncmp(info.name, "/boot/system/lib/", 17) == 0;
+			strlcpy(linkedPath, info.name, sizeof(linkedPath));
+		}
+	}
+	report("package_library", linked, "loaded %s", linkedPath);
+
+	const char* files[] = {
+		"/boot/system/lib/libwayland-server-renga.so.0",
+		"/boot/system/develop/lib/libwayland-client-renga.so",
+		"/boot/system/develop/lib/libwayland-server-renga.so",
+		"/boot/system/develop/headers/renga_wayland/wayland-client.h",
+		"/boot/system/develop/headers/renga_wayland/wayland-client-protocol.h",
+		"/boot/system/develop/headers/renga_wayland/wayland-server.h",
+		"/boot/system/develop/headers/renga_wayland/wayland-server-protocol.h",
+		"/boot/system/develop/headers/renga_wayland/wayland-util.h",
+		"/boot/system/develop/headers/renga_wayland/wayland-version.h",
+		"/boot/system/develop/lib/pkgconfig/wayland-client-renga.pc",
+		"/boot/system/develop/lib/pkgconfig/wayland-server-renga.pc",
+		"/boot/system/data/renga_wayland/pkgconfig/wayland-client.pc",
+		"/boot/system/data/renga_wayland/pkgconfig/wayland-server.pc",
+		"/boot/system/data/renga_wayland/protocols/wayland.xml",
+		NULL
+	};
+	std::string missing;
+	int present = 0;
+	for (int i = 0; files[i] != NULL; i++) {
+		struct stat st;
+		if (stat(files[i], &st) == 0 && S_ISREG(st.st_mode))
+			present++;
+		else
+			missing += std::string(files[i]) + " ";
+	}
+	report("package_files", missing.empty(), "%d present%s%s", present,
+		missing.empty() ? "" : "; missing: ", missing.c_str());
+
+	// The .pc file under the usual name points at Renga's library.
+	FILE* file = fopen("/boot/system/data/renga_wayland/pkgconfig/"
+		"wayland-client.pc", "r");
+	bool pcOK = false;
+	char line[256];
+	while (file != NULL && fgets(line, sizeof(line), file) != NULL) {
+		if (strncmp(line, "Libs:", 5) == 0
+			&& strstr(line, "-lwayland-client-renga") != NULL)
+			pcOK = true;
+	}
+	if (file != NULL)
+		fclose(file);
+	report("package_pkgconfig", pcOK, "wayland-client.pc Libs: "
+		"-lwayland-client-renga %s", pcOK ? "found" : "missing");
+}
+
+
 int
 main()
 {
@@ -808,6 +873,8 @@ main()
 
 	// BScreen and the clipboard need a BApplication.
 	BApplication application("application/x-vnd.Renga-WaylandTest");
+
+	package_test();
 
 	if (getenv("XDG_RUNTIME_DIR") == NULL)
 		setenv("XDG_RUNTIME_DIR", kRuntimeDir, 1);
