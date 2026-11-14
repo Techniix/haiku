@@ -255,6 +255,13 @@ ScreenSaverFilter::CheckTime()
 	BAutolock _(this);
 
 	bigtime_t now = system_time();
+	// Renga: a program keeps the screen saver from starting while a port
+	// with this name exists (the Wayland compositor's idle-inhibit, video
+	// players); ports go away with their team. ScreenSaver preferences can
+	// turn it off ("Programs may keep the screensaver from starting").
+	if (fSettings.AllowInhibit()
+		&& find_port("renga:screen saver inhibit") >= 0)
+		fLastEventTime = now;
 	if (now >= fLastEventTime + fBlankTime)
 		_Invoke();
 

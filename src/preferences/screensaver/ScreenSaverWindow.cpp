@@ -73,6 +73,7 @@ const int32 kMsgPasswordSliderChanged = 'PWch';
 const int32 kMsgPasswordSliderUpdate = 'PWup';
 const int32 kMsgChangePassword = 'PWBT';
 const int32 kMsgEnableScreenSaverBox = 'ESCH';
+const int32 kMsgAllowInhibitCheckBox = 'AICB';
 
 const int32 kMsgTurnOffCheckBox = 'TUOF';
 const int32 kMsgTurnOffSliderChanged = 'TUch';
@@ -139,6 +140,7 @@ private:
 			BTextView*			fFadeNowText;
 
 			BCheckBox*			fPasswordCheckBox;
+			BCheckBox*			fAllowInhibitCheckBox;
 			TimeSlider*			fPasswordSlider;
 			BButton*			fPasswordButton;
 
@@ -332,6 +334,11 @@ FadeView::FadeView(const char* name, ScreenSaverSettings& settings)
 	fPasswordSlider = new TimeSlider("PasswordSlider",
 		kMsgPasswordSliderChanged, kMsgPasswordSliderUpdate);
 
+	// Renga: programs that ask (video playback, Wayland's idle-inhibit)
+	fAllowInhibitCheckBox = new BCheckBox("AllowInhibitCheckBox",
+		B_TRANSLATE("Programs may keep the screensaver from starting"),
+		new BMessage(kMsgAllowInhibitCheckBox));
+
 	fPasswordButton = new BButton("PasswordButton",
 		B_TRANSLATE("Password" B_UTF8_ELLIPSIS),
 		new BMessage(kMsgChangePassword));
@@ -377,6 +384,7 @@ FadeView::FadeView(const char* name, ScreenSaverSettings& settings)
 			.Add(fPasswordSlider, 1, 2)
 			.End()
 		.AddGroup(B_HORIZONTAL)
+			.Add(fAllowInhibitCheckBox)
 			.AddGlue()
 			.Add(fPasswordButton)
 			.End()
@@ -416,6 +424,7 @@ FadeView::AttachedToWindow()
 	fFadeNever->SetTarget(this);
 	fPasswordCheckBox->SetTarget(this);
 	fPasswordSlider->SetTarget(this);
+	fAllowInhibitCheckBox->SetTarget(this);
 
 	fEnableCheckBox->SetValue(
 		fSettings.TimeFlags() & ENABLE_SAVER ? B_CONTROL_ON : B_CONTROL_OFF);
@@ -425,6 +434,7 @@ FadeView::AttachedToWindow()
 	fFadeNever->SetCorner(fSettings.NeverBlankCorner());
 	fPasswordCheckBox->SetValue(fSettings.LockEnable());
 	fPasswordSlider->SetTime(fSettings.PasswordTime());
+	fAllowInhibitCheckBox->SetValue(fSettings.AllowInhibit());
 
 	_UpdateColors();
 	UpdateTurnOffScreen();
@@ -472,6 +482,7 @@ FadeView::MessageReceived(BMessage *message)
 		case kMsgPasswordSliderChanged:
 		case kMsgPasswordCheckBox:
 		case kMsgEnableScreenSaverBox:
+		case kMsgAllowInhibitCheckBox:
 		case kMsgFadeCornerChanged:
 		case kMsgNeverFadeCornerChanged:
 			UpdateStatus();
@@ -527,6 +538,7 @@ FadeView::UpdateStatus()
 	fTurnOffSlider->SetEnabled(enabled && fTurnOffCheckBox->Value());
 	fPasswordSlider->SetEnabled(enabled && fPasswordCheckBox->Value());
 	fPasswordButton->SetEnabled(enabled && fPasswordCheckBox->Value());
+	fAllowInhibitCheckBox->SetEnabled(enabled);
 
 	Window()->EnableUpdates();
 
@@ -543,6 +555,7 @@ FadeView::UpdateStatus()
 	fSettings.SetNeverBlankCorner(fFadeNever->Corner());
 	fSettings.SetLockEnable(fPasswordCheckBox->Value());
 	fSettings.SetPasswordTime(fPasswordSlider->Time());
+	fSettings.SetAllowInhibit(fAllowInhibitCheckBox->Value());
 
 	// TODO - Tell the password window to update its stuff
 }

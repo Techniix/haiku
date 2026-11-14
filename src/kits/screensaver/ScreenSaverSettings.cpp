@@ -78,6 +78,9 @@ ScreenSaverSettings::Load()
 	bool lockEnabled;
 	if (fSettings.FindBool("lockenable", &lockEnabled) == B_OK)
 		fLockEnabled = lockEnabled;
+	bool allowInhibit;
+	if (fSettings.FindBool("renga:allowinhibit", &allowInhibit) == B_OK)
+		fAllowInhibit = allowInhibit;
 	if (fSettings.FindInt32("lockdelay", &value) == B_OK)
 		fPasswordTime = value * 1000000LL;
 	const char* string;
@@ -132,6 +135,7 @@ ScreenSaverSettings::Defaults()
 	fNeverBlankCorner = NO_CORNER;
 
 	fLockEnabled = false;
+	fAllowInhibit = true;
 	// This time is NOT referenced to when the screen saver starts, but to when
 	// idle time starts, like fBlankTime. By default it is the same as
 	// fBlankTime.
@@ -169,6 +173,8 @@ ScreenSaverSettings::Message()
 		fSettings.AddInt32("cornernever", fNeverBlankCorner);
 	if (fSettings.ReplaceBool("lockenable", fLockEnabled) != B_OK)
 		fSettings.AddBool("lockenable", fLockEnabled);
+	if (fSettings.ReplaceBool("renga:allowinhibit", fAllowInhibit) != B_OK)
+		fSettings.AddBool("renga:allowinhibit", fAllowInhibit);
 	if (fSettings.ReplaceInt32("lockdelay", fPasswordTime / 1000000LL) != B_OK)
 		fSettings.AddInt32("lockdelay", fPasswordTime / 1000000LL);
 	if (fSettings.ReplaceString("lockmethod", fLockMethod) != B_OK)

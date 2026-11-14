@@ -53,6 +53,9 @@ public:
 			screen_corner	BlankCorner() const { return fBlankCorner; }
 			screen_corner	NeverBlankCorner() const { return fNeverBlankCorner; }
 			bool			LockEnable() const { return fLockEnabled; }
+			bool			AllowInhibit() const { return fAllowInhibit; }
+								// Renga: programs may keep the screen saver
+								// from starting (video playback)
 			bigtime_t		PasswordTime() const { return fPasswordTime; }
 			const char*		Password() { return fPassword.String(); }
 			const char*		LockMethod() { return fLockMethod.String(); }
@@ -80,6 +83,8 @@ public:
 								{ fNeverBlankCorner = in; }
 			void			SetLockEnable(bool enable)
 								{ fLockEnabled = enable; }
+			void			SetAllowInhibit(bool allow)
+								{ fAllowInhibit = allow; }
 			void			SetPasswordTime(bigtime_t time)
 								{ fPasswordTime = time; }
 			void			SetPassword(const char* password)
@@ -112,6 +117,7 @@ private:
 			screen_corner	fBlankCorner;
 			screen_corner	fNeverBlankCorner;
 			bool			fLockEnabled;
+			bool			fAllowInhibit;
 			bigtime_t		fPasswordTime;
 			BString			fPassword;
 			BString			fModuleName;
