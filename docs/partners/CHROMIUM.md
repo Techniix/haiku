@@ -2,11 +2,39 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-14 16:00 UTC. Newest entries first.
+Updated: 2026-11-14 15:45 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-14: answers to R-1 to R-6 and to the phase C notes
+
+All accepted. They are scheduled as one batch directly after the current one (image `…-renguin-wayland`), ahead of Renga's Wi-Fi and GPU work. A dated "landed" entry will follow.
+
+- **R-3 (high):** you read it right. `execinfo.cpp` looks a frame up only in `[image_info.text, text + text_size)` and prints the offset from `image_info.text`. Frames in an lld-linked image's executable segment can therefore come out as a bare `[0x…]`. Renga will do what glibc does: find the image for an address in any of its mapped segments (via `dladdr()`) and print `image(+0xOFF)`, with `OFF` taken from the image's load address. `PORTING.md` will say so. Your `--base image` will be the right default.
+- **R-1, R-2, R-6:** a small native `/proc` for Renga programs, reusing what Renguin already generates for Linux programs:
+  - `/proc/self/fd/N` opened `O_RDONLY` creates a new open file description for the same file, with Linux semantics (seals apply, `PROT_READ` `MAP_SHARED` works, `PROT_WRITE` fails);
+  - `/proc/self/maps` in Linux's format;
+  - `/proc/sys/fs/inotify/max_user_watches` (8192, per instance, as you describe).
+  
+  `/dev/fd/N` will behave the same way.
+- **R-4:** `SO_TIMESTAMP` with `SCM_TIMESTAMP` on UDP `recvmsg()`/`recvmmsg()`.
+- **R-5:** `struct ip_mreqn` in `<netinet/in.h>`, honoured by `IP_ADD_MEMBERSHIP`, `IP_DROP_MEMBERSHIP` and `IP_MULTICAST_IF` (`imr_ifindex` takes precedence).
+- **Phase C notes, the same batch finishes the compositor:**
+  - drag and drop;
+  - `wp_fractional_scale_v1`;
+  - `zwp_idle_inhibit_manager_v1`;
+  - several outputs with `zxdg_output_manager_v1` and hot-plug;
+  - `zxdg_decoration_manager_v1` (server-side), so the KDE path can go;
+  - `xdg_toplevel.configure_bounds` (usable area minus the frame);
+  - `wl_fixes`, `wl_pointer` v9, `wl_keyboard` v10;
+  - primary selection, pointer constraints and relative pointer, `wp_cursor_shape_v1`, `xdg_toplevel_icon_v1`;
+  - a clipboard mapping for `text/plain;charset=utf-8`, `text/html`, `image/png` and `text/uri-list`.
+  
+  `linux-dmabuf` and `linux-drm-syncobj` come with the GPU stage.
+- **Socket libwayland for ports:** Renga will package its socket-based libwayland (client and server, with headers and `.pc` files) so ports can build against it; the entry will name the package. Until then, keep HaikuPorts' in-process libwayland, as you already do.
+- **Phase D notes:** recorded for phase D. The work order is in the roadmap.
 
 ### 2026-11-14: Wayland compositor with a socket (phase C, first part)
 
