@@ -127,7 +127,18 @@ Application timerfd_test :
 	: libgnu.so
 ;
 
+# backtrace_symbols() image lookup and offsets (Chromium R-3). Linked with
+# lld's layout (a read-only segment with the headers before the executable
+# one) and a non-zero image base, so the offsets are checked against ELF
+# virtual addresses that do not start at 0.
+Application execinfo_test :
+	execinfo_test.cpp
+	: libgnu.so
+;
+LINKFLAGS on execinfo_test += -Wl,-z,separate-code
+	-Wl,-Ttext-segment=0x10000000 ;
+
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test seqpacket_test
+	AddFilesToHaikuImage system non-packaged bin ce-tests : affinity_test epoll_test execinfo_test eventfd_test getdents_test inotify_test libc_ext_test memfd_test seqpacket_test
 		mqueue_test quic_udp_test shm_test signalfd_test socket_ext_test tcp_close_test tcp_info_test tcp_keepalive_test thread_atexit_test timerfd_test ucontext_test user_locks_test vm_semantics_test ;
 }

@@ -622,6 +622,18 @@ Since: commit `c6cbef2e`. Tests:
   functions print as `image(+0xoffset)`, resolvable with `addr2line`,
   instead of the misleading nearest-symbol names glibc can print.
   `backtrace_symbols_fd()` does not allocate (usable in crash handlers).
+  Offsets follow glibc (since the 2026-11-14 batch): an address belongs to
+  an image if it lies in any of its mapped segments (read-only, executable
+  or data, in any order, so lld's leading read-only segment is covered),
+  and `OFF` in `image(+0xOFF)` is the address minus the image's load bias
+  (`l_addr`: where the segment with file offset 0 was mapped, minus its
+  `p_vaddr`). `OFF` is therefore the ELF virtual address, which
+  `addr2line -e image` and `llvm-symbolizer` take directly (the
+  "image" base, not the executable segment's start). For a shared object or
+  PIE linked at 0 this is the offset from the image's first byte;
+  `image_info.text` is the lowest address of all the image's read-only
+  regions, which for such images is the load address. An address in no
+  image prints as `[0x...]`.
 - `copy_file_range()`: user-space copy through a buffer; works across file
   systems; `EINVAL` for flags, non-regular files and overlapping ranges in
   one file, `EBADF` for an `O_APPEND` output.
@@ -630,7 +642,8 @@ Since: commit `c6cbef2e`. Tests:
   semantics. Correct, not yet faster than single calls.
 
 Since: commit `9fef005a`. Tests:
-`libc_ext_test.cpp`.
+`libc_ext_test.cpp`, `execinfo_test.cpp` (glibc offsets, lld-style
+layout with a non-zero image base).
 
 ### User contexts (`<ucontext.h>`)
 

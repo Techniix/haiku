@@ -1036,6 +1036,13 @@ of a 1 GiB guest was, so the bounce path went untested.
   waits, get the lock within 3 s of its release, and the lock must be free
   afterwards. A second writer or a reader must wait for an `RWLockManager`
   write lock.
+- **execinfo** (every image, `execinfo_test`; Chromium R-3):
+  `backtrace_symbols()` on a program linked with lld's layout (a read-only
+  segment before the executable one) at a non-zero image base: a static
+  function's frame and an address in the data segment are attributed to
+  the program with `+0xOFF` equal to the ELF virtual address (glibc's
+  offset from the load bias), an exported function is named, an address in
+  no image prints as `[0x...]`.
 - **seqpacket** (every image, `seqpacket_test`; roadmap F-58, OBS
   Studio's O-13): `SOCK_SEQPACKET` UNIX sockets: message boundaries
   (10/3000/1 bytes), a message of 0 bytes, `MSG_TRUNC` (the rest of the

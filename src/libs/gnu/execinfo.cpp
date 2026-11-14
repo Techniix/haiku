@@ -15,6 +15,14 @@
  * can resolve. The output format is glibc's:
  *     /path/to/image(symbol+0x1f) [0x7f...]
  *     /path/to/image(+0x1234) [0x7f...]
+ * As with glibc, an address belongs to an image if it lies in any of the
+ * image's mapped segments (text or data, whatever order the linker put
+ * them in; lld puts a read-only segment before the executable one), and
+ * the "+0x" offset of a frame without a symbol is taken from the image's
+ * load bias (glibc's l_addr): the address the segment with p_vaddr 0 was
+ * mapped at, so OFF is the ELF virtual address that addr2line and
+ * llvm-symbolizer expect. For a non-PIE executable the bias is 0 and OFF
+ * is the address itself, as with glibc.
  * backtrace_symbols_fd() does not allocate, so it can be used from a
  * crash handler, like glibc's.
  */
@@ -116,32 +124,55 @@ gnu_hash_symbol_count(const uint32* table)
 }
 
 
+/*!	Locates the image's ELF header and computes its load bias ("delta",
+	glibc's l_addr): the difference between where the image was mapped and
+	the virtual addresses in its program headers. The header is at the
+	start of the segment with file offset 0, which is the image's lowest
+	read-only segment (image_info.text is the lowest address of all its
+	read-only regions), or, with an unusual layout, the start of its data.
+*/
+static const ElfHeader*
+image_header(const image_info& info, uintptr_t& _delta)
+{
+	const void* candidates[2] = { info.text, info.data };
+	for (int c = 0; c < 2; c++) {
+		const ElfHeader* header = (const ElfHeader*)candidates[c];
+		if (header == NULL
+			|| memcmp(header->e_ident, ELFMAG, SELFMAG) != 0)
+			continue;
+		const ProgramHeader* programHeaders = (const ProgramHeader*)
+			((const char*)header + header->e_phoff);
+		for (int i = 0; i < header->e_phnum; i++) {
+			if (programHeaders[i].p_type == PT_LOAD
+				&& programHeaders[i].p_offset == 0) {
+				_delta = (uintptr_t)header
+					- (programHeaders[i].p_vaddr & ~(uintptr_t)(B_PAGE_SIZE - 1));
+				return header;
+			}
+		}
+	}
+	return NULL;
+}
+
+
 /*!	Finds the function containing "target" in the image's dynamic symbol
 	table. Returns false if none does (static function, stripped image).
 */
 static bool
-find_function(const image_info& info, uintptr_t target, const char*& _name,
-	uintptr_t& _start)
+find_function(const ElfHeader* header, uintptr_t delta, uintptr_t target,
+	const char*& _name, uintptr_t& _start)
 {
-	const ElfHeader* header = (const ElfHeader*)info.text;
-	if (memcmp(header->e_ident, ELFMAG, SELFMAG) != 0)
-		return false;
 	const ProgramHeader* programHeaders = (const ProgramHeader*)
 		((const char*)header + header->e_phoff);
 
 	// The dynamic section's addresses are unrelocated: add the load delta,
-	// as the runtime loader does (region 0 is the first PT_LOAD).
-	uintptr_t delta = 0;
-	bool haveDelta = false;
+	// as the runtime loader does.
 	const DynamicEntry* dynamic = NULL;
 	for (int i = 0; i < header->e_phnum; i++) {
-		if (programHeaders[i].p_type == PT_LOAD && !haveDelta) {
-			delta = (uintptr_t)info.text - programHeaders[i].p_vaddr;
-			haveDelta = true;
-		} else if (programHeaders[i].p_type == PT_DYNAMIC)
+		if (programHeaders[i].p_type == PT_DYNAMIC)
 			dynamic = (const DynamicEntry*)programHeaders[i].p_vaddr;
 	}
-	if (dynamic == NULL || !haveDelta)
+	if (dynamic == NULL)
 		return false;
 	dynamic = (const DynamicEntry*)((uintptr_t)dynamic + delta);
 
@@ -184,6 +215,14 @@ find_function(const image_info& info, uintptr_t target, const char*& _name,
 }
 
 
+static bool
+in_range(uintptr_t address, const void* base, size_t size)
+{
+	return base != NULL && address >= (uintptr_t)base
+		&& address < (uintptr_t)base + size;
+}
+
+
 /*!	Formats one frame into "line" (no allocation). Return addresses point
 	after the call instruction, so the lookup uses address - 1.
 */
@@ -192,12 +231,16 @@ format_frame(void* address, char* line, size_t size)
 {
 	uintptr_t target = (uintptr_t)address - 1;
 
+	// An address belongs to an image if it is in any of its segments:
+	// image_info.text spans all read-only regions (lld's leading read-only
+	// segment as well as the executable one), image_info.data all writable
+	// ones (RELRO and data).
 	image_info info;
 	int32 cookie = 0;
 	bool found = false;
 	while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
-		if (target >= (uintptr_t)info.text
-			&& target < (uintptr_t)info.text + info.text_size) {
+		if (in_range(target, info.text, info.text_size)
+			|| in_range(target, info.data, info.data_size)) {
 			found = true;
 			break;
 		}
@@ -207,15 +250,22 @@ format_frame(void* address, char* line, size_t size)
 		return;
 	}
 
+	uintptr_t delta;
+	const ElfHeader* header = image_header(info, delta);
+	if (header == NULL) {
+		// No readable ELF header (should not happen): fall back to the
+		// start of the image's lowest read-only region.
+		delta = (uintptr_t)info.text;
+	}
+
 	const char* name;
 	uintptr_t start;
-	if (find_function(info, target, name, start)) {
+	if (header != NULL && find_function(header, delta, target, name, start)) {
 		snprintf(line, size, "%s(%s+0x%lx) [%p]", info.name, name,
 			(unsigned long)((uintptr_t)address - start), address);
 	} else {
 		snprintf(line, size, "%s(+0x%lx) [%p]", info.name,
-			(unsigned long)((uintptr_t)address - (uintptr_t)info.text),
-			address);
+			(unsigned long)((uintptr_t)address - delta), address);
 	}
 }
 
