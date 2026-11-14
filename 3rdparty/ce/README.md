@@ -931,11 +931,12 @@ of a 1 GiB guest was, so the bounce path went untested.
   rumble reaching the device, a hot-plugged 8BitDo Ultimate 2C added and
   removed, and HIDAPI enumerating hidraw without errors; in child
   processes, SDL_Init(VIDEO|GAMEPAD) with SDL_CreateWindow() from a second
-  thread, 100 rounds (10 processes, 10 starts each) of
-  SDL_Init(VIDEO|AUDIO|GAMEPAD) while a second thread calls
-  SDL_CreateWindow() (OpenCE's crash with libsdl3 3.4.16-100 and -101;
-  run it with --smp 4 or more), and an idle frame loop with a pad open
-  under 5 % of one CPU; minimum images
+  thread, a B_QUIT_REQUESTED sent to SDL's BApplication from outside
+  (SDL_EVENT_QUIT, the application stays, a window opens: OpenCE's crash
+  with libsdl3 3.4.16-100 to -102), 200 starts in OpenCE's order (one
+  thread with its own stack, OpenGL window, frames; run it with --smp 8 and
+  --smp 2), and an idle frame loop with a pad open under 5 % of one CPU;
+  minimum images
   only report that SDL3 is not installed. With HaikuPorts' libsdl3 it
   lists no gamepad (the bug found with OpenCE).
 - **gamepad_protocol** (`gamepad_protocol_test`): the xinput driver's

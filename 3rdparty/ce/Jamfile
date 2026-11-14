@@ -186,11 +186,10 @@ if $(HAIKU_RENGA_IMAGE) {
 
 	# (Revision 100: Renga builds of HaikuPorts packages use revisions from
 	# 100 up, so pkgman replaces an installed HaikuPorts build.)
-	# 101: SDL's BApplication start and stop locked (OpenCE crashed with 100);
-	# 102: windows wait for the video init and the BApplication (101 still
-	# raced on a 12-thread CPU).
-	RengaPortsPackage libsdl3 : libsdl3-3.4.16-102-x86_64.hpkg
-		: 237eec0477d3bed7188dfef2bf723e67fc88be52e222788a00612d445b9a4268 ;
+	# 103: SDL's BApplication only quits when SDL says so (OpenCE crashed
+	# in BWindow with 100 to 102).
+	RengaPortsPackage libsdl3 : libsdl3-3.4.16-103-x86_64.hpkg
+		: 72719d8f8eedc4125fbf9c15a78fd63f11def860ff47dee9a4477a3b72d621ef ;
 
 	# Development files, active (maintainer, 2026-11-13: early users are
 	# porters): haiku_devel built from this tree, with every Renga header

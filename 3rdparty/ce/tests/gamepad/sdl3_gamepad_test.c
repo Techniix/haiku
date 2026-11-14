@@ -25,10 +25,11 @@
 	 - video (in a child process): SDL_Init(SDL_INIT_VIDEO |
 	   SDL_INIT_GAMEPAD), then SDL_CreateWindow() from a second pthread, as
 	   OpenCE does; Renga's first build crashed there;
-	 - threads: 100 rounds (10 processes, 10 starts each) of
-	   SDL_Init(VIDEO|AUDIO|GAMEPAD) while a second thread calls
-	   SDL_CreateWindow() (SDL's BApplication start raced: 3.4.16-101
-	   locked it, 3.4.16-102 makes window creation wait for it);
+	 - foreign quit request: B_QUIT_REQUESTED sent to SDL's BApplication
+	   from outside gives SDL_EVENT_QUIT and leaves the application running
+	   (before, it ended and windows crashed: OpenCE on hardware);
+	 - OpenCE's start-up order, 200 starts (10 processes of 20), all SDL
+	   calls on one thread with its own stack, OpenGL window, frames;
 	 - idle: with a pad open, an idle frame loop uses under 5 % of a CPU.
 
 	SDL is loaded with dlopen() so the program runs on images without it
@@ -63,9 +64,15 @@
 
 #define SUITE "sdl3_gamepad"
 
+// sdl3_quit_helper.cpp
+int sdl3_test_post_quit_to_be_app(void);
+int sdl3_test_be_app_exists(void);
+
 /* The parts of SDL3's ABI used here (SDL 3.x, stable). */
 #define SDL_INIT_VIDEO					0x00000020u
 #define SDL_INIT_GAMEPAD				0x00002000u
+#define SDL_EVENT_QUIT					0x100
+#define SDL_WINDOW_OPENGL				0x0000000000000002ull
 #define SDL_EVENT_GAMEPAD_BUTTON_DOWN	0x651
 #define SDL_EVENT_GAMEPAD_ADDED			0x653
 #define SDL_EVENT_GAMEPAD_REMOVED		0x654
@@ -118,6 +125,11 @@ static struct {
 	void*			(*CreateWindow)(const char*, int, int, uint64_t);
 	void			(*DestroyWindow)(void*);
 	void			(*PumpEvents)(void);
+	bool			(*SetHint)(const char*, const char*);
+	void*			(*GL_CreateContext)(void*);
+	bool			(*GL_MakeCurrent)(void*, void*);
+	bool			(*GL_SwapWindow)(void*);
+	bool			(*GL_DestroyContext)(void*);
 	const char*		(*GetCurrentVideoDriver)(void);
 } sdl;
 
@@ -172,6 +184,11 @@ load_sdl(const char* library)
 	SYM(hid_free_enumeration, "SDL_hid_free_enumeration")
 	SYM(CreateWindow, "SDL_CreateWindow")
 	SYM(PumpEvents, "SDL_PumpEvents")
+	SYM(SetHint, "SDL_SetHint")
+	SYM(GL_CreateContext, "SDL_GL_CreateContext")
+	SYM(GL_MakeCurrent, "SDL_GL_MakeCurrent")
+	SYM(GL_SwapWindow, "SDL_GL_SwapWindow")
+	SYM(GL_DestroyContext, "SDL_GL_DestroyContext")
 	SYM(DestroyWindow, "SDL_DestroyWindow")
 	SYM(GetCurrentVideoDriver, "SDL_GetCurrentVideoDriver")
 #undef SYM
@@ -312,46 +329,123 @@ create_window_thread(void* data)
 }
 
 
+/*	OpenCE's start-up (child "opence"), as its Haiku host and the game do
+	it (Techniix/OpenCE_HaikuOS, port/haiku/host/host_main.c and
+	port/linux/src/sdl_platform.c): the main thread only waits; one thread,
+	with a stack of its own (the game's), calls everything: SDL_SetHint(
+	SDL_HINT_APP_NAME, "Halo"), SDL_Init(VIDEO | AUDIO | GAMEPAD | EVENTS),
+	SDL_Init(VIDEO) again (its game-data offer does), SDL_CreateWindow() with
+	SDL_WINDOW_OPENGL, an OpenGL context, then frames: events pumped and
+	polled, the gamepads listed, buffers swapped. Twenty starts and quits
+	per process. */
+static int sOpenCEResult = 0;
+
 static void*
-race_video_thread(void* data)
+opence_thread(void* data)
 {
-	// SDL_CreateWindow() over and over while the main thread is in
-	// SDL_Init(): it can see the video device before the driver has started
-	// the BApplication.
-	void** window = (void**)data;
-	bigtime_t end = system_time() + 5000000;
-	while (*window == NULL && system_time() < end)
-		*window = sdl.CreateWindow("sdl3_gamepad_test", 320, 240, 0);
+	(void)data;
+
+	for (int round = 0; round < 20; round++) {
+		sdl.SetHint("SDL_APP_NAME", "Halo");
+		if (!sdl.Init(SDL_INIT_VIDEO | 0x00000010u | SDL_INIT_GAMEPAD
+				| 0x00004000u) || !sdl.Init(SDL_INIT_VIDEO)) {
+			printf("CE-INFO sdl3_gamepad: opence round %d: SDL_Init: %s\n",
+				round, sdl.GetError());
+			sOpenCEResult = 1;
+			return NULL;
+		}
+		void* window = sdl.CreateWindow("Halo", 640, 480, SDL_WINDOW_OPENGL);
+		if (window == NULL) {
+			printf("CE-INFO sdl3_gamepad: opence round %d: SDL_CreateWindow: "
+				"%s\n", round, sdl.GetError());
+			sOpenCEResult = 1;
+			return NULL;
+		}
+		void* context = sdl.GL_CreateContext(window);
+		if (context != NULL)
+			sdl.GL_MakeCurrent(window, context);
+		for (int frame = 0; frame < 10; frame++) {
+			SDL_Event event;
+			sdl.PumpEvents();
+			while (sdl.PollEvent(&event))
+				;
+			int count = 0;
+			SDL_JoystickID* ids = sdl.GetGamepads(&count);
+			sdl.free(ids);
+			if (context != NULL)
+				sdl.GL_SwapWindow(window);
+			snooze(5000);
+		}
+		if (context != NULL)
+			sdl.GL_DestroyContext(context);
+		sdl.DestroyWindow(window);
+		sdl.Quit();
+	}
 	return NULL;
 }
 
 
-/*	The threads race (child "threads"): SDL_Init(SDL_INIT_AUDIO |
-	SDL_INIT_GAMEPAD) on the main thread while a second thread does
-	SDL_Init(SDL_INIT_VIDEO) and SDL_CreateWindow(), both at once. SDL's
-	BApplication start was not locked: both threads could start one ("2
-	BApplication objects were created", 4 of 10 runs in QEMU with
-	3.4.16-100), or the window came after the application had gone (the
-	crash OpenCE hit on hardware). */
 static int
-threads_child(const char* library)
+opence_child(const char* library)
 {
 	if (!load_sdl(library))
 		return 2;
-	// ten rounds in one process (start and quit), ten processes: 100
-	for (int round = 0; round < 10; round++) {
-		void* window = NULL;
-		pthread_t thread;
-		pthread_create(&thread, NULL, race_video_thread, &window);
-		bool init = sdl.Init(SDL_INIT_VIDEO | 0x00000010u | SDL_INIT_GAMEPAD);
-		pthread_join(thread, NULL);
-		if (window != NULL)
-			sdl.DestroyWindow(window);
-		sdl.Quit();
-		if (!init || window == NULL)
-			return 1;
+	pthread_attr_t attributes;
+	pthread_attr_init(&attributes);
+	size_t stackSize = 8 * 1024 * 1024;
+	// (64 KiB to spare after the stack: with a stack of the program's own,
+	// the kernel writes just past its end when such a thread ends, about
+	// 0x3e00 bytes above it; a separate Renga issue, recorded in the roadmap.
+	// It is not SDL's and showed as "Bad address" faults in the kernel log.)
+	void* stack = malloc(stackSize + 65536);
+	pthread_attr_setstack(&attributes, stack, stackSize);
+	pthread_t thread;
+	if (pthread_create(&thread, &attributes, opence_thread, NULL) != 0)
+		return 3;
+	pthread_join(thread, NULL);
+	return sOpenCEResult;
+}
+
+
+/*	A quit request from outside (child "quitrequest"): after SDL_Init(VIDEO)
+	someone sends SDL's BApplication B_QUIT_REQUESTED (Deskbar's "Quit", or
+	any program). The program must get SDL_EVENT_QUIT, the application must
+	stay, and a window must still open. Before, the application ended
+	under SDL: be_app NULL, BWindow's "You need a valid BApplication object"
+	debugger call, the crash OpenCE showed on hardware (SDLLooper alive, SDL's
+	application thread gone). */
+static int
+quitrequest_child(const char* library)
+{
+	if (!load_sdl(library))
+		return 2;
+	if (!sdl.Init(SDL_INIT_VIDEO))
+		return 3;
+	if (sdl3_test_post_quit_to_be_app() != 0)
+		return 4;
+	bool quitEvent = false;
+	bigtime_t end = system_time() + 2000000;
+	while (!quitEvent && system_time() < end) {
+		SDL_Event event;
+		sdl.PumpEvents();
+		while (sdl.PollEvent(&event)) {
+			if (event.type == SDL_EVENT_QUIT)
+				quitEvent = true;
+		}
+		snooze(10000);
 	}
-	return 0;
+	snooze(200000);
+	bool appStays = sdl3_test_be_app_exists();
+	void* window = appStays ? sdl.CreateWindow("after quit request", 320, 240,
+		0) : NULL;
+	printf("CE-INFO sdl3_gamepad: quit request: SDL_EVENT_QUIT %s, "
+		"BApplication %s, window %s\n", quitEvent ? "seen" : "missing",
+		appStays ? "still there" : "gone", window != NULL ? "made" : "not made");
+	fflush(stdout);
+	if (window != NULL)
+		sdl.DestroyWindow(window);
+	sdl.Quit();
+	return quitEvent && appStays && window != NULL ? 0 : 1;
 }
 
 
@@ -482,12 +576,12 @@ test_idle(const char* self, const char* library)
 
 
 static void
-test_threads(const char* self, const char* library)
+test_opence(const char* self, const char* library)
 {
 	int runs = 10;
 	int failed = 0, hung = 0, crashed = 0;
 	for (int i = 0; i < runs; i++) {
-		int status = run_child(self, "threads", 60000000);
+		int status = run_child(self, "opence", 120000000);
 		if (status == -1)
 			hung++;
 		else if (status == -3)
@@ -495,11 +589,21 @@ test_threads(const char* self, const char* library)
 		else if (status != 0)
 			failed++;
 	}
-	report("video_threads", failed + hung + crashed == 0,
-		"%d processes of 10 rounds each (start and quit): "
-		"SDL_Init(VIDEO|AUDIO|GAMEPAD) while a second thread calls "
-		"SDL_CreateWindow(): %d failed, %d hung, %d crashed (%s)", runs,
-		failed, hung, crashed, library);
+	report("opence_sequence", failed + hung + crashed == 0,
+		"%d processes of 20 starts each (200) in OpenCE's order, everything "
+		"on one thread with its own stack: SDL_Init(VIDEO|AUDIO|GAMEPAD|"
+		"EVENTS), an OpenGL window, frames: %d failed, %d hung, %d crashed "
+		"(%s)", runs, failed, hung, crashed, library);
+}
+
+
+static void
+test_quit_request(const char* self, const char* library)
+{
+	int status = run_child(self, "quitrequest", 30000000);
+	report("foreign_quit_request", status == 0, "B_QUIT_REQUESTED to SDL's "
+		"BApplication from outside: SDL_EVENT_QUIT, the application stays, "
+		"a window opens (exit %d; see the INFO line)", status);
 }
 
 
@@ -544,8 +648,10 @@ main(int argc, char** argv)
 		library = "libSDL3.so.0";
 	if (argc > 1 && strcmp(argv[1], "video") == 0)
 		return video_child(library);
-	if (argc > 1 && strcmp(argv[1], "threads") == 0)
-		return threads_child(library);
+	if (argc > 1 && strcmp(argv[1], "opence") == 0)
+		return opence_child(library);
+	if (argc > 1 && strcmp(argv[1], "quitrequest") == 0)
+		return quitrequest_child(library);
 	if (argc > 1 && strcmp(argv[1], "idle") == 0)
 		return idle_child(library);
 
@@ -711,7 +817,8 @@ main(int argc, char** argv)
 	close(xbox.fd);
 
 	test_video(argv[0], library);
-	test_threads(argv[0], library);
+	test_quit_request(argv[0], library);
+	test_opence(argv[0], library);
 	test_idle(argv[0], library);
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);

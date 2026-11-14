@@ -52,7 +52,8 @@ Application gamepad_ui_test :
 # build and runs on images without SDL3 (then it only says so).
 Application sdl3_gamepad_test :
 	sdl3_gamepad_test.c
-	: libgnu.so
+	sdl3_quit_helper.cpp
+	: libgnu.so be [ TargetLibstdc++ ]
 ;
 
 if $(CE_HARNESS) {
