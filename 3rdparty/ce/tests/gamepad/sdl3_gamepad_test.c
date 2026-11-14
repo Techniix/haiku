@@ -25,9 +25,11 @@
 	 - video (in a child process): SDL_Init(SDL_INIT_VIDEO |
 	   SDL_INIT_GAMEPAD), then SDL_CreateWindow() from a second pthread, as
 	   OpenCE does; Renga's first build crashed there;
-	 - threads: ten runs of SDL_Init(AUDIO|GAMEPAD) on one thread while
-	   another does SDL_Init(VIDEO) and SDL_CreateWindow() (SDL's
-	   BApplication start raced; fixed in 3.4.16-101).
+	 - threads: 100 rounds (10 processes, 10 starts each) of
+	   SDL_Init(VIDEO|AUDIO|GAMEPAD) while a second thread calls
+	   SDL_CreateWindow() (SDL's BApplication start raced: 3.4.16-101
+	   locked it, 3.4.16-102 makes window creation wait for it);
+	 - idle: with a pad open, an idle frame loop uses under 5 % of a CPU.
 
 	SDL is loaded with dlopen() so the program runs on images without it
 	(minimum images): then it reports that SDL3 is not installed.
@@ -42,6 +44,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/inotify.h>
 #include <sys/wait.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -114,6 +117,7 @@ static struct {
 	void			(*hid_free_enumeration)(struct hid_device_info*);
 	void*			(*CreateWindow)(const char*, int, int, uint64_t);
 	void			(*DestroyWindow)(void*);
+	void			(*PumpEvents)(void);
 	const char*		(*GetCurrentVideoDriver)(void);
 } sdl;
 
@@ -167,6 +171,7 @@ load_sdl(const char* library)
 	SYM(hid_enumerate, "SDL_hid_enumerate")
 	SYM(hid_free_enumeration, "SDL_hid_free_enumeration")
 	SYM(CreateWindow, "SDL_CreateWindow")
+	SYM(PumpEvents, "SDL_PumpEvents")
 	SYM(DestroyWindow, "SDL_DestroyWindow")
 	SYM(GetCurrentVideoDriver, "SDL_GetCurrentVideoDriver")
 #undef SYM
@@ -310,8 +315,12 @@ create_window_thread(void* data)
 static void*
 race_video_thread(void* data)
 {
+	// SDL_CreateWindow() over and over while the main thread is in
+	// SDL_Init(): it can see the video device before the driver has started
+	// the BApplication.
 	void** window = (void**)data;
-	if (sdl.Init(SDL_INIT_VIDEO))
+	bigtime_t end = system_time() + 5000000;
+	while (*window == NULL && system_time() < end)
 		*window = sdl.CreateWindow("sdl3_gamepad_test", 320, 240, 0);
 	return NULL;
 }
@@ -329,15 +338,85 @@ threads_child(const char* library)
 {
 	if (!load_sdl(library))
 		return 2;
-	void* window = NULL;
-	pthread_t thread;
-	pthread_create(&thread, NULL, race_video_thread, &window);
-	bool init = sdl.Init(0x00000010u | SDL_INIT_GAMEPAD);
-	pthread_join(thread, NULL);
-	if (window != NULL)
-		sdl.DestroyWindow(window);
+	// ten rounds in one process (start and quit), ten processes: 100
+	for (int round = 0; round < 10; round++) {
+		void* window = NULL;
+		pthread_t thread;
+		pthread_create(&thread, NULL, race_video_thread, &window);
+		bool init = sdl.Init(SDL_INIT_VIDEO | 0x00000010u | SDL_INIT_GAMEPAD);
+		pthread_join(thread, NULL);
+		if (window != NULL)
+			sdl.DestroyWindow(window);
+		sdl.Quit();
+		if (!init || window == NULL)
+			return 1;
+	}
+	return 0;
+}
+
+
+/*	Idle CPU use (child "idle"): with a pad plugged in, SDL_Init(GAMEPAD)
+	and 4 s of SDL_PumpEvents() every 16 ms, as a game's idle frame loop.
+	Renga's back ends must not poll or spin (evdev with inotify, HIDAPI
+	with inotify on /dev): less than 5 % of one CPU for the team. Busy
+	threads are listed. */
+static int
+idle_child(const char* library)
+{
+	if (!load_sdl(library))
+		return 2;
+	struct VirtualPad pad;
+	create_pad(&pad, 0x045e, 0x028e, 0x0114, "Microsoft X-Box 360 pad");
+	snooze(200000);
+	if (!sdl.Init(SDL_INIT_GAMEPAD))
+		return 3;
+	int count = 0;
+	SDL_JoystickID* ids = sdl.GetGamepads(&count);
+	void* gamepad = count > 0 ? sdl.OpenGamepad(ids[0]) : NULL;
+	sdl.free(ids);
+	SDL_Event event;
+	while (sdl.PollEvent(&event))
+		;
+
+	team_usage_info before, after;
+	get_team_usage_info(B_CURRENT_TEAM, B_TEAM_USAGE_SELF, &before);
+	bigtime_t start = system_time();
+	while (system_time() - start < 4000000) {
+		sdl.PumpEvents();
+		while (sdl.PollEvent(&event))
+			;
+		snooze(16000);
+	}
+	get_team_usage_info(B_CURRENT_TEAM, B_TEAM_USAGE_SELF, &after);
+	bigtime_t wall = system_time() - start;
+	bigtime_t used = after.user_time + after.kernel_time - before.user_time
+		- before.kernel_time;
+	double percent = 100.0 * used / wall;
+	printf("CE-INFO sdl3_gamepad: idle: %.1f %% of one CPU over %.1f s "
+		"(%s, %d gamepad(s) open)\n", percent, wall / 1000000.0, library,
+		gamepad != NULL ? 1 : 0);
+	thread_info thread;
+	int32 cookie = 0;
+	while (get_next_thread_info(B_CURRENT_TEAM, &cookie, &thread) == B_OK) {
+		if (thread.user_time + thread.kernel_time > 100000) {
+			printf("CE-INFO sdl3_gamepad: idle: thread \"%s\" %.0f ms in "
+				"total\n", thread.name,
+				(thread.user_time + thread.kernel_time) / 1000.0);
+		}
+	}
+	int watch = inotify_init1(IN_NONBLOCK);
+	int added = watch >= 0 ? inotify_add_watch(watch, "/dev",
+		IN_CREATE | IN_DELETE) : -1;
+	printf("CE-INFO sdl3_gamepad: inotify on /dev (HIDAPI hot-plug): %s\n",
+		added >= 0 ? "watched" : strerror(errno));
+	if (watch >= 0)
+		close(watch);
+	fflush(stdout);
+	if (gamepad != NULL)
+		sdl.CloseGamepad(gamepad);
 	sdl.Quit();
-	return init && window != NULL ? 0 : 1;
+	close(pad.fd);
+	return percent < 5.0 ? 0 : 1;
 }
 
 
@@ -393,11 +472,22 @@ run_child(const char* self, const char* mode, bigtime_t timeout)
 
 
 static void
+test_idle(const char* self, const char* library)
+{
+	int status = run_child(self, "idle", 30000000);
+	report("idle_cpu", status == 0, "an idle SDL3 program with a pad open "
+		"uses under 5 %% of one CPU (exit %d; the numbers are in the INFO "
+		"lines above)", status);
+}
+
+
+static void
 test_threads(const char* self, const char* library)
 {
+	int runs = 10;
 	int failed = 0, hung = 0, crashed = 0;
-	for (int i = 0; i < 10; i++) {
-		int status = run_child(self, "threads", 15000000);
+	for (int i = 0; i < runs; i++) {
+		int status = run_child(self, "threads", 60000000);
 		if (status == -1)
 			hung++;
 		else if (status == -3)
@@ -406,9 +496,10 @@ test_threads(const char* self, const char* library)
 			failed++;
 	}
 	report("video_threads", failed + hung + crashed == 0,
-		"10 runs of SDL_Init(AUDIO|GAMEPAD) and SDL_Init(VIDEO) + "
-		"SDL_CreateWindow() on two threads at once: %d failed, %d hung, "
-		"%d crashed (%s)", failed, hung, crashed, library);
+		"%d processes of 10 rounds each (start and quit): "
+		"SDL_Init(VIDEO|AUDIO|GAMEPAD) while a second thread calls "
+		"SDL_CreateWindow(): %d failed, %d hung, %d crashed (%s)", runs,
+		failed, hung, crashed, library);
 }
 
 
@@ -455,6 +546,8 @@ main(int argc, char** argv)
 		return video_child(library);
 	if (argc > 1 && strcmp(argv[1], "threads") == 0)
 		return threads_child(library);
+	if (argc > 1 && strcmp(argv[1], "idle") == 0)
+		return idle_child(library);
 
 	printf("CE-SUITE " SUITE " START\n");
 	fflush(stdout);
@@ -619,6 +712,7 @@ main(int argc, char** argv)
 
 	test_video(argv[0], library);
 	test_threads(argv[0], library);
+	test_idle(argv[0], library);
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	return sFailures == 0 ? 0 : 1;
