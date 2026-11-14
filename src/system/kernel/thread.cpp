@@ -929,6 +929,15 @@ create_thread_user_stack(Team* team, Thread* thread, void* _stackBase,
 			return B_BAD_VALUE;
 
 		stackSize -= TLS_SIZE;
+
+		// Renga (2026-11-14): really ignore them. The guard size (16 KiB by
+		// default, from the pthread attributes) was still added to the base
+		// below, so the thread's stack and its TLS lay guardSize bytes above
+		// the memory it was given: pthread_attr_setstack() threads wrote up
+		// to 0x3e00 bytes past the end of their stack (OpenCE's game threads
+		// run on stacks it maps itself; thread_stack_test). Upstream Haiku
+		// has the same code (master, 2026-11-14).
+		guardSize = 0;
 	} else {
 		// No user-defined stack -- allocate one. For non-main threads the stack
 		// will be between USER_STACK_REGION and the main thread stack area. For
