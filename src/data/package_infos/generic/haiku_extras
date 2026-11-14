@@ -9,7 +9,7 @@ description 	"A delightfully hand-curated set of oddities and tidbits to enhance
 * 'acpi_call' is a debugging tool.
 * Partitioning systems for Sun, pre-GPT Apple, and Amiga RDB."
 packager		"The Haiku build system"
-vendor			"Haiku Project"
+vendor			"%HAIKU_DISTRO_VENDOR%"
 
 copyrights		"2007-2026 Haiku, Inc."
 licenses		MIT

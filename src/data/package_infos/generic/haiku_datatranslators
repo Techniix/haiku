@@ -5,7 +5,7 @@ summary			"Haiku data translators"
 description 	"Standard data translators and media format plugins"
 
 packager		"The Haiku build system"
-vendor			"Haiku Project"
+vendor			"%HAIKU_DISTRO_VENDOR%"
 
 copyrights		"2001-2026 Haiku, Inc."
 licenses		MIT

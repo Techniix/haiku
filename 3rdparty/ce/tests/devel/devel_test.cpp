@@ -6,7 +6,8 @@
 /*!	Renga's development files on Renga images (roadmap: Renga development
 	packaging; Quasar R-17): haiku_devel is installed and active and
 	provides renga_devel, the system package provides renga, both with the
-	system's version; Renga's own headers are installed (epoll, inotify,
+	system's version, and both have the vendor "Techniix" (the Renga
+	repository's); Renga's own headers are installed (epoll, inotify,
 	eventfd, the capture and virtual camera headers, GpuPresent.h,
 	HardwareCursor.h); and the compiler on the image builds and links
 	small programs: one with epoll (gnu headers, -lgnu), one with eventfd
@@ -140,6 +141,31 @@ main()
 			: devel.String(), develProvides ? "yes" : "no");
 	report("system_provides_renga", systemProvides, "%s",
 		systemProvides ? "yes" : "no");
+
+	// Renga's own system packages carry the Renga repository's vendor,
+	// "Techniix" (maintainer decision 2026-11-13), or package_repo refuses
+	// them for that repository
+	BString vendor;
+	int32 vendorAt = systemInfo.FindFirst("\tvendor: ");
+	if (vendorAt >= 0) {
+		systemInfo.CopyInto(vendor, vendorAt + 9,
+			systemInfo.Length() - vendorAt - 9);
+		int32 end = vendor.FindFirst('\n');
+		if (end >= 0)
+			vendor.Truncate(end);
+	}
+	BString develVendor;
+	vendorAt = develInfo.FindFirst("\tvendor: ");
+	if (vendorAt >= 0) {
+		develInfo.CopyInto(develVendor, vendorAt + 9,
+			develInfo.Length() - vendorAt - 9);
+		int32 end = develVendor.FindFirst('\n');
+		if (end >= 0)
+			develVendor.Truncate(end);
+	}
+	report("system_vendor", vendor == "Techniix" && develVendor == "Techniix",
+		"haiku: \"%s\", haiku_devel: \"%s\" (want \"Techniix\")",
+		vendor.String(), develVendor.String());
 
 	int status = 0;
 

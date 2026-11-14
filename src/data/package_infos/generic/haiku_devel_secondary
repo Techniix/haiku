@@ -8,7 +8,7 @@ needed for development for the secondary architecture %HAIKU_SECONDARY_PACKAGING
 like static libraries, glue code, library symlinks, header files, etc."
 
 packager		"The Haiku build system"
-vendor			"Haiku Project"
+vendor			"%HAIKU_DISTRO_VENDOR%"
 
 copyrights		"2001-2026 Haiku, Inc. et al"
 licenses		"MIT"

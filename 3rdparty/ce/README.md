@@ -910,7 +910,8 @@ of a 1 GiB guest was, so the bounce path went untested.
   and the choice of pin. QEMU emulates no HDMI codec: the verbs reaching a
   real codec need hardware.
 - **devel** (renga-* images, `devel_test`): `haiku_devel` active and
-  providing `renga_devel`, `haiku` providing `renga`, a package requiring
+  providing `renga_devel`, `haiku` providing `renga`, both with the vendor
+  "Techniix" of the Renga repository (`system_vendor`), a package requiring
   both activating through the package daemon (it waits for the image's
   first-boot processing, up to 3 minutes), Renga's headers installed,
   gcc building an epoll program and one with `<sys/eventfd.h>`,

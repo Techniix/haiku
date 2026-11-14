@@ -6,7 +6,7 @@ description 	"A set of tools to mount and use filesystems that run in
 userland. FUSE compatibiity is also provided."
 
 packager		"The Haiku build system"
-vendor			"Haiku Project"
+vendor			"%HAIKU_DISTRO_VENDOR%"
 
 copyrights		"2007-2026 Haiku, Inc."
 licenses		MIT

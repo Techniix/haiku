@@ -8,7 +8,7 @@ secondary architecture support includes all system libraries, add-ons, and
 other files required to run programs build for that architecture."
 
 packager		"The Haiku build system"
-vendor			"Haiku Project"
+vendor			"%HAIKU_DISTRO_VENDOR%"
 
 copyrights		"2001-2026 Haiku, Inc. et al"
 licenses {

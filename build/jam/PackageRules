@@ -102,6 +102,20 @@ rule PreprocessPackageOrRepositoryInfo target : source : architecture
 		HAIKU_PACKAGING_ARCH_$(architecture)
 		HAIKU_$(HAIKU_BUILD_TYPE:U)_BUILD ;
 	local sedReplacements = %HAIKU_PACKAGING_ARCH%,$(architecture) ;
+	# Renga: the vendor of the system packages and of the local Haiku
+	# repository built from them (src/data/package_infos,
+	# src/data/repository_infos/haiku). Official builds keep upstream's
+	# "Haiku Project"; Renga's builds (any other distro compatibility, the
+	# same rule as the system's name in headers/private/shared/
+	# distro_name.h) use the Renga repository's vendor, "Techniix"
+	# (maintainer decision, 2026-11-13), because package_repo accepts a
+	# package into a repository only if their vendors match. The space is
+	# escaped for the sed command line below.
+	if $(HAIKU_DISTRO_COMPATIBILITY) = official {
+		sedReplacements += "%HAIKU_DISTRO_VENDOR%,Haiku\\ Project" ;
+	} else {
+		sedReplacements += %HAIKU_DISTRO_VENDOR%,Techniix ;
+	}
 	if $(secondaryArchitecture) {
 		defines += HAIKU_SECONDARY_PACKAGING_ARCH=$(secondaryArchitecture) ;
 		defines += HAIKU_SECONDARY_PACKAGING_ARCH_$(secondaryArchitecture:U) ;

@@ -5,7 +5,7 @@ summary			"Haiku's source code"
 description		"This package contains the core source code of Haiku."
 
 packager		"The Haiku build system"
-vendor			"Haiku Project"
+vendor			"%HAIKU_DISTRO_VENDOR%"
 
 copyrights		"2001-2026 Haiku, Inc. et al"
 licenses {
