@@ -22,6 +22,13 @@
 	 - HIDAPI (SDL_hid_*) enumerates /dev/hidraw* without udev; QEMU has
 	   no raw game controller, so the list is empty, without an error.
 
+	 - video (in a child process): SDL_Init(SDL_INIT_VIDEO |
+	   SDL_INIT_GAMEPAD), then SDL_CreateWindow() from a second pthread, as
+	   OpenCE does; Renga's first build crashed there;
+	 - threads: ten runs of SDL_Init(AUDIO|GAMEPAD) on one thread while
+	   another does SDL_Init(VIDEO) and SDL_CreateWindow() (SDL's
+	   BApplication start raced; fixed in 3.4.16-101).
+
 	SDL is loaded with dlopen() so the program runs on images without it
 	(minimum images): then it reports that SDL3 is not installed.
 	CE_SDL3_LIBRARY names another library to load (for comparison runs
@@ -32,6 +39,10 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -50,6 +61,7 @@
 #define SUITE "sdl3_gamepad"
 
 /* The parts of SDL3's ABI used here (SDL 3.x, stable). */
+#define SDL_INIT_VIDEO					0x00000020u
 #define SDL_INIT_GAMEPAD				0x00002000u
 #define SDL_EVENT_GAMEPAD_BUTTON_DOWN	0x651
 #define SDL_EVENT_GAMEPAD_ADDED			0x653
@@ -100,6 +112,9 @@ static struct {
 	int				(*hid_init)(void);
 	struct hid_device_info* (*hid_enumerate)(unsigned short, unsigned short);
 	void			(*hid_free_enumeration)(struct hid_device_info*);
+	void*			(*CreateWindow)(const char*, int, int, uint64_t);
+	void			(*DestroyWindow)(void*);
+	const char*		(*GetCurrentVideoDriver)(void);
 } sdl;
 
 static int sFailures = 0;
@@ -151,6 +166,9 @@ load_sdl(const char* library)
 	SYM(hid_init, "SDL_hid_init")
 	SYM(hid_enumerate, "SDL_hid_enumerate")
 	SYM(hid_free_enumeration, "SDL_hid_free_enumeration")
+	SYM(CreateWindow, "SDL_CreateWindow")
+	SYM(DestroyWindow, "SDL_DestroyWindow")
+	SYM(GetCurrentVideoDriver, "SDL_GetCurrentVideoDriver")
 #undef SYM
 	return true;
 }
@@ -274,15 +292,172 @@ ends_with(const char* string, const char* suffix)
 }
 
 
-int
-main()
+/*	The video phase, in a child process (the program run again with
+	"video"): SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD) on the main thread,
+	then SDL_CreateWindow() from a second pthread, as OpenCE does. Renga's
+	first libsdl3 build (3.4.16-100) crashed there on hardware: BWindow's
+	"You need a valid BApplication object" debugger call. Exit status 0 when
+	the window was made. */
+static void*
+create_window_thread(void* data)
 {
-	printf("CE-SUITE " SUITE " START\n");
-	fflush(stdout);
+	void** window = (void**)data;
+	*window = sdl.CreateWindow("sdl3_gamepad_test", 320, 240, 0);
+	return NULL;
+}
 
+
+static void*
+race_video_thread(void* data)
+{
+	void** window = (void**)data;
+	if (sdl.Init(SDL_INIT_VIDEO))
+		*window = sdl.CreateWindow("sdl3_gamepad_test", 320, 240, 0);
+	return NULL;
+}
+
+
+/*	The threads race (child "threads"): SDL_Init(SDL_INIT_AUDIO |
+	SDL_INIT_GAMEPAD) on the main thread while a second thread does
+	SDL_Init(SDL_INIT_VIDEO) and SDL_CreateWindow(), both at once. SDL's
+	BApplication start was not locked: both threads could start one ("2
+	BApplication objects were created", 4 of 10 runs in QEMU with
+	3.4.16-100), or the window came after the application had gone (the
+	crash OpenCE hit on hardware). */
+static int
+threads_child(const char* library)
+{
+	if (!load_sdl(library))
+		return 2;
+	void* window = NULL;
+	pthread_t thread;
+	pthread_create(&thread, NULL, race_video_thread, &window);
+	bool init = sdl.Init(0x00000010u | SDL_INIT_GAMEPAD);
+	pthread_join(thread, NULL);
+	if (window != NULL)
+		sdl.DestroyWindow(window);
+	sdl.Quit();
+	return init && window != NULL ? 0 : 1;
+}
+
+
+static int
+video_child(const char* library)
+{
+	if (!load_sdl(library))
+		return 2;
+	if (!sdl.Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+		printf("CE-INFO sdl3_gamepad: video: SDL_Init: %s\n", sdl.GetError());
+		return 3;
+	}
+	const char* driver = sdl.GetCurrentVideoDriver();
+	void* window = NULL;
+	pthread_t thread;
+	pthread_create(&thread, NULL, create_window_thread, &window);
+	pthread_join(thread, NULL);
+	printf("CE-INFO sdl3_gamepad: video: driver %s, window %s%s\n",
+		driver != NULL ? driver : "(none)", window != NULL ? "made" : "failed: ",
+		window != NULL ? "" : sdl.GetError());
+	fflush(stdout);
+	if (window != NULL) {
+		snooze(300000);
+		sdl.DestroyWindow(window);
+	}
+	sdl.Quit();
+	return window != NULL ? 0 : 4;
+}
+
+
+//! Runs the program again with \a mode; the exit status, -1 when it hung.
+static int
+run_child(const char* self, const char* mode, bigtime_t timeout)
+{
+	char* argv[] = { (char*)self, (char*)mode, NULL };
+	extern char** environ;
+	pid_t child;
+	if (posix_spawn(&child, self, NULL, NULL, argv, environ) != 0)
+		return -2;
+	int status = 0;
+	bigtime_t end = system_time() + timeout;
+	pid_t done = 0;
+	while ((done = waitpid(child, &status, WNOHANG)) == 0
+		&& system_time() < end)
+		snooze(50000);
+	if (done == 0) {
+		kill(child, SIGKILL);
+		waitpid(child, &status, 0);
+		return -1;
+	}
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -3;
+}
+
+
+static void
+test_threads(const char* self, const char* library)
+{
+	int failed = 0, hung = 0, crashed = 0;
+	for (int i = 0; i < 10; i++) {
+		int status = run_child(self, "threads", 15000000);
+		if (status == -1)
+			hung++;
+		else if (status == -3)
+			crashed++;
+		else if (status != 0)
+			failed++;
+	}
+	report("video_threads", failed + hung + crashed == 0,
+		"10 runs of SDL_Init(AUDIO|GAMEPAD) and SDL_Init(VIDEO) + "
+		"SDL_CreateWindow() on two threads at once: %d failed, %d hung, "
+		"%d crashed (%s)", failed, hung, crashed, library);
+}
+
+
+static void
+test_video(const char* self, const char* library)
+{
+	char* argv[] = { (char*)self, (char*)"video", NULL };
+	extern char** environ;
+	pid_t child;
+	if (posix_spawn(&child, self, NULL, NULL, argv, environ) != 0) {
+		report("video_window", false, "could not start %s: %s", self,
+			strerror(errno));
+		return;
+	}
+	int status = 0;
+	bigtime_t end = system_time() + 30000000;
+	pid_t done = 0;
+	while ((done = waitpid(child, &status, WNOHANG)) == 0
+		&& system_time() < end)
+		snooze(100000);
+	if (done == 0) {
+		kill(child, SIGKILL);
+		waitpid(child, &status, 0);
+		report("video_window", false, "SDL_Init(VIDEO|GAMEPAD) and "
+			"SDL_CreateWindow() from a second thread did not finish in 30 s "
+			"(crashed into the debugger?)");
+		return;
+	}
+	bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	report("video_window", ok, "SDL_Init(VIDEO|GAMEPAD), SDL_CreateWindow() "
+		"from a second thread (as OpenCE does): %s (%s, status %d)",
+		ok ? "window made" : "failed", library,
+		WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+}
+
+
+int
+main(int argc, char** argv)
+{
 	const char* library = getenv("CE_SDL3_LIBRARY");
 	if (library == NULL)
 		library = "libSDL3.so.0";
+	if (argc > 1 && strcmp(argv[1], "video") == 0)
+		return video_child(library);
+	if (argc > 1 && strcmp(argv[1], "threads") == 0)
+		return threads_child(library);
+
+	printf("CE-SUITE " SUITE " START\n");
+	fflush(stdout);
 	if (!load_sdl(library)) {
 		if (access("/boot/system/lib/libSDL3.so.0", F_OK) != 0
 			&& getenv("CE_SDL3_LIBRARY") == NULL) {
@@ -441,6 +616,9 @@ main()
 
 	sdl.Quit();
 	close(xbox.fd);
+
+	test_video(argv[0], library);
+	test_threads(argv[0], library);
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	return sFailures == 0 ? 0 : 1;

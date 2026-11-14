@@ -929,7 +929,11 @@ of a 1 GiB guest was, so the bounce path went untested.
   libSDL3 (dlopen) with uinput pads: an Xbox 360 pad listed once by
   `SDL_GetGamepads()` with its name, type and evdev path, a button event,
   rumble reaching the device, a hot-plugged 8BitDo Ultimate 2C added and
-  removed, and HIDAPI enumerating hidraw without errors; minimum images
+  removed, and HIDAPI enumerating hidraw without errors; in child
+  processes, SDL_Init(VIDEO|GAMEPAD) with SDL_CreateWindow() from a second
+  thread, and ten runs of audio+gamepad and video+window started on two
+  threads at once (SDL's BApplication start raced: OpenCE's crash with
+  libsdl3 3.4.16-100); minimum images
   only report that SDL3 is not installed. With HaikuPorts' libsdl3 it
   lists no gamepad (the bug found with OpenCE).
 - **gamepad_protocol** (`gamepad_protocol_test`): the xinput driver's

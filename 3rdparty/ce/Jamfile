@@ -186,8 +186,9 @@ if $(HAIKU_RENGA_IMAGE) {
 
 	# (Revision 100: Renga builds of HaikuPorts packages use revisions from
 	# 100 up, so pkgman replaces an installed HaikuPorts build.)
-	RengaPortsPackage libsdl3 : libsdl3-3.4.16-100-x86_64.hpkg
-		: 1a082ab43f7b9fc23448e69837bfe273edda7126f0dd8dfd0121141ff35e2f81 ;
+	# 101: SDL's BApplication start and stop locked (OpenCE crashed with 100).
+	RengaPortsPackage libsdl3 : libsdl3-3.4.16-101-x86_64.hpkg
+		: 3d4da5637fd3e66cec39a7f69d7f93a1180dc68504b70e469ccfddfb1356c678 ;
 
 	# Development files, active (maintainer, 2026-11-13: early users are
 	# porters): haiku_devel built from this tree, with every Renga header
