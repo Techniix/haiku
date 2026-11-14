@@ -2086,6 +2086,7 @@ These have no full entries. All are **Not Started** in Renga unless noted. Diff 
 | Storage | AHCI NCQ | not rated | — | HW |
 | Storage | SMART (SAT pass-through, NVMe health) + UI | 6 | 3 | Both |
 | Storage | ext4/exFAT format via mkfs tools | 5 | 2 | QEMU |
+| Storage | DriveSetup "Write image" (upstream code; maintainer's stick differed from the ISO and panicked BFS, `dd` was exact, 2026-11-13): unmount the target first, check every write, sync, then read back and compare the checksum | 3 | 1 | Both |
 | Input | GPIO drivers + interrupt-driven i2c_hid | 6 | 3 | HW |
 | Input | Input-method modernisation | 6 | 3 | QEMU |
 | Input | Gamepad API with SDL mapping database | 5 | proposal | Both |
