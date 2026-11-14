@@ -184,8 +184,10 @@ if $(HAIKU_RENGA_IMAGE) {
 		cp "$(2)" "$(1)"
 	}
 
-	RengaPortsPackage libsdl3 : libsdl3-3.4.16-1-x86_64.hpkg
-		: 718d207e5413173fb8ba9368b88d9bd66e41d8a939d3b8540082ccc69c2dce10 ;
+	# (Revision 100: Renga builds of HaikuPorts packages use revisions from
+	# 100 up, so pkgman replaces an installed HaikuPorts build.)
+	RengaPortsPackage libsdl3 : libsdl3-3.4.16-100-x86_64.hpkg
+		: 1a082ab43f7b9fc23448e69837bfe273edda7126f0dd8dfd0121141ff35e2f81 ;
 
 	# Development files, active (maintainer, 2026-11-13: early users are
 	# porters): haiku_devel built from this tree, with every Renga header
