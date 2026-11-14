@@ -59,10 +59,12 @@ enum {
 	B_GPU_PRESENT_ASYNC_FLIP	= 0x02,	// flips without waiting for vblank
 	B_GPU_PRESENT_SCALING		= 0x04,	// planes scale source to destination
 		// (implies B_GPU_PRESENT_PLACEMENT)
-	B_GPU_PRESENT_PLACEMENT		= 0x08	// overlay planes can be positioned
+	B_GPU_PRESENT_PLACEMENT		= 0x08,	// overlay planes can be positioned
 		// anywhere on the head at their source size (gpu_flip_params::
 		// destination honoured, width and height equal to the source's);
 		// for hardware that can place an overlay but not scale it
+	B_GPU_PRESENT_SEMAPHORES	= 0x10	// flips wait on gpu_flip_params::
+		// acquire and write release in GPU memory (Quasar R-1 amendment)
 };
 
 // gpu_flip_params::flags
@@ -100,6 +102,19 @@ typedef struct {
 } gpu_buffer_desc;
 
 
+// A 32-bit value in GPU memory the display engine waits on or writes
+// (Quasar R-1 amendment, provisional like the rest of this header).
+typedef struct {
+	int32		buffer;				// an imported buffer id holding the
+									// semaphore, or -1 for none
+	uint32		offset;				// byte offset of the 32-bit value,
+									// 16-byte aligned
+	uint32		value;				// acquire: flip once the word equals it;
+									// release: written when this buffer is
+									// replaced on screen
+} gpu_semaphore;
+
+
 typedef struct {
 	uint32		planes_per_head;	// 1 = primary only
 	uint32		flags;				// B_GPU_PRESENT_*
@@ -114,6 +129,14 @@ typedef struct {
 	uint32		flags;				// B_GPU_FLIP_*
 	int			wait_fd;			// -1, or a descriptor that becomes
 									// readable when rendering is complete
+	gpu_semaphore acquire;			// with B_GPU_PRESENT_SEMAPHORES: flip
+									// once the GPU wrote the value;
+									// buffer -1 for none
+	gpu_semaphore release;			// written when the buffer leaves the
+									// screen; buffer -1 for none
+		// A flip gives wait_fd or acquire, not both: wait_fd for drivers
+		// whose display waits on fences, acquire for drivers that set
+		// B_GPU_PRESENT_SEMAPHORES.
 	uint64		user_data;			// returned in the completion event
 } gpu_flip_params;
 
