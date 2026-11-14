@@ -161,6 +161,8 @@ rule HaikuImageGetPrivateSystemLibs
 
 SYSTEM_SERVERS += [ FFilterByBuildFeatures
 	audio_device_agent
+	crash_report_notifier
+	gamepad_agent
 	mail_daemon
 	media_addon_server
 	media_server

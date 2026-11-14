@@ -31,7 +31,9 @@
 
 	  SystemLogs                        the window
 	  SystemLogs <crash report>         the window, showing that report
-	  SystemLogs --notify               at login (data/launch/
+	  SystemLogs --notify               starts crash_report_notifier, which
+	                                    the user's launch script runs at
+	                                    login (data/launch/
 	                                    user_crash_reports): a notification
 	                                    for each new kernel crash report
 	  SystemLogs --save-report [<path>] write the archive without a window
@@ -87,6 +89,7 @@
 
 #include <crash_report_format.h>
 
+#include "CrashReportCommon.h"
 #include "ReportArchive.h"
 
 
@@ -254,23 +257,6 @@ parse_lines(const std::string& text, std::vector<LogLine>& lines)
 		lines.push_back(line);
 		start = end + 1;
 	}
-}
-
-
-static bool
-read_file(const char* path, std::string& contents, off_t from = 0)
-{
-	FILE* file = fopen(path, "rb");
-	if (file == NULL)
-		return false;
-	if (from > 0)
-		fseeko(file, from, SEEK_SET);
-	char buffer[65536];
-	size_t bytesRead;
-	while ((bytesRead = fread(buffer, 1, sizeof(buffer), file)) > 0)
-		contents.append(buffer, bytesRead);
-	fclose(file);
-	return true;
 }
 
 
@@ -616,20 +602,6 @@ private:
 	BString	fPath;
 	time_t	fWhen;
 };
-
-
-static std::string
-report_field(const std::string& text, const char* name)
-{
-	std::string key = std::string("\n") + name + ": ";
-	size_t start = text.find(key);
-	if (start == std::string::npos)
-		return "";
-	start += key.size();
-	size_t end = text.find('\n', start);
-	return text.substr(start, end == std::string::npos ? std::string::npos
-		: end - start);
-}
 
 
 static BString
@@ -1092,84 +1064,6 @@ private:
 
 
 static int
-notify_new_crashes()
-{
-	BApplication app(kHelperSignature);
-
-	// notification_server is a system service; at login it may still be
-	// starting.
-	for (int32 i = 0; i < 60
-			&& !be_roster->IsRunning("application/x-vnd.Haiku-notification_server");
-			i++) {
-		snooze(500000);
-	}
-
-	int32 shown = 0;
-	BDirectory directory(CRASH_REPORT_DIRECTORY);
-	BEntry entry;
-	while (directory.GetNextEntry(&entry) == B_OK) {
-		BPath path;
-		if (entry.GetPath(&path) != B_OK
-			|| strncmp(path.Leaf(), "kernel-", 7) != 0) {
-			continue;
-		}
-		BNode node(&entry);
-		int32 isNew = 0;
-		if (node.ReadAttr(CRASH_REPORT_NEW_ATTRIBUTE, B_INT32_TYPE, 0, &isNew,
-				sizeof(isNew)) != sizeof(isNew) || isNew == 0) {
-			continue;
-		}
-
-		std::string text;
-		read_file(path.Path(), text);
-		text = "\n" + text;
-		std::string when = report_field(text, "crash time");
-		std::string message = report_field(text, "message");
-
-		BNotification notification(B_IMPORTANT_NOTIFICATION);
-		notification.SetGroup(B_TRANSLATE_SYSTEM_NAME("System logs"));
-		notification.SetTitle(B_TRANSLATE("The system crashed"));
-		BString content;
-		content.SetToFormat(B_TRANSLATE("The kernel stopped on %s: %s\n"
-			"Click to view the crash report."), when.c_str(),
-			message.c_str());
-		std::string driver = report_field(text, "driver");
-		if (!driver.empty()) {
-			BString line;
-			line.SetToFormat(B_TRANSLATE("\nIt happened in the driver %s."),
-				driver.c_str());
-			content << line;
-		}
-		notification.SetContent(content);
-		notification.SetMessageID(path.Path());
-		notification.SetOnClickApp(kSignature);
-		entry_ref ref;
-		if (entry.GetRef(&ref) == B_OK)
-			notification.SetOnClickFile(&ref);
-
-		status_t status = B_ERROR;
-		for (int32 attempt = 0; attempt < 20; attempt++) {
-			status = notification.Send(60 * 1000000LL);
-			if (status == B_OK)
-				break;
-			snooze(500000);
-		}
-		if (status != B_OK) {
-			syslog(LOG_ERR, "SystemLogs: could not show the notification for "
-				"%s: %s", path.Path(), strerror(status));
-			continue;
-		}
-		node.RemoveAttr(CRASH_REPORT_NEW_ATTRIBUTE);
-		syslog(LOG_NOTICE, "SystemLogs: crash report notification shown for "
-			"%s", path.Path());
-		printf("SystemLogs: notification shown for %s\n", path.Path());
-		shown++;
-	}
-	return 0;
-}
-
-
-static int
 save_report_command(const char* path)
 {
 	BApplication app(kHelperSignature);
@@ -1191,8 +1085,13 @@ main(int argc, char** argv)
 {
 	openlog("SystemLogs", 0, LOG_USER);
 
-	if (argc >= 2 && strcmp(argv[1], "--notify") == 0)
-		return notify_new_crashes();
+	if (argc >= 2 && strcmp(argv[1], "--notify") == 0) {
+		// Renga: the notifications come from a background server of their
+		// own now (CrashReportNotifier.cpp); this starts it, for old
+		// launch scripts
+		status_t status = be_roster->Launch(kNotifierSignature);
+		return status == B_OK || status == B_ALREADY_RUNNING ? 0 : 1;
+	}
 	if (argc >= 2 && strcmp(argv[1], "--save-report") == 0)
 		return save_report_command(argc >= 3 ? argv[2] : NULL);
 	if (argc >= 2 && (strcmp(argv[1], "--help") == 0

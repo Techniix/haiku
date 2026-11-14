@@ -17,6 +17,21 @@ Application SystemLogs :
 	: SystemLogs.rdef
 ;
 
+# The background server that shows a notification for each new kernel
+# crash report after login (data/launch/user_crash_reports); installed in
+# system/servers.
+Application crash_report_notifier :
+	CrashReportNotifier.cpp
+	: be localestub [ TargetLibstdc++ ]
+	: CrashReportNotifier.rdef
+;
+
+DoCatalogs crash_report_notifier :
+	x-vnd.Renga-CrashReportNotifier
+	:
+	CrashReportNotifier.cpp
+;
+
 DoCatalogs SystemLogs :
 	x-vnd.Renga-SystemLogs
 	:

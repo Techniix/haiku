@@ -1,10 +1,11 @@
 # Renga (roadmap F-42): the gamepad agent behind the Gamepads preferences'
-# guide-button overlay and low-battery notifications. Idle while no pad
-# reports anything; it stops watching when both features are off.
+# guide-button overlay and low-battery notifications, a background server
+# (not in Deskbar). Idle while no pad reports anything; it stops watching
+# when both features are off.
 target desktop {
 	job x-vnd.Renga-GamepadAgent {
-		launch /system/preferences/Gamepads --agent
-		if file_exists /system/preferences/Gamepads
+		launch /system/servers/gamepad_agent
+		if file_exists /system/servers/gamepad_agent
 		on initial_volumes_mounted
 		no_safemode
 	}

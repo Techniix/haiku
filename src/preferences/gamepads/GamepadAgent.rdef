@@ -1,0 +1,23 @@
+/*
+ * Copyright 2026, Renga contributors.
+ * Distributed under the terms of the MIT License.
+ */
+
+resource app_signature "application/x-vnd.Renga-GamepadAgent";
+
+// a background server: never in Deskbar, one per session
+resource app_flags B_BACKGROUND_APP | B_EXCLUSIVE_LAUNCH;
+
+resource app_version {
+	major  = 1,
+	middle = 0,
+	minor  = 0,
+	variety = B_APPV_FINAL,
+	internal = 0,
+	short_info = "Gamepad agent",
+	long_info = "Guide-button overlay and low-battery notifications for Renga"
+};
+
+resource file_types message {
+	"types" = "application/x-vnd.Be-elfexecutable"
+};

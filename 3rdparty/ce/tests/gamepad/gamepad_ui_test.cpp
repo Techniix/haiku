@@ -222,6 +222,10 @@ guide(int fd, bigtime_t hold)
 
 
 // 1 shown, 0 hidden, -1 no answer
+static const char* kAgentSignature = "application/x-vnd.Renga-GamepadAgent";
+static const char* kAgentPath = "/boot/system/servers/gamepad_agent";
+
+
 static int
 overlay_shown(BMessenger& agent)
 {
@@ -240,23 +244,31 @@ overlay_shown(BMessenger& agent)
 static void
 test_overlay()
 {
-	// an agent of our own, started directly (no roster round trip), with
-	// the pad already there
+	// the gamepad agent (gamepad_agent, a background server the user's
+	// launch script starts, once per session). Harness boots have no user
+	// session, so it is started here directly (load_image, no roster
+	// round trip, which blocked this test) unless it already runs; it
+	// notices the new pad through hot-plug.
 	int pad = create_pad();
-	const char* arguments[] = { kApp, "--agent", NULL };
-	thread_id thread = load_image(2, arguments, (const char**)environ);
-	status_t status = thread >= 0 ? resume_thread(thread) : thread;
-	thread_info info;
-	team_id team = thread >= 0 && get_thread_info(thread, &info) == B_OK
-		? info.team : -1;
+	status_t status = B_OK;
+	team_id team = -1;
+	if (!be_roster->IsRunning(kAgentSignature)) {
+		const char* arguments[] = { kAgentPath, NULL };
+		thread_id thread = load_image(1, arguments, (const char**)environ);
+		status = thread >= 0 ? resume_thread(thread) : thread;
+		thread_info info;
+		if (thread >= 0 && get_thread_info(thread, &info) == B_OK)
+			team = info.team;
+	}
 	BMessenger agent;
 	for (int i = 0; i < 40; i++) {
 		snooze(250000);
-		agent = BMessenger(NULL, team);
+		agent = team >= 0 ? BMessenger(NULL, team)
+			: BMessenger(kAgentSignature);
 		if (agent.IsValid() && overlay_shown(agent) >= 0)
 			break;
 	}
-	snooze(500000);
+	snooze(1500000);
 
 	guide(pad, 100000);
 	snooze(700000);

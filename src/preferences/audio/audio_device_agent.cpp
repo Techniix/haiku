@@ -31,6 +31,16 @@ public:
 
 	virtual void MessageReceived(BMessage* message)
 	{
+		if (message->what == B_SILENT_RELAUNCH) {
+			// media_server started the agent again while it was running
+			// (the devices changed once more). It had no resources before,
+			// and a second instance started; now it is a background app
+			// with B_EXCLUSIVE_LAUNCH (AudioDeviceAgent.rdef), and the
+			// running one looks again
+			if (handle_audio_devices_changed() == 0 && CountWindows() == 0)
+				PostMessage(B_QUIT_REQUESTED);
+			return;
+		}
 		if (message->what == kMsgAgentPromptClosed) {
 			// the closing prompt is still counted
 			if (CountWindows() <= 1)

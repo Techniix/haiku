@@ -1,0 +1,13 @@
+SubDir HAIKU_TOP 3rdparty ce tests agents ;
+
+# Renga's agents are background applications and never show in Deskbar
+# (gamepad_agent, crash_report_notifier, audio_device_agent).
+Application background_agents_test :
+	background_agents_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: background_agents_test ;
+}

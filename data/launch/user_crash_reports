@@ -1,10 +1,11 @@
 # Renga (roadmap F-51): after login, a notification for each kernel crash
 # report crash_collector saved and nobody has seen yet; clicking it opens
-# the report in System logs. Only on images that have the application.
+# the report in System logs. A background server (not in Deskbar) that
+# quits when it is done. Only on images that have it.
 target desktop {
-	job x-vnd.Renga-SystemLogs-notify {
-		launch /system/apps/SystemLogs --notify
-		if file_exists /system/apps/SystemLogs
+	job x-vnd.Renga-CrashReportNotifier {
+		launch /system/servers/crash_report_notifier
+		if file_exists /system/servers/crash_report_notifier
 		on initial_volumes_mounted
 		no_safemode
 	}

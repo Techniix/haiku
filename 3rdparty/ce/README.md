@@ -955,6 +955,12 @@ of a 1 GiB guest was, so the bounce path went untested.
   1 and 2, the preferred one with the older version. `pkgman install -R`,
   answered "no", has to plan the package from the repository with priority
   1. Nothing is installed; the test removes what it made.
+- **background_agents** (`background_agents_test`, renga-* images):
+  `gamepad_agent`, `crash_report_notifier` and `audio_device_agent` have
+  `B_BACKGROUND_APP` in their app flags; after boot no Renga server or
+  agent runs as a foreground application (it would show in Deskbar), the
+  gamepad agent runs as a background app, and neither Gamepads nor System
+  logs was started for agent work.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **pointer_logic** (`pointer_logic_test`, no desktop needed): Adaptive
   pointer acceleration gives the same distance at 125, 500, 1000 and

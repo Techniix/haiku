@@ -31,6 +31,7 @@ Application audio_device_agent :
 	AudioDevicePolicy.cpp
 	AudioDevices.cpp
 	: be media localestub [ TargetLibsupc++ ]
+	: AudioDeviceAgent.rdef
 ;
 
 DoCatalogs audio_device_agent :

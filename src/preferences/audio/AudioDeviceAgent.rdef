@@ -1,0 +1,24 @@
+/*
+ * Copyright 2026, Renga contributors.
+ * Distributed under the terms of the MIT License.
+ */
+
+resource app_signature "application/x-vnd.Renga-AudioDeviceAgent";
+
+// a background server: never in Deskbar, one at a time (media_server's
+// launch while it runs reaches it as B_SILENT_RELAUNCH)
+resource app_flags B_BACKGROUND_APP | B_EXCLUSIVE_LAUNCH;
+
+resource app_version {
+	major  = 1,
+	middle = 0,
+	minor  = 0,
+	variety = B_APPV_FINAL,
+	internal = 0,
+	short_info = "Audio device agent",
+	long_info = "Audio device policies and prompts for Renga"
+};
+
+resource file_types message {
+	"types" = "application/x-vnd.Be-elfexecutable"
+};
