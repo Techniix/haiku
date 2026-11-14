@@ -2,7 +2,9 @@ SubDir HAIKU_TOP 3rdparty ce tests gamepad ;
 
 # Gamepads (roadmap F-42): evdev, uinput, BGamepad and BJoystick on virtual
 # pads (gamepad_test), and the XInput, HID and SDL mapping code with
-# recorded packets (gamepad_protocol_test).
+# recorded packets (gamepad_protocol_test); SDL3 (the system's libSDL3,
+# Renga's libsdl3 package) seeing virtual pads as gamepads, with hot-plug
+# and rumble (sdl3_gamepad_test; renga-* images, which carry libsdl3).
 
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
 UsePrivateHeaders device drivers shared ;
@@ -46,7 +48,14 @@ Application gamepad_ui_test :
 	: be tracker [ TargetLibstdc++ ]
 ;
 
+# Loads libSDL3 with dlopen(), so it needs no SDL headers or package to
+# build and runs on images without SDL3 (then it only says so).
+Application sdl3_gamepad_test :
+	sdl3_gamepad_test.c
+	: libgnu.so
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests
-		: gamepad_test gamepad_protocol_test gamepad_ui_test ;
+		: gamepad_test gamepad_protocol_test gamepad_ui_test sdl3_gamepad_test ;
 }

@@ -1482,8 +1482,23 @@ header directory; nothing to link.
   sends an output report (first byte the report ID, 0 if none);
   `HIDIOCGRDESCSIZE`, `HIDIOCGRDESC`, `HIDIOCGRAWINFO`, `HIDIOCGRAWNAME`,
   `HIDIOCGRAWPHYS`, `HIDIOCGRAWUNIQ`, `HIDIOCS/GFEATURE`,
-  `HIDIOCS/GINPUT`, `HIDIOCS/GOUTPUT`; `poll()` works. SDL's HIDAPI needs a
-  Haiku back end for hidapi that opens these nodes (there is no libudev).
+  `HIDIOCS/GINPUT`, `HIDIOCS/GOUTPUT`; `poll()` works. Enumerate by
+  scanning `/dev` for `hidraw<N>` (there is no libudev or sysfs);
+  `HIDIOCGRAWPHYS` reads `usb-<device>/input<interface>` like on Linux.
+- **SDL3** (2026-11-14): Renga's `libsdl3` (RengaPorts, 3.4.16, soname
+  `libSDL3.so.0`, part of the renga-* images) replaces HaikuPorts' and
+  uses SDL's Linux evdev back end (inotify hot-plug) and HIDAPI on hidraw
+  (Switch Pro Controller gyro and rumble, DualSense), so
+  `SDL_GetGamepads()` lists the pads with database mappings. Game ports:
+  depend on the system SDL3 (`REQUIRES` `lib:libSDL3` or
+  `libsdl3 >= 3.4.0`) and do not bundle a copy; a bundled or static SDL
+  has only the BJoystick back end and sees no gamepads. The BJoystick back
+  end is still inside, off unless `SDL_JOYSTICK_HAIKU=1`. SDL2 programs
+  still use HaikuPorts' libsdl2 (BJoystick); sdl2-compat over SDL3 is not
+  in Renga yet.
+- `<linux/joystick.h>` (2026-11-14) has the classic `js` API's
+  definitions so Linux code that supports both compiles; Renga has no
+  `/dev/input/js*` nodes.
 - **BJoystick** keeps working: XInput pads also get
   `/dev/joystick/gamepad/<N>`; HID pads keep their `joystick/usb` node.
 - **BGamepad** (`<Gamepad.h>`, libdevice): the standard layout (SDL's

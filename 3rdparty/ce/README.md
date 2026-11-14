@@ -925,6 +925,13 @@ of a 1 GiB guest was, so the bounce path went untested.
   battery, unplug, inotify and `BGamepad` hot-plug, the database mapping,
   the BJoystick node, and no hidraw node for QEMU's USB tablet (roadmap
   F-42).
+- **sdl3_gamepad** (renga-* images, `sdl3_gamepad_test`): the system's
+  libSDL3 (dlopen) with uinput pads: an Xbox 360 pad listed once by
+  `SDL_GetGamepads()` with its name, type and evdev path, a button event,
+  rumble reaching the device, a hot-plugged 8BitDo Ultimate 2C added and
+  removed, and HIDAPI enumerating hidraw without errors; minimum images
+  only report that SDL3 is not installed. With HaikuPorts' libsdl3 it
+  lists no gamepad (the bug found with OpenCE).
 - **gamepad_protocol** (`gamepad_protocol_test`): the xinput driver's
   XInput/GIP code, usb_hid's HID-to-evdev mapping (built with
   `USERLAND_HID`) and the SDL mappings, with recorded and constructed

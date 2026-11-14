@@ -132,6 +132,61 @@ if $(HAIKU_RENGA_IMAGE) {
 		AddHaikuImageSystemPackages $(HAIKU_RENGA_EXTRA_PACKAGES) ;
 	}
 
+	# Packages built for Renga in RengaPorts that the image carries by
+	# default. The build cannot take them from a package repository (Haiku's
+	# build only knows Haiku's and HaikuPorts' repositories, and HaikuPorts
+	# has packages of the same name), so each is downloaded from the
+	# RengaPorts package repository (its "packages" branch), checked against
+	# the SHA-256 recorded here, and added as a package file. When the
+	# recipe is rebuilt, the file name and checksum here change with it.
+	# For a local build, HAIKU_RENGA_PACKAGE_FILE_<name> (in UserBuildConfig)
+	# names a package file to use instead of the download.
+	#
+	# libsdl3 (2026-11-14): SDL3 with SDL's Linux evdev joystick back end on
+	# /dev/input and HIDAPI on /dev/hidraw, so SDL_GetGamepads() lists the
+	# pads (HaikuPorts' build only has BJoystick, whose GUIDs miss the
+	# mapping database; OpenCE saw no controller). It replaces HaikuPorts'
+	# libsdl3 (the Renga repository has priority). OpenCE also failed to
+	# start on a fresh install without SDL3, so it is part of the image.
+	rule RengaPortsPackage name : file : sha256
+	{
+		local target = $(file:G=renga-package) ;
+		local local = $(HAIKU_RENGA_PACKAGE_FILE_$(name)) ;
+		local source ;
+		if $(local) {
+			source = $(local:G=renga-package-local) ;
+		} else {
+			source = [ DownloadFile $(file)
+				: https://raw.githubusercontent.com/Techniix/RengaPorts/packages/x86_64/current/packages/$(file) ] ;
+		}
+		MakeLocate $(target) : [ FDirName $(HAIKU_OBJECT_DIR) renga-packages ] ;
+		Depends $(target) : $(source) ;
+		# A local file is a package being tested: no checksum for it. (Never
+		# leave the variable empty: jam drops action words that use an empty
+		# variable.)
+		if $(local) {
+			RENGA_PACKAGE_SHA256 on $(target) = none ;
+		} else {
+			RENGA_PACKAGE_SHA256 on $(target) = $(sha256) ;
+		}
+		RengaPortsPackageVerify $(target) : $(source) ;
+		AddPackageFilesToHaikuImage system packages : $(target) ;
+	}
+
+	actions RengaPortsPackageVerify
+	{
+		sum=`$(HOST_SHA256) "$(2)" | cut -d' ' -f1`
+		want="$(RENGA_PACKAGE_SHA256)"
+		if [ "$want" != none ] && [ "$sum" != "$want" ]; then
+			echo "ERROR: $(2): SHA-256 $sum, expected $want" >&2
+			exit 1
+		fi
+		cp "$(2)" "$(1)"
+	}
+
+	RengaPortsPackage libsdl3 : libsdl3-3.4.16-1-x86_64.hpkg
+		: 718d207e5413173fb8ba9368b88d9bd66e41d8a939d3b8540082ccc69c2dce10 ;
+
 	# Development files, active (maintainer, 2026-11-13: early users are
 	# porters): haiku_devel built from this tree, with every Renga header
 	# and library, and the compiler (from HaikuPorts, in the profile). The
