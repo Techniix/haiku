@@ -55,6 +55,17 @@
 	                          a speed set for the device applies to its
 	                          second interface too
 
+	  latency.1000hz          a quick flick (750 counts in 25 ms) on a USB
+	                          mouse reporting at 1000 Hz (ce_vmouse's
+	                          emulated USB mouse, polled the way usb_hid
+	                          polls): the pointer is at the end within one
+	                          60 Hz frame (16.7 ms) of the hand stopping, and
+	                          stays there (before: usb_hid polled once per
+	                          read, every 8 ms, and the mouse's reports came
+	                          out after the hand had stopped; reported as an
+	                          INFO line for comparison)
+	  latency.8000hz          the same at 8000 Hz (stress case)
+
 	The driver is plugged in "queued" mode (like PS/2: every report is kept)
 	for the backlog and click checks and in "on demand" mode (like usb_hid:
 	motion not read yet is summed) for the others. Without a desktop or
@@ -681,6 +692,134 @@ test_two_interfaces(BRect screen)
 }
 
 
+/*!	Pointer latency (2026-11-14): a fast flick on a USB mouse reporting at
+	\a rate Hz, through ce_vmouse's emulated USB mouse (CE_VMOUSE_USB: the
+	firmware sends one report per poll) and the whole real input path.
+	Returns how long after the hand stopped the window saw the pointer at
+	the end of the move (-1: never), and the position it ended at.
+*/
+static bigtime_t
+flick_latency(BRect screen, int32 rate, uint32 pollMode, BPoint& final,
+	BPoint& expected)
+{
+	unplug();
+	BString names;
+	wait_for_device(0, names);
+	ce_vmouse_plug request = { 1, CE_VMOUSE_USB,
+		(uint32)(1000000 / rate), pollMode };
+	if (ioctl(sControl, CE_VMOUSE_PLUG, &request, sizeof(request)) != 0
+		|| !wait_for_device(1, names)) {
+		final = expected = BPoint(-1, -1);
+		return -1;
+	}
+	send(0, 1, 0, 0, 0);
+	snooze(200000);
+
+	// 30 counts a millisecond for 25 ms (30 000 counts a second, a quick
+	// flick with a 1600 DPI mouse), sent as the sensor makes them: every
+	// millisecond, that millisecond's reports.
+	const int32 kMilliseconds = 25;
+	const double kCountsPerMillisecond = 30;
+	int32 distance = (int32)(kCountsPerMillisecond * kMilliseconds);
+	if (screen.Width() < distance + 200)
+		distance = (int32)screen.Width() - 200;
+	BPoint start(screen.left + 100, screen.top + 200);
+	expected = BPoint(start.x + distance, start.y);
+	place_pointer(start);
+	clear_records();
+
+	int32 perMillisecond = rate / 1000 > 0 ? rate / 1000 : 1;
+	double owed = 0;
+	int32 sent = 0;
+	bigtime_t when = system_time() + 1000;
+	for (int32 ms = 0; ms < kMilliseconds && sent < distance; ms++) {
+		snooze_until(when, B_SYSTEM_TIMEBASE);
+		ce_vmouse_report reports[16];
+		int32 count = 0;
+		for (int32 i = 0; i < perMillisecond && count < 16; i++) {
+			owed += kCountsPerMillisecond / perMillisecond;
+			int32 counts = (int32)owed;
+			if (sent + counts > distance)
+				counts = distance - sent;
+			owed -= counts;
+			sent += counts;
+			memset(&reports[count], 0, sizeof(reports[count]));
+			reports[count].movement.xdelta = counts;
+			reports[count].movement.timestamp
+				= when + i * (1000 / perMillisecond);
+			count++;
+		}
+		write(sControl, reports, count * sizeof(ce_vmouse_report));
+		when += 1000;
+	}
+	if (sent < distance)
+		send(0, distance - sent, 0, 0, when);
+	bigtime_t handStopped = system_time();
+
+	bigtime_t reached = -1;
+	for (int i = 0; i < 400 && reached < 0; i++) {
+		std::vector<Record> list = records();
+		for (size_t r = 0; r < list.size(); r++) {
+			if (list[r].what == B_MOUSE_MOVED && list[r].where == expected) {
+				reached = list[r].received - handStopped;
+				if (reached < 0)
+					reached = 0;
+				break;
+			}
+		}
+		if (reached < 0)
+			snooze(5000);
+	}
+	snooze(200000);
+	final = pointer_position();
+	return reached;
+}
+
+
+static void
+test_latency(BRect screen)
+{
+	// A refresh at 60 Hz: the pointer has to be where the hand stopped
+	// within one frame. The add-on reads every 8 ms, so up to 8 ms of it
+	// are its cadence.
+	const bigtime_t kFrame = 16700;
+	BPoint before = pointer_position();
+	struct { int32 rate; uint32 mode; const char* name; } runs[] = {
+		{ 1000, CE_VMOUSE_POLL_ON_DEMAND, NULL },
+		{ 1000, CE_VMOUSE_POLL_CONTINUOUS, "latency.1000hz" },
+		{ 8000, CE_VMOUSE_POLL_CONTINUOUS, "latency.8000hz" }
+	};
+	for (size_t i = 0; i < sizeof(runs) / sizeof(runs[0]); i++) {
+		BPoint final, expected;
+		bigtime_t latency = flick_latency(screen, runs[i].rate, runs[i].mode,
+			final, expected);
+		if (runs[i].name == NULL) {
+			// usb_hid's polling before the fix, for comparison
+			printf("CE-INFO pointer_rate: polled once per read (usb_hid "
+				"before 2026-11-14), %" B_PRId32 " Hz: at the end %.1f ms "
+				"after the hand stopped, ended at (%.0f,%.0f), want "
+				"(%.0f,%.0f)\n", runs[i].rate,
+				latency >= 0 ? latency / 1000.0 : -1.0, final.x, final.y,
+				expected.x, expected.y);
+			fflush(stdout);
+			continue;
+		}
+		report(runs[i].name, latency >= 0 && latency <= kFrame
+			&& final == expected,
+			"a flick of %.0f counts in 25 ms at %" B_PRId32 " Hz: the pointer "
+			"was at the end %.1f ms after the hand stopped (one frame: %.1f "
+			"ms) and ended at (%.0f,%.0f), want (%.0f,%.0f)",
+			expected.x - (screen.left + 100), runs[i].rate,
+			latency >= 0 ? latency / 1000.0 : -1.0, kFrame / 1000.0, final.x,
+			final.y, expected.x, expected.y);
+	}
+	// leave the pointer where the earlier checks did, for the suites after
+	// this one (pointer_test's first tablet move)
+	if (before.x >= 0)
+		place_pointer(before);
+}
+
+
 int
 main()
 {
@@ -762,6 +901,7 @@ main()
 			report("long_stall.clicks", false, "plugging again failed");
 
 		test_two_interfaces(screen);
+		test_latency(screen);
 		unplug();
 	}
 

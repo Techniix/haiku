@@ -31,10 +31,13 @@
 #include <KernelExport.h>
 
 #include <condition_variable.h>
+#include <cpu.h>
 #include <fs/devfs.h>
 #include <kernel.h>
 #include <lock.h>
 #include <util/AutoLock.h>
+
+#include "MousePoller.h"
 
 
 int32 api_version = B_CUR_DRIVER_API_VERSION;
@@ -52,6 +55,11 @@ struct vmouse_node {
 	uint32				head;
 	uint32				count;
 	ConditionVariable	readable;
+	// CE_VMOUSE_USB: the queue is the mouse's firmware; the poller is
+	// usb_hid's (MousePoller.h)
+	MousePoller			poller;
+	int32				openCount;
+	bigtime_t			lastPoll;
 };
 
 
@@ -59,10 +67,68 @@ static mutex sLock;
 static vmouse_node sNodes[CE_VMOUSE_MAX_NODES];
 static uint32 sNodeCount = 0;
 static uint32 sMode = CE_VMOUSE_QUEUED;
+static bigtime_t sPollInterval = 1000;
+static uint32 sPollMode = CE_VMOUSE_POLL_CONTINUOUS;
 static int32 sControlOpen = 0;
 
 
 //	#pragma mark - nodes
+
+
+/*!	CE_VMOUSE_USB: one USB poll. Like a USB mouse, the node sends at most one
+	report per poll interval, the oldest its firmware holds; with nothing to
+	send it waits (the transfer stays pending) until \a timeout.
+*/
+static status_t
+usb_poll(vmouse_node* node, mouse_movement& movement, bigtime_t timeout)
+{
+	// A host controller polls on its own precise schedule (every 125 us at
+	// 8000 Hz). A kernel timer under emulation fires far later than that for
+	// such short waits, which would make the emulated mouse slower than a
+	// real one, so short waits spin.
+	bigtime_t next = node->lastPoll + sPollInterval;
+	bigtime_t now = system_time();
+	if (next - now > 1000)
+		snooze_until(next, B_SYSTEM_TIMEBASE);
+	else {
+		while (system_time() < next)
+			cpu_pause();
+	}
+
+	MutexLocker locker(sLock);
+	bigtime_t deadline = timeout == B_INFINITE_TIMEOUT
+		? B_INFINITE_TIMEOUT : system_time() + timeout;
+	while (node->count == 0) {
+		if (node->removed)
+			return B_DEV_NOT_READY;
+		ConditionVariableEntry entry;
+		node->readable.Add(&entry);
+		locker.Unlock();
+		status_t status = deadline == B_INFINITE_TIMEOUT
+			? entry.Wait(B_CAN_INTERRUPT)
+			: entry.Wait(B_ABSOLUTE_TIMEOUT | B_CAN_INTERRUPT, deadline);
+		locker.Lock();
+		if (status == B_TIMED_OUT || status == B_INTERRUPTED)
+			return status;
+	}
+	if (node->removed)
+		return B_DEV_NOT_READY;
+	movement = node->queue[node->head];
+	node->head = (node->head + 1) % kQueueSize;
+	node->count--;
+	node->lastPoll = system_time();
+	locker.Unlock();
+	if (movement.timestamp == 0)
+		movement.timestamp = node->lastPoll;
+	return B_OK;
+}
+
+
+static status_t
+usb_poll_hook(void* cookie, mouse_movement& movement)
+{
+	return usb_poll((vmouse_node*)cookie, movement, 100000);
+}
 
 
 static status_t
@@ -73,7 +139,14 @@ node_open(const char* name, uint32 flags, void** _cookie)
 		// devfs passes the path below /dev
 		if (sNodes[i].published && !sNodes[i].removed
 			&& strcmp(name, sNodes[i].path) == 0) {
-			*_cookie = &sNodes[i];
+			vmouse_node* node = &sNodes[i];
+			*_cookie = node;
+			if (sMode == CE_VMOUSE_USB
+				&& sPollMode == CE_VMOUSE_POLL_CONTINUOUS
+				&& node->openCount++ == 0) {
+				locker.Unlock();
+				node->poller.Start();
+			}
 			return B_OK;
 		}
 	}
@@ -84,6 +157,12 @@ node_open(const char* name, uint32 flags, void** _cookie)
 static status_t
 node_close(void* cookie)
 {
+	vmouse_node* node = (vmouse_node*)cookie;
+	MutexLocker locker(sLock);
+	if (node->openCount > 0 && --node->openCount == 0) {
+		locker.Unlock();
+		node->poller.Stop();
+	}
 	return B_OK;
 }
 
@@ -136,10 +215,30 @@ node_control(void* cookie, uint32 op, void* buffer, size_t length)
 
 	switch (op) {
 		case MS_READ:
+			if (sMode == CE_VMOUSE_USB) {
+				if (length < sizeof(mouse_movement))
+					return B_BUFFER_OVERFLOW;
+				mouse_movement movement;
+				status_t status;
+				if (node->poller.IsRunning())
+					status = node->poller.Read(movement);
+				else {
+					do {
+						status = usb_poll(node, movement, B_INFINITE_TIMEOUT);
+					} while (status == B_TIMED_OUT);
+				}
+				if (status != B_OK)
+					return status;
+				if (!IS_USER_ADDRESS(buffer))
+					return B_BAD_ADDRESS;
+				return user_memcpy(buffer, &movement, sizeof(movement));
+			}
 			return node_read_movement(node, buffer, length);
 
 		case MS_NUM_EVENTS:
 		{
+			if (sMode == CE_VMOUSE_USB)
+				return node->poller.IsRunning() ? node->poller.Count() : 0;
 			MutexLocker locker(sLock);
 			if (node->removed)
 				return B_DEV_NOT_READY;
@@ -225,7 +324,9 @@ plug(const ce_vmouse_plug& request)
 {
 	if (request.nodes < 1 || request.nodes > CE_VMOUSE_MAX_NODES
 		|| (request.mode != CE_VMOUSE_QUEUED
-			&& request.mode != CE_VMOUSE_ON_DEMAND)) {
+			&& request.mode != CE_VMOUSE_ON_DEMAND
+			&& request.mode != CE_VMOUSE_USB)
+		|| request.poll_mode > CE_VMOUSE_POLL_ON_DEMAND) {
 		return B_BAD_VALUE;
 	}
 
@@ -233,10 +334,13 @@ plug(const ce_vmouse_plug& request)
 	unplug_locked(locker);
 
 	sMode = request.mode;
+	sPollInterval = request.poll_interval != 0 ? request.poll_interval : 1000;
+	sPollMode = request.poll_mode;
 	for (uint32 i = 0; i < request.nodes; i++) {
 		vmouse_node& node = sNodes[i];
 		node.head = 0;
 		node.count = 0;
+		node.lastPoll = 0;
 		node.removed = false;
 		node.published = true;
 		snprintf(node.path, sizeof(node.path), CE_VMOUSE_NODE_FORMAT,
@@ -257,7 +361,9 @@ plug(const ce_vmouse_plug& request)
 	}
 	dprintf("ce_vmouse: plugged in, %" B_PRIu32 " node(s), %s\n",
 		request.nodes, request.mode == CE_VMOUSE_QUEUED ? "queued"
-			: "on demand");
+			: request.mode == CE_VMOUSE_ON_DEMAND ? "on demand"
+			: request.poll_mode == CE_VMOUSE_POLL_CONTINUOUS
+				? "USB, polled continuously" : "USB, polled on demand");
 	return B_OK;
 }
 
@@ -335,8 +441,10 @@ control_control(void* cookie, uint32 op, void* buffer, size_t length)
 		case CE_VMOUSE_PLUG:
 		{
 			ce_vmouse_plug request;
-			if (length < sizeof(request) || !IS_USER_ADDRESS(buffer)
-				|| user_memcpy(&request, buffer, sizeof(request)) != B_OK) {
+			memset(&request, 0, sizeof(request));
+			if (length < CE_VMOUSE_PLUG_V1_SIZE || !IS_USER_ADDRESS(buffer)
+				|| user_memcpy(&request, buffer,
+					min_c(length, sizeof(request))) != B_OK) {
 				return B_BAD_ADDRESS;
 			}
 			return plug(request);
@@ -424,6 +532,10 @@ init_driver()
 		sNodes[i].head = 0;
 		sNodes[i].count = 0;
 		sNodes[i].readable.Init(&sNodes[i], "ce_vmouse readable");
+		sNodes[i].poller.Init("ce_vmouse usb poller", &usb_poll_hook,
+			&sNodes[i]);
+		sNodes[i].openCount = 0;
+		sNodes[i].lastPoll = 0;
 	}
 	sNodeCount = 0;
 	sControlOpen = 0;
@@ -437,6 +549,8 @@ uninit_driver()
 	MutexLocker locker(sLock);
 	unplug_locked(locker);
 	locker.Unlock();
+	for (uint32 i = 0; i < CE_VMOUSE_MAX_NODES; i++)
+		sNodes[i].poller.Uninit();
 	mutex_destroy(&sLock);
 }
 

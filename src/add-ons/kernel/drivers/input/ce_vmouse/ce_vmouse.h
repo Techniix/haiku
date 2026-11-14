@@ -27,10 +27,24 @@ enum {
 	CE_VMOUSE_QUEUED		= 0,
 		// every report is kept and read one by one, and MS_NUM_EVENTS says
 		// how many wait (PS/2 keeps a ring of packets)
-	CE_VMOUSE_ON_DEMAND		= 1
+	CE_VMOUSE_ON_DEMAND		= 1,
 		// motion that nobody has read yet is summed into one report, as the
 		// mouse's firmware does between two USB polls; MS_NUM_EVENTS is
 		// always 0 (usb_hid)
+	CE_VMOUSE_USB			= 2
+		// a USB mouse behind usb_hid (2026-11-14): every report written is
+		// one the mouse's firmware has to send, and one USB poll sends one
+		// report, at most one per poll_interval. With CE_VMOUSE_POLL_CONTINUOUS
+		// the node polls like usb_hid does since the pointer latency fix
+		// (MousePoller: polled at the device's rate while open, reports summed
+		// into frames); with CE_VMOUSE_POLL_ON_DEMAND it polls once per
+		// MS_READ, as usb_hid did before, which left a 1000 Hz mouse's
+		// reports in the mouse when the add-on reads every 8 ms
+};
+
+enum {
+	CE_VMOUSE_POLL_CONTINUOUS	= 0,
+	CE_VMOUSE_POLL_ON_DEMAND	= 1
 };
 
 enum {
@@ -44,8 +58,14 @@ enum {
 
 typedef struct {
 	uint32		nodes;		// 1 or 2 HID mouse interfaces of one device
-	uint32		mode;		// CE_VMOUSE_QUEUED or CE_VMOUSE_ON_DEMAND
+	uint32		mode;		// CE_VMOUSE_QUEUED, _ON_DEMAND or _USB
+	// CE_VMOUSE_USB only (older callers pass only the two fields above):
+	uint32		poll_interval;	// microseconds between USB polls (1000 for
+								// a 1000 Hz mouse; 0 means 1000)
+	uint32		poll_mode;		// CE_VMOUSE_POLL_CONTINUOUS or _ON_DEMAND
 } ce_vmouse_plug;
+
+#define CE_VMOUSE_PLUG_V1_SIZE	(2 * sizeof(uint32))
 
 typedef struct {
 	uint32		node;		// which interface reports it

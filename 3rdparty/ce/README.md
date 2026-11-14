@@ -1033,6 +1033,12 @@ of a 1 GiB guest was, so the bounce path went untested.
   1000 and 125 Hz after a rest (within 5 %); a mouse with two HID mouse
   interfaces is one device, moves with either, and shares its settings.
   On the code before the pointer fix 9 of its 20 checks fail.
+  Latency (2026-11-14): `ce_vmouse`'s emulated USB mouse (`CE_VMOUSE_USB`,
+  one report per poll, polled with usb_hid's `MousePoller`) gives a quick
+  flick (750 counts in 25 ms) at 1000 Hz (`latency.1000hz`) and 8000 Hz
+  (`latency.8000hz`, stress); the pointer has to be at the end within one
+  60 Hz frame (16.7 ms) of the hand stopping. An INFO line gives the same
+  flick polled once per read, as usb_hid did before (about 170 ms).
 - **posix_compat**: eventfd, timerfd, memfd, POSIX message queues, System V
   shared memory, the libc additions, user contexts, and TCP (keepalive,
   `TCP_INFO`, orderly and abortive close). `user_locks_test` (suite

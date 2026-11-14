@@ -37,8 +37,11 @@ MouseProtocolHandler::MouseProtocolHandler(HIDReport &report,
 	fLastButtons(0),
 	fClickCount(0),
 	fLastClickTime(0),
-	fClickSpeed(250000)
+	fClickSpeed(250000),
+	fOpenCount(0)
 {
+	fPoller.Init("usb mouse poller", &_Poll, this);
+
 	uint32 buttonCount = 0;
 	for (uint32 i = 0; i < report.CountItems(); i++) {
 		HIDReportItem *item = report.ItemAt(i);
@@ -62,6 +65,60 @@ MouseProtocolHandler::MouseProtocolHandler(HIDReport &report,
 		buttonCount, fHorizontalPan == NULL ? "" : ", horizontal pan ",
 		fWheel == NULL ? "no " : "");
 	TRACE("report id: %u\n", report.ID());
+}
+
+
+MouseProtocolHandler::~MouseProtocolHandler()
+{
+	fPoller.Uninit();
+}
+
+
+/*!	Renga (pointer latency fix, 2026-11-14): while the node is open, a
+	thread polls the mouse at its own rate (one interrupt transfer queued at
+	all times, as Linux's usbhid does) and sums its reports into frames
+	(MousePoller.h). Before, a transfer was only scheduled while MS_READ
+	waited, and input_server's mouse add-on reads every 8 ms: a 1000 Hz mouse
+	was polled 125 times a second, and what it could not send meanwhile came
+	out after the hand stopped (the pointer kept moving and caught up).
+*/
+status_t
+MouseProtocolHandler::Open(uint32 flags, uint32 *cookie)
+{
+	status_t status = ProtocolHandler::Open(flags, cookie);
+	if (status != B_OK)
+		return status;
+	if (atomic_add(&fOpenCount, 1) == 0) {
+		status = fPoller.Start();
+		if (status != B_OK) {
+			atomic_add(&fOpenCount, -1);
+			ProtocolHandler::Close(cookie);
+			return status;
+		}
+	}
+	return B_OK;
+}
+
+
+status_t
+MouseProtocolHandler::Close(uint32 *cookie)
+{
+	if (atomic_add(&fOpenCount, -1) == 1)
+		fPoller.Stop();
+	return ProtocolHandler::Close(cookie);
+}
+
+
+/*static*/ status_t
+MouseProtocolHandler::_Poll(void *_handler, mouse_movement &movement)
+{
+	MouseProtocolHandler *handler = (MouseProtocolHandler *)_handler;
+	uint32 cookie = 0;
+	// returns within 100 ms so that the poller notices Stop()
+	status_t status = handler->_ReadReport(&movement, &cookie, 100000);
+	if (status == B_BUSY && handler->fReport.Device()->IsRemoved())
+		return B_DEV_NOT_READY;
+	return status;
 }
 
 
@@ -145,11 +202,23 @@ MouseProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 
 			while (true) {
 				mouse_movement movement;
-				status_t result = _ReadReport(&movement, cookie);
+				status_t result;
+				if (fPoller.IsRunning()) {
+					// the frames the poller collected (see Open())
+					result = fPoller.Read(movement);
+					if (result == B_FILE_ERROR
+						&& (*cookie & PROTOCOL_HANDLER_COOKIE_FLAG_CLOSED) == 0
+						&& fPoller.IsRunning()) {
+						continue;
+					}
+				} else
+					result = _ReadReport(&movement, cookie);
 				if (result == B_INTERRUPTED)
 					return result;
 				if (result == B_BUSY)
 					continue;
+				if (result != B_OK)
+					return result;
 
 				if (!IS_USER_ADDRESS(buffer)
 					|| user_memcpy(buffer, &movement, sizeof(movement))
@@ -166,7 +235,10 @@ MouseProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 			if (fReport.Device()->IsRemoved())
 				return B_DEV_NOT_READY;
 
-			// we are always on demand, so 0 queued events
+			// Renga: the frames the poller holds (summed motion, button
+			// changes apart), so input_server's watcher merges them
+			if (fPoller.IsRunning())
+				return fPoller.Count();
 			return 0;
 		}
 
@@ -185,9 +257,10 @@ MouseProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 
 
 status_t
-MouseProtocolHandler::_ReadReport(void *buffer, uint32 *cookie)
+MouseProtocolHandler::_ReadReport(void *buffer, uint32 *cookie,
+	bigtime_t timeout)
 {
-	status_t result = fReport.WaitForReport(B_INFINITE_TIMEOUT);
+	status_t result = fReport.WaitForReport(timeout);
 	if (result != B_OK) {
 		if (fReport.Device()->IsRemoved()) {
 			TRACE("device has been removed\n");
@@ -199,7 +272,7 @@ MouseProtocolHandler::_ReadReport(void *buffer, uint32 *cookie)
 		if ((*cookie & PROTOCOL_HANDLER_COOKIE_FLAG_CLOSED) != 0)
 			return B_FILE_ERROR;
 
-		if (result != B_BUSY) {
+		if (result != B_BUSY && result != B_TIMED_OUT) {
 			// "busy" happens when other reports come in on the same input as ours
 			TRACE_ALWAYS("error waiting for report: %s\n", strerror(result));
 		}

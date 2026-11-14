@@ -5,6 +5,7 @@ SubDir HAIKU_TOP src add-ons kernel drivers input ce_vmouse ;
 
 UsePrivateKernelHeaders ;
 UsePrivateHeaders input ;
+SubDirHdrs $(HAIKU_TOP) src add-ons kernel drivers input hid_shared ;
 
 KernelAddon ce_vmouse :
 	ce_vmouse.cpp
