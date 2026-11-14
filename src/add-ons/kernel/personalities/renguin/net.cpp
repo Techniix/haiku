@@ -1941,15 +1941,19 @@ control_to_haiku(renguin_scratch* scratch, uint64 control,
 
 	uint8* linux = (uint8*)malloc(controlLength);
 	// Haiku's headers are no larger than Linux's (both 16 bytes with the
-	// data 8-byte aligned), so the same size is enough.
-	uint8* haiku = (uint8*)malloc(controlLength);
+	// data 8-byte aligned), but Linux lets the last message end unpadded
+	// (libwayland sends msg_controllen = CMSG_LEN(n)), while Haiku's
+	// messages take CMSG_SPACE(n) each: leave room for the padding.
+	size_t haikuSize = controlLength + 8 * (controlLength / LX_CMSG_HDRLEN
+		+ 1);
+	uint8* haiku = (uint8*)malloc(haikuSize);
 	if (linux == NULL || haiku == NULL) {
 		free(linux);
 		free(haiku);
 		return -LX_ENOMEM;
 	}
 	MemoryDeleter linuxDeleter(linux), haikuDeleter(haiku);
-	memset(haiku, 0, controlLength);
+	memset(haiku, 0, haikuSize);
 	if (renguin_copy_in(linux, control, controlLength) != B_OK)
 		return -LX_EFAULT;
 
@@ -1985,7 +1989,7 @@ control_to_haiku(renguin_scratch* scratch, uint64 control,
 
 		if (mapped) {
 			size_t space = CMSG_SPACE(dataLength);
-			if (out + space > controlLength)
+			if (out + space > haikuSize)
 				return -LX_ENOBUFS;
 			cmsghdr* target = (cmsghdr*)(haiku + out);
 			target->cmsg_len = CMSG_LEN(dataLength);

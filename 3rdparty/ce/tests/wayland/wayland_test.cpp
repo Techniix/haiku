@@ -25,6 +25,15 @@
 	                      system clipboard as text/plain
 	  clipboard_from_native text put on the system clipboard reaches the
 	                      client as a selection offer it can read
+	  linux_client        (when the image has Renguin's Linux root) a Linux
+	                      Wayland client, musl with Alpine's
+	                      libwayland-client, under Renguin: it connects,
+	                      sees the globals and shows its wl_shm window,
+	                      whose colour appears on the screen (screenshot
+	                      screen-wayland_linux_window)
+	  linux_clipboard     its selection reaches the system clipboard (the
+	                      compositor reads it over a pipe it passes with
+	                      SCM_RIGHTS through Renguin)
 	  disconnect          the same compositor team keeps running after the
 	                      client and its objects go away
 
@@ -48,6 +57,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <string>
@@ -299,9 +309,9 @@ static const xdg_toplevel_listener kToplevelListener = {
 };
 
 
-//! Counts the screen's pixels of the window's colour.
+//! Counts the screen's pixels of the colour (in B_RGB32 byte order).
 static int32
-count_window_pixels()
+count_pixels(uint8 blue, uint8 green, uint8 red)
 {
 	BScreen screen;
 	BBitmap* bitmap = NULL;
@@ -316,7 +326,7 @@ count_window_pixels()
 			const uint8* row = bits + y * bitmap->BytesPerRow();
 			for (int32 x = 0; x < width; x++) {
 				const uint8* pixel = row + x * 4;
-				if (pixel[0] == 0x5e && pixel[1] == 0x9a && pixel[2] == 0x12)
+				if (pixel[0] == blue && pixel[1] == green && pixel[2] == red)
 					count++;
 			}
 		}
@@ -378,7 +388,7 @@ window_test(Client& client)
 	int32 found = 0;
 	for (int attempt = 0; attempt < 20; attempt++) {
 		dispatch_until(client, 250000, NULL);
-		found = count_window_pixels();
+		found = count_pixels(0x5e, 0x9a, 0x12);
 		if (found >= kWidth * kHeight * 9 / 10)
 			break;
 	}
@@ -621,6 +631,68 @@ clipboard_test(Client& client)
 }
 
 
+static const char* kLinuxClient
+	= "/boot/system/non-packaged/compat/linux/opt/renguin-tests/wlclient-musl";
+
+
+static void
+linux_client_test()
+{
+	if (access(kLinuxClient, X_OK) != 0) {
+		printf("CE-INFO wayland: no Linux root with the Linux client on "
+			"this image; linux_client not checked\n");
+		return;
+	}
+	std::string command = std::string("timeout 60 ") + kLinuxClient
+		+ " 8 2>&1";
+	FILE* pipe = popen(command.c_str(), "r");
+	if (pipe == NULL) {
+		report("linux_client", false, "popen: %s", strerror(errno));
+		return;
+	}
+
+	std::string lines;
+	bool window = false, selection = false;
+	int32 found = 0;
+	std::string clipboard;
+	char line[256];
+	while (fgets(line, sizeof(line), pipe) != NULL) {
+		lines += line;
+		if (strncmp(line, "window ok", 9) == 0) {
+			window = true;
+			for (int attempt = 0; attempt < 20; attempt++) {
+				snooze(250000);
+				found = count_pixels(0x12, 0x5e, 0x9a);
+				if (found >= 200 * 120 * 9 / 10)
+					break;
+			}
+			printf("CE-HOST screenshot wayland_linux_window\n");
+			fflush(stdout);
+		} else if (strncmp(line, "selection set", 13) == 0) {
+			selection = true;
+			for (int attempt = 0; attempt < 40; attempt++) {
+				snooze(100000);
+				clipboard = native_clipboard_text();
+				if (clipboard == "renga-linux-wayland")
+					break;
+			}
+		}
+	}
+	int status = pclose(pipe);
+	for (char& c : lines) {
+		if (c == '\n')
+			c = '|';
+	}
+	report("linux_client", window && found >= 200 * 120 * 9 / 10
+			&& lines.find("ok|", lines.size() >= 3 ? lines.size() - 3 : 0)
+				!= std::string::npos,
+		"output [%s] exit %d, %d of %d pixels of its colour on the screen",
+		lines.c_str(), WEXITSTATUS(status), (int)found, 200 * 120);
+	report("linux_clipboard", selection && clipboard == "renga-linux-wayland",
+		"system clipboard text/plain: [%s]", clipboard.c_str());
+}
+
+
 // #pragma mark -
 
 
@@ -723,6 +795,7 @@ main()
 
 	window_test(client);
 	clipboard_test(client);
+	linux_client_test();
 
 	// The same compositor team keeps running once the client and its
 	// window, surfaces and buffers are gone (launch_daemon would restart a

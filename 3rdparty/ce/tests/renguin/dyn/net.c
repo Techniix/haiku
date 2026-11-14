@@ -379,6 +379,39 @@ fdpass_test(void)
 	CHECK(name, read(fd, buffer, sizeof(buffer)) == 3
 		&& memcmp(buffer, "via", 3) == 0, "read through passed fd");
 	close(fd);
+
+	// msg_controllen = CMSG_LEN(n), without the padding at the end (what
+	// libwayland sends), is valid on Linux.
+	int second[2];
+	CHECK(name, pipe(second) == 0, "pipe 2");
+	memset(control, 0, sizeof(control));
+	iov.iov_base = (void*)"G";
+	iov.iov_len = 1;
+	memset(&message, 0, sizeof(message));
+	message.msg_iov = &iov;
+	message.msg_iovlen = 1;
+	message.msg_control = control;
+	message.msg_controllen = CMSG_LEN(sizeof(int));
+	header = CMSG_FIRSTHDR(&message);
+	header->cmsg_level = SOL_SOCKET;
+	header->cmsg_type = SCM_RIGHTS;
+	header->cmsg_len = CMSG_LEN(sizeof(int));
+	memcpy(CMSG_DATA(header), &second[0], sizeof(int));
+	CHECK(name, sendmsg(pair[0], &message, 0) == 1, "sendmsg unpadded");
+	memset(received, 0, sizeof(received));
+	iov.iov_base = &byte;
+	memset(&message, 0, sizeof(message));
+	message.msg_iov = &iov;
+	message.msg_iovlen = 1;
+	message.msg_control = received;
+	message.msg_controllen = sizeof(received);
+	CHECK(name, recvmsg(pair[1], &message, 0) == 1 && byte == 'G'
+		&& CMSG_FIRSTHDR(&message) != NULL, "recvmsg unpadded");
+	memcpy(&fd, CMSG_DATA(CMSG_FIRSTHDR(&message)), sizeof(int));
+	close(fd);
+	close(second[0]);
+	close(second[1]);
+
 	close(pipeFds[1]);
 	close(pair[0]);
 	close(pair[1]);

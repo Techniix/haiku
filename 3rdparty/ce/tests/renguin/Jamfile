@@ -79,17 +79,25 @@ local rootInputs = <renguin-root>build-root.sh <renguin-root>alpine.pins ;
 SEARCH on $(rootInputs) = $(rootDir) ;
 local dynSources = <renguin-dyn>hello.c <renguin-dyn>net.c <renguin-dyn>fds.c ;
 SEARCH on $(dynSources) = $(dynDir) ;
-Depends $(linuxRoot) : $(rootInputs) $(dynSources) ;
+local waylandClientDir = [ FDirName $(SUBDIR) dyn-wayland ] ;
+local waylandClientSources = <renguin-dyn-wayland>wlclient.c ;
+SEARCH on $(waylandClientSources) = $(waylandClientDir) ;
+Depends $(linuxRoot) : $(rootInputs) $(dynSources) $(waylandClientSources)
+	<build>wayland_scanner ;
 RENGUIN_DYN_DIR on $(linuxRoot) = $(dynDir) ;
+RENGUIN_WAYLAND_DIR on $(linuxRoot)
+	= [ FDirName $(HAIKU_TOP) src libs wayland ] ;
+RENGUIN_WAYLAND_CLIENT_DIR on $(linuxRoot) = $(waylandClientDir) ;
 RENGUIN_ROOT_CACHE on $(linuxRoot)
 	= [ FDirName $(HAIKU_DOWNLOAD_DIR) renguin-linux-root ] ;
 
 actions BuildRenguinLinuxRoot
 {
 	sh $(2[1]) $(1) "$(HOST_CC)" $(RENGUIN_DYN_DIR) $(2[2]) \
-		$(RENGUIN_ROOT_CACHE)
+		$(RENGUIN_ROOT_CACHE) $(2[3]) $(RENGUIN_WAYLAND_DIR) \
+		$(RENGUIN_WAYLAND_CLIENT_DIR)
 }
-BuildRenguinLinuxRoot $(linuxRoot) : $(rootInputs) ;
+BuildRenguinLinuxRoot $(linuxRoot) : $(rootInputs) <build>wayland_scanner ;
 
 local expected = <renguin-linux-src>expected.txt ;
 SEARCH on $(expected) = $(linuxDir) ;

@@ -214,6 +214,9 @@ LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
 	"linuxkpi_settings_mt7921e"]
 # The Wayland compositor showing wayland_test's wl_shm window (F-43 C).
 WAYLAND_SCREENSHOTS = ["wayland_shm_window"]
+# ... and the Linux client's window under Renguin (F-27), x86_64 harness
+# images with the Linux root.
+WAYLAND_LINUX_SCREENSHOTS = ["wayland_linux_window"]
 # The Installer with a destination that has an installation (F-23).
 INSTALLER_SCREENSHOTS = ["installer_modes"]
 
@@ -4189,8 +4192,8 @@ def main():
 			check_screenshots(results_dir, report, LINUXKPI_SCREENSHOTS,
 				"linuxkpi_ui.screenshots")
 		if "wayland_test" in (args.only or available):
-			check_screenshots(results_dir, report, WAYLAND_SCREENSHOTS,
-				"wayland.screenshots")
+			check_screenshots(results_dir, report, WAYLAND_SCREENSHOTS
+				+ WAYLAND_LINUX_SCREENSHOTS, "wayland.screenshots")
 
 	summary, passed = write_report(results_dir, report)
 	print(summary)

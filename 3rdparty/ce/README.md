@@ -998,7 +998,11 @@ of a 1 GiB guest was, so the bounce path went untested.
   clipboard both ways (a Wayland selection becomes `text/plain` on the
   system clipboard; system clipboard text reaches the client as an
   offer), and that the same compositor team survives the client's
-  disconnect.
+  disconnect. With the Linux root (renguin), `linux_client` and
+  `linux_clipboard`: the Linux Wayland client `wlclient-musl` (musl,
+  Alpine's libwayland-client, through Renguin's sockets) shows its
+  window (screenshot `screen-wayland_linux_window`) and its selection
+  reaches the system clipboard.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **pointer_logic** (`pointer_logic_test`, no desktop needed): Adaptive
   pointer acceleration gives the same distance at 125, 500, 1000 and
