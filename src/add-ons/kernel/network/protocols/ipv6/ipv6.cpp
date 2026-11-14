@@ -1618,6 +1618,8 @@ ipv6_receive_data(net_buffer* buffer)
 	// clones, unlike the stored header.
 	buffer->traffic_class = (ntohl(header.header.ip6_flow) >> 20) & 0xff;
 	buffer->hop_limit = header.header.ip6_hlim;
+	buffer->receive_time = real_time_clock_usecs();
+		// SO_TIMESTAMP (SCM_TIMESTAMP is wall-clock time, as on Linux)
 
 	// get the transport protocol and transport header offset
 	uint16 transportHeaderOffset = header.GetHeaderOffset(buffer);

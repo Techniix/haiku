@@ -64,6 +64,7 @@ typedef uint8_t sa_family_t;
 #define SO_REUSEPORT	0x00000080	/* allow local address & port reuse */
 #define SO_USELOOPBACK	0x00000100	/* bypass hardware when possible */
 #define SO_LINGER		0x00000200	/* linger on close if data present */
+#define SO_TIMESTAMP	0x00000400	/* receive time as SCM_TIMESTAMP (Renga) */
 
 #define SO_SNDBUF		0x40000001	/* send buffer size */
 #define SO_SNDLOWAT		0x40000002	/* send low-water mark */
@@ -155,6 +156,7 @@ struct cmsghdr {
 
 /* SOL_SOCKET control message types */
 #define SCM_RIGHTS	0x01
+#define SCM_TIMESTAMP	0x02	/* struct timeval, with SO_TIMESTAMP (Renga) */
 
 /* parameter to SO_PEERCRED */
 struct ucred {

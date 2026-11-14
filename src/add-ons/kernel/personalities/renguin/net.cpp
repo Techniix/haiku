@@ -2051,6 +2051,10 @@ control_to_linux(uint64 haikuControl, socklen_t haikuLength, uint64 control,
 			level = LX_SOL_SOCKET;
 			if (type == SCM_RIGHTS)
 				type = LX_SCM_RIGHTS;
+			else if (type == SCM_TIMESTAMP)
+				type = LX_SO_TIMESTAMP;
+					// Linux's SCM_TIMESTAMP is SO_TIMESTAMP; struct
+					// timeval has the same layout on x86_64
 		} else if (level == IPPROTO_IP) {
 			if (type == IP_TOS || type == IP_RECVTOS)
 				type = LX_IP_TOS;
@@ -2495,9 +2499,9 @@ option_to_haiku(int64 level, int64 option, int* _level, int* _option,
 				case LX_SO_RCVTIMEO:	*_option = SO_RCVTIMEO; return true;
 				case LX_SO_SNDTIMEO:	*_option = SO_SNDTIMEO; return true;
 				case LX_SO_ACCEPTCONN:	*_option = SO_ACCEPTCONN; return true;
+				case LX_SO_TIMESTAMP:	*_option = SO_TIMESTAMP; return true;
 				case LX_SO_PRIORITY:
 				case LX_SO_PASSCRED:
-				case LX_SO_TIMESTAMP:
 				case LX_SO_PASSSEC:
 				case LX_SO_MARK:
 				case LX_SO_RXQ_OVFL:

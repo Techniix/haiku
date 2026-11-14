@@ -106,6 +106,15 @@ struct ip_mreq {
 	struct in_addr imr_interface; /* IP address of interface */
 };
 
+/* Linux and FreeBSD: IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP and
+ * IP_MULTICAST_IF also take this; a non-zero imr_ifindex selects the
+ * interface and takes precedence over imr_address (Renga). */
+struct ip_mreqn {
+	struct in_addr	imr_multiaddr;	/* IP address of group */
+	struct in_addr	imr_address;	/* IP address of interface */
+	int				imr_ifindex;	/* interface index, or 0 */
+};
+
 struct ip_mreq_source {
 	struct in_addr imr_multiaddr;	/* IP address of group */
 	struct in_addr imr_sourceaddr;	/* IP address of source */

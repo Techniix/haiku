@@ -309,6 +309,39 @@ process_ancillary_data(net_socket* socket,
 }
 
 
+/*!	Renga (Chromium R-4): appends SO_TIMESTAMP's SCM_TIMESTAMP control
+	message (struct timeval, the time the IP layer received the datagram)
+	after the protocol's control messages. "capacity" is the size of the
+	caller's control buffer; msg_controllen holds what is already used.
+	A message that does not fit sets MSG_CTRUNC, as on Linux.
+*/
+static void
+add_timestamp_message(net_socket* socket, net_buffer* buffer,
+	msghdr* messageHeader, size_t capacity)
+{
+	if ((socket->options & SO_TIMESTAMP) == 0 || buffer == NULL
+		|| buffer->receive_time == 0 || messageHeader->msg_control == NULL)
+		return;
+
+	size_t used = messageHeader->msg_controllen;
+	if (capacity < used || capacity - used < CMSG_SPACE(sizeof(timeval))) {
+		buffer->buffer_flags |= NET_BUFFER_CONTROL_TRUNCATED;
+		return;
+	}
+
+	struct timeval time;
+	time.tv_sec = buffer->receive_time / 1000000;
+	time.tv_usec = buffer->receive_time % 1000000;
+
+	cmsghdr* header = (cmsghdr*)((uint8*)messageHeader->msg_control + used);
+	header->cmsg_len = CMSG_LEN(sizeof(timeval));
+	header->cmsg_level = SOL_SOCKET;
+	header->cmsg_type = SCM_TIMESTAMP;
+	memcpy(CMSG_DATA(header), &time, sizeof(timeval));
+	messageHeader->msg_controllen = used + CMSG_SPACE(sizeof(timeval));
+}
+
+
 static size_t
 calculate_total_length(msghdr* header, void* data, size_t length)
 {
@@ -1182,6 +1215,7 @@ socket_get_option(net_socket* socket, int level, int option, void* value,
 		case SO_REUSEADDR:
 		case SO_REUSEPORT:
 		case SO_USELOOPBACK:
+		case SO_TIMESTAMP:
 		{
 			int32* _set = (int32*)value;
 			*_set = (socket->options & option) != 0;
@@ -1268,6 +1302,7 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 		buffer->buffer_flags &= ~NET_BUFFER_CONTROL_TRUNCATED;
 	if (header != NULL) {
 		if (buffer != NULL && header->msg_control != NULL) {
+			size_t controlCapacity = header->msg_controllen;
 			ancillary_data_container* container
 				= gNetBufferModule.get_ancillary_data(buffer);
 			if (container != NULL)
@@ -1278,6 +1313,7 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 				gNetBufferModule.free(buffer);
 				return status;
 			}
+			add_timestamp_message(socket, buffer, header, controlCapacity);
 		} else
 			header->msg_controllen = 0;
 	}
@@ -1622,6 +1658,7 @@ socket_set_option(net_socket* socket, int level, int option, const void* value,
 		case SO_REUSEADDR:
 		case SO_REUSEPORT:
 		case SO_USELOOPBACK:
+		case SO_TIMESTAMP:
 			if (length != sizeof(int32))
 				return B_BAD_VALUE;
 

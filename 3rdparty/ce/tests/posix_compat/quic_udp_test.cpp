@@ -17,7 +17,13 @@
 	   each received datagram;
 	 - recvmsg() with all of these at once, and with a control buffer too
 	   small (MSG_CTRUNC);
-	 - an unknown control message in sendmsg() refused with EINVAL.
+	 - an unknown control message in sendmsg() refused with EINVAL;
+	 - SO_TIMESTAMP: an SCM_TIMESTAMP receive time (struct timeval) on
+	   recvmsg() and recvmmsg(), together with IP_PKTINFO, MSG_CTRUNC when
+	   it does not fit, none when the option is off (Chromium R-4);
+	 - struct ip_mreqn for IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP and
+	   IP_MULTICAST_IF, imr_ifindex taking precedence over imr_address
+	   (Chromium R-5).
 
 	The "do not fragment" checks lower loopback's MTU to 1500 for a moment
 	(loopback's own 64 KiB is above any datagram) and restore it.
@@ -28,6 +34,7 @@
 
 
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <errno.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -403,6 +410,278 @@ test_family(const Family& family)
 }
 
 
+static long long
+now_usecs()
+{
+	struct timeval time;
+	gettimeofday(&time, NULL);
+	return time.tv_sec * 1000000LL + time.tv_usec;
+}
+
+
+struct Timestamped {
+	ssize_t		bytes;
+	int			flags;
+	bool		haveTimestamp;
+	bool		havePktinfo;
+	long long	time;
+};
+
+
+static Timestamped
+parse_timestamp(const Family& family, struct msghdr& header, ssize_t bytes)
+{
+	Timestamped result = {};
+	result.bytes = bytes;
+	result.flags = header.msg_flags;
+	if (bytes < 0)
+		return result;
+	for (struct cmsghdr* message = CMSG_FIRSTHDR(&header); message != NULL;
+			message = CMSG_NXTHDR(&header, message)) {
+		if (message->cmsg_level == SOL_SOCKET
+			&& message->cmsg_type == SCM_TIMESTAMP
+			&& message->cmsg_len == CMSG_LEN(sizeof(struct timeval))) {
+			struct timeval time;
+			memcpy(&time, CMSG_DATA(message), sizeof(time));
+			result.haveTimestamp = true;
+			result.time = time.tv_sec * 1000000LL + time.tv_usec;
+		} else if (message->cmsg_level == family.level
+			&& message->cmsg_type == family.pktinfoMessage) {
+			result.havePktinfo = true;
+		}
+	}
+	return result;
+}
+
+
+static Timestamped
+receive_timestamp(const Family& family, int fd, size_t controlSize)
+{
+	char data[256];
+	char control[512];
+	struct iovec vec = { data, sizeof(data) };
+	struct msghdr header = {};
+	header.msg_iov = &vec;
+	header.msg_iovlen = 1;
+	header.msg_control = control;
+	header.msg_controllen = controlSize;
+	ssize_t bytes = recvmsg(fd, &header, 0);
+	return parse_timestamp(family, header, bytes);
+}
+
+
+/*!	SO_TIMESTAMP (Chromium R-4): QUIC RTT samples and WebRTC jitter use the
+	kernel's receive time from an SCM_TIMESTAMP control message.
+*/
+static void
+test_timestamp(const Family& family)
+{
+	char name[64];
+	struct sockaddr_storage address;
+	socklen_t length = loopback(family, address);
+	int receiver = socket(family.domain, SOCK_DGRAM, 0);
+	int sender = socket(family.domain, SOCK_DGRAM, 0);
+	if (receiver < 0 || sender < 0
+		|| bind(receiver, (struct sockaddr*)&address, length) != 0) {
+		// reported by test_family()
+		close(receiver);
+		close(sender);
+		return;
+	}
+	getsockname(receiver, (struct sockaddr*)&address, &length);
+	struct timeval timeout = { 2, 0 };
+	setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+	snprintf(name, sizeof(name), "%s.so_timestamp_option", family.name);
+	check_option(name, receiver, SOL_SOCKET, SO_TIMESTAMP, 1);
+	set_int(receiver, family.level, family.pktinfo, 1);
+
+	// recvmsg(): the receive time lies between the send and the read.
+	long long before = now_usecs();
+	sendto(sender, "stamp", 5, 0, (struct sockaddr*)&address, length);
+	usleep(20000);
+	Timestamped received = receive_timestamp(family, receiver, 512);
+	long long after = now_usecs();
+	snprintf(name, sizeof(name), "%s.so_timestamp_recvmsg", family.name);
+	report(name, received.bytes == 5 && received.haveTimestamp
+			&& received.havePktinfo && received.time >= before - 1000
+			&& received.time <= after - 15000,
+		"bytes %zd, timestamp %d (%lld us after the send, read %lld us "
+		"after it), pktinfo %d", received.bytes, received.haveTimestamp,
+		received.time - before, after - before, received.havePktinfo);
+
+	// recvmmsg() (libnetwork): each message gets its own timestamp.
+	sendto(sender, "one", 3, 0, (struct sockaddr*)&address, length);
+	sendto(sender, "two", 3, 0, (struct sockaddr*)&address, length);
+	usleep(10000);
+	char data[2][64];
+	char control[2][256];
+	struct iovec vecs[2];
+	struct mmsghdr messages[2] = {};
+	for (int i = 0; i < 2; i++) {
+		vecs[i].iov_base = data[i];
+		vecs[i].iov_len = sizeof(data[i]);
+		messages[i].msg_hdr.msg_iov = &vecs[i];
+		messages[i].msg_hdr.msg_iovlen = 1;
+		messages[i].msg_hdr.msg_control = control[i];
+		messages[i].msg_hdr.msg_controllen = sizeof(control[i]);
+	}
+	int count = recvmmsg(receiver, messages, 2, MSG_DONTWAIT, NULL);
+	int stamped = 0;
+	for (int i = 0; i < count; i++) {
+		Timestamped one = parse_timestamp(family, messages[i].msg_hdr,
+			messages[i].msg_len);
+		if (one.haveTimestamp && one.time >= before)
+			stamped++;
+	}
+	snprintf(name, sizeof(name), "%s.so_timestamp_recvmmsg", family.name);
+	report(name, count == 2 && stamped == 2, "%d messages, %d stamped",
+		count, stamped);
+
+	// A control buffer with room for nothing but the pktinfo message:
+	// the datagram is delivered, with MSG_CTRUNC.
+	sendto(sender, "small", 5, 0, (struct sockaddr*)&address, length);
+	usleep(10000);
+	size_t pktinfoSpace = family.domain == AF_INET
+		? CMSG_SPACE(sizeof(struct in_pktinfo))
+		: CMSG_SPACE(sizeof(struct in6_pktinfo));
+	received = receive_timestamp(family, receiver, pktinfoSpace);
+	snprintf(name, sizeof(name), "%s.so_timestamp_truncated", family.name);
+	report(name, received.bytes == 5 && !received.haveTimestamp
+			&& (received.flags & MSG_CTRUNC) != 0,
+		"bytes %zd, timestamp %d, MSG_CTRUNC %d", received.bytes,
+		received.haveTimestamp, (received.flags & MSG_CTRUNC) != 0);
+
+	// Off again: no timestamp.
+	set_int(receiver, SOL_SOCKET, SO_TIMESTAMP, 0);
+	sendto(sender, "off", 3, 0, (struct sockaddr*)&address, length);
+	usleep(10000);
+	received = receive_timestamp(family, receiver, 512);
+	snprintf(name, sizeof(name), "%s.so_timestamp_off", family.name);
+	report(name, received.bytes == 3 && !received.haveTimestamp,
+		"bytes %zd, timestamp %d", received.bytes, received.haveTimestamp);
+
+	close(sender);
+	close(receiver);
+}
+
+
+/*!	An interface with an IPv4 address that can join multicast groups: the
+	first non-loopback one with IFF_MULTICAST, else loopback.
+*/
+static unsigned
+multicast_interface(struct in_addr& _address, char* name, size_t nameSize)
+{
+	struct ifaddrs* list;
+	unsigned result = 0;
+	if (getifaddrs(&list) != 0)
+		return 0;
+	for (int pass = 0; pass < 2 && result == 0; pass++) {
+		for (struct ifaddrs* entry = list; entry != NULL;
+				entry = entry->ifa_next) {
+			if (entry->ifa_addr == NULL
+				|| entry->ifa_addr->sa_family != AF_INET
+				|| (entry->ifa_flags & IFF_UP) == 0)
+				continue;
+			bool isLoopback = (entry->ifa_flags & IFF_LOOPBACK) != 0;
+			if (pass == 0 && (isLoopback
+					|| (entry->ifa_flags & IFF_MULTICAST) == 0))
+				continue;
+			if (pass == 1 && !isLoopback)
+				continue;
+			_address = ((struct sockaddr_in*)entry->ifa_addr)->sin_addr;
+			strlcpy(name, entry->ifa_name, nameSize);
+			result = if_nametoindex(entry->ifa_name);
+			break;
+		}
+	}
+	freeifaddrs(list);
+	return result;
+}
+
+
+/*!	struct ip_mreqn (Chromium R-5): UDPSocketPosix::JoinGroup() passes the
+	interface index the caller chose (mDNS, WebRTC).
+*/
+static void
+test_mreqn()
+{
+	struct in_addr interfaceAddress = {};
+	char interfaceName[IF_NAMESIZE] = "-";
+	unsigned index = multicast_interface(interfaceAddress, interfaceName,
+		sizeof(interfaceName));
+	report("ipv4.mreqn_interface", index != 0, "%s, index %u, %s",
+		interfaceName, index, inet_ntoa(interfaceAddress));
+	if (index == 0)
+		return;
+
+	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	struct ip_mreqn request = {};
+	inet_pton(AF_INET, "239.255.42.99", &request.imr_multiaddr);
+	// A bogus address: the index must take precedence.
+	inet_pton(AF_INET, "192.0.2.77", &request.imr_address);
+	request.imr_ifindex = index;
+
+	int error = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &request,
+		sizeof(request)) == 0 ? 0 : errno;
+	report("ipv4.mreqn_add", error == 0, "IP_ADD_MEMBERSHIP: %s",
+		strerror(error));
+
+	// The same group again on the same interface, now with ip_mreq and the
+	// interface's address: already a member.
+	struct ip_mreq plain = {};
+	plain.imr_multiaddr = request.imr_multiaddr;
+	plain.imr_interface = interfaceAddress;
+	error = setsockopt(fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &plain,
+		sizeof(plain)) == 0 ? 0 : errno;
+	int error2 = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &request,
+		sizeof(request)) == 0 ? 0 : errno;
+	report("ipv4.mreqn_same_group", error == 0 && error2 == 0,
+		"drop with ip_mreq (interface address): %s; add with ip_mreqn "
+		"again: %s", strerror(error), strerror(error2));
+
+	error = setsockopt(fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &request,
+		sizeof(request)) == 0 ? 0 : errno;
+	error2 = setsockopt(fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &request,
+		sizeof(request)) == 0 ? 0 : errno;
+	report("ipv4.mreqn_drop", error == 0 && error2 == EADDRNOTAVAIL,
+		"drop: %s; drop again: %s (want EADDRNOTAVAIL)", strerror(error),
+		strerror(error2));
+
+	struct ip_mreqn bad = request;
+	bad.imr_ifindex = 9999;
+	error = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &bad,
+		sizeof(bad)) == 0 ? 0 : errno;
+	report("ipv4.mreqn_bad_index", error != 0, "index 9999: %s",
+		strerror(error));
+
+	// IP_MULTICAST_IF with an ip_mreqn: the index selects the interface,
+	// whose address getsockopt() then returns.
+	struct ip_mreqn multicastIf = {};
+	multicastIf.imr_ifindex = index;
+	error = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &multicastIf,
+		sizeof(multicastIf)) == 0 ? 0 : errno;
+	struct in_addr chosen = {};
+	socklen_t length = sizeof(chosen);
+	error2 = getsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &chosen, &length)
+		== 0 ? 0 : errno;
+	char chosenText[32];
+	strlcpy(chosenText, inet_ntoa(chosen), sizeof(chosenText));
+	report("ipv4.mreqn_multicast_if", error == 0 && error2 == 0
+			&& chosen.s_addr == interfaceAddress.s_addr,
+		"set: %s, get: %s, %s (want %s)", strerror(error), strerror(error2),
+		chosenText, inet_ntoa(interfaceAddress));
+
+	// The plain in_addr form still works (reset with INADDR_ANY).
+	struct in_addr any = { htonl(INADDR_ANY) };
+	error = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &any, sizeof(any))
+		== 0 ? 0 : errno;
+	report("ipv4.multicast_if_in_addr", error == 0, "INADDR_ANY: %s",
+		strerror(error));
+	close(fd);
+}
+
+
 int
 main()
 {
@@ -411,6 +690,9 @@ main()
 
 	test_family(kIPv4);
 	test_family(kIPv6);
+	test_timestamp(kIPv4);
+	test_timestamp(kIPv6);
+	test_mreqn();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

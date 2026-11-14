@@ -788,7 +788,9 @@ ping(int argc, char *const *argv)
 			err(EX_OSERR, "setsockopt IP_MULTICAST_IF");
 		}
 	}
-#ifdef SO_TIMESTAMP
+#if defined(SO_TIMESTAMP) && defined(SO_TS_CLOCK)
+	/* Renga has SO_TIMESTAMP (timeval, real time) but no SO_TS_CLOCK; ping
+	 * needs monotonic timespec stamps, so it keeps its own clock. */
 	{
 		int on = 1;
 		int ts_clock = SO_TS_MONOTONIC;
@@ -898,7 +900,7 @@ ping(int argc, char *const *argv)
 	msg.msg_name = (caddr_t)&from;
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
-#ifdef SO_TIMESTAMP
+#if defined(SO_TIMESTAMP) && defined(SO_TS_CLOCK)
 	msg.msg_control = (caddr_t)ctrl;
 	msg.msg_controllen = sizeof(ctrl);
 #endif
@@ -951,7 +953,7 @@ ping(int argc, char *const *argv)
 			continue;	/* EINTR */
 		if (n == 1) {
 			struct timespec *tv = NULL;
-#ifdef SO_TIMESTAMP
+#if defined(SO_TIMESTAMP) && defined(SO_TS_CLOCK)
 			struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
 #endif
 			msg.msg_namelen = sizeof(from);
@@ -964,7 +966,7 @@ ping(int argc, char *const *argv)
 			/* If we have a 0 byte read from recvfrom continue */
 			if (cc == 0)
 				continue;
-#ifdef SO_TIMESTAMP
+#if defined(SO_TIMESTAMP) && defined(SO_TS_CLOCK)
 			if (cmsg != NULL &&
 			    cmsg->cmsg_level == SOL_SOCKET &&
 			    cmsg->cmsg_type == SCM_TIMESTAMP &&

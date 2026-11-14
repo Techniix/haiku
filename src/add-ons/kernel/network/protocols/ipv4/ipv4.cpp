@@ -1062,6 +1062,34 @@ ipv4_generic_delta_membership(ipv4_protocol* protocol, int option,
 }
 
 
+/*!	Renga (Chromium R-5): the first IPv4 address of the interface with
+	the given index, for ip_mreqn's imr_ifindex in IP_MULTICAST_IF (the
+	send path selects the interface by its address).
+*/
+static status_t
+ipv4_interface_address_for_index(int index, in_addr& _address)
+{
+	if (index <= 0)
+		return B_DEVICE_NOT_FOUND;
+	net_interface* interface = sDatalinkModule->get_interface(sDomain, index);
+	if (interface == NULL)
+		return B_DEVICE_NOT_FOUND;
+
+	status_t status = EADDRNOTAVAIL;
+	net_interface_address* address = NULL;
+	while (sDatalinkModule->get_next_interface_address(interface, &address)) {
+		if (address->local != NULL && address->local->sa_family == AF_INET) {
+			_address = ((sockaddr_in*)address->local)->sin_addr;
+			status = B_OK;
+			sDatalinkModule->put_interface_address(address);
+			break;
+		}
+	}
+	sDatalinkModule->put_interface(interface);
+	return status;
+}
+
+
 //	#pragma mark - module interface
 
 
@@ -1389,21 +1417,40 @@ ipv4_setsockopt(net_protocol* _protocol, int level, int option,
 		if (option == IP_TOS)
 			return set_int_option(protocol->service_type, value, length);
 		if (option == IP_MULTICAST_IF) {
-			if (length != sizeof(struct in_addr))
+			// Linux accepts an in_addr, an ip_mreq (its imr_interface) or
+			// an ip_mreqn, whose non-zero imr_ifindex takes precedence
+			// (Renga, Chromium R-5).
+			if (length != sizeof(struct in_addr)
+				&& length != sizeof(struct ip_mreq)
+				&& length != sizeof(struct ip_mreqn))
 				return B_BAD_VALUE;
 			if (!isDgramOrRaw)
 				return B_NOT_SUPPORTED;
 
+			struct ip_mreqn request = {};
+			struct in_addr sin_addr;
+			if (length == sizeof(struct in_addr)) {
+				if (user_memcpy(&sin_addr, value, sizeof(struct in_addr))
+						!= B_OK)
+					return B_BAD_ADDRESS;
+			} else {
+				if (user_memcpy(&request, value, length) != B_OK)
+					return B_BAD_ADDRESS;
+				// ip_mreq's imr_interface and ip_mreqn's imr_address
+				// are both at offset 4
+				sin_addr = request.imr_address;
+				if (length == sizeof(struct ip_mreqn)
+					&& request.imr_ifindex != 0) {
+					status_t status = ipv4_interface_address_for_index(
+						request.imr_ifindex, sin_addr);
+					if (status != B_OK)
+						return status;
+				}
+			}
+
 			struct sockaddr_in* address = new (std::nothrow) sockaddr_in;
 			if (address == NULL)
 				return B_NO_MEMORY;
-
-			struct in_addr sin_addr;
-			if (user_memcpy(&sin_addr, value, sizeof(struct in_addr))
-					!= B_OK) {
-				delete address;
-				return B_BAD_ADDRESS;
-			}
 			fill_sockaddr_in(address, sin_addr.s_addr);
 
 			MutexLocker _(sMulticastGroupsLock);
@@ -1449,14 +1496,26 @@ ipv4_setsockopt(net_protocol* _protocol, int level, int option,
 		if (option == IP_ADD_MEMBERSHIP || option == IP_DROP_MEMBERSHIP) {
 			if (!isDgramOrRaw)
 				return B_NOT_SUPPORTED;
-			ip_mreq mreq;
-			if (length != sizeof(ip_mreq))
+			// An ip_mreq or (Renga, Chromium R-5) Linux's ip_mreqn, whose
+			// non-zero imr_ifindex takes precedence over imr_address.
+			ip_mreqn mreq = {};
+			if (length != sizeof(ip_mreq) && length != sizeof(ip_mreqn))
 				return B_BAD_VALUE;
-			if (user_memcpy(&mreq, value, sizeof(ip_mreq)) != B_OK)
+			if (user_memcpy(&mreq, value, length) != B_OK)
 				return B_BAD_ADDRESS;
 
 			MutexLocker _(sMulticastGroupsLock);
-			return ipv4_delta_membership(protocol, option, &mreq.imr_interface,
+			if (length == sizeof(ip_mreqn) && mreq.imr_ifindex != 0) {
+				if (mreq.imr_ifindex < 0)
+					return B_DEVICE_NOT_FOUND;
+				net_interface* interface = sDatalinkModule->get_interface(
+					sDomain, mreq.imr_ifindex);
+				if (interface == NULL)
+					return B_DEVICE_NOT_FOUND;
+				return ipv4_delta_membership(protocol, option, interface,
+					&mreq.imr_multiaddr, NULL);
+			}
+			return ipv4_delta_membership(protocol, option, &mreq.imr_address,
 				&mreq.imr_multiaddr, NULL);
 		}
 		if (option == IP_BLOCK_SOURCE
@@ -1876,6 +1935,8 @@ ipv4_receive_data(net_buffer* buffer)
 	// stored header.
 	buffer->traffic_class = header.service_type;
 	buffer->hop_limit = header.time_to_live;
+	buffer->receive_time = real_time_clock_usecs();
+		// SO_TIMESTAMP (SCM_TIMESTAMP is wall-clock time, as on Linux)
 
 	if ((buffer->buffer_flags & NET_BUFFER_L3_CHECKSUM_VALID) == 0) {
 		if (gBufferModule->checksum(buffer, 0, headerLength, true) != 0)

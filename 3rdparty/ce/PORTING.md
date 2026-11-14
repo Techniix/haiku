@@ -61,6 +61,8 @@ updates this file in the same commit.
 | `getpeereid()` | `<unistd.h>` (bsd) | `-lbsd` | Missing | Available |
 | `POLLRDHUP` (`poll()`), `EPOLLRDHUP` on a peer's half-close | `<poll.h>`, `<sys/epoll.h>` | | Missing; a half-close was reported as `POLLHUP` | Available |
 | UDP options for QUIC: `IP_RECVTOS`, `IP_PKTINFO`, `IP_MTU_DISCOVER`, `IPV6_RECVTCLASS`, `IPV6_TCLASS`, `IPV6_DONTFRAG`, `IPV6_MTU_DISCOVER`; `sendmsg()` with `IP_TOS`/`IP_TTL`/`IPV6_TCLASS`/`IPV6_HOPLIMIT`; `MSG_CTRUNC` | `<netinet/in.h>` | libnetwork (nothing extra) | Missing; any `sendmsg()` control message failed with `EOPNOTSUPP` | Available |
+| `SO_TIMESTAMP` with `SCM_TIMESTAMP` (`struct timeval`) on `recvmsg()`/`recvmmsg()` | `<sys/socket.h>` | (nothing extra) | Missing | Available |
+| `struct ip_mreqn` for `IP_ADD_MEMBERSHIP`, `IP_DROP_MEMBERSHIP`, `IP_MULTICAST_IF` | `<netinet/in.h>` | (nothing extra) | Missing; only `ip_mreq` / `in_addr` | Available |
 | `madvise(MADV_DONTNEED)` zero-fill of private memory (V8, PartitionAlloc) | `<sys/mman.h>` | libroot (nothing extra) | Accepted, did nothing | Available |
 | virtio-blk disks on x86_64 (boot from them, flush, trim) | (driver) | | Driver not shipped on x86_64 | Available |
 | Gamepads as Linux evdev devices (`/dev/input/event*`, FF rumble), virtual devices (`/dev/input/uinput`), raw HID for game controllers (`/dev/hidraw*`) | `<linux/input.h>`, `<linux/uinput.h>`, `<linux/hidraw.h>` (gnu) | (nothing extra) | Missing (BJoystick only, 360 pads read-only) | Available (not yet tried with real pads) |
@@ -415,6 +417,23 @@ sockets now works, so HTTP/3 needs no `--disable-quic`:
   (on) or `_DONT`/`_WANT` (off). A datagram above the route MTU then fails
   with `EMSGSIZE`.
 - `SO_RCVBUF`/`SO_SNDBUF` of a megabyte and more are kept.
+- Receive times (Chromium R-4, since the 2026-11-14 batch):
+  `setsockopt(SOL_SOCKET, SO_TIMESTAMP, 1)` adds an `SCM_TIMESTAMP`
+  message (level `SOL_SOCKET`, a `struct timeval` of real time, as Linux
+  and FreeBSD) to every datagram `recvmsg()` and `recvmmsg()` return, after
+  the IP-level messages. The time is taken when the IP layer (IPv4 or
+  IPv6) receives the packet. If it does not fit in the control buffer the
+  datagram comes with `MSG_CTRUNC`. Any socket with IP below it gets it
+  (UDP, raw); TCP ignores it. FreeBSD's `SO_TS_CLOCK`, `SO_BINTIME` and
+  Linux's `SO_TIMESTAMPNS`/`SO_TIMESTAMPING` are not provided. Under
+  Renguin, Linux's `SO_TIMESTAMP` maps to it.
+- Multicast with an interface index (Chromium R-5): `struct ip_mreqn`
+  (`imr_multiaddr`, `imr_address`, `imr_ifindex`) is accepted, by its
+  size, by `IP_ADD_MEMBERSHIP` and `IP_DROP_MEMBERSHIP`, and
+  `IP_MULTICAST_IF` takes an `in_addr`, an `ip_mreq` or an `ip_mreqn`, as
+  on Linux. A non-zero `imr_ifindex` takes precedence over `imr_address`;
+  an unknown index fails with `ENODEV`. `IP_MULTICAST_IF` by index uses
+  the interface's first IPv4 address, which `getsockopt()` then returns.
 - `recvmsg()` with a control buffer too small for all messages delivers the
   datagram with `MSG_CTRUNC` (and the messages that fit); before it failed
   with `ENOMEM` for IPv6. An unknown control message in `sendmsg()` fails

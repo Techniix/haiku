@@ -48,6 +48,9 @@ typedef struct net_buffer {
 		// Renga: TOS / IPv6 traffic class of a received IP packet
 	uint8					hop_limit;
 		// Renga: TTL / IPv6 hop limit of a received IP packet
+	bigtime_t				receive_time;
+		// Renga: real time (microseconds since the epoch) the IP layer
+		// received the packet; 0 if unknown. For SO_TIMESTAMP.
 } net_buffer;
 
 struct ancillary_data_container;
