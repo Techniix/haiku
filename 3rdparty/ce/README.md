@@ -961,6 +961,15 @@ of a 1 GiB guest was, so the bounce path went untested.
   agent runs as a foreground application (it would show in Deskbar), the
   gamepad agent runs as a background app, and neither Gamepads nor System
   logs was started for agent work.
+- **renguin** (`renguin_test`, x86_64): Linux programs under Renguin
+  (roadmap F-27). The Linux test programs in `tests/renguin/linux` (from
+  Techniix/Renguin) are built with the build host's Linux gcc during the
+  image build (raw ones without a C library, branded Linux; static glibc
+  ones), installed in `/boot/system/non-packaged/data/renguin-tests`,
+  run from `/tmp` and compared with `expected.txt` (exit status and
+  output); `module` and `native_after` too. Programs in the test's
+  `kPending` list (now `libc-fs`: BFS stores no access time) are printed
+  as CE-INFO lines, not counted.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
 - **pointer_logic** (`pointer_logic_test`, no desktop needed): Adaptive
   pointer acceleration gives the same distance at 125, 500, 1000 and
