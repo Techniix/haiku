@@ -968,6 +968,12 @@ of a 1 GiB guest was, so the bounce path went untested.
   1 and 2, the preferred one with the older version. `pkgman install -R`,
   answered "no", has to plan the package from the repository with priority
   1. Nothing is installed; the test removes what it made.
+  Vendor change (2026-11-14): a package from vendor "Haiku Project"
+  installed from its file, the same package with revision 100 from
+  "Techniix" in a repository with the better priority; `pkgman update -R`
+  (answered "no") must plan the upgrade (before: "Nothing to do"). A newer
+  package from another vendor must not be offered. The test packages are
+  uninstalled again.
 - **background_agents** (`background_agents_test`, renga-* images):
   `gamepad_agent`, `crash_report_notifier` and `audio_device_agent` have
   `B_BACKGROUND_APP` in their app flags; after boot no Renga server or

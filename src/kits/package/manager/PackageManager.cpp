@@ -289,17 +289,35 @@ BPackageManager::Uninstall(const BSolverPackageSpecifierList& packages)
 void
 BPackageManager::Update(const char* const* packages, int packageCount)
 {
+	Update(packages, packageCount, true);
+}
+
+
+void
+BPackageManager::Update(const char* const* packages, int packageCount,
+	bool refresh)
+{
 	BSolverPackageSpecifierList packagesToUpdate;
 	_AddPackageSpecifiers(packages, packageCount, packagesToUpdate);
-	Update(packagesToUpdate);
+	Update(packagesToUpdate, refresh);
 }
 
 
 void
 BPackageManager::Update(const BSolverPackageSpecifierList& packages)
 {
-	Init(B_ADD_INSTALLED_REPOSITORIES | B_ADD_REMOTE_REPOSITORIES
-		| B_REFRESH_REPOSITORIES);
+	Update(packages, true);
+}
+
+
+void
+BPackageManager::Update(const BSolverPackageSpecifierList& packages,
+	bool refresh)
+{
+	uint32 flags = B_ADD_INSTALLED_REPOSITORIES | B_ADD_REMOTE_REPOSITORIES;
+	if (refresh)
+		flags |= B_REFRESH_REPOSITORIES;
+	Init(flags);
 
 	// solve
 	const BSolverPackageSpecifier* unmatchedSpecifier;

@@ -605,6 +605,18 @@ LibsolvSolver::_InitPool()
 
 	fPool = pool_create();
 
+	// Renga (2026-11-14): the system's own vendors are one vendor class.
+	// Renga's builds of HaikuPorts packages ("Techniix", in the Renga
+	// repository, which has the better priority) and Haiku's and
+	// HaikuPorts' packages ("Haiku Project") may replace each other on
+	// update; libsolv refuses a vendor change otherwise, so "pkgman update
+	// libsdl3" kept HaikuPorts' build ("Nothing to do"). Packages of any
+	// other vendor still cannot replace them, nor be replaced by them.
+	static const char* kSystemVendors[] = {
+		"Techniix", "Haiku Project", NULL, NULL
+	};
+	pool_setvendorclasses(fPool, kSystemVendors);
+
 	pool_setdebuglevel(fPool, fDebugLevel);
 
 	// Set the system architecture. We use what uname() returns unless we're on

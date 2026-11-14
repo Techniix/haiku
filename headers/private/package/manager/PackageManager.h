@@ -102,6 +102,12 @@ public:
 									int packageCount);
 			void				Update(const BSolverPackageSpecifierList&
 									packages);
+			// Renga: without refreshing the repository caches (pkgman
+			// update -R)
+			void				Update(const char* const* packages,
+									int packageCount, bool refresh);
+			void				Update(const BSolverPackageSpecifierList&
+									packages, bool refresh);
 			void				FullSync();
 
 			void				VerifyInstallation();

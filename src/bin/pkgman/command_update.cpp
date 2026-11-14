@@ -42,6 +42,8 @@ static const char* const kLongUsage =
 	"  -H, --home\n"
 	"    Update the packages in the user's home directory. Default is to\n"
 	"    update in the system directory.\n"
+	"  -R, --no-refresh\n"
+	"    Do not refresh the repository caches.\n"
 	"  -y\n"
 	"    Non-interactive mode. Automatically confirm changes, but fail when\n"
 	"    encountering problems.\n"
@@ -58,17 +60,19 @@ UpdateCommand::Execute(int argc, const char* const* argv)
 	BPackageInstallationLocation location
 		= B_PACKAGE_INSTALLATION_LOCATION_SYSTEM;
 	bool interactive = true;
+	bool refresh = true;
 
 	while (true) {
 		static struct option sLongOptions[] = {
 			{ "debug", required_argument, 0, OPTION_DEBUG },
 			{ "help", no_argument, 0, 'h' },
 			{ "home", no_argument, 0, 'H' },
+			{ "no-refresh", no_argument, 0, 'R' },
 			{ 0, 0, 0, 0 }
 		};
 
 		opterr = 0; // don't print errors
-		int c = getopt_long(argc, (char**)argv, "hHy", sLongOptions, NULL);
+		int c = getopt_long(argc, (char**)argv, "hHRy", sLongOptions, NULL);
 		if (c == -1)
 			break;
 
@@ -88,6 +92,10 @@ UpdateCommand::Execute(int argc, const char* const* argv)
 				interactive = false;
 				break;
 
+			case 'R':
+				refresh = false;
+				break;
+
 			default:
 				PrintUsageAndExit(true);
 				break;
@@ -101,7 +109,7 @@ UpdateCommand::Execute(int argc, const char* const* argv)
 	// perform the update
 	PackageManager packageManager(location, interactive);
 	packageManager.SetDebugLevel(fCommonOptions.DebugLevel());
-	packageManager.Update(packages, packageCount);
+	packageManager.Update(packages, packageCount, refresh);
 
 	return 0;
 }
