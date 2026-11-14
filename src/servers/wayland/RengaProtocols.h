@@ -11,7 +11,8 @@
 	  while a client inhibits (ScreenSaver preferences can turn this off);
 	- wp_cursor_shape_manager_v1: named cursors as Haiku's system cursors;
 	- xdg_toplevel_icon_manager_v1: accepted; icons are not shown yet;
-	- zwp_primary_selection_device_manager_v1 (HaikuPrimarySelection.cpp).
+	- zwp_primary_selection_device_manager_v1 (HaikuPrimarySelection.cpp);
+	- xdg_activation_v1: tokens, and activate() raises the window.
 */
 #define RENGA_SMALL_GLOBAL(name) \
 	class name: public WlGlocal { \
@@ -29,6 +30,7 @@ RENGA_SMALL_GLOBAL(HaikuToplevelIconGlobal)
 RENGA_SMALL_GLOBAL(HaikuPrimarySelectionGlobal)
 RENGA_SMALL_GLOBAL(HaikuPointerConstraintsGlobal)
 RENGA_SMALL_GLOBAL(HaikuRelativePointerGlobal)
+RENGA_SMALL_GLOBAL(HaikuActivationGlobal)
 	// HaikuPointerConstraints.cpp
 	// HaikuPrimarySelection.cpp
 

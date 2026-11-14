@@ -14,6 +14,10 @@
 #include "IdleInhibitUnstableV1.h"
 #include "CursorShapeV1.h"
 #include "XdgToplevelIconV1.h"
+#include "XdgActivationV1.h"
+#include "xdg-activation-v1-protocol.h"
+#include "HaikuXdgSurface.h"
+#include <Window.h>
 
 #include <Application.h>
 #include <AutoDeleter.h>
@@ -22,6 +26,7 @@
 #include <OS.h>
 
 #include <math.h>
+#include <stdio.h>
 #include <new>
 
 extern const struct wl_interface wl_fixes_interface;
@@ -142,6 +147,59 @@ public:
 		bind_simple<HaikuIdleInhibitor>(Client(), Version(), id);
 	}
 };
+
+// #pragma mark - xdg_activation_v1
+
+/*	Renga (2026-11-14): tokens are handed out on commit; activate() with a
+	token raises the surface's window (BWindow::Activate()). Haiku has no
+	focus-stealing prevention to feed with the serial and the app ID, so
+	every token the compositor made is accepted once. (foot warned that the
+	compositor "does not implement XDG activation": the global was listed in
+	the notes but never created.)
+*/
+static int32 sNextActivationToken = 1;
+
+class HaikuActivationToken: public XdgActivationTokenV1 {
+public:
+	void HandleSetSerial(uint32_t serial, struct wl_resource *seat) final {}
+	void HandleSetAppId(const char *app_id) final {}
+	void HandleSetSurface(struct wl_resource *surface) final {}
+	void HandleCommit() final
+	{
+		char token[48];
+		snprintf(token, sizeof(token), "renga-%" B_PRId32 "-%" B_PRIx64,
+			atomic_add(&sNextActivationToken, 1), (uint64)system_time());
+		SendDone(token);
+	}
+};
+
+class HaikuActivation: public XdgActivationV1 {
+public:
+	void HandleGetActivationToken(uint32_t id) final
+	{
+		bind_simple<HaikuActivationToken>(Client(), Version(), id);
+	}
+
+	void HandleActivate(const char *token, struct wl_resource *_surface) final
+	{
+		if (token == NULL || strncmp(token, "renga-", 6) != 0)
+			return;
+		HaikuSurface *surface = HaikuSurface::FromResource(_surface);
+		if (surface == NULL || surface->XdgSurface() == NULL)
+			return;
+		BWindow *window = surface->XdgSurface()->Window();
+		if (window != NULL)
+			window->Activate(true);
+	}
+};
+
+DEFINE_CREATE(HaikuActivationGlobal, xdg_activation_v1_interface, 1)
+
+void HaikuActivationGlobal::Bind(struct wl_client *client, uint32_t version, uint32_t id)
+{
+	bind_simple<HaikuActivation>(client, version, id);
+}
+
 
 DEFINE_CREATE(HaikuIdleInhibitGlobal, zwp_idle_inhibit_manager_v1_interface, 1)
 

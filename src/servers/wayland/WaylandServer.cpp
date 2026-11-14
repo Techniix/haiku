@@ -213,6 +213,7 @@ create_globals(struct wl_display* display)
 	Assert(HaikuPrimarySelectionGlobal::Create(display) != NULL);
 	Assert(HaikuPointerConstraintsGlobal::Create(display) != NULL);
 	Assert(HaikuRelativePointerGlobal::Create(display) != NULL);
+	Assert(HaikuActivationGlobal::Create(display) != NULL);
 	Assert(HaikuDataDeviceManagerGlobal::Create(display) != NULL);
 	Assert((seat = HaikuSeatGlobal::Create(display)) != NULL);
 	Assert(HaikuTextInputGlobal::Create(display, seat) != NULL);

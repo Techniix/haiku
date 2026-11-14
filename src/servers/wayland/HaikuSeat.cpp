@@ -272,6 +272,10 @@ void HaikuSeatGlobal::Bind(struct wl_client *wl_client, uint32_t version, uint32
 		return;
 	}
 	seat->SendCapabilities(WlSeat::capabilityPointer | WlSeat::capabilityKeyboard);
+	// Renga: the seat's name (wl_seat 2 and later); wayland-info showed
+	// "(null)" before
+	if (version >= 2)
+		seat->SendName("seat0");
 }
 
 

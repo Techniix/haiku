@@ -81,6 +81,7 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
 #include "xdg-toplevel-icon-v1-client-protocol.h"
+#include "xdg-activation-v1-client-protocol.h"
 
 
 #define SUITE "wayland_protocols"
@@ -221,7 +222,8 @@ test_globals(Connection& connection)
 		"wp_fractional_scale_manager_v1", "zwp_idle_inhibit_manager_v1",
 		"zwp_primary_selection_device_manager_v1",
 		"zwp_pointer_constraints_v1", "zwp_relative_pointer_manager_v1",
-		"wp_cursor_shape_manager_v1", "xdg_toplevel_icon_manager_v1", NULL };
+		"wp_cursor_shape_manager_v1", "xdg_toplevel_icon_manager_v1",
+		"xdg_activation_v1", NULL };
 	std::string missing;
 	for (int i = 0; wanted[i] != NULL; i++) {
 		if (!connection.Has(wanted[i]))
@@ -1031,6 +1033,79 @@ test_clipboard(Connection& a, Connection& b)
 // #pragma mark -
 
 
+// #pragma mark - activation and the seat's name
+
+
+static void
+activation_done(void* data, xdg_activation_token_v1*, const char* token)
+{
+	*(std::string*)data = token != NULL ? token : "";
+}
+
+static const xdg_activation_token_v1_listener kActivationTokenListener = {
+	activation_done
+};
+
+
+static void
+seat_capabilities(void*, wl_seat*, uint32_t)
+{
+}
+
+static void
+seat_name(void* data, wl_seat*, const char* name)
+{
+	*(std::string*)data = name != NULL ? name : "";
+}
+
+static const wl_seat_listener kSeatNameListener = {
+	seat_capabilities, seat_name
+};
+
+
+/*	2026-11-14 (hardware: foot said the compositor "does not implement XDG
+	activation", wayland-info showed the seat's name as "(null)"):
+	xdg_activation_v1 gives a token on commit; wl_seat names itself
+	"seat0". */
+static void
+test_activation(Connection& connection)
+{
+	xdg_activation_v1* activation = (xdg_activation_v1*)connection.Bind(
+		"xdg_activation_v1", &xdg_activation_v1_interface, 1);
+	std::string token;
+	if (activation != NULL) {
+		xdg_activation_token_v1* request
+			= xdg_activation_v1_get_activation_token(activation);
+		xdg_activation_token_v1_add_listener(request,
+			&kActivationTokenListener, &token);
+		xdg_activation_token_v1_set_app_id(request, "renga.test");
+		xdg_activation_token_v1_commit(request);
+		bigtime_t end = system_time() + 2000000;
+		while (token.empty() && system_time() < end)
+			dispatch_until(connection.display, 50000, NULL);
+		xdg_activation_token_v1_destroy(request);
+	}
+	report("activation", activation != NULL && !token.empty()
+			&& connection_ok(connection),
+		"xdg_activation_v1 %s, token \"%s\"", activation != NULL ? "bound"
+			: "missing", token.c_str());
+	if (activation != NULL)
+		xdg_activation_v1_destroy(activation);
+
+	wl_seat* seat = (wl_seat*)connection.Bind("wl_seat", &wl_seat_interface,
+		10);
+	std::string name;
+	if (seat != NULL) {
+		wl_seat_add_listener(seat, &kSeatNameListener, &name);
+		wl_display_roundtrip(connection.display);
+		wl_display_roundtrip(connection.display);
+		wl_seat_release(seat);
+	}
+	report("seat_name", name == "seat0", "wl_seat name \"%s\" (want "
+		"seat0)", name.c_str());
+}
+
+
 int
 main()
 {
@@ -1059,6 +1134,7 @@ main()
 	test_fixes(a);
 	test_window(a);
 	test_seat(a);
+	test_activation(a);
 	test_primary(a, b);
 	test_clipboard(a, b);
 
