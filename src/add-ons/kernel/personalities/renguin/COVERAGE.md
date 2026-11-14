@@ -129,7 +129,11 @@ Renga has natively (F-12) and only need mapping; `copy_file_range` and
 ## Beyond system calls
 
 - **ioctl**: terminal requests (TCGETS/TCSETS*, TIOCGWINSZ/SWINSZ,
-  TIOC[GS]PGRP, TIOCGSID, TIOCSCTTY), FIONREAD, FIONBIO, FIOCLEX/FIONCLEX;
+  TIOC[GS]PGRP, TIOCGSID, TIOCSCTTY, TIOCNOTTY), pseudo-terminals
+  (TIOCGPTN, TIOCSPTLCK, TIOCGPTPEER on Haiku's pty driver: `/dev/ptmx`
+  is the master, `/dev/pts/<n>` names Haiku's `/dev/tt/<l><h>` slave and
+  `/proc/self/fd` shows it so, which openpty(), forkpty(), ttyname() and
+  terminal emulators need), FIONREAD, FIONBIO, FIOCLEX/FIONCLEX;
   socket requests SIOCGIFNAME, SIOCGIFCONF, SIOCGIFFLAGS, SIOCGIFADDR,
   SIOCGIFDSTADDR, SIOCGIFBRDADDR, SIOCGIFNETMASK, SIOCGIFMETRIC,
   SIOCGIFMTU, SIOCGIFHWADDR, SIOCGIFINDEX, SIOCGIFTXQLEN, SIOCATMARK.
@@ -152,6 +156,10 @@ Renga has natively (F-12) and only need mapping; `copy_file_range` and
   performance hints accepted, others ENOPROTOOPT; TCP_INFO is not mapped
   yet. Interfaces are named "lo" and "eth0", "eth1", ... (Haiku's link
   layer does not tell Wi-Fi from Ethernet); indexes are Haiku's.
+- **fallocate**: mode 0 and FALLOC_FL_KEEP_SIZE. On file systems without
+  preallocation (memfds live on one) mode 0 grows the file with ftruncate,
+  seals applying; KEEP_SIZE is accepted (space is reserved on write); hole
+  punching and zero ranges are EOPNOTSUPP.
 - **Files**: absolute paths are looked up in the Linux root
   (`/boot/system/non-packaged/compat/linux`) first, then in Haiku's tree,
   following links through both (path.cpp); `/proc` is generated

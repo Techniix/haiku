@@ -20,6 +20,7 @@
 #include "renguin.h"
 #include "linux_defs.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include <KernelExport.h>
@@ -28,6 +29,7 @@
 #include <termios.h>
 
 #include <kernel.h>
+#include <tty.h>
 #include <vfs.h>
 
 
@@ -263,6 +265,56 @@ renguin_sys_ioctl(int fd, uint64 cmd, uint64 arg)
 				(void*)(addr_t)arg, sizeof(pid_t)));
 		case LX_TIOCSCTTY:
 			return tty_status(_user_ioctl(fd, TIOCSCTTY, NULL, 0));
+
+		// Renga (2026-11-14): Linux pseudo-terminals on Haiku's pty driver
+		// (the /dev/pts names: path.cpp). Haiku's slaves need no unlocking
+		// and no grantpt() permission change for the owner.
+		case LX_TIOCGPTN:
+		{
+			// the pty's number: /dev/pts/<n>
+			int32 index;
+			status_t status = haiku_ioctl_struct(fd, B_IOCTL_GET_TTY_INDEX,
+				&index, sizeof(index), true);
+			if (status != B_OK)
+				return tty_status(status);
+			uint32 number = (uint32)index;
+			if (renguin_copy_out(arg, &number, sizeof(number)) != B_OK)
+				return -LX_EFAULT;
+			return 0;
+		}
+		case LX_TIOCSPTLCK:
+		{
+			// (un)lock: nothing to do, but only a master answers
+			int32 index;
+			status_t status = haiku_ioctl_struct(fd, B_IOCTL_GET_TTY_INDEX,
+				&index, sizeof(index), true);
+			return tty_status(status);
+		}
+		case LX_TIOCGPTPEER:
+		{
+			// opens the slave of this master; arg holds the open() flags
+			int32 index;
+			status_t status = haiku_ioctl_struct(fd, B_IOCTL_GET_TTY_INDEX,
+				&index, sizeof(index), true);
+			if (status != B_OK)
+				return tty_status(status);
+			char path[32];
+			snprintf(path, sizeof(path), "/dev/tt/%c%" B_PRIx32,
+				(char)('p' + index / 16), (uint32)index % 16);
+			renguin_scratch scratch;
+			renguin_scratch_init(&scratch);
+			uint64 user = renguin_scratch_put(&scratch, path,
+				strlen(path) + 1);
+			if (user == 0)
+				return -LX_EFAULT;
+			int slave = _user_open(-1, (const char*)(addr_t)user,
+				open_flags_to_haiku(arg), 0);
+			return slave >= 0 ? slave : renguin_encode(slave);
+		}
+		case LX_TIOCNOTTY:
+			// drop the controlling terminal: a session leader's own
+			// business on Haiku; accepted
+			return 0;
 
 		case LX_FIONREAD:
 			return renguin_encode(_user_ioctl(fd, FIONREAD,

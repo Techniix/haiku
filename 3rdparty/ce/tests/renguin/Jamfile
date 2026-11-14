@@ -77,7 +77,8 @@ local linuxRoot = <renguin-linux>renguin-linux-root.tar.gz ;
 MakeLocate $(linuxRoot) : $(outputDir) ;
 local rootInputs = <renguin-root>build-root.sh <renguin-root>alpine.pins ;
 SEARCH on $(rootInputs) = $(rootDir) ;
-local dynSources = <renguin-dyn>hello.c <renguin-dyn>net.c <renguin-dyn>fds.c ;
+local dynSources = <renguin-dyn>hello.c <renguin-dyn>net.c <renguin-dyn>fds.c
+	<renguin-dyn>sys.c ;
 SEARCH on $(dynSources) = $(dynDir) ;
 local waylandClientDir = [ FDirName $(SUBDIR) dyn-wayland ] ;
 local waylandClientSources = <renguin-dyn-wayland>wlclient.c ;

@@ -743,14 +743,48 @@ renguin_sys_readahead(int fd, int64 offset, uint64 count)
 }
 
 
+/*!	fallocate(): mode 0 (posix_fallocate()) and FALLOC_FL_KEEP_SIZE.
+	Renga (2026-11-14): file systems without a preallocate hook (the one
+	memfds live on, /var/shared_memory) answered B_UNSUPPORTED, so musl's
+	posix_fallocate() failed with EOPNOTSUPP and weston-simple-shm could
+	not make its first buffer. Then mode 0 grows the file to offset + length
+	with ftruncate() (seals apply: F_SEAL_GROW gives EPERM, as on Linux),
+	which is what posix_fallocate() promises: the range can be written
+	without growing the file. FALLOC_FL_KEEP_SIZE only reserves space,
+	which Haiku's file systems do on write: it is accepted, the size stays.
+	PUNCH_HOLE, ZERO_RANGE and the others stay EOPNOTSUPP.
+*/
+#define LX_FALLOC_FL_KEEP_SIZE	0x01
+
 int64
 renguin_sys_fallocate(int fd, uint64 mode, int64 offset, int64 length)
 {
 	if (offset < 0 || length <= 0)
 		return -LX_EINVAL;
-	if (mode != 0)
-		return -LX_EOPNOTSUPP;		// KEEP_SIZE, PUNCH_HOLE, ...
-	return renguin_encode(_user_preallocate(fd, offset, length));
+	if (mode != 0 && mode != LX_FALLOC_FL_KEEP_SIZE)
+		return -LX_EOPNOTSUPP;		// PUNCH_HOLE, ZERO_RANGE, ...
+
+	struct stat st;
+	status_t status = vfs_read_stat(fd, NULL, false, &st, false);
+	if (status != B_OK)
+		return renguin_encode(status);
+	if (S_ISDIR(st.st_mode))
+		return -LX_EISDIR;
+	if (!S_ISREG(st.st_mode))
+		return -LX_ENODEV;
+	if (offset > INT64_MAX - length)
+		return -LX_EFBIG;
+
+	if (mode == LX_FALLOC_FL_KEEP_SIZE)
+		return 0;
+
+	status = _user_preallocate(fd, offset, length);
+	if (status == B_UNSUPPORTED || status == B_NOT_SUPPORTED) {
+		if (st.st_size >= offset + length)
+			return 0;
+		return renguin_sys_ftruncate(fd, offset + length);
+	}
+	return renguin_encode(status);
 }
 
 

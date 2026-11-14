@@ -1,7 +1,7 @@
 SubDir HAIKU_TOP src add-ons kernel personalities renguin ;
 
 UsePrivateKernelHeaders ;
-UsePrivateHeaders system ;
+UsePrivateHeaders system drivers ;
 
 # Linux ABI binaries are x86-64 only for now.
 if $(TARGET_ARCH) = x86_64 {

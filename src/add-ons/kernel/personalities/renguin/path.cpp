@@ -313,6 +313,61 @@ renguin_host_to_linux_path(char* path)
 }
 
 
+/*!	Renga (2026-11-14): Linux pseudo-terminals. Linux programs find their
+	pty slaves as /dev/pts/<n> (devpts) and the master as /dev/ptmx; Haiku's
+	pty driver publishes /dev/ptmx too, the masters as /dev/pt/<l><h> and
+	the slaves as /dev/tt/<l><h>, with <l> 'p' + n / 16 and <h> n % 16 in
+	hex (libroot's ptsname()). These two translate between them.
+*/
+bool
+renguin_linux_pts_to_host(const char* path, char* hostPath, size_t size)
+{
+	if (strcmp(path, "/dev/pts") == 0 || strcmp(path, "/dev/pts/") == 0) {
+		strlcpy(hostPath, "/dev/tt", size);
+		return true;
+	}
+	if (strncmp(path, "/dev/pts/", 9) != 0)
+		return false;
+	const char* number = path + 9;
+	if (*number < '0' || *number > '9')
+		return false;
+	uint32 index = 0;
+	for (; *number >= '0' && *number <= '9'; number++)
+		index = index * 10 + (*number - '0');
+	if (*number != '\0' || index >= 16 * 26)
+		return false;
+	snprintf(hostPath, size, "/dev/tt/%c%" B_PRIx32, (char)('p' + index / 16),
+		index % 16);
+	return true;
+}
+
+
+void
+renguin_host_to_linux_device(char* path, size_t size)
+{
+	bool slave = strncmp(path, "/dev/tt/", 8) == 0;
+	bool master = strncmp(path, "/dev/pt/", 8) == 0;
+	if (!slave && !master)
+		return;
+	const char* name = path + 8;
+	if (name[0] < 'p' || name[0] > 'z' || name[1] == '\0' || name[2] != '\0')
+		return;
+	char digit = name[1];
+	uint32 low;
+	if (digit >= '0' && digit <= '9')
+		low = digit - '0';
+	else if (digit >= 'a' && digit <= 'f')
+		low = digit - 'a' + 10;
+	else
+		return;
+	uint32 index = (name[0] - 'p') * 16 + low;
+	if (slave)
+		snprintf(path, size, "/dev/pts/%" B_PRIu32, index);
+	else
+		strlcpy(path, "/dev/ptmx", size);
+}
+
+
 status_t
 renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
 	size_t pathSize)
@@ -334,8 +389,13 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 	// Devices always come from Haiku's own /dev, as FreeBSD gets them from
 	// the devfs mounted at /compat/linux/dev. Otherwise "> /dev/null" (an
 	// O_CREAT open) would create a plain file inside the Linux root.
-	if (strncmp(path, "/dev", 4) == 0 && (path[4] == '\0' || path[4] == '/'))
+	if (strncmp(path, "/dev", 4) == 0 && (path[4] == '\0' || path[4] == '/')) {
+		// devpts: /dev/pts/<n> is Haiku's /dev/tt/<l><h>
+		char host[32];
+		if (renguin_linux_pts_to_host(path, host, sizeof(host)))
+			strlcpy(path, host, pathSize);
 		return B_OK;
+	}
 
 	// Already a host path into the Linux root: leave it alone.
 	const size_t rootLength = strlen(RENGUIN_LINUX_ROOT);

@@ -372,6 +372,12 @@ status_t	renguin_translate_path(char* path, size_t pathSize, uint32 flags);
 	// the translation renguin_get_user_path() applies, for a path already
 	// in the kernel (an AF_UNIX socket address)
 void		renguin_host_to_linux_path(char* path);
+// Renga: Haiku's pty nodes under their Linux names (devpts): the slave
+// /dev/tt/<l><h> is /dev/pts/<n>, the master /dev/pt/<l><h> is /dev/ptmx.
+int			open_flags_to_haiku(uint64 flags);
+void		renguin_host_to_linux_device(char* path, size_t size);
+bool		renguin_linux_pts_to_host(const char* path, char* hostPath,
+				size_t size);
 	// strips the Linux root prefix from a host path, in place
 
 // net.cpp: sockets on Haiku's network stack, read-only NETLINK_ROUTE

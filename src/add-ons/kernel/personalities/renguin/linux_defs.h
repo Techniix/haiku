@@ -33,6 +33,8 @@
 #define LX_EEXIST		17
 #define LX_ENOTDIR		20
 #define LX_EISDIR		21
+#define LX_ENODEV		19
+#define LX_EFBIG		27
 #define LX_EINVAL		22
 #define LX_ENFILE		23
 #define LX_EMFILE		24
@@ -226,6 +228,10 @@
 #define LX_FIONREAD		0x541B
 #define LX_FIONBIO		0x5421
 #define LX_TIOCGSID		0x5429
+#define LX_TIOCGPTN		0x80045430	// _IOR('T', 0x30, unsigned int)
+#define LX_TIOCSPTLCK	0x40045431	// _IOW('T', 0x31, int)
+#define LX_TIOCGPTPEER	0x5441		// _IO('T', 0x41)
+#define LX_TIOCNOTTY	0x5422
 #define LX_FIOCLEX		0x5451
 #define LX_FIONCLEX		0x5450
 

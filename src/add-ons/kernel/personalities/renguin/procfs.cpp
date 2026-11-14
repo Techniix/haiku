@@ -768,6 +768,8 @@ describe_fd(team_id pid, int fd, char* path, size_t size)
 	}
 	if (S_ISCHR(st.st_mode)
 		&& find_device_path(st.st_dev, st.st_ino, path, size)) {
+		// ttyname(): a pty slave is /dev/pts/<n> for Linux programs
+		renguin_host_to_linux_device(path, size);
 		return;
 	}
 	// A regular file: Haiku can't name it from the descriptor.

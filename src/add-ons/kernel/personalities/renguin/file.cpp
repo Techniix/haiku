@@ -45,7 +45,7 @@
 #include <fs/fd.h>
 
 
-static int
+int
 open_flags_to_haiku(uint64 flags)
 {
 	int result = (int)(flags & LX_O_ACCMODE);	// RDONLY/WRONLY/RDWR match

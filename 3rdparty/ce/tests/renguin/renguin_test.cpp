@@ -41,6 +41,11 @@
 	  dyn.coreutils            GNU coreutils (ls, sort, head, sha256sum)
 	  dyn.net_musl/glibc       sockets, SCM_RIGHTS, getaddrinfo, netlink
 	                           (getifaddrs, if_nameindex, RTM_GETROUTE)
+	  dyn.sys_musl/glibc       connect() to an unreachable IPv6 address
+	                           fails (apk), SIGINT interrupts blocked
+	                           calls, posix_fallocate on a sealed memfd
+	                           (weston's buffers), FALLOC_FL_KEEP_SIZE,
+	                           Linux pseudo-terminals and forkpty()
 	  dyn.fds_musl/glibc       epoll, eventfd, timerfd, signalfd, inotify,
 	                           memfd with sealing, on Renga's own
 	  dyn.wget                 busybox wget from a busybox nc server on
@@ -200,6 +205,14 @@ static const RootCheck kRootChecks[] = {
 	{ "dyn.fds_glibc", "$R/opt/renguin-tests/fds-glibc", 0,
 		"epoll ok\neventfd ok\ntimerfd ok\nsignalfd ok\ninotify ok\n"
 		"memfd ok\nok" },
+	{ "dyn.sys_musl", "$R/opt/renguin-tests/sys-musl", 0,
+		"connect6_nonblock ok\nconnect6_block ok\nconnect_fallback ok\n"
+		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
+		"fallocate_keep ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
+	{ "dyn.sys_glibc", "$R/opt/renguin-tests/sys-glibc", 0,
+		"connect6_nonblock ok\nconnect6_block ok\nconnect_fallback ok\n"
+		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
+		"fallocate_keep ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
 	// Alpine's busybox has no httpd: busybox nc answers one request with a
 	// canned HTTP response (a Linux TCP server, on 127.0.0.1: Haiku's IPv6
 	// has no IPv4-mapped addresses, so nc's default [::] listener would
