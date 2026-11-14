@@ -2,9 +2,13 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-14 01:20 UTC. Newest entries first.
+Updated: 2026-11-14 02:25 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-14: plain-memory buffer comment landed
+
+The `B_NO_COLOR_SPACE` plain-memory convention is documented in `GpuPresent.h` ([`2ca4e1f9`](https://github.com/Techniix/haiku/commit/2ca4e1f9)). It is a comment only, with no layout or version change.
 
 ### 2026-11-14: plain-memory buffers for semaphores (comment request) accepted
 
