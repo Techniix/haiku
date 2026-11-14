@@ -2,11 +2,22 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-14 15:45 UTC. Newest entries first.
+Updated: 2026-11-14 19:30 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-14: landed: R-1 to R-5 and the compositor completion (image `2026.11.14-chromium-wayland`)
+
+All QEMU Tested, not yet tried in the port. Details and limits: `3rdparty/ce/PORTING.md`.
+
+- **R-3:** `backtrace_symbols()` finds the image for an address in any of its segments and prints `image(+0xOFF)` with `OFF` = address - load bias (glibc's `l_addr`), i.e. the ELF virtual address. Make `--base image` the default (`c595cafe`).
+- **R-1, R-2, R-6 (`da0ac1d9`):** native `open()` of `/proc/self/fd/N`, `/proc/<pid>/fd/N` and `/dev/fd/N` gives a new open file description (memfd seals apply, `PROT_READ` `MAP_SHARED` works, `PROT_WRITE` and `mprotect(PROT_WRITE)` fail; a socket gives `ENXIO`). `/proc/self/maps` is in Linux's format with image paths and `start - offset` = load base. `/proc/sys/fs/inotify/max_user_watches` reads `8192`. Only `open()` (no `stat()`, `readlink()` or listing of these paths); other `/proc` files are `ENOENT` for native programs.
+- **R-4, R-5 (`976dcccc`):** `SO_TIMESTAMP` with `SCM_TIMESTAMP` (`struct timeval`, receive time) on UDP `recvmsg()`/`recvmmsg()`; `struct ip_mreqn` in `<netinet/in.h>` for `IP_ADD_MEMBERSHIP`, `IP_DROP_MEMBERSHIP` and `IP_MULTICAST_IF` (`imr_ifindex` wins). Patch 0008's own struct and the invalid `SO_TIMESTAMP` can go on the `renga` branch.
+- **Socket libwayland for ports (`98caa94a`):** package **`renga_wayland`** (in every x86_64 image): `libwayland-client-renga.so.0`, `libwayland-server-renga.so.0`, headers in `develop/headers/renga_wayland`, pkg-config `wayland-client-renga`/`wayland-server-renga`, and `wayland-client.pc`/`wayland-server.pc` in `/boot/system/data/renga_wayland/pkgconfig` for `PKG_CONFIG_PATH`. Recipes: `devel:libwayland_client_renga`. Do not load HaikuPorts' libwayland in the same process. No `libwayland-egl`/`-cursor` yet.
+- **Compositor (`6578efda`, `88904d90`, `fdf80e37`):** `zxdg_decoration_manager_v1` (server-side frame; the KDE path can go), one `wl_output` v4 per screen with `zxdg_output_manager_v1` and hot-plug, `xdg_wm_base` 6 with `configure_bounds` (usable area minus the frame) and `wm_capabilities`, `wl_fixes`, `wl_seat` 10 (`wl_pointer` 9 with `axis_value120`, `wl_keyboard` 10 with `repeated` and `repeat_info` rate 0), `wp_fractional_scale_v1` (system font size / 12), `zwp_idle_inhibit_manager_v1` (screen saver; switch in ScreenSaver preferences), primary selection (between Wayland clients), pointer constraints and relative pointer, `wp_cursor_shape_v1`, `xdg_toplevel_icon_v1` (accepted, not shown), drag and drop (X547's `8ede02e`), and the clipboard mapping for `text/plain;charset=utf-8`, `text/html`, `image/png` and `text/uri-list`, other types read lazily from the source by other Wayland clients. With the package, the three Haiku blocks in patch 0010 should be removable.
+- **Deferred:** a Deskbar entry per Wayland program; `linux-dmabuf`, `linux-drm-syncobj`, `libwayland-egl` (GPU stage); `stat()`/listing for the small `/proc`; Renguin IPv4-mapped IPv6 for `[::]` listeners and abstract Unix socket names (both open in `F-52`).
 
 ### 2026-11-14: answers to R-1 to R-6 and to the phase C notes
 
