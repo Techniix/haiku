@@ -37,6 +37,7 @@
 #include <fs/fd.h>
 #include <heap.h>
 #include <kernel.h>
+#include <foreign_personality.h>
 #include <interrupts.h>
 #include <lock.h>
 #include <low_resource_manager.h>
@@ -3984,9 +3985,14 @@ vm_page_fault(addr_t address, addr_t faultAddress, bool isWrite, bool isExecute,
 
 			// If the thread has a signal handler for SIGSEGV, we simply
 			// send it the signal. Otherwise we notify the user debugger
-			// first.
+			// first. Foreign ABI threads get their ABI's semantics (see
+			// foreign_personality.h).
 			struct sigaction action;
-			if ((sigaction(SIGSEGV, NULL, &action) == 0
+			if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0) {
+				foreign_personality_fault_signal(thread, SIGSEGV,
+					status == B_PERMISSION_DENIED ? SEGV_ACCERR : SEGV_MAPERR,
+					EFAULT, (void*)address);
+			} else if ((sigaction(SIGSEGV, NULL, &action) == 0
 					&& action.sa_handler != SIG_DFL
 					&& action.sa_handler != SIG_IGN)
 				|| user_debug_exception_occurred(B_SEGMENT_VIOLATION,

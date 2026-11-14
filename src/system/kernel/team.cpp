@@ -58,6 +58,7 @@
 #include <vfs.h>
 #include <vm/vm.h>
 #include <vm/VMAddressSpace.h>
+#include <foreign_personality.h>
 #include <util/AutoLock.h>
 #include <util/ThreadAutoLock.h>
 
@@ -474,6 +475,9 @@ Team::Team(team_id id, bool kernel)
 
 	commpage_address = NULL;
 
+	personality = NULL;
+	personality_data = NULL;
+
 	clear_team_debug_info(&debug_info, true);
 
 	dead_threads_kernel_time = 0;
@@ -514,6 +518,8 @@ Team::~Team()
 {
 	// get rid of all associated data
 	PrepareForDeletion();
+
+	foreign_personality_team_released(this);
 
 	if (io_context != NULL)
 		vfs_put_io_context(io_context);
@@ -1557,6 +1563,33 @@ team_create_thread_start_internal(void* args)
 	TRACE(("team_create_thread_start: entry thread %" B_PRId32 "\n",
 		thread->id));
 
+	// Give foreign ABI personalities (see foreign_personality.h) a chance to
+	// claim the executable. A personality that claims it loads the image and
+	// builds the initial stack itself; runtime_loader and the commpage are not
+	// used. For native executables this resets any personality the team had.
+	{
+		const foreign_personality_module_info* personality = NULL;
+		addr_t foreignEntry = 0;
+		addr_t foreignStackPointer = 0;
+		err = foreign_personality_exec(team, thread, teamArgs->path,
+			teamArgs->flat_args, teamArgs->arg_count, teamArgs->env_count,
+			teamArgs->umask, teamArgs->flags, &personality, &foreignEntry,
+			&foreignStackPointer);
+		if (err != B_NOT_SUPPORTED) {
+			free_team_arg(teamArgs);
+			if (err != B_OK)
+				return err;
+
+			team->Lock();
+			team->state = TEAM_STATE_NORMAL;
+			team->Unlock();
+
+			// returns only in case of error
+			return personality->enter_userspace(thread, foreignEntry,
+				foreignStackPointer);
+		}
+	}
+
 	// Main stack area layout is currently as follows (starting from 0):
 	//
 	// size								| usage
@@ -2237,6 +2270,12 @@ fork_team(void)
 
 	// copy image list
 	if (copy_images(parentTeam->id, team) != B_OK)
+		goto err5;
+
+	// Inherit a foreign ABI personality (see foreign_personality.h). On
+	// failure the team deletion releases whatever the personality set up.
+	status = foreign_personality_fork(parentTeam, team, thread);
+	if (status != B_OK)
 		goto err5;
 
 	// insert the team into its parent and the teams hash

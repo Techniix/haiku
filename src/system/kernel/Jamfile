@@ -49,6 +49,7 @@ KernelMergeObject kernel_core.o :
 	system_info.cpp
 	smp.cpp
 	syscalls.cpp
+	foreign_personality.cpp
 	team.cpp
 	thread.cpp
 	timer.cpp

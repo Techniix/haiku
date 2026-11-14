@@ -201,8 +201,10 @@ arch_thread_context_switch(Thread* from, Thread* to)
 	x86_set_syscall_stack(to->kernel_stack_top);
 
 	// set TLS GDT entry to the current thread - since this action is
-	// dependent on the current CPU, we have to do it here
-	if (to->user_local_storage != 0)
+	// dependent on the current CPU, we have to do it here. Threads of foreign
+	// ABI teams manage their TLS base themselves, and it may well be 0.
+	if (to->user_local_storage != 0
+		|| (to->flags & THREAD_FLAGS_FOREIGN_ABI) != 0)
 		x86_set_tls_context(to);
 
 	X86PagingStructures* activePagingStructures

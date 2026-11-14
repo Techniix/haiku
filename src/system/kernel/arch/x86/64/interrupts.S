@@ -393,6 +393,11 @@ FUNCTION(x86_64_syscall_entry):
 	movq	%rax, %r14
 	movq	%gs:0, %r12
 
+	// Threads of foreign ABI teams (see foreign_personality.h) take their own
+	// path, before any C code can touch the FPU registers.
+	testl	$THREAD_FLAGS_FOREIGN_ABI, THREAD_flags(%r12)
+	jnz		.Lforeign_syscall
+
 	STOP_USER_DEBUGGING()
 	UPDATE_THREAD_USER_TIME()
 
@@ -564,6 +569,55 @@ FUNCTION(x86_64_syscall_entry):
 	call	thread_at_kernel_exit
 	jmp		.Lpost_syscall_work_done
 
+.Lforeign_syscall:
+	// Foreign ABIs such as Linux preserve the FPU and vector registers across
+	// the syscall instruction, but kernel code may use them. Save the user
+	// state as the user interrupt path does; it is restored on the way out
+	// via .Lrestore_fpu.
+	movl	(gXsaveMask), %eax
+	movl	(gXsaveMask+4), %edx
+	leaq	THREAD_user_fpu_state(%r12), %rdi
+	CODEPATCH_START
+	fxsaveq	(%rdi)
+	CODEPATCH_END(ALTCODEPATCH_TAG_XSAVE)
+	movq	%rdi, IFRAME_fpu(%rbp)
+
+	STOP_USER_DEBUGGING()
+	UPDATE_THREAD_USER_TIME()
+	sti
+
+	// The personality reads the call number and arguments from the iframe
+	// and stores the result in it.
+	movq	%rbp, %rdi
+	call	foreign_personality_syscall
+	movq	%rbp, %rsp
+
+	// The frame may have been changed (exec, signal return), so always take
+	// the IRET path. Native syscall debugging hooks are not used: they would
+	// interpret the call number as a Haiku one.
+	testl	$(THREAD_FLAGS_SIGNALS_PENDING | THREAD_FLAGS_DEBUG_THREAD \
+			| THREAD_FLAGS_TRAP_FOR_CORE_DUMP) \
+			, THREAD_flags(%r12)
+	jnz		1f
+	cli
+	call	thread_at_kernel_exit_no_signals
+	jmp		2f
+1:
+	// thread_at_kernel_exit() disables interrupts itself.
+	call	thread_at_kernel_exit
+2:
+	testl	$THREAD_FLAGS_RESTART_SYSCALL, THREAD_flags(%r12)
+	jz		3f
+	movq	%rbp, %rdi
+	call	x86_restart_syscall
+3:
+	testl	$THREAD_FLAGS_BREAKPOINTS_DEFINED, THREAD_flags(%r12)
+	jz		4f
+	movq	%rbp, %rdi
+	call	x86_init_user_debug_at_kernel_exit
+4:
+	jmp		.Lrestore_fpu
+
 .Lsyscall_stack_args:
 	// Some arguments are on the stack, work out what we need to copy. 6
 	// arguments (48 bytes) are already in registers.
@@ -604,6 +658,27 @@ FUNCTION(x86_64_syscall_entry):
 FUNCTION_END(x86_64_syscall_entry)
 
 
+// A thread entering userland for the first time (or after a modified frame)
+// gets cleared vector registers, except threads of foreign ABI teams (see
+// foreign_personality.h): they get the FPU state their personality prepared
+// in Thread::arch_info::user_fpu_state, e.g. the state inherited from the
+// parent. The registers can't be relied on here: x86-64 Haiku does not
+// switch FPU state between threads that are inside the kernel.
+#define RETURN_TO_USERLAND_FPU_STATE() \
+	testl	$THREAD_FLAGS_FOREIGN_ABI, THREAD_flags(%r12); \
+	jz		5f; \
+	movl	(gXsaveMask), %eax; \
+	movl	(gXsaveMask+4), %edx; \
+	leaq	THREAD_user_fpu_state(%r12), %rdi; \
+	CODEPATCH_START \
+	fxrstorq	(%rdi); \
+	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR) \
+	jmp		6f; \
+5: \
+	CLEAR_FPU_STATE(); \
+6:
+
+
 /*!	\fn void x86_return_to_userland(iframe* frame)
 	\brief Returns to the userland environment given by \a frame.
 
@@ -630,7 +705,7 @@ FUNCTION(x86_return_to_userland):
 
 	UPDATE_THREAD_KERNEL_TIME()
 
-	CLEAR_FPU_STATE()
+	RETURN_TO_USERLAND_FPU_STATE()
 
 	// Restore the frame and return.
 	RESTORE_IFRAME()
@@ -654,7 +729,7 @@ FUNCTION(x86_return_to_userland):
 	movq	%rbp, %rdi
 	call	x86_init_user_debug_at_kernel_exit
 1:
-	CLEAR_FPU_STATE()
+	RETURN_TO_USERLAND_FPU_STATE()
 
 	// Restore the frame and return.
 	RESTORE_IFRAME()

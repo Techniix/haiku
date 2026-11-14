@@ -60,6 +60,7 @@ typedef enum job_control_state {
 
 struct cpu_ent;
 struct image;					// defined in image.c
+struct foreign_personality_module_info;	// defined in foreign_personality.h
 struct io_context;
 struct realtime_sem_context;	// defined in realtime_sem.cpp
 struct select_info;
@@ -314,6 +315,8 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 
 	addr_t			user_local_storage;
 		// usually allocated at the safe side of the stack
+	void*			personality_data;
+		// owned by the team's foreign ABI personality, if any
 	int				kernel_errno;
 		// kernel "errno" differs from its userspace alter ego
 
@@ -484,6 +487,12 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 	struct free_user_thread* free_user_threads;
 
 	void*			commpage_address;
+
+	const ::foreign_personality_module_info* personality;
+		// foreign ABI personality, NULL for native teams. Only changed by the
+		// team's main thread while it starts a new program, and on deletion.
+	void*			personality_data;
+		// owned by the personality
 
 	struct team_debug_info debug_info;
 
@@ -864,5 +873,8 @@ using BKernel::ProcessGroupList;
 #endif
 #define	THREAD_FLAGS_OLD_SIGMASK			0x4000
 	// the thread has an old sigmask to be restored
+#define	THREAD_FLAGS_FOREIGN_ABI			0x8000
+	// the thread's team runs a foreign ABI personality; its system calls go
+	// to the personality (see foreign_personality.h)
 
 #endif	/* _KERNEL_THREAD_TYPES_H */

@@ -12,6 +12,7 @@
 
 
 #include <cpu.h>
+#include <foreign_personality.h>
 #include <interrupts.h>
 #include <kscheduler.h>
 #include <team.h>
@@ -215,8 +216,12 @@ x86_unexpected_exception(iframe* frame)
 		enable_interrupts();
 
 		// If the thread has a signal handler for the signal, we simply send it
-		// the signal. Otherwise we notify the user debugger first.
-		if ((sigaction(signalNumber, NULL, &action) == 0
+		// the signal. Otherwise we notify the user debugger first. Foreign ABI
+		// threads get their ABI's semantics (see foreign_personality.h).
+		if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0) {
+			foreign_personality_fault_signal(thread, signalNumber, signalCode,
+				signalError, (void*)signalAddress);
+		} else if ((sigaction(signalNumber, NULL, &action) == 0
 				&& action.sa_handler != SIG_DFL
 				&& action.sa_handler != SIG_IGN)
 			|| user_debug_exception_occurred(type, signalNumber)) {

@@ -34,6 +34,7 @@
 #include <cpu.h>
 #include <elf.h>
 #include <interrupts.h>
+#include <foreign_personality.h>
 #include <kimage.h>
 #include <kscheduler.h>
 #include <ksignal.h>
@@ -291,6 +292,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	user_stack_area(-1),
 	user_stack_base(0),
 	user_local_storage(0),
+	personality_data(NULL),
 	kernel_errno(0),
 	user_time(0),
 	kernel_time(0),
@@ -738,7 +740,13 @@ remove_thread_from_team(Team *team, Thread *thread)
 static status_t
 enter_userspace(Thread* thread, UserThreadEntryArguments* args)
 {
-	status_t error = arch_thread_init_tls(thread);
+	// Threads of foreign ABI teams (see foreign_personality.h) manage their
+	// thread pointer themselves: a fork()ed child keeps its parent's, and
+	// Haiku's TLS slots must not be written into the foreign ABI's thread
+	// block.
+	const bool foreignABI = (thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0;
+
+	status_t error = foreignABI ? B_OK : arch_thread_init_tls(thread);
 	if (error != B_OK) {
 		dprintf("Failed to init TLS for new userland thread \"%s\" (%" B_PRId32
 			")\n", thread->name, thread->id);
@@ -754,8 +762,11 @@ enter_userspace(Thread* thread, UserThreadEntryArguments* args)
 	userThread->pthread = args->pthread;
 	userThread->flags = 0;
 	userThread->wait_status = B_OK;
+	// Native code undefers signals itself (libroot does after fork()); foreign
+	// ABI code never will.
 	userThread->defer_signals
-		= (args->flags & THREAD_CREATION_FLAG_DEFER_SIGNALS) != 0 ? 1 : 0;
+		= !foreignABI && (args->flags & THREAD_CREATION_FLAG_DEFER_SIGNALS) != 0
+			? 1 : 0;
 	userThread->pending_signals = 0;
 	arch_cpu_disable_user_access();
 
@@ -766,19 +777,28 @@ enter_userspace(Thread* thread, UserThreadEntryArguments* args)
 	tls[TLS_THREAD_ID_SLOT] = thread->id;
 	tls[TLS_USER_THREAD_SLOT] = (addr_t)thread->user_thread;
 
+	if (foreignABI) {
+		foreign_personality_thread_entering_userspace(thread,
+			args->forkArgs != NULL);
+	}
+
 	if (args->forkArgs == NULL) {
-		if (user_memcpy((void*)thread->user_local_storage, tls, sizeof(tls)) != B_OK)
+		if (!foreignABI && user_memcpy((void*)thread->user_local_storage, tls,
+				sizeof(tls)) != B_OK) {
 			return B_BAD_ADDRESS;
+		}
 	} else {
 		// This is a fork()ed thread.
 
 		// Update select TLS values, do not clear the whole array.
-		arch_cpu_enable_user_access();
-		addr_t* userTls = (addr_t*)thread->user_local_storage;
-		ASSERT(userTls[TLS_BASE_ADDRESS_SLOT] == thread->user_local_storage);
-		userTls[TLS_THREAD_ID_SLOT] = tls[TLS_THREAD_ID_SLOT];
-		userTls[TLS_USER_THREAD_SLOT] = tls[TLS_USER_THREAD_SLOT];
-		arch_cpu_disable_user_access();
+		if (!foreignABI) {
+			arch_cpu_enable_user_access();
+			addr_t* userTls = (addr_t*)thread->user_local_storage;
+			ASSERT(userTls[TLS_BASE_ADDRESS_SLOT] == thread->user_local_storage);
+			userTls[TLS_THREAD_ID_SLOT] = tls[TLS_THREAD_ID_SLOT];
+			userTls[TLS_USER_THREAD_SLOT] = tls[TLS_USER_THREAD_SLOT];
+			arch_cpu_disable_user_access();
+		}
 
 		// Copy the fork args onto the stack and free them.
 		arch_fork_arg archArgs = *args->forkArgs;

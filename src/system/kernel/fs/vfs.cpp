@@ -5586,6 +5586,12 @@ vfs_get_mount_point(dev_t mountID, dev_t* _mountPointMountID,
 		return B_BAD_VALUE;
 
 	Vnode* mountPoint = mount->covers_vnode;
+	if (mountPoint == NULL) {
+		// Renga: the root file system covers nothing; this dereferenced
+		// NULL for it (a kernel panic for any caller that asks about
+		// device 1, found with Renguin's /proc/mounts)
+		return B_ENTRY_NOT_FOUND;
+	}
 
 	*_mountPointMountID = mountPoint->device;
 	*_mountPointNodeID = mountPoint->id;

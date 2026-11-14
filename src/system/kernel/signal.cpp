@@ -24,6 +24,7 @@
 #include <cpu.h>
 #include <core_dump.h>
 #include <debug.h>
+#include <foreign_personality.h>
 #include <kernel.h>
 #include <kscheduler.h>
 #include <sem.h>
@@ -918,6 +919,11 @@ setup_signal_frame(Thread* thread, struct sigaction* action, Signal* signal,
 	// syscall_restart_return_value is filled in by the architecture specific
 	// code.
 
+	// Threads of foreign ABI teams (see foreign_personality.h) get the
+	// foreign ABI's signal frame.
+	if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0)
+		return foreign_personality_setup_signal_frame(thread, action, &frameData);
+
 	return arch_setup_signal_frame(thread, action, &frameData);
 }
 
@@ -1050,9 +1056,11 @@ handle_signals(Thread* thread)
 		} else if (handler.sa_handler == SIG_DFL) {
 			// default signal behaviour
 
-			// realtime signals are ignored by default
+			// realtime signals are ignored by default (foreign ABIs such as
+			// Linux end the process, as for any other signal)
 			if (signal->Number() >= SIGNAL_REALTIME_MIN
-				&& signal->Number() <= SIGNAL_REALTIME_MAX) {
+				&& signal->Number() <= SIGNAL_REALTIME_MAX
+				&& (thread->flags & THREAD_FLAGS_FOREIGN_ABI) == 0) {
 				// notify the debugger
 				if (debugSignal)
 					notify_debugger(thread, signal, handler, false);
@@ -2143,9 +2151,15 @@ sigaction_internal(int signal, const struct sigaction* act,
 
 	// Remove pending signal if it should now be ignored and remove pending
 	// signal for those signals whose default action is to ignore them.
+	// (Foreign ABIs such as Linux end the process on unhandled realtime
+	// signals, see handle_signals(), so those stay pending.)
+	sigset_t defaultIgnored = DEFAULT_IGNORE_SIGNALS;
+	if (team->personality != NULL)
+		defaultIgnored &= ~SIGNAL_RANGE_TO_MASK(SIGNAL_REALTIME_MIN,
+			SIGNAL_REALTIME_MAX);
 	if ((act && act->sa_handler == SIG_IGN)
 		|| (act && act->sa_handler == SIG_DFL
-			&& (SIGNAL_TO_MASK(signal) & DEFAULT_IGNORE_SIGNALS) != 0)) {
+			&& (SIGNAL_TO_MASK(signal) & defaultIgnored) != 0)) {
 		InterruptsSpinLocker locker(team->signal_lock);
 
 		team->RemovePendingSignal(signal);
