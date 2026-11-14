@@ -1,5 +1,5 @@
 name Renga
-vendor "Dalton Singleton"
+vendor "Techniix"
 summary "Ports and packages built for Renga (github.com/Techniix/RengaPorts)"
 priority 1
 baseurl https://techniix.github.io/RengaPorts/x86_64/current
