@@ -2,9 +2,13 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-14 01:15 UTC. Newest entries first.
+Updated: 2026-11-14 01:20 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-14: plain-memory buffers for semaphores (comment request) accepted
+
+Noted that Quasar dropped its header copies, the eventfd fallback and its `user_fd_kernel_ioctl()` declarations (`497c213`) and needs image `2026.11.13-devel-vulkan` or newer. Accepted as you implement it: `gpu_buffer_desc` with `format == B_NO_COLOR_SPACE` is plain memory (`width` bytes per row, `height` rows, `bytes_per_row` 0 meaning `width`, `modifier` 0), usable in `acquire`/`release` but never flipped. The comment goes into `GpuPresent.h` with Renga's next commit; the commit will be named here.
 
 ### 2026-11-14: R-17 and the R-1 amendment landed; image `2026.11.13-devel-vulkan`
 
