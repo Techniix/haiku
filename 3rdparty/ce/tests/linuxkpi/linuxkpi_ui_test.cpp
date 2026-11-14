@@ -12,7 +12,11 @@
 	  driver, "--tab <name>" switches tabs (also on a running instance), and
 	  the harness saves a screenshot of the Overview, Drivers, Hardware and
 	  Compatibility tabs (screen-linuxkpi_<tab>.png). It has its own vector
-	  icon, which draws (manager_icon; Renga icon rule, roadmap).
+	  icon, which draws (manager_icon; Renga icon rule, roadmap). Its
+	  settings window for mt7921e ("--settings mt7921e", as Drivers ->
+	  Settings... opens it) shows the manifest's tunables: the "Card does
+	  the encryption" check box and the Save button are there, inside the
+	  window, and the window fits on the screen (settings_*; screen-linuxkpi_settings_mt7921e.png).
 	- System logs: kernel lines of FreeBSD/LinuxKPI drivers
 	  ("[lkpi_pcitest] (lkpi) ...", from the boot-time load of the test
 	  driver against QEMU's edu device) are filed under their driver as
@@ -34,6 +38,7 @@
 #include <Messenger.h>
 #include <OS.h>
 #include <Roster.h>
+#include <Screen.h>
 #include <String.h>
 
 #include <signal.h>
@@ -219,6 +224,106 @@ test_manager_icon()
 }
 
 
+/*!	Drivers -> mt7921e -> Settings... (here "--settings mt7921e", the same
+	window): the manifest's tunables are shown as controls. On the
+	maintainer's PC the window showed only its note and buttons; the check
+	asks the window for the hardware encryption check box by name, its
+	label, and that it lies inside the window, which lies on the screen.
+*/
+static void
+test_settings_window(BMessenger& app)
+{
+	BString command;
+	command << kManager << " --settings mt7921e &";
+	system(command.String());
+
+	int32 index = -1;
+	for (int attempt = 0; attempt < 40 && index < 0; attempt++) {
+		snooze(250000);
+		for (int32 i = 0; i < 8; i++) {
+			BMessage request(B_GET_PROPERTY);
+			request.AddSpecifier("Title");
+			request.AddSpecifier("Window", i);
+			BMessage reply;
+			if (app.SendMessage(&request, &reply, 2000000, 2000000) != B_OK)
+				break;
+			if (BString(reply.GetString("result", "")) == "mt7921e settings") {
+				index = i;
+				break;
+			}
+		}
+	}
+	report("settings_window_opens", index >= 0,
+		"window \"mt7921e settings\" %s", index >= 0 ? "found" : "missing");
+	if (index < 0)
+		return;
+	snooze(1000000);
+	screenshot("linuxkpi_settings_mt7921e");
+
+	static const char* kBox = "compat.linuxkpi.80211.hw_crypto";
+	BMessage request(B_GET_PROPERTY);
+	request.AddSpecifier("Label");
+	request.AddSpecifier("View", kBox);
+	request.AddSpecifier("Window", index);
+	BMessage reply;
+	BString label;
+	if (app.SendMessage(&request, &reply, 2000000, 2000000) == B_OK)
+		label = reply.GetString("result", "");
+
+	BRect boxFrame;
+	request.MakeEmpty();
+	request.what = B_GET_PROPERTY;
+	request.AddSpecifier("Frame");
+	request.AddSpecifier("View", kBox);
+	request.AddSpecifier("Window", index);
+	reply.MakeEmpty();
+	if (app.SendMessage(&request, &reply, 2000000, 2000000) == B_OK)
+		reply.FindRect("result", &boxFrame);
+
+	BRect windowFrame;
+	request.MakeEmpty();
+	request.what = B_GET_PROPERTY;
+	request.AddSpecifier("Frame");
+	request.AddSpecifier("Window", index);
+	reply.MakeEmpty();
+	if (app.SendMessage(&request, &reply, 2000000, 2000000) == B_OK)
+		reply.FindRect("result", &windowFrame);
+
+	// the Save button below the settings is inside the window too (the
+	// window was once too short for its wrapped descriptions)
+	BRect saveFrame;
+	request.MakeEmpty();
+	request.what = B_GET_PROPERTY;
+	request.AddSpecifier("Frame");
+	request.AddSpecifier("View", "save");
+	request.AddSpecifier("Window", index);
+	reply.MakeEmpty();
+	if (app.SendMessage(&request, &reply, 2000000, 2000000) == B_OK)
+		reply.FindRect("result", &saveFrame);
+
+	BRect screen = BScreen().Frame();
+	bool saveInside = saveFrame.IsValid() && windowFrame.IsValid()
+		&& saveFrame.bottom <= windowFrame.Height() + 1
+		&& saveFrame.right <= windowFrame.Width() + 1;
+	bool inside = saveInside && boxFrame.IsValid() && boxFrame.Width() > 20
+		&& boxFrame.Height() > 5 && windowFrame.IsValid()
+		&& boxFrame.right <= windowFrame.Width() + 1
+		&& boxFrame.bottom <= windowFrame.Height() + 1;
+	report("settings_hw_crypto_box", label == "Card does the encryption"
+			&& inside,
+		"label \"%s\", box (%.0f,%.0f)-(%.0f,%.0f), Save button bottom "
+		"%.0f, in a %.0fx%.0f window", label.String(), boxFrame.left,
+		boxFrame.top, boxFrame.right, boxFrame.bottom, saveFrame.bottom,
+		windowFrame.Width(), windowFrame.Height());
+	report("settings_window_fits", windowFrame.IsValid()
+			&& screen.Contains(windowFrame),
+		"window (%.0f,%.0f)-(%.0f,%.0f), screen %.0fx%.0f",
+		windowFrame.left, windowFrame.top, windowFrame.right,
+		windowFrame.bottom, screen.Width() + 1, screen.Height() + 1);
+	// the window closes with the application (test_manager())
+}
+
+
 static void
 test_manager()
 {
@@ -267,6 +372,8 @@ test_manager()
 	report("tabs", app.IsValid() && window_title(app) == "LinuxKPI Manager",
 		"switched to %d tabs with --tab, window still open",
 		(int)(sizeof(kTabs) / sizeof(kTabs[0])));
+
+	test_settings_window(app);
 
 	app.SendMessage(B_QUIT_REQUESTED);
 	snooze(500000);

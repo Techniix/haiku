@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "MainWindow.h"
+#include "SettingsWindow.h"
 
 
 static const char* kSignature = "application/x-vnd.LinuxKPI-Manager";
@@ -36,6 +37,12 @@ public:
 				BMessage select(kMsgSelectTab);
 				select.AddString("tab", argv[i + 1]);
 				_Window()->PostMessage(&select);
+			} else if (strcmp(argv[i], "--settings") == 0) {
+				// Renga: "--settings <driver>" opens that driver's settings
+				// window, as Drivers -> Settings... does (scripts, the
+				// linuxkpi_ui suite)
+				(new SettingsWindow(argv[i + 1], BMessenger(_Window())))
+					->Show();
 			}
 		}
 	}

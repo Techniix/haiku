@@ -667,10 +667,14 @@ of a 1 GiB guest was, so the bounce path went untested.
   `linuxkpi_ui_test`): `lkpictl` (drivers, hardware, status of a driver
   that is not running, coverage, report), LinuxKPI Manager (window, the
   overview's text read through scripting, `--tab` to three tabs on the
-  running instance), System logs (FreeBSD/LinuxKPI driver lines filed
-  under their driver, `hardware/linuxkpi.txt` in "Save a report");
-  screenshots `linuxkpi_overview`, `linuxkpi_drivers`, `linuxkpi_hardware`,
-  `linuxkpi_compatibility` (`linuxkpi_ui.screenshots`).
+  running instance; `--settings mt7921e` opens the driver's settings
+  window, which has to show the "Card does the encryption" check box
+  inside the window and fit on the screen, `settings_*`), System logs
+  (FreeBSD/LinuxKPI driver lines filed under their driver,
+  `hardware/linuxkpi.txt` in "Save a report"); screenshots
+  `linuxkpi_overview`, `linuxkpi_drivers`, `linuxkpi_hardware`,
+  `linuxkpi_compatibility`, `linuxkpi_settings_mt7921e`
+  (`linuxkpi_ui.screenshots`).
 
 - **media** (renga-* images): see "Media Kit tests". In the guest it checks
   recording from the fed card through the Media Kit and its recording gain,

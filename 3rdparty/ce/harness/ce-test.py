@@ -210,7 +210,8 @@ HTML5_SCREENSHOTS = ["html5_webm", "html5_mp4"]
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
-	"linuxkpi_hardware", "linuxkpi_compatibility"]
+	"linuxkpi_hardware", "linuxkpi_compatibility",
+	"linuxkpi_settings_mt7921e"]
 # The Installer with a destination that has an installation (F-23).
 INSTALLER_SCREENSHOTS = ["installer_modes"]
 

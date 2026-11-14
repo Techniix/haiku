@@ -18,6 +18,9 @@
 #include <LayoutBuilder.h>
 #include <StringView.h>
 #include <TextControl.h>
+#include <TextView.h>
+
+#include <math.h>
 
 #include "MainWindow.h"
 
@@ -33,6 +36,39 @@ enum {
 	kMsgSave	= 'save',
 	kMsgReset	= 'rset'
 };
+
+
+/*!	Renga: a setting's description, wrapped to the window's width. A
+	BStringView is one line, and mt7921e's hardware encryption setting has
+	a description of about 250 characters: the window would be some 1500
+	pixels wide. A read-only BTextView wraps instead and only asks for the
+	height the wrapped text needs.
+*/
+static BView*
+make_description_view(const BString& text)
+{
+	BTextView* view = new BTextView("description");
+	view->SetText(text.String());
+	view->MakeEditable(false);
+	view->MakeSelectable(false);
+	view->SetWordWrap(true);
+	view->SetStylable(false);
+	view->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	view->SetLowUIColor(B_PANEL_BACKGROUND_COLOR);
+	rgb_color color = ui_color(B_PANEL_TEXT_COLOR);
+	view->SetFontAndColor(be_plain_font, B_FONT_ALL, &color);
+	view->SetInsets(0, 0, 0, 0);
+	float width = be_plain_font->Size() * 32;
+		// about 65 characters a line, 384 pixels at the default 12 points
+	// The window's size limits do not follow a text view's height for its
+	// width, so the wrapped height at this width is measured here and
+	// fixed (otherwise the note and buttons below were cut off).
+	view->ResizeTo(width, 1000);
+	view->SetTextRect(BRect(0, 0, width, 1000));
+	float height = ceilf(view->TextHeight(0, view->TextLength()));
+	view->SetExplicitSize(BSize(width, height));
+	return view;
+}
 
 
 static bool
@@ -58,6 +94,32 @@ SettingsWindow::SettingsWindow(const BString& driverName, BMessenger target)
 
 	BGridLayout* grid = new BGridLayout(B_USE_DEFAULT_SPACING,
 		B_USE_SMALL_SPACING);
+	// Renga: the grid goes into the window's layout before anything is
+	// added to it. A BLayout without a target view refuses items
+	// (BLayout::AddItem() returns false), so the settings that used to be
+	// added first never appeared: the window showed an empty area above
+	// its note and buttons (found on the maintainer's PC with mt7921e,
+	// 2026-11-13; linuxkpi_ui.settings_hw_crypto_box).
+	BStringView* note = new BStringView("note", B_TRANSLATE(
+		"Changes take effect the next time the driver loads (restart)."));
+	BButton* reset = new BButton("reset", B_TRANSLATE("Defaults"),
+		new BMessage(kMsgReset));
+	BButton* save = new BButton("save", B_TRANSLATE("Save"),
+		new BMessage(kMsgSave));
+	save->MakeDefault(true);
+	save->SetEnabled(fDriver != NULL);
+	reset->SetEnabled(fDriver != NULL);
+
+	BLayoutBuilder::Group<>(this, B_VERTICAL)
+		.SetInsets(B_USE_WINDOW_SPACING)
+		.Add(grid)
+		.Add(note)
+		.AddGroup(B_HORIZONTAL)
+			.Add(reset)
+			.AddGlue()
+			.Add(save)
+		.End();
+
 	BStringList keys, values;
 	if (fDriver != NULL)
 		SettingsStore::Read(*fDriver, keys, values);
@@ -89,10 +151,7 @@ SettingsWindow::SettingsWindow(const BString& driverName, BMessenger target)
 			: t->risk == kRiskExperimental ? B_TRANSLATE("Experimental")
 			: B_TRANSLATE("Locked");
 		BStringView* riskView = new BStringView("risk", risk);
-		BStringView* description = new BStringView("description",
-			t->description.String());
-		description->SetFont(be_plain_font);
-		description->SetHighUIColor(B_PANEL_TEXT_COLOR, B_DARKEN_1_TINT);
+		BView* description = make_description_view(t->description);
 
 		if (BTextControl* text = dynamic_cast<BTextControl*>(control)) {
 			grid->AddItem(text->CreateLabelLayoutItem(), 0, i * 2);
@@ -103,25 +162,6 @@ SettingsWindow::SettingsWindow(const BString& driverName, BMessenger target)
 		grid->AddView(description, 0, i * 2 + 1, 3);
 	}
 
-	BStringView* note = new BStringView("note", B_TRANSLATE(
-		"Changes take effect the next time the driver loads (restart)."));
-	BButton* reset = new BButton("reset", B_TRANSLATE("Defaults"),
-		new BMessage(kMsgReset));
-	BButton* save = new BButton("save", B_TRANSLATE("Save"),
-		new BMessage(kMsgSave));
-	save->MakeDefault(true);
-	save->SetEnabled(fDriver != NULL);
-	reset->SetEnabled(fDriver != NULL);
-
-	BLayoutBuilder::Group<>(this, B_VERTICAL)
-		.SetInsets(B_USE_WINDOW_SPACING)
-		.Add(grid)
-		.Add(note)
-		.AddGroup(B_HORIZONTAL)
-			.Add(reset)
-			.AddGlue()
-			.Add(save)
-		.End();
 	CenterOnScreen();
 }
 
