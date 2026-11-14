@@ -89,6 +89,12 @@ typedef struct {
 } gpu_rect;
 
 
+// A buffer whose format is B_NO_COLOR_SPACE is plain memory, not an image
+// (Quasar's convention, accepted 2026-11-14): width is its size in bytes per
+// row, height the number of rows, bytes_per_row 0 means width, and modifier
+// must be 0. Such a buffer may be named in a gpu_semaphore (acquire or
+// release), for instance one page holding the semaphore words, but it is
+// never flipped or scanned out.
 typedef struct {
 	uint32		handle_type;		// B_GPU_BUFFER_FD
 	int			handle;				// driver-specific shareable descriptor
