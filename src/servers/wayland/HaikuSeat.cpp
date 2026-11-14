@@ -5,6 +5,7 @@
 #include "HaikuDataDeviceManager.h"
 #include "WaylandKeycodes.h"
 #include "XkbKeymap.h"
+#include "RengaProtocols.h"
 #include <SupportDefs.h>
 #include <InterfaceDefs.h>
 #include <Application.h>
@@ -21,7 +22,9 @@ extern const struct wl_interface wl_seat_interface;
 
 
 enum {
-	SEAT_VERSION = 8,
+	SEAT_VERSION = 10,
+		// Renga: wl_pointer 9 (axis_relative_direction), wl_keyboard 10
+		// (the key state "repeated")
 };
 
 static HaikuSeatGlobal *sHaikuSeat = NULL;
@@ -194,17 +197,25 @@ static bool IsModifierKey(uint32 haikuKey)
 }
 
 class SurfaceCursorHook: public HaikuSurface::Hook {
+private:
+	BCursor *fCursor = NULL;
+
 public:
 	BPoint fHotspot;
+	virtual ~SurfaceCursorHook() { delete fCursor; }
 	void HandleCommit() final;
 };
 
 void SurfaceCursorHook::HandleCommit()
 {
+	delete fCursor;
+	fCursor = NULL;
 	BBitmap *bitmap = Base()->Bitmap();
 	if (bitmap != NULL) {
-		BCursor cursor(bitmap, fHotspot);
-		AppKitPtrs::LockedPtr(be_app)->SetCursor(&cursor);
+		fCursor = new(std::nothrow) BCursor(bitmap, fHotspot);
+		if (fCursor != NULL) {
+			AppKitPtrs::LockedPtr(be_app)->SetCursor(fCursor);
+		}
 	} else {
 		be_app->SetCursor(B_CURSOR_SYSTEM_DEFAULT, true);
 	}
@@ -220,12 +231,16 @@ HaikuPointer::~HaikuPointer()
 
 void HaikuPointer::HandleSetCursor(uint32_t serial, struct wl_resource *_surface, int32_t hotspot_x, int32_t hotspot_y)
 {
-	HaikuSurface *surface = HaikuSurface::FromResource(_surface);
+	HaikuSurface *surface = _surface != NULL ? HaikuSurface::FromResource(_surface) : NULL;
 	if (surface != NULL) {
 		SurfaceCursorHook *hook = new SurfaceCursorHook();
 		hook->fHotspot = BPoint(hotspot_x, hotspot_y);
 		surface->SetHook(hook);
 		hook->HandleCommit();
+	} else {
+		// Renga: a NULL surface hides the cursor (games, pointer lock)
+		BCursor cursor(B_CURSOR_ID_NO_CURSOR);
+		AppKitPtrs::LockedPtr(be_app)->SetCursor(&cursor);
 	}
 }
 
@@ -281,7 +296,9 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
 			}
 			break;
 		case trackDrag:
-			fDataDevice->SendLeave();
+			if (fDataDevice != NULL) {
+				fDataDevice->SendLeave();
+			}
 			break;
 		}
 	}
@@ -308,13 +325,17 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
 				pointer->SendFrame();
 			}
 			break;
-			case trackDrag: {
+		case trackDrag: {
+			if (fDataDevice != NULL) {
 				BMessage data;
 				msg.FindMessage("be:drag_message", &data);
 				HaikuDataOffer *dataOffer = HaikuDataOffer::Create(fDataDevice, data);
-				fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y), dataOffer->ToResource());
-				break;
+				if (dataOffer != NULL) {
+					fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y), dataOffer->ToResource());
+				}
 			}
+			break;
+		}
 		}
 	}
 }
@@ -356,8 +377,8 @@ void HaikuSeatGlobal::SetKeyboardFocus(HaikuSurface *surface, bool setFocus)
 			fTextInput->Leave(surface);
 		}
 		for (HaikuKeyboard *keyboard = fKeyboardIfaces.First(); keyboard != NULL; keyboard = fKeyboardIfaces.GetNext(keyboard)) {
-			if (keyboard->Client() != fKeyboardFocus->Client()) continue;
-			keyboard->SendLeave(NextSerial(), fKeyboardFocus->ToResource());
+			if (keyboard->Client() != surface->Client()) continue;
+			keyboard->SendLeave(NextSerial(), surface->ToResource());
 		}
 		fKeyboardFocus = NULL;
 	}
@@ -381,9 +402,12 @@ void HaikuSeatGlobal::DoTrack(TrackId id, const TrackInfo &info)
 bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 {
 	if (msg->WasDropped()) {
-		fprintf(stderr, "WasDropped, (fPointerFocus == surface: %d, fTrack.id == trackDrag: %d)\n", fPointerFocus == surface, fTrack.id == trackDrag);
-		if (fPointerFocus == surface && fTrack.id == trackDrag) {
-			fDataDevice->SendDrop();
+		bool isDrag = msg->HasMessage("be:drag_message") || fTrack.id == trackDrag;
+		if (isDrag) {
+			if (fDataDevice != NULL) {
+				fDataDevice->SendDrop();
+				fDataDevice->SetDropPending(true);
+			}
 			fTrack.captured = false;
 			SetPointerFocus(surface, true, *msg, trackClient);
 		}
@@ -393,16 +417,20 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 	if (msg->what == B_MOUSE_MOVED) {
 		int32 transit;
 		msg->FindInt32("be:transit", &transit);
+		bool isDrag = msg->HasMessage("be:drag_message");
 
-		if (!fTrack.captured) {
+		if (isDrag) {
+			if (fTrack.id != trackDrag) {
+				fTrack.captured = true;
+				SetPointerFocus(surface, true, *msg, trackDrag);
+			}
+		} else if (!fTrack.captured) {
 			switch (transit) {
 				case B_ENTERED_VIEW:
 				case B_INSIDE_VIEW: {
 					BPoint where;
 					msg->FindPoint("be:view_where", &where);
-					bool isDrag = msg->HasMessage("be:drag_message");
-					SetPointerFocus(surface, true, *msg, isDrag ? trackDrag : trackClient);
-					fTrack.captured = isDrag;
+					SetPointerFocus(surface, true, *msg, trackClient);
 					break;
 				}
 				case B_EXITED_VIEW:
@@ -410,6 +438,7 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 					break;
 			}
 		}
+
 		if (fPointerFocus == surface) {
 			switch (transit) {
 				case B_ENTERED_VIEW:
@@ -440,8 +469,21 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			uint32_t state = (msg->what == B_KEY_UP || msg->what == B_UNMAPPED_KEY_UP) ? WlKeyboard::keyStateReleased : WlKeyboard::keyStatePressed;
 
 			uint32_t wlKey = FromHaikuKeyCode(key);
+			// Renga: Haiku repeats keys itself ("be:key_repeat" on the
+			// repeated B_KEY_DOWNs). wl_keyboard 10 clients get those as the
+			// key state "repeated" and a repeat rate of 0 (no client-side
+			// repeat); older clients repeat on their own (repeat_info has
+			// Haiku's rate and delay) and must not see them as new presses.
+			int32 repeat = 0;
+			bool repeated = msg->what == B_KEY_DOWN
+				&& msg->FindInt32("be:key_repeat", &repeat) == B_OK && repeat > 0;
 			for (HaikuKeyboard *keyboard = fKeyboardIfaces.First(); keyboard != NULL; keyboard = fKeyboardIfaces.GetNext(keyboard)) {
 				if (keyboard->Client() != fKeyboardFocus->Client()) continue;
+				if (repeated) {
+					if (keyboard->Version() >= 10)
+						keyboard->SendKey(NextSerial(), system_time()/1000, wlKey, WlKeyboard::keyStateRepeated);
+					continue;
+				}
 				keyboard->SendKey(NextSerial(), system_time()/1000, wlKey, state);
 			}
 			return true;
@@ -467,16 +509,28 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 				for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 					if (pointer->Client() != fPointerFocus->Client()) continue;
 					pointer->SendAxisSource(WlPointer::axisSourceWheel);
+					// Renga: value120 replaces axis_discrete from version 8
+					if (pointer->Version() >= 8)
+						pointer->SendAxisValue120(WlPointer::axisHorizontalScroll, (int32_t)(dx * 120));
+					else
+						pointer->SendAxisDiscrete(WlPointer::axisHorizontalScroll, dx);
 					pointer->SendAxis(when/1000, WlPointer::axisHorizontalScroll, wl_fixed_from_double(dx*10.0));
-					pointer->SendAxisDiscrete(WlPointer::axisHorizontalScroll, dx);
+					if (pointer->Version() >= 9)
+						pointer->SendAxisRelativeDirection(WlPointer::axisHorizontalScroll, WlPointer::axisRelativeDirectionIdentical);
 				}
 			}
 			if (dy != 0) {
 				for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 					if (pointer->Client() != fPointerFocus->Client()) continue;
 					pointer->SendAxisSource(WlPointer::axisSourceWheel);
+					// Renga: value120 replaces axis_discrete from version 8
+					if (pointer->Version() >= 8)
+						pointer->SendAxisValue120(WlPointer::axisVerticalScroll, (int32_t)(dy * 120));
+					else
+						pointer->SendAxisDiscrete(WlPointer::axisVerticalScroll, dy);
 					pointer->SendAxis(when/1000, WlPointer::axisVerticalScroll, wl_fixed_from_double(dy*10.0));
-					pointer->SendAxisDiscrete(WlPointer::axisVerticalScroll, dy);
+					if (pointer->Version() >= 9)
+						pointer->SendAxisRelativeDirection(WlPointer::axisVerticalScroll, WlPointer::axisRelativeDirectionIdentical);
 				}
 			}
 			for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
@@ -522,7 +576,14 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			return true;
 		}
 		case B_MOUSE_UP: {
+			if (fDataDevice != NULL && fDataDevice->HasDataSource()) {
+				if (!fDataDevice->IsDropPending() && fTrack.id != trackDrag) {
+					fDataDevice->FinishDrag();
+				}
+			}
+
 			if (fPointerFocus != surface) return false;
+
 			bigtime_t when;
 			uint32 btns;
 			msg->FindInt64("when", &when);
@@ -566,6 +627,9 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			switch (fTrack.id) {
 				case trackNone:
 				case trackClient: {
+					// Renga: relative motion, pointer lock and confinement
+					if (HaikuPointerConstraintsMotion(fPointerFocus, when, where))
+						break;
 					for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 						if (pointer->Client() != fPointerFocus->Client()) continue;
 						pointer->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
@@ -574,7 +638,8 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 					break;
 				}
 				case trackDrag: {
-					fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
+					if (fDataDevice != NULL)
+						fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
 					break;
 				}
 				case trackMove: {
@@ -686,6 +751,19 @@ void HaikuSeat::HandleGetKeyboard(uint32_t id)
 	fGlobal->fKeyboardIfaces.Insert(keyboard);
 
 	fGlobal->UpdateKeymap();
+
+	// Renga: the repeat settings (see the key handling above)
+	if (keyboard->Version() >= 4) {
+		int32 rate = 0;
+		bigtime_t delay = 0;
+		if (get_key_repeat_rate(&rate) != B_OK) rate = 250;
+		if (get_key_repeat_delay(&delay) != B_OK) delay = 500000;
+		int32 perSecond = rate / 10;
+		if (perSecond < 1) perSecond = 1;
+		if (perSecond > 100) perSecond = 100;
+		keyboard->SendRepeatInfo(keyboard->Version() >= 10 ? 0 : perSecond,
+			(int32_t)(delay / 1000));
+	}
 
 	uint32_t currentModifiers = FromHaikuModifiers(modifiers());
 	keyboard->SendModifiers(fGlobal->NextSerial(), currentModifiers, 0, 0, 0);

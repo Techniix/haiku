@@ -23,6 +23,28 @@ Application wayland_test :
 		# the shared library ports get (package renga_wayland)
 ;
 
+# The protocols that complete the compositor (2026-11-14 batch).
+UsePrivateHeaders interface ;
+	# WindowInfo.h: the compositor window's tab (decorations)
+local protocolTestProtocols = xdg-decoration-unstable-v1
+	xdg-output-unstable-v1 fractional-scale-v1 idle-inhibit-unstable-v1
+	primary-selection-unstable-v1 pointer-constraints-unstable-v1
+	relative-pointer-unstable-v1 cursor-shape-v1 tablet-v2
+	xdg-toplevel-icon-v1 ;
+local protocolTestHeaders = [ WaylandProtocols $(protocolTestProtocols)
+	: c client ] ;
+Depends [ FGristFiles wayland_protocols_test.o
+		$(protocolTestProtocols)-protocol.o ]
+	: $(headers) $(protocolTestHeaders) ;
+
+Application wayland_protocols_test :
+	wayland_protocols_test.cpp
+	xdg-shell-protocol.c
+	$(protocolTestProtocols)-protocol.c
+	: be libgnu.so libwayland-client-renga.so network [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : wayland_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : wayland_test
+		wayland_protocols_test ;
 }

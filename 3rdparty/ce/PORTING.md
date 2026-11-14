@@ -1514,17 +1514,58 @@ and native programs linked against a socket-transport libwayland-client.
 - Globals: `wl_compositor`, `wl_subcompositor`, `wl_shm` (ARGB8888,
   XRGB8888; the pool's descriptor, a memfd for example, is mapped into an
   area and shown through a `BBitmap` without a copy), `wp_viewporter`,
-  `wl_output` (one, the main screen; version 3), `wl_seat` (pointer,
-  keyboard with an XKB keymap generated from the Haiku keymap),
-  `wl_data_device_manager` (version 3), `zwp_text_input_manager_v3`
-  (Haiku input methods), `xdg_wm_base`, `xdg_activation_v1`,
-  `org_kde_kwin_server_decoration_manager` (a client that asks gets Renga's
-  window frame; one that does not is drawn without a frame).
+  `wl_output`, `wl_seat`, `wl_data_device_manager` (version 3),
+  `zwp_text_input_manager_v3` (Haiku input methods), `xdg_wm_base`,
+  `xdg_activation_v1`, `org_kde_kwin_server_decoration_manager`, and since
+  the 2026-11-14 batch (core protocol XML from Wayland 1.24, the others
+  from wayland-protocols 1.45):
+  - `zxdg_decoration_manager_v1`: server-side mode by default (Renga's
+    frame); a client asking for client-side gets no frame. It takes
+    precedence over the KDE protocol for the same window.
+  - `wl_output` version 4, **one per screen** (name `RENGA-<n>`), with
+    `zxdg_output_manager_v1` version 3 (logical position and size).
+    Screens are checked every 2 s: added and removed screens add and
+    remove globals, a changed mode is sent to bound outputs.
+    `wl_surface.enter` is sent when a window is shown.
+  - `xdg_wm_base` version 6: `configure_bounds` (the usable area of the
+    window's screen without Deskbar, minus Renga's frame when the window
+    has one) before each configure, `wm_capabilities` (maximize,
+    fullscreen, minimize; `set_minimized` works).
+  - `wl_fixes` (`destroy_registry`).
+  - `wl_seat` version 10: `wl_pointer` 9 (`axis_value120` replaces
+    `axis_discrete` from version 8, `axis_relative_direction`),
+    `wl_keyboard` 10: Haiku's own key repeat arrives as the key state
+    `repeated`, with `repeat_info` rate 0; older keyboards get Haiku's
+    repeat rate and delay and no repeated presses. A NULL cursor surface
+    hides the pointer.
+  - `wp_fractional_scale_manager_v1`: `preferred_scale` is Renga's UI
+    scale, the system font size / 12 (120 = 1.0, at least 1.0).
+  - `zwp_idle_inhibit_manager_v1`: while an inhibitor exists the screen
+    saver does not start (ScreenSaver preferences, "Programs may keep the
+    screensaver from starting", on by default). Unlike Linux compositors,
+    visibility of the surface is not checked.
+  - `zwp_primary_selection_device_manager_v1`: between Wayland clients
+    only (Haiku has no primary selection).
+  - `zwp_pointer_constraints_v1` and `zwp_relative_pointer_manager_v1`:
+    lock and confine while the window is active (deactivating the window
+    always releases it; persistent locks come back), relative motion
+    with every motion; the region argument is ignored (whole surface).
+  - `wp_cursor_shape_manager_v1`: shapes map to Haiku's system cursors.
+  - `xdg_toplevel_icon_manager_v1`: accepted; icons are not shown yet.
 - Every `xdg_toplevel` is a native window; popups are native windows too.
-- Clipboard: a client's selection is read at once and put on the system
-  clipboard (`text/plain;charset=utf-8` becomes `text/plain`,
-  `text/uri-list` becomes `refs`); system clipboard changes reach every
-  client as a new selection offer.
+- Clipboard: a client's selection goes to the system clipboard in the
+  mapped formats, which are read when it is set: `text/plain;charset=utf-8`
+  (as `text/plain`), `text/html`, `image/png` (also as a bitmap for Haiku
+  programs), `text/uri-list` (as `refs` too). Other Wayland clients are
+  offered every type the source offers, and read it from the source
+  directly (lazily, as on Linux) while it owns the selection. System
+  clipboard changes reach every client as a new offer with
+  `text/plain;charset=utf-8`, `text/plain`, `text/uri-list` for refs, and
+  `image/png` for bitmaps. The source is no longer cancelled by its own
+  clipboard commit.
+- Drag and drop (X547's implementation, `8ede02e`): from Wayland clients
+  to Haiku programs (Tracker gets files through `text/uri-list` and
+  `B_COPY_TARGET`) and from Haiku programs into Wayland clients.
 - Native ports: HaikuPorts' `wayland` package is X547's in-process build;
   ports linked against it keep working as before and do not use this
   compositor.
@@ -1555,10 +1596,10 @@ and native programs linked against a socket-transport libwayland-client.
     `lib:` provides, for recipes.
 - The switch: Screen preferences, "Show Wayland programs" (or `Screen
   --wayland on|off`); setting `~/config/settings/Renga/wayland`.
-- Not yet: drag and drop, `wp_fractional_scale_v1`, `zwp_idle_inhibit_v1`,
-  one `wl_output` per screen with hot-plug, `xdg-decoration`,
-  `linux-dmabuf` (GPU stage), a Deskbar entry per Wayland program (the
-  windows belong to the compositor, a background application).
+- Not yet: `linux-dmabuf` and `linux-drm-syncobj` (GPU stage); a Deskbar
+  entry per Wayland program (the windows belong to the compositor, a
+  background application; toplevel icons are kept for it); per-screen
+  scale factors (Haiku has one).
 - x86_64 only (the build replaces libffi with a direct x86-64 call).
 
 ### Drivers in non-packaged

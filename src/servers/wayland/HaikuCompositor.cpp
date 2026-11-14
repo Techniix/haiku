@@ -5,6 +5,11 @@
 #include "HaikuXdgToplevel.h"
 #include "HaikuXdgPopup.h"
 #include "HaikuSeat.h"
+#include "HaikuDataDeviceManager.h"
+#include "HaikuOutput.h"
+#include "RengaProtocols.h"
+#include "HaikuServerDecoration.h"
+#include <Window.h>
 #include "Wayland.h"
 #include "WaylandEnv.h"
 #include <wayland-server-core.h>
@@ -188,8 +193,20 @@ void WaylandView::MessageReceived(BMessage *msg)
 {
 	{
 		WaylandEnv wlEnv(this, &fActiveWlEnv);
+
 		HaikuSeatGlobal *seat = HaikuGetSeat(fSurface->Client());
 		if (seat != NULL) {
+			if (msg->what == B_COPY_TARGET) {
+				entry_ref dirRef;
+				BString name;
+				if (msg->FindRef("directory", &dirRef) == B_OK && msg->FindString("name", &name) == B_OK) {
+					if (seat->DataDevice() != NULL) {
+						seat->DataDevice()->HandleCopyTargetReply(msg, dirRef, name);
+						return;
+					}
+				}
+			}
+
 			bool isPointerMessage = true;
 			BPoint where;
 			if (msg->WasDropped()) {
@@ -287,6 +304,9 @@ HaikuSurface *HaikuSurface::Create(struct wl_client *client, uint32_t version, u
 
 HaikuSurface::~HaikuSurface()
 {
+	HaikuOutputSurfaceGone(this);
+	HaikuPointerConstraintsSurfaceGone(this);
+
 	HaikuSeatGlobal *seat = HaikuGetSeat(Client());
 	if (seat != NULL) {
 		seat->SetPointerFocus(this, false, BMessage());
@@ -383,6 +403,34 @@ void HaikuSurface::CallFrameCallbacks()
 		callback->SendDone(system_time()/1000);
 		callback->Destroy();
 	}
+}
+
+bool HaikuSurface::WantsServerFrame()
+{
+	if (fXdgDecorationMode != decorationNone)
+		return fXdgDecorationMode == decorationServer;
+	return fServerDecoration != NULL
+		&& fServerDecoration->Mode() == OrgKdeKwinServerDecoration::modeServer;
+}
+
+bool HaikuSurface::HasDecorationProtocol()
+{
+	return fXdgDecorationMode != decorationNone || fServerDecoration != NULL;
+}
+
+void HaikuSurface::SetXdgDecorationMode(int32 mode)
+{
+	if (mode == fXdgDecorationMode)
+		return;
+	fXdgDecorationMode = mode;
+	// A window already on screen changes its look now; one not shown yet
+	// gets it at its first commit (XdgSurfaceHook::HandleCommit()).
+	if (fXdgSurface == NULL || fXdgSurface->Window() == NULL
+		|| !fXdgSurface->fSurfaceInitalized)
+		return;
+	fXdgSurface->Window()->SetLook(
+		WantsServerFrame() ? B_TITLED_WINDOW_LOOK : B_NO_BORDER_WINDOW_LOOK);
+		// (BWindow locks itself, as in the rest of HaiWay)
 }
 
 void HaikuSurface::SetHook(Hook *hook)

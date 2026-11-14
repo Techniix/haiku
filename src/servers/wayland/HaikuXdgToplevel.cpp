@@ -4,6 +4,9 @@
 #include "HaikuCompositor.h"
 #include "HaikuSeat.h"
 #include "HaikuServerDecoration.h"
+#include "HaikuXdgDecoration.h"
+#include "HaikuOutput.h"
+#include "RengaProtocols.h"
 #include "WaylandEnv.h"
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
@@ -58,6 +61,10 @@ bool WaylandWindow::QuitRequested()
 void WaylandWindow::WindowActivated(bool isActive)
 {
 	WaylandEnv vlEnv(this);
+	// Renga: a locked or confined pointer is released with the window
+	if (!isActive && fToplevel != NULL && fToplevel->XdgSurface() != NULL
+		&& fToplevel->XdgSurface()->Surface() != NULL)
+		HaikuPointerConstraintsFocusLost(fToplevel->XdgSurface()->Surface());
 	if (isActive != fToplevel->fState.activated) {
 		fToplevel->fState.activated = !fToplevel->fState.activated;
 		fToplevel->DoSendConfigure();
@@ -147,8 +154,59 @@ void WaylandWindow::UpdateRefreshRate()
 
 //#pragma mark - HaikuXdgToplevel
 
+/*!	Renga (xdg_toplevel version 4): the largest content size that fits:
+	the usable area of the window's screen (Deskbar excluded) minus Renga's
+	frame when the window has one. Chromium sizes its first window from
+	it.
+*/
+void HaikuXdgToplevel::SendBounds()
+{
+	if (Version() < 4)
+		return;
+	BRect windowFrame = fWindow != NULL ? fWindow->Frame() : BRect();
+	BRect usable = HaikuOutputUsableFrame(windowFrame);
+	float left = 0, top = 0, right = 0, bottom = 0;
+	HaikuSurface *surface = fXdgSurface != NULL ? fXdgSurface->Surface() : NULL;
+	if (surface != NULL && surface->WantsServerFrame()) {
+		BRect decorator = fWindow != NULL && fWindow->Look() == B_TITLED_WINDOW_LOOK
+			? fWindow->DecoratorFrame() : BRect();
+		if (decorator.IsValid() && windowFrame.IsValid()) {
+			left = windowFrame.left - decorator.left;
+			top = windowFrame.top - decorator.top;
+			right = decorator.right - windowFrame.right;
+			bottom = decorator.bottom - windowFrame.bottom;
+		} else {
+			// before the window has its frame: the default decorator's
+			// borders and tab
+			left = right = bottom = 5;
+			top = 5 + 21;
+		}
+	}
+	int32_t width = (int32_t)(usable.Width() + 1 - left - right);
+	int32_t height = (int32_t)(usable.Height() + 1 - top - bottom);
+	SendConfigureBounds(width > 0 ? width : 0, height > 0 ? height : 0);
+}
+
+void HaikuXdgToplevel::SendCapabilities()
+{
+	if (Version() < 5)
+		return;
+	uint32_t capabilities[] = {
+		XdgToplevel::wmCapabilitiesMaximize,
+		XdgToplevel::wmCapabilitiesFullscreen,
+		XdgToplevel::wmCapabilitiesMinimize
+	};
+	struct wl_array array {
+		.size = sizeof(capabilities),
+		.alloc = sizeof(capabilities),
+		.data = capabilities
+	};
+	SendWmCapabilities(&array);
+}
+
 void HaikuXdgToplevel::DoSendConfigure()
 {
+	SendBounds();
 	uint32_t stateArray[3];
 	struct wl_array state {
 		.size = 0,
@@ -259,6 +317,9 @@ void HaikuXdgToplevel::HandleUnsetFullscreen()
 
 void HaikuXdgToplevel::HandleSetMinimized()
 {
+	// Renga: offered in wm_capabilities
+	if (fWindow != NULL)
+		fWindow->Minimize(true);
 }
 
 
@@ -276,12 +337,15 @@ HaikuXdgToplevel *HaikuXdgToplevel::Create(HaikuXdgSurface *xdgSurface, uint32_t
 	xdgToplevel->fXdgSurface = xdgSurface;
 	xdgToplevel->fWindow = new WaylandWindow(xdgToplevel, BRect(), "", B_NO_BORDER_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL, 0);
 	xdgSurface->fSurface->AttachWindow(xdgToplevel->fWindow);
+	xdgToplevel->SendCapabilities();
 
 	return xdgToplevel;
 }
 
 HaikuXdgToplevel::~HaikuXdgToplevel()
 {
+	HaikuXdgDecorationToplevelGone(fDecoration);
+
 	// Renga: the xdg_surface and the wl_surface may be gone already (a
 	// client that went away; see ~HaikuXdgSurface()).
 	if (fXdgSurface != NULL) {

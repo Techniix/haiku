@@ -4,6 +4,7 @@
 #include "HaikuXdgPopup.h"
 #include "HaikuCompositor.h"
 #include "HaikuServerDecoration.h"
+#include "HaikuOutput.h"
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
 #include <xdg-shell-protocol.h>
@@ -102,14 +103,20 @@ void XdgSurfaceHook::HandleCommit()
 
 	// initial window show
 	if (!fXdgSurface->fSurfaceInitalized && fXdgSurface->Surface()->Bitmap() != NULL) {
-		if (fXdgSurface->Surface()->ServerDecoration() != NULL) {
-			fXdgSurface->Window()->SetLook(fXdgSurface->Surface()->ServerDecoration()->Look());
+		if (fXdgSurface->Surface()->HasDecorationProtocol()) {
+			// Renga: the KDE protocol or xdg-decoration
+			fXdgSurface->Window()->SetLook(
+				fXdgSurface->Surface()->WantsServerFrame()
+					? B_TITLED_WINDOW_LOOK : B_NO_BORDER_WINDOW_LOOK);
 		}
 		if (fXdgSurface->fToplevel != NULL) {
 			fXdgSurface->Window()->CenterOnScreen();
 		}
 		fXdgSurface->Window()->Show();
 		fXdgSurface->fSurfaceInitalized = true;
+		// Renga: wl_surface.enter for the output it is on
+		HaikuOutputSurfaceShown(fXdgSurface->Surface(),
+			fXdgSurface->Window()->Frame());
 	}
 
 	if (fXdgSurface->fPopup != NULL) {
@@ -165,8 +172,7 @@ bool HaikuXdgSurface::HasServerDecoration()
 {
 	return
 		Geometry().valid &&
-		Surface()->ServerDecoration() != NULL &&
-		Surface()->ServerDecoration()->Mode() == OrgKdeKwinServerDecoration::modeServer;
+		Surface()->WantsServerFrame();
 }
 
 void HaikuXdgSurface::ConvertFromScreen(BPoint &pt)

@@ -9,6 +9,7 @@ public:
 	enum {
 		closureSendMsg = 1,
 		dispatchMsg = 'wldp',	// Renga: the socket event loop has work
+		checkScreensMsg = 'wlsc',	// Renga: screens added, removed, changed
 	};
 
 	ServerHandler();

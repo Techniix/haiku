@@ -1047,7 +1047,18 @@ of a 1 GiB guest was, so the bounce path went untested.
   (load base and inode right) and libroot; `/proc/<pid>/maps`;
   `/proc/sys/fs/inotify/max_user_watches` = 8192 and read-only;
   `/proc/cpuinfo` absent for native programs.
-, `execinfo_test`; Chromium R-3):
+- **wayland_protocols** (x86_64 images, `wayland_protocols_test`; the
+  2026-11-14 compositor batch): the new globals and versions (xdg_wm_base
+  6, wl_seat 10, wl_output 4), xdg-output per wl_output, wl_fixes,
+  configure_bounds before the first configure and within the screen,
+  wm_capabilities, xdg-decoration server-side (the window has a tab) and
+  client-side on request (no tab), fractional scale, idle inhibit (the
+  screen saver's inhibit port exists only while inhibited), cursor shape,
+  wl_keyboard 10/9 repeat_info, primary selection and the lazy clipboard
+  between two connections (private type read from the source, only the
+  mapped text on the system clipboard, source not cancelled), pointer
+  constraints and relative pointer objects, toplevel icon.
+- **execinfo** (every image, `execinfo_test`; Chromium R-3):
   `backtrace_symbols()` on a program linked with lld's layout (a read-only
   segment before the executable one) at a non-zero image base: a static
   function's frame and an address in the data segment are attributed to

@@ -4,6 +4,7 @@
 
 
 struct HaikuXdgSurface;
+class HaikuXdgToplevelDecoration;
 class WaylandWindow;
 class BWindow;
 
@@ -36,6 +37,9 @@ private:
 	bool fSizeChanged = false;
 
 public:
+	HaikuXdgToplevelDecoration *fDecoration{};
+		// Renga: xdg-decoration object, if any (HaikuXdgDecoration.cpp)
+
 	virtual ~HaikuXdgToplevel();
 	static HaikuXdgToplevel *Create(HaikuXdgSurface *xdg_surface, uint32_t id);
 	static HaikuXdgToplevel *FromResource(struct wl_resource *resource) {return (HaikuXdgToplevel*)WlResource::FromResource(resource);}
@@ -45,6 +49,8 @@ public:
 	void MinSize(int32_t &width, int32_t &height) {width = fMinWidth; height = fMinHeight;}
 	void MaxSize(int32_t &width, int32_t &height) {width = fMaxWidth; height = fMaxHeight;}
 	void DoSendConfigure();
+	void SendBounds();
+	void SendCapabilities();
 
 	void HandleSetParent(struct wl_resource *parent) override;
 	void HandleSetTitle(const char *title) override;

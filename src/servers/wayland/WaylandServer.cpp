@@ -12,6 +12,8 @@
 #include "HaikuSeat.h"
 #include "HaikuTextInput.h"
 #include "HaikuServerDecoration.h"
+#include "HaikuXdgDecoration.h"
+#include "RengaProtocols.h"
 #include "WaylandEnv.h"
 
 #include <wayland-server-core.h>
@@ -48,6 +50,11 @@ void ServerHandler::MessageReceived(BMessage *msg)
 	switch (msg->what) {
 	case dispatchMsg:
 		DispatchEvents();
+		return;
+	case checkScreensMsg:
+		// Renga: wl_output hot-plug (HaikuOutput.cpp)
+		if (sDisplay != NULL)
+			HaikuOutputCheckScreens(sDisplay);
 		return;
 	default:
 		break;
@@ -115,6 +122,7 @@ bool Application::QuitRequested()
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <MessageRunner.h>
 #include <Roster.h>
 
 
@@ -194,7 +202,17 @@ create_globals(struct wl_display* display)
 	Assert(HaikuCompositorGlobal::Create(display) != NULL);
 	Assert(HaikuSubcompositorGlobal::Create(display) != NULL);
 	Assert(HaikuViewporterGlobal::Create(display) != NULL);
-	Assert(HaikuOutputGlobal::Create(display) != NULL);
+	HaikuOutputCreateGlobals(display);
+	Assert(HaikuXdgOutputManagerGlobal::Create(display) != NULL);
+	Assert(HaikuXdgDecorationManagerGlobal::Create(display) != NULL);
+	Assert(HaikuFixesGlobal::Create(display) != NULL);
+	Assert(HaikuFractionalScaleGlobal::Create(display) != NULL);
+	Assert(HaikuIdleInhibitGlobal::Create(display) != NULL);
+	Assert(HaikuCursorShapeGlobal::Create(display) != NULL);
+	Assert(HaikuToplevelIconGlobal::Create(display) != NULL);
+	Assert(HaikuPrimarySelectionGlobal::Create(display) != NULL);
+	Assert(HaikuPointerConstraintsGlobal::Create(display) != NULL);
+	Assert(HaikuRelativePointerGlobal::Create(display) != NULL);
 	Assert(HaikuDataDeviceManagerGlobal::Create(display) != NULL);
 	Assert((seat = HaikuSeatGlobal::Create(display)) != NULL);
 	Assert(HaikuTextInputGlobal::Create(display, seat) != NULL);
@@ -250,6 +268,10 @@ main(int argc, char** argv)
 	thread_id poller = spawn_thread(poll_thread, "wayland poll",
 		B_DISPLAY_PRIORITY, NULL);
 	resume_thread(poller);
+
+	// Renga: screens that come and go (wl_output hot-plug), every 2 s.
+	BMessage checkScreens(ServerHandler::checkScreensMsg);
+	BMessageRunner screenRunner(gServerMessenger, &checkScreens, 2000000);
 
 	application->Run();
 

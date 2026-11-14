@@ -9,7 +9,8 @@
 
 #include <stdio.h>
 
-#define WM_BASE_VERSION 3
+#define WM_BASE_VERSION 6
+	// Renga: 4 configure_bounds, 5 wm_capabilities, 6 the suspended state
 
 static void Assert(bool cond) {if (!cond) abort();}
 

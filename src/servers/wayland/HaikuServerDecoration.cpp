@@ -85,6 +85,8 @@ window_look HaikuServerDecoration::Look()
 void HaikuServerDecoration::HandleRequestMode(uint32_t mode)
 {
 	fMode = (OrgKdeKwinServerDecoration::Mode)mode;
+	if (fSurface->XdgDecorationMode() != HaikuSurface::decorationNone)
+		return;	// Renga: xdg-decoration decides
 	if (fSurface->XdgSurface() == NULL) return;
 	BWindow *window = fSurface->XdgSurface()->Window();
 	if (window == NULL) return;

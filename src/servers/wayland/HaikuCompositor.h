@@ -110,7 +110,16 @@ private:
 
 	HaikuSubsurface::SurfaceList fSurfaceList;
 
+	int32 fXdgDecorationMode = 0;
+		// Renga: DecorationMode from xdg-decoration (HaikuXdgDecoration.cpp)
+
 public:
+	enum DecorationMode {
+		decorationNone = 0,		// no xdg-decoration object
+		decorationClient,
+		decorationServer
+	};
+
 	static HaikuSurface *Create(struct wl_client *client, uint32_t version, uint32_t id);
 	static HaikuSurface *FromResource(struct wl_resource *resource) {return (HaikuSurface*)WlResource::FromResource(resource);}
 	virtual ~HaikuSurface();
@@ -123,6 +132,12 @@ public:
 	HaikuXdgSurface *XdgSurface() {return fXdgSurface;}
 	HaikuSubsurface *Subsurface() {return fSubsurface;}
 	HaikuServerDecoration *ServerDecoration() {return fServerDecoration;}
+	int32 XdgDecorationMode() const {return fXdgDecorationMode;}
+	void SetXdgDecorationMode(int32 mode);
+	bool WantsServerFrame();
+		// Renga: the KDE protocol or xdg-decoration asked for Renga's frame
+	bool HasDecorationProtocol();
+		// either protocol is in use for this surface
 	HaikuSubsurface::SurfaceList &SurfaceList() {return fSurfaceList;}
 	void AttachWindow(BWindow *window);
 	void AttachView(BView *view);

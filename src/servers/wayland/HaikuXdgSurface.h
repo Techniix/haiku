@@ -54,6 +54,7 @@ public:
 	bool SetConfigurePending() {if (fConfigurePending) return false; else fConfigurePending = true; return true;}
 	struct GeometryInfo Geometry() {return fGeometry;}
 	HaikuSurface *Surface() {return fSurface;}
+	bool ConfigureCalled() const {return fConfigureCalled;}
 	HaikuXdgToplevel *Toplevel() {return fToplevel;}
 	BWindow *Window();
 	bool HasServerDecoration();
