@@ -19,7 +19,6 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			copy_file_range.cpp
 			crypt.cpp
 			epoll.cpp
-			eventfd.cpp
 			execinfo.cpp
 			getauxval.cpp
 			getdents.cpp

@@ -190,7 +190,9 @@ register_from_library(void* data)
 		return NULL;
 
 	// Any address inside the image identifies it, as __dso_handle would.
-	void* symbol = dlsym(handle, "eventfd");
+	// (timerfd_create: eventfd moved to libroot, so dlsym() on libgnu
+	// finds libroot's and the test would pin the wrong image)
+	void* symbol = dlsym(handle, "timerfd_create");
 	state->registerResult = __cxa_thread_atexit_impl(log_char, (void*)'L',
 		symbol != NULL ? symbol : handle);
 

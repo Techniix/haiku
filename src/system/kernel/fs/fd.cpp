@@ -900,12 +900,24 @@ common_close_range(u_int minFd, u_int maxFd, int flags, bool kernel)
 }
 
 
-status_t
-user_fd_kernel_ioctl(int fd, uint32 op, void* buffer, size_t length)
+// Renga (Quasar R-17): defined as <fs/fd.h> declares it, with C linkage
+// and an ulong op. Upstream defined it in C++ with uint32 op, a different,
+// C++-mangled symbol, so code using the header found nothing to link
+// against (section 10.2 of the roadmap).
+extern "C" status_t
+user_fd_kernel_ioctl(int fd, ulong op, void* buffer, size_t length)
 {
 	TRACE(("user_fd_kernel_ioctl: fd %d\n", fd));
 
 	return fd_ioctl(false, fd, op, buffer, length);
+}
+
+
+// The old C++ symbol, kept for drivers built against it (add-only ABI).
+status_t
+user_fd_kernel_ioctl(int fd, uint32 op, void* buffer, size_t length)
+{
+	return user_fd_kernel_ioctl(fd, (ulong)op, buffer, length);
 }
 
 

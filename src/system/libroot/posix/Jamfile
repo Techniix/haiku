@@ -33,6 +33,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			dlfcn.c
 			dirent.cpp
 			errno.c
+			eventfd.cpp
 			fcntl.cpp
 			glob.c
 			inttypes.c
