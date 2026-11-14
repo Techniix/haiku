@@ -2742,6 +2742,7 @@ Append new rows at the bottom of 10.1. Do not rewrite earlier rows; add a correc
 | 2026-11-14 | [`88904d90`](https://github.com/Techniix/haiku/commit/88904d90) | Screen saver: programs may inhibit it (port-based), ScreenSaver preferences switch | Same sweep |
 | 2026-11-14 | [`6578efda`](https://github.com/Techniix/haiku/commit/6578efda) | Compositor completion: xdg-decoration, outputs per screen with xdg-output and hot-plug, xdg_wm_base 6, seat 10, fractional scale, idle inhibit, primary selection, pointer constraints, cursor shape, toplevel icon, DnD (X547 `8ede02e`), lazy clipboard; `wayland_protocols` suite | Same sweep |
 | 2026-11-14 | [`fdf80e37`](https://github.com/Techniix/haiku/commit/fdf80e37) | `configure_bounds` from Deskbar's frame (first sweep's renga-raw failure) | Same sweep |
+| 2026-11-14 | [`ea9753b2`](https://github.com/Techniix/haiku/commit/ea9753b2) | Image `2026.11.14-chromium-wayland` (renga-anyboot, sha256 `d6fc0c04260d351dbd65cc2b1b42927a35a1067b6a9a3deba97ca303a1738e9c`, renga-builds branch `build/2026.11.14-chromium-wayland`) | Sweep sweep-chromium-wayland-2: BIOS 1128/1128, `--smp 2` 1128/1128, UEFI 1125/1125, renga-raw 1511/1513 (`output_device_back` known flaky; `output_device_menu` baseline, passed on re-run) |
 
 ### 10.2 Upstream Haiku bugs found and fixed in Renga
 
