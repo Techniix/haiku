@@ -3537,6 +3537,36 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			break;
 		}
 
+		case AS_TEST_STALL_INPUT:
+		{
+			// Renga: see ServerProtocol.h. The event loop takes this lock
+			// for every mouse event, so input piles up meanwhile exactly as
+			// it does behind long drawing.
+			int32 milliseconds;
+			if (link.Read<int32>(&milliseconds) != B_OK) {
+				fLink.StartMessage(B_BAD_DATA);
+				fLink.Flush();
+				break;
+			}
+			if (access("/boot/system/non-packaged/data/ce-harness", F_OK)
+					!= 0) {
+				fLink.StartMessage(B_NOT_ALLOWED);
+				fLink.Flush();
+				break;
+			}
+			if (milliseconds < 0)
+				milliseconds = 0;
+			if (milliseconds > 2000)
+				milliseconds = 2000;
+			if (fDesktop->LockAllWindows()) {
+				snooze((bigtime_t)milliseconds * 1000);
+				fDesktop->UnlockAllWindows();
+			}
+			fLink.StartMessage(B_OK);
+			fLink.Flush();
+			break;
+		}
+
 		case AS_TEST_SCREEN_READ:
 		{
 			int32 legacy;

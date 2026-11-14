@@ -13,6 +13,8 @@
 #include "ProtocolHandler.h"
 #include "QuirkyDevices.h"
 
+#include <kernel.h>
+#include <keyboard_mouse_driver.h>
 #include <lock.h>
 #include <util/AutoLock.h>
 
@@ -291,6 +293,29 @@ usb_hid_control(void *_cookie, uint32 op, void *buffer, size_t length)
 
 	TRACE("control(%p, %" B_PRIu32 ", %p, %" B_PRIuSIZE ")\n", cookie, op,
 		buffer, length);
+
+	if (op == MS_GET_DEVICE_IDENTITY) {
+		// Renga: answered here for every protocol handler, so input_server
+		// can tell that two mouse nodes are interfaces of one device.
+		HIDDevice* device = cookie->handler->Device();
+		if (device == NULL || device->IsRemoved())
+			return B_DEV_NOT_READY;
+		if (length < sizeof(mouse_device_identity) || !IS_USER_ADDRESS(buffer))
+			return B_BAD_VALUE;
+		const usb_device_descriptor* descriptor
+			= gUSBModule->get_device_descriptor(device->USBDevice());
+		mouse_device_identity identity;
+		memset(&identity, 0, sizeof(identity));
+		identity.bus = 1;
+		identity.device = (uint32)device->USBDevice();
+		identity.interface = (uint32)device->InterfaceIndex();
+		if (descriptor != NULL) {
+			identity.vendor = descriptor->vendor_id;
+			identity.product = descriptor->product_id;
+		}
+		return user_memcpy(buffer, &identity, sizeof(identity));
+	}
+
 	return cookie->handler->Control(&cookie->cookie, op, buffer, length);
 }
 

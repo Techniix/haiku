@@ -310,8 +310,17 @@ EventDispatcher::_Unset()
 status_t
 EventDispatcher::_Run()
 {
+	// Renga: 14 instead of 10 (B_REAL_TIME_DISPLAY_PRIORITY - 10, the same
+	// as every application thread), so pointer events are not held up
+	// behind ordinary work at normal priority: boot-time start-up
+	// (Tracker, Deskbar, media_server, launch_daemon jobs) and busy
+	// applications. It stays below app_server's window and application
+	// threads (B_DISPLAY_PRIORITY, 15) and the cursor loop (15), so it never
+	// preempts the drawing it waits for (the Desktop's window lock), and
+	// its work per event is small and bounded (queued motion is merged,
+	// InputServerStream::_AddEvent()).
 	fThread = spawn_thread(_event_looper, "event loop",
-		B_REAL_TIME_DISPLAY_PRIORITY - 10, this);
+		B_DISPLAY_PRIORITY - 1, this);
 	if (fThread < B_OK)
 		return fThread;
 

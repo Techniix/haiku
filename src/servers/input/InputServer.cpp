@@ -1558,7 +1558,19 @@ InputServer::_EventLoop()
 {
 	while (true) {
 		// Block until we find the size of the next message
-		ssize_t length = port_buffer_size(fEventLooperPort);
+		// Renga: while events wait for room in app_server's port
+		// (_DispatchEvents()), wake up every 5 ms to try again
+		ssize_t length;
+		if (fUnsentEvents.IsEmpty())
+			length = port_buffer_size(fEventLooperPort);
+		else {
+			length = port_buffer_size_etc(fEventLooperPort,
+				B_RELATIVE_TIMEOUT, 5000);
+			if (length == B_TIMED_OUT || length == B_WOULD_BLOCK) {
+				_SendUnsentEvents();
+				continue;
+			}
+		}
 		if (length < B_OK) {
 			PRINT(("[Event Looper] port gone, exiting.\n"));
 			return;
@@ -1684,6 +1696,16 @@ InputServer::_SanitizeEvents(EventList& events)
 {
 	CALLED();
 
+	// Renga: the position the events of this round have moved the pointer
+	// to so far. Relative motion used to be added to fMousePos, which only
+	// changes after the whole round (_UpdateMouseAndKeys()), so when several
+	// moves were queued at once (input_server's loop was held up, or two
+	// interfaces of a mouse reported together) each started from the same
+	// position and only the last one counted: the pointer fell behind the
+	// hand and moved less than it should, which felt like inconsistent
+	// acceleration, worst while the system was busy after boot.
+	BPoint position = fMousePos;
+
 	for (int32 index = 0; BMessage* event = (BMessage*)events.ItemAt(index);
 			index++) {
 		switch (event->what) {
@@ -1704,8 +1726,8 @@ InputServer::_SanitizeEvents(EventList& events)
 
 				if (event->FindInt32("x", &x) == B_OK
 					&& event->FindInt32("y", &y) == B_OK) {
-					where.x = fMousePos.x + x;
-					where.y = fMousePos.y - y;
+					where.x = position.x + x;
+					where.y = position.y - y;
 
 					event->RemoveName("x");
 					event->RemoveName("y");
@@ -1748,6 +1770,7 @@ InputServer::_SanitizeEvents(EventList& events)
 				where.ConstrainTo(fFrame);
 				if (event->ReplacePoint("where", where) != B_OK)
 					event->AddPoint("where", where);
+				position = where;
 
 				if (!event->HasInt64("when"))
 					event->AddInt64("when", system_time());
@@ -1895,22 +1918,103 @@ InputServer::_FilterEvents(EventList& events)
 }
 
 
+/*!	Renga: merges consecutive B_MOUSE_MOVED events of a round into the
+	last of them, so a backlog goes to app_server as one move to the newest
+	position instead of being replayed step by step. Only moves that follow
+	each other directly and have the same buttons are merged: a press, a
+	release, a wheel step or any other event between them ends the run, so
+	the order of everything relative to motion, and the position of every
+	click (set by _SanitizeEvents()), are unchanged. The merged event keeps
+	all fields of the newest one, carries the summed "be:delta_x"/"_y" of
+	the run, and says how many moves it stands for in "be:coalesced".
+	Applications that ask for B_FULL_POINTER_HISTORY get fewer intermediate
+	points only when input_server had fallen behind.
+*/
+void
+InputServer::_CoalesceMouseMoved(EventList& events)
+{
+	for (int32 index = 1; index < events.CountItems();) {
+		BMessage* previous = events.ItemAt(index - 1);
+		BMessage* event = events.ItemAt(index);
+		int32 previousButtons = 0;
+		int32 buttons = 0;
+		previous->FindInt32("buttons", &previousButtons);
+		event->FindInt32("buttons", &buttons);
+		if (previous->what != B_MOUSE_MOVED || event->what != B_MOUSE_MOVED
+			|| previousButtons != buttons) {
+			index++;
+			continue;
+		}
+
+		int32 deltaX;
+		int32 deltaY;
+		if (previous->FindInt32("be:delta_x", &deltaX) == B_OK
+			&& previous->FindInt32("be:delta_y", &deltaY) == B_OK) {
+			int32 x = 0;
+			int32 y = 0;
+			event->FindInt32("be:delta_x", &x);
+			event->FindInt32("be:delta_y", &y);
+			if (event->ReplaceInt32("be:delta_x", x + deltaX) != B_OK)
+				event->AddInt32("be:delta_x", x + deltaX);
+			if (event->ReplaceInt32("be:delta_y", y + deltaY) != B_OK)
+				event->AddInt32("be:delta_y", y + deltaY);
+		}
+		int32 previousCount = 1;
+		int32 count = 1;
+		previous->FindInt32("be:coalesced", &previousCount);
+		event->FindInt32("be:coalesced", &count);
+		if (event->ReplaceInt32("be:coalesced", previousCount + count) != B_OK)
+			event->AddInt32("be:coalesced", previousCount + count);
+
+		events.RemoveItemAt(index - 1);
+		delete previous;
+	}
+}
+
+
 void
 InputServer::_DispatchEvents(EventList& events)
 {
 	CALLED();
 
-	int32 count = events.CountItems();
+	// Renga: events are prepared once (modifiers, key states, the cursor
+	// position), then queued behind any that could not be sent yet, queued
+	// motion is merged (_CoalesceMouseMoved()), and as many as fit go to
+	// app_server, in order.
+	//
+	// app_server's input port holds 200 messages and input_server sends
+	// without waiting. Before, a message that did not fit was dropped: when
+	// app_server's event loop was held up long enough (a busy window, at
+	// boot), presses and releases could be lost (a button that stays
+	// down), and motion was lost at random. Now nothing is dropped: what
+	// does not fit waits here, keeps its order, and is sent as soon as
+	// there is room (_EventLoop() tries again every 5 ms meanwhile); moves
+	// waiting here are merged with newer ones, so the backlog is at most
+	// one move between two button or wheel events.
+	for (int32 i = 0; i < events.CountItems(); i++)
+		_PrepareEvent(events.ItemAt(i));
 
-	for (int32 i = 0; i < count; i++) {
-		BMessage* event = events.ItemAt(i);
+	fUnsentEvents.AddList(&events);
+	events.MakeEmpty();
+	_CoalesceMouseMoved(fUnsentEvents);
+	_SendUnsentEvents();
+}
 
-		// now we must send each event to the app_server
-		_DispatchEvent(event);
+
+/*!	Renga: sends the waiting events (fUnsentEvents) to app_server in order,
+	until its port is full.
+*/
+void
+InputServer::_SendUnsentEvents()
+{
+	while (BMessage* event = fUnsentEvents.ItemAt(0)) {
+		status_t status = _SendEvent(event);
+		if (status == B_WOULD_BLOCK || status == B_TIMED_OUT)
+			return;
+		// sent, or app_server is gone (it gets a new port when it is back)
+		fUnsentEvents.RemoveItemAt(0);
 		delete event;
 	}
-
-	events.MakeEmpty();
 }
 
 
@@ -1947,8 +2051,9 @@ InputServer::_FilterEvent(BInputServerFilter* filter, EventList& events,
 }
 
 
-status_t
-InputServer::_DispatchEvent(BMessage* event)
+//! Renga: what _DispatchEvent() did before sending, done once per event.
+void
+InputServer::_PrepareEvent(BMessage* event)
 {
 	CALLED();
 
@@ -1996,7 +2101,13 @@ InputServer::_DispatchEvent(BMessage* event)
    		default:
 			break;
 	}
+}
 
+
+//! Renga: sends \a event to app_server without waiting (B_WOULD_BLOCK).
+status_t
+InputServer::_SendEvent(BMessage* event)
+{
 	BMessenger reply;
 	BMessage::Private messagePrivate(event);
 	return messagePrivate.SendMessage(fAppServerPort, fAppServerTeam, 0, 0,

@@ -2,13 +2,37 @@ SubDir HAIKU_TOP 3rdparty ce tests pointer ;
 
 # Absolute pointing devices (VM mouse integration): the USB and virtio
 # tablets the harness attaches, moved by the host through QMP.
-UsePrivateHeaders input ;
+UsePrivateHeaders app input interface ;
 
 Application pointer_test :
 	pointer_test.cpp
 	: be [ TargetLibstdc++ ]
 ;
 
+# The pointer and packaging fix (2026-11-13): acceleration and the grouping
+# of a mouse's interfaces with made-up reports (pointer_logic_test), and a
+# 1000 Hz virtual mouse (the ce_vmouse driver) while app_server is busy
+# (pointer_rate_test).
+local mouseAddonDir = [ FDirName $(HAIKU_TOP) src add-ons input_server
+	devices mouse ] ;
+local vmouseDir = [ FDirName $(HAIKU_TOP) src add-ons kernel drivers input
+	ce_vmouse ] ;
+SEARCH_SOURCE += $(mouseAddonDir) ;
+ObjectHdrs [ FGristFiles pointer_logic_test.cpp ] : $(mouseAddonDir) ;
+ObjectHdrs [ FGristFiles pointer_rate_test.cpp ] : $(vmouseDir) ;
+
+Application pointer_logic_test :
+	pointer_logic_test.cpp
+	PointerAcceleration.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+Application pointer_rate_test :
+	pointer_rate_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : pointer_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : pointer_test
+		pointer_logic_test pointer_rate_test ;
 }

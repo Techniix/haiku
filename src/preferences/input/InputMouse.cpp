@@ -9,6 +9,8 @@
 
 #include "InputMouse.h"
 
+#include <pointer_acceleration.h>
+
 #include <Button.h>
 #include <Catalog.h>
 #include <CheckBox.h>
@@ -135,6 +137,21 @@ InputMouse::MessageReceived(BMessage* message)
 					acceptFirstClick
 						= acceptFirstClickBox->Value() == B_CONTROL_ON;
 				fSettings->SetAcceptFirstClick(acceptFirstClick);
+				fDefaultsButton->SetEnabled(fSettings->IsDefaultable());
+				fRevertButton->SetEnabled(fSettings->IsRevertable());
+			}
+			break;
+		}
+
+		case kMsgAccelerationProfile:
+		{
+			// Renga
+			int32 value;
+			if (message->FindInt32("be:value", &value) == B_OK) {
+				fSettings->SetAccelerationProfile(
+					value == B_POINTER_ACCELERATION_CLASSIC
+						? B_POINTER_ACCELERATION_CLASSIC
+						: B_POINTER_ACCELERATION_ADAPTIVE);
 				fDefaultsButton->SetEnabled(fSettings->IsDefaultable());
 				fRevertButton->SetEnabled(fSettings->IsRevertable());
 			}

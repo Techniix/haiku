@@ -62,10 +62,29 @@ enum {
 	MS_IS_TOUCHPAD,
 	MS_READ_TOUCHPAD,
 
+	// Renga: which physical device a pointing device node belongs to
+	// (mouse_device_identity); usb_hid answers it for every node it
+	// publishes, other drivers return an error
+	MS_GET_DEVICE_IDENTITY,
+
 	IIC_WRITE = B_DEVICE_OP_CODES_END + 200, 
 	RESTART_SYSTEM,
 	SHUTDOWN_SYSTEM
 };
+
+
+/*!	Renga: the answer to MS_GET_DEVICE_IDENTITY. Nodes with the same bus and
+	device number are interfaces of one physical device (a mouse with two HID
+	mouse interfaces publishes two nodes); input_server's mouse add-on shows
+	them as one pointing device.
+*/
+typedef struct {
+	uint32		bus;		// 1: USB (others reserved)
+	uint32		device;		// the bus's number for the device
+	uint32		interface;	// the HID interface on it
+	uint16		vendor;
+	uint16		product;
+} mouse_device_identity;
 
 
 typedef struct {

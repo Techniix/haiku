@@ -125,38 +125,119 @@ InputServerStream::UpdateScreenBounds(BRect bounds)
 bool
 InputServerStream::GetNextEvent(BMessage** _event)
 {
+	// Renga: whatever input_server has sent meanwhile is taken first, even
+	// when events are still queued here, so that queued motion can be
+	// merged (_AddEvent()). Before, the port was only read once the queue
+	// was empty: when the event loop had been held up (it takes the
+	// Desktop's window lock for every mouse event, and drawing holds it),
+	// every move that had piled up was replayed one by one afterwards, and
+	// the pointer's events trailed the hand by the whole backlog.
+	if (!_ReadAvailable())
+		return false;
+
 	while (fEvents.IsEmpty()) {
 		// wait for new events
 		BMessage* event;
 		status_t status = _MessageFromPort(&event);
-		if (status == B_OK) {
-			if (event->what == B_MOUSE_MOVED)
-				fLatestMouseMoved = event;
-
-			fEvents.AddMessage(event);
-		} else if (status == B_BAD_PORT_ID) {
+		if (status == B_OK)
+			_AddEvent(event);
+		else if (status == B_BAD_PORT_ID) {
 			// our port got deleted - the input_server must have died
 			fPort = -1;
 			return false;
 		}
 
-		int32 count = port_count(fPort);
-		if (count > 0) {
-			// empty port queue completely while we're at it
-			for (int32 i = 0; i < count; i++) {
-				if (_MessageFromPort(&event, 0) == B_OK) {
-					if (event->what == B_MOUSE_MOVED)
-						fLatestMouseMoved = event;
-					fEvents.AddMessage(event);
-				}
-			}
-		}
+		// empty port queue completely while we're at it
+		if (!_ReadAvailable())
+			return false;
 	}
 
 	// there are items in our list, so just work through them
 
 	*_event = fEvents.NextMessage();
 	return true;
+}
+
+
+//! Renga: reads the events waiting in the port without blocking.
+bool
+InputServerStream::_ReadAvailable()
+{
+	if (fPort < 0)
+		return false;
+
+	int32 count = port_count(fPort);
+	for (int32 i = 0; i < count; i++) {
+		BMessage* event;
+		status_t status = _MessageFromPort(&event, 0);
+		if (status == B_OK)
+			_AddEvent(event);
+		else if (status == B_BAD_PORT_ID) {
+			fPort = -1;
+			return false;
+		}
+	}
+	return true;
+}
+
+
+/*!	Renga: queues \a event. A B_MOUSE_MOVED that directly follows another
+	one still waiting here, with the same buttons, is merged into it: the
+	waiting message takes the new one's fields (position, time, modifiers),
+	with the summed "be:delta_x"/"_y" and the count of moves it stands for in
+	"be:coalesced". It is updated in place, so the event loop's pointer to
+	the latest move (PeekLatestMouseMoved(), for B_NO_POINTER_HISTORY) stays
+	valid. Presses, releases, wheel steps and everything else are never
+	merged, and nothing is merged across them, so their order relative to
+	the motion and the position they carry stay exactly as input_server sent
+	them.
+*/
+void
+InputServerStream::_AddEvent(BMessage* event)
+{
+	if (event->what != B_MOUSE_MOVED) {
+		fEvents.AddMessage(event);
+		return;
+	}
+
+	fEvents.Lock();
+	int32 count = fEvents.CountMessages();
+	BMessage* last = count > 0 ? fEvents.FindMessage(count - 1) : NULL;
+	int32 lastButtons = -1;
+	int32 buttons = 0;
+	if (last != NULL && last == fLatestMouseMoved
+		&& last->what == B_MOUSE_MOVED) {
+		last->FindInt32("buttons", &lastButtons);
+		event->FindInt32("buttons", &buttons);
+	}
+	if (last != NULL && last == fLatestMouseMoved
+		&& last->what == B_MOUSE_MOVED && lastButtons == buttons) {
+		int32 lastX = 0, lastY = 0, x = 0, y = 0;
+		bool deltas = last->FindInt32("be:delta_x", &lastX) == B_OK
+			&& last->FindInt32("be:delta_y", &lastY) == B_OK;
+		event->FindInt32("be:delta_x", &x);
+		event->FindInt32("be:delta_y", &y);
+		int32 lastMerged = 1, merged = 1;
+		last->FindInt32("be:coalesced", &lastMerged);
+		event->FindInt32("be:coalesced", &merged);
+
+		*last = *event;
+		if (deltas) {
+			if (last->ReplaceInt32("be:delta_x", lastX + x) != B_OK)
+				last->AddInt32("be:delta_x", lastX + x);
+			if (last->ReplaceInt32("be:delta_y", lastY + y) != B_OK)
+				last->AddInt32("be:delta_y", lastY + y);
+		}
+		if (last->ReplaceInt32("be:coalesced", lastMerged + merged) != B_OK)
+			last->AddInt32("be:coalesced", lastMerged + merged);
+		fEvents.Unlock();
+		delete event;
+		return;
+	}
+
+	fLatestMouseMoved = event;
+	fEvents.AddMessage(event);
+	fEvents.Unlock();
 }
 
 

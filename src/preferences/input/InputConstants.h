@@ -24,6 +24,8 @@ const uint32 kMsgAcceptFirstClick	= 'PUaf';
 const uint32 kMsgDragInHardware		= 'PUdh';
 	// Renga (F-59); with an int32 "renga:value" (tests, scripts) the
 	// check box is set to it first
+const uint32 kMsgAccelerationProfile	= 'PUap';
+	// Renga: "Acceleration profile", the option's int32 "be:value"
 const uint32 kMsgMouseType		= 'PUmt';
 const uint32 kMsgMouseMap		= 'PUmm';
 const uint32 kMsgMouseSpeed		= 'SLms';

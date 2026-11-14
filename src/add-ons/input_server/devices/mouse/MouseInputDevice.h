@@ -14,6 +14,9 @@
 #include <Locker.h>
 
 #include <ObjectList.h>
+#include <String.h>
+
+#include "PhysicalDeviceGroups.h"
 
 
 class MouseDevice;
@@ -39,6 +42,7 @@ private:
 			status_t		_HandleMonitor(BMessage* message);
 			void			_RecursiveScan(const char* directory);
 
+			BString			_PhysicalKey(const char* path) const;
 			MouseDevice*	_FindDevice(const char* path) const;
 			status_t		_AddDevice(const char* path);
 			status_t		_RemoveDevice(const char* path);
@@ -46,6 +50,10 @@ private:
 private:
 			BObjectList<MouseDevice, true> fDevices;
 			BLocker			fDeviceListLock;
+
+			// Renga: nodes that are interfaces of one physical mouse
+			PhysicalDeviceGroups<MouseDevice> fGroups;
+			BLocker			fGroupLock;
 };
 
 extern "C" BInputServerDevice* instantiate_input_device();

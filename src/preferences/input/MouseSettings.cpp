@@ -18,7 +18,10 @@
 #include <stdio.h>
 
 #include <AppServerLink.h>
+#include <Input.h>
+#include <List.h>
 #include <ServerProtocol.h>
+#include <pointer_acceleration.h>
 
 
 static const bool kDefaultDragInHardware = true;
@@ -62,6 +65,7 @@ MouseSettings::MouseSettings(BString name)
 	fOriginalFocusFollowsMouseMode = fFocusFollowsMouseMode;
 	fOriginalAcceptFirstClick = fAcceptFirstClick;
 	fOriginalDragInHardware = fDragInHardware;
+	fOriginalAccelerationProfile = fAccelerationProfile;
 }
 
 
@@ -89,6 +93,7 @@ MouseSettings::_RetrieveSettings()
 	fFocusFollowsMouseMode = focus_follows_mouse_mode();
 	fAcceptFirstClick = accept_first_click();
 	fDragInHardware = get_drag_in_hardware();
+	fAccelerationProfile = get_pointer_acceleration_profile();
 
 	return B_OK;
 }
@@ -106,6 +111,7 @@ MouseSettings::Defaults()
 	SetFocusFollowsMouseMode(B_NORMAL_FOCUS_FOLLOWS_MOUSE);
 	SetAcceptFirstClick(kDefaultAcceptFirstClick);
 	SetDragBitmapsInHardware(kDefaultDragInHardware);
+	SetAccelerationProfile(BPrivate::kDefaultPointerAccelerationProfile);
 
 	mouse_map map;
 	for (int i = 0; i < B_MAX_MOUSE_BUTTONS; i++)
@@ -126,6 +132,8 @@ MouseSettings::IsDefaultable() const
 		|| fFocusFollowsMouseMode != B_NORMAL_FOCUS_FOLLOWS_MOUSE
 		|| fAcceptFirstClick != kDefaultAcceptFirstClick
 		|| fDragInHardware != kDefaultDragInHardware
+		|| fAccelerationProfile
+			!= BPrivate::kDefaultPointerAccelerationProfile
 		|| fSettings.map.button[0] != B_PRIMARY_MOUSE_BUTTON
 		|| fSettings.map.button[1] != B_SECONDARY_MOUSE_BUTTON
 		|| fSettings.map.button[2] != B_TERTIARY_MOUSE_BUTTON
@@ -147,6 +155,7 @@ MouseSettings::Revert()
 	SetFocusFollowsMouseMode(fOriginalFocusFollowsMouseMode);
 	SetAcceptFirstClick(fOriginalAcceptFirstClick);
 	SetDragBitmapsInHardware(fOriginalDragInHardware);
+	SetAccelerationProfile(fOriginalAccelerationProfile);
 
 	SetMapping(fOriginalSettings.map);
 }
@@ -164,6 +173,7 @@ MouseSettings::IsRevertable() const
 		|| fFocusFollowsMouseMode != fOriginalFocusFollowsMouseMode
 		|| fAcceptFirstClick != fOriginalAcceptFirstClick
 		|| fDragInHardware != fOriginalDragInHardware
+		|| fAccelerationProfile != fOriginalAccelerationProfile
 		|| fSettings.map.button[0] != fOriginalSettings.map.button[0]
 		|| fSettings.map.button[1] != fOriginalSettings.map.button[1]
 		|| fSettings.map.button[2] != fOriginalSettings.map.button[2]
@@ -310,4 +320,34 @@ MouseSettings::SetDragBitmapsInHardware(bool enabled)
 {
 	set_drag_in_hardware(enabled);
 	fDragInHardware = enabled;
+}
+
+
+/*!	Renga: writes the profile and makes every running mouse load it again:
+	setting a mouse's acceleration factor (to the value it has) sends it
+	B_MOUSE_ACCELERATION_CHANGED, and the mouse add-on then reads all its
+	settings, the profile included.
+*/
+void
+MouseSettings::SetAccelerationProfile(int32 profile)
+{
+	if (profile == fAccelerationProfile)
+		return;
+	set_pointer_acceleration_profile(
+		profile == B_POINTER_ACCELERATION_CLASSIC
+			? B_POINTER_ACCELERATION_CLASSIC
+			: B_POINTER_ACCELERATION_ADAPTIVE);
+	fAccelerationProfile = profile;
+
+	BList devices;
+	if (get_input_devices(&devices) != B_OK)
+		return;
+	for (int32 i = 0; i < devices.CountItems(); i++) {
+		BInputDevice* device = (BInputDevice*)devices.ItemAt(i);
+		int32 factor;
+		if (device->Type() == B_POINTING_DEVICE
+			&& get_mouse_acceleration(device->Name(), &factor) == B_OK)
+			set_mouse_acceleration(device->Name(), factor);
+		delete device;
+	}
 }

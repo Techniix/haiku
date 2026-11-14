@@ -404,6 +404,11 @@ enum {
 		// the Input preferences' "Show dragged items with the hardware
 		// pointer" (bool), kept by app_server
 
+	// Renga: harness images only: app_server holds the Desktop's window
+	// lock for an int32 number of milliseconds (at most 2000), as a busy
+	// app_server would, and replies when it lets go (pointer suite)
+	AS_TEST_STALL_INPUT,
+
 	AS_LAST_CODE
 };
 

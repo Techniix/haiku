@@ -5,4 +5,5 @@ UsePrivateHeaders input shared ;
 Addon <input>mouse :
 	MouseInputDevice.cpp
 	movement_maker.cpp
+	PointerAcceleration.cpp
 	: be input_server [ TargetLibsupc++ ] ;

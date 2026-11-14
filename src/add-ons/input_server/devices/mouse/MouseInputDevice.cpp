@@ -15,6 +15,7 @@
 #include "MouseInputDevice.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <new>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +34,7 @@
 
 #include <kb_mouse_settings.h>
 #include <keyboard_mouse_driver.h>
+#include <pointer_acceleration.h>
 #include <touchpad_settings.h>
 
 #include "movement_maker.h"
@@ -75,6 +77,10 @@ public:
 			status_t			Start();
 			void				Stop();
 
+			// Renga: a member of another node's physical device (see
+			// PhysicalDeviceGroups.h) uses that node's name and settings
+			void				JoinAs(const char* primaryName);
+
 			status_t			UpdateSettings();
 			status_t			UpdateTouchpadSettings(const BMessage* message);
 
@@ -95,11 +101,6 @@ private:
 			BMessage*			_BuildMouseMessage(uint32 what,
 									uint64 when, uint32 buttons,
 									int32 deltaX, int32 deltaY) const;
-			void				_ComputeAcceleration(
-									const mouse_movement& movements,
-									int32& deltaX, int32& deltaY,
-									float& historyDeltaX,
-									float& historyDeltaY) const;
 			uint32				_RemapButtons(uint32 buttons) const;
 
 private:
@@ -110,6 +111,8 @@ private:
 			input_device_ref	fDeviceRef;
 			mouse_settings		fSettings;
 			bool				fDeviceRemapsButtons;
+			PointerAcceleration	fAcceleration;
+			bool				fJoined;
 
 			thread_id			fThread;
 	volatile bool				fActive;
@@ -138,6 +141,7 @@ MouseDevice::MouseDevice(MouseInputDevice& target, const char* driverPath)
 	fPath(driverPath),
 	fDevice(-1),
 	fDeviceRemapsButtons(false),
+	fJoined(false),
 	fThread(-1),
 	fActive(false),
 	fUpdateSettings(false),
@@ -155,6 +159,9 @@ MouseDevice::MouseDevice(MouseInputDevice& target, const char* driverPath)
 	for (int i = 0; i < B_MAX_MOUSE_BUTTONS; i++)
 		fSettings.map.button[i] = B_MOUSE_BUTTON(i + 1);
 #endif
+	fSettings.accel.enabled = true;
+	fSettings.accel.speed = kDefaultMouseSpeed;
+	fSettings.accel.accel_factor = kDefaultAccelerationFactor;
 };
 
 
@@ -176,11 +183,19 @@ MouseDevice::Start()
 {
 	CALLED();
 
+	if (fActive) {
+		// Renga: a joined node that became its device's primary is already
+		// running when input_server starts it (MouseInputDevice::
+		// _RemoveDevice())
+		return B_OK;
+	}
+
 	fDevice = open(fPath.String(), O_RDWR);
 		// let the control thread handle any error on opening the device
 
 	char threadName[B_OS_NAME_LENGTH];
-	snprintf(threadName, B_OS_NAME_LENGTH, "%s watcher", fDeviceRef.name);
+	snprintf(threadName, B_OS_NAME_LENGTH, "%s watcher%s", fDeviceRef.name,
+		fJoined ? " (joined)" : "");
 
 	fThread = spawn_thread(_ControlThreadEntry, threadName,
 		kMouseThreadPriority, (void*)this);
@@ -225,6 +240,15 @@ MouseDevice::Stop()
 		status_t dummy;
 		wait_for_thread(fThread, &dummy);
 	}
+}
+
+
+void
+MouseDevice::JoinAs(const char* primaryName)
+{
+	free(fDeviceRef.name);
+	fDeviceRef.name = strdup(primaryName);
+	fJoined = true;
 }
 
 
@@ -368,8 +392,6 @@ MouseDevice::_ControlThread()
 	_UpdateSettings();
 
 	uint32 lastButtons = 0;
-	float historyDeltaX = 0.0;
-	float historyDeltaY = 0.0;
 
 	static const bigtime_t kTransferDelay = 1000000 / 125;
 		// 125 transfers per second should be more than enough
@@ -382,9 +404,19 @@ MouseDevice::_ControlThread()
 	touchpad_movement lastTouchpadMovement;
 	bigtime_t touchpadEventTimeout = B_INFINITE_TIMEOUT;
 
+	// Renga: a report read while merging queued reports that could not be
+	// merged (its buttons or wheel differ); it is handled next, without
+	// another read.
+	mouse_movement pending;
+	bool havePending = false;
+
 	while (fActive) {
 		mouse_movement movements;
 
+		if (havePending) {
+			movements = pending;
+			havePending = false;
+		} else {
 #if USE_REGULAR_INTERVAL
 		snooze_until(nextTransferTime, B_SYSTEM_TIMEBASE);
 		nextTransferTime += kTransferDelay;
@@ -399,6 +431,54 @@ MouseDevice::_ControlThread()
 				_ControlThreadCleanup();
 				// TOAST!
 				return;
+			}
+
+#if USE_REGULAR_INTERVAL
+			// Renga: when the read blocked (the mouse was at rest) or the
+			// thread was held up, the cadence starts again from now. Before,
+			// it ran through every tick missed meanwhile without waiting:
+			// after a second at rest the next ~140 ms of motion were read
+			// report by report, at the mouse's own rate (1000 Hz for the
+			// Darmoshark M3) instead of every 8 ms, which made eight times
+			// the events and, with Classic acceleration, far less
+			// acceleration at the start of every move.
+			bigtime_t now = system_time();
+			if (nextTransferTime < now)
+				nextTransferTime = now + kTransferDelay;
+#endif
+
+			// Renga: drivers that queue reports (PS/2 keeps a ring of
+			// packets) can hold more than one per 8 ms tick. Reading one
+			// per tick fell behind a device reporting faster than 125 Hz,
+			// and the pointer trailed the hand by the whole queue. Motion
+			// with the same buttons is merged into one movement (the
+			// latest timestamp, the summed deltas); a report that changes
+			// the buttons or turns the wheel is kept for the next round, so
+			// presses, releases and wheel steps stay separate and in order.
+			// Nothing is merged into a report that itself presses or
+			// releases a button either: its motion is sent before the
+			// press (see below), so motion after the press added to it
+			// would put the click where the pointer went next
+			// (pointer_rate.clicks.positions). usb_hid reads on demand and
+			// reports no queue (MS_NUM_EVENTS is 0), so nothing changes for
+			// it.
+			while (movements.buttons == lastButtons
+				&& movements.wheel_xdelta == 0
+				&& movements.wheel_ydelta == 0
+				&& ioctl(fDevice, MS_NUM_EVENTS, NULL, 0) > 0) {
+				mouse_movement next;
+				if (ioctl(fDevice, MS_READ, &next, sizeof(next)) != B_OK)
+					break;
+				if (next.buttons != movements.buttons
+					|| next.wheel_xdelta != 0 || next.wheel_ydelta != 0) {
+					pending = next;
+					havePending = true;
+					break;
+				}
+				movements.xdelta += next.xdelta;
+				movements.ydelta += next.ydelta;
+				movements.timestamp = next.timestamp;
+				movements.clicks = next.clicks;
 			}
 		} else {
 			touchpad_read read;
@@ -430,6 +510,7 @@ MouseDevice::_ControlThread()
 			if (status != B_OK)
 				continue;
 		}
+		}
 
 		// take care of updating the settings first, if necessary
 		if (fUpdateSettings) {
@@ -448,25 +529,50 @@ MouseDevice::_ControlThread()
 		uint32 buttons = lastButtons ^ movements.buttons;
 
 		uint32 remappedButtons = _RemapButtons(movements.buttons);
-		int32 deltaX, deltaY;
-		_ComputeAcceleration(movements, deltaX, deltaY, historyDeltaX,
-			historyDeltaY);
+		int32 deltaX = 0, deltaY = 0;
+		if (movements.xdelta != 0 || movements.ydelta != 0) {
+			// Renga: the acceleration profile's speed measurement needs the
+			// report's time; the touchpad movement maker leaves it unset.
+			bigtime_t when = movements.timestamp > 0
+				? movements.timestamp : system_time();
+			fAcceleration.Compute(movements.xdelta, movements.ydelta, when,
+				deltaX, deltaY);
+		}
 
 		LOG_EVENT("%s: buttons: 0x%" B_PRIx32 ", x: %" B_PRId32 ", y: %" B_PRId32
 			", clicks:%" B_PRId32 ", wheel_x:%" B_PRId32 ", wheel_y:%" B_PRId32 "\n",
 			fDeviceRef.name, movements.buttons,
 			movements.xdelta, movements.ydelta, movements.clicks,
 			movements.wheel_xdelta, movements.wheel_ydelta);
-		LOG_EVENT("%s: x: %" B_PRId32 ", y: %" B_PRId32 " (%.4f, %.4f)\n", fDeviceRef.name,
-			deltaX, deltaY, historyDeltaX, historyDeltaY);
+		LOG_EVENT("%s: x: %" B_PRId32 ", y: %" B_PRId32 "\n", fDeviceRef.name,
+			deltaX, deltaY);
 
 		// Send single messages for each event
+
+		// Renga: the motion of a report goes first, in its own
+		// B_MOUSE_MOVED, and a button change after it carries no motion.
+		// input_server adds the "x"/"y" of B_MOUSE_DOWN and B_MOUSE_UP to
+		// the pointer position like those of B_MOUSE_MOVED, and both
+		// messages used to carry the report's motion: when input_server
+		// handled them in separate rounds the pointer moved twice as far
+		// for that report, in the same round once (it used one position for
+		// the whole round). Now the press lands where the motion ended,
+		// either way.
+		if (deltaX != 0 || deltaY != 0) {
+			BMessage* message = _BuildMouseMessage(B_MOUSE_MOVED,
+				movements.timestamp, _RemapButtons(lastButtons), deltaX,
+				deltaY);
+				// the buttons as they were during the motion; a change in
+				// this report follows in its own message
+			if (message != NULL)
+				fTarget.EnqueueMessage(message);
+		}
 
 		if (buttons != 0) {
 			bool pressedButton = (buttons & movements.buttons) > 0;
 			BMessage* message = _BuildMouseMessage(
 				pressedButton ? B_MOUSE_DOWN : B_MOUSE_UP,
-				movements.timestamp, remappedButtons, deltaX, deltaY);
+				movements.timestamp, remappedButtons, 0, 0);
 			if (message != NULL) {
 				if (pressedButton) {
 					message->AddInt32("clicks", movements.clicks);
@@ -477,13 +583,6 @@ MouseDevice::_ControlThread()
 				fTarget.EnqueueMessage(message);
 				lastButtons = movements.buttons;
 			}
-		}
-
-		if (movements.xdelta != 0 || movements.ydelta != 0) {
-			BMessage* message = _BuildMouseMessage(B_MOUSE_MOVED,
-				movements.timestamp, remappedButtons, deltaX, deltaY);
-			if (message != NULL)
-				fTarget.EnqueueMessage(message);
 		}
 
 		if (movements.wheel_ydelta != 0 || movements.wheel_xdelta != 0) {
@@ -563,6 +662,11 @@ MouseDevice::_UpdateSettings()
 		}
 	}
 
+	// Renga: the acceleration profile (the same for every mouse) and this
+	// mouse's speed and acceleration factor
+	fAcceleration.SetSettings(fSettings.accel.speed,
+		fSettings.accel.accel_factor, get_pointer_acceleration_profile());
+
 	if (get_mouse_type(fDeviceRef.name, &fSettings.type) != B_OK)
 		LOG_ERROR("error when get_mouse_type\n");
 	else
@@ -639,42 +743,6 @@ MouseDevice::_BuildMouseMessage(uint32 what, uint64 when, uint32 buttons,
 	}
 
 	return message;
-}
-
-
-void
-MouseDevice::_ComputeAcceleration(const mouse_movement& movements,
-	int32& _deltaX, int32& _deltaY, float& historyDeltaX,
-	float& historyDeltaY) const
-{
-	// basic mouse speed
-	float deltaX = (float)movements.xdelta * fSettings.accel.speed / 65536.0
-		+ historyDeltaX;
-	float deltaY = (float)movements.ydelta * fSettings.accel.speed / 65536.0
-		+ historyDeltaY;
-
-	// acceleration
-	double acceleration = 1;
-	if (fSettings.accel.accel_factor) {
-		acceleration = 1 + sqrt(deltaX * deltaX + deltaY * deltaY)
-			* fSettings.accel.accel_factor / 524288.0;
-	}
-
-	deltaX *= acceleration;
-	deltaY *= acceleration;
-
-	if (deltaX >= 0)
-		_deltaX = (int32)floorf(deltaX);
-	else
-		_deltaX = (int32)ceilf(deltaX);
-
-	if (deltaY >= 0)
-		_deltaY = (int32)floorf(deltaY);
-	else
-		_deltaY = (int32)ceilf(deltaY);
-
-	historyDeltaX = deltaX - _deltaX;
-	historyDeltaY = deltaY - _deltaY;
 }
 
 
@@ -760,6 +828,14 @@ MouseInputDevice::Stop(const char* name, void* cookie)
 	MouseDevice* device = (MouseDevice*)cookie;
 	device->Stop();
 
+	// Renga: the interfaces joined to this node (PhysicalDeviceGroups.h)
+	// are not stopped with it: they run for as long as their own node
+	// exists. Stopping them here would wait for their watcher threads with
+	// fGroupLock held, while a watcher whose node has just gone away holds
+	// fDeviceListLock in _RemoveDevice() and waits for fGroupLock. Nothing
+	// in the system stops a single mouse; input_server's shutdown deletes
+	// every device, the joined ones included (~MouseInputDevice()).
+
 	return B_OK;
 }
 
@@ -779,8 +855,18 @@ MouseInputDevice::Control(const char* name, void* cookie,
 		return device->UpdateTouchpadSettings(message);
 
 	if (command >= B_MOUSE_TYPE_CHANGED
-		&& command <= B_MOUSE_ACCELERATION_CHANGED)
+		&& command <= B_MOUSE_ACCELERATION_CHANGED) {
+		// Renga: the nodes joined to this one share its settings. Only the
+		// group lock is taken here: input_server calls this with its own
+		// device list locked, and _AddDevice() holds fDeviceListLock while
+		// it calls into input_server.
+		BAutolock _(fGroupLock);
+		for (int32 i = 0; MouseDevice* member = fGroups.MemberAt(device, i);
+				i++) {
+			member->UpdateSettings();
+		}
 		return device->UpdateSettings();
+	}
 
 	return B_BAD_VALUE;
 }
@@ -834,6 +920,27 @@ MouseInputDevice::_RecursiveScan(const char* directory)
 }
 
 
+/*!	Renga: the key of the physical device the node at \a path belongs to
+	("usb:<device>"), or an empty string if the driver cannot say
+	(MS_GET_DEVICE_IDENTITY; PS/2 and touchpads cannot).
+*/
+BString
+MouseInputDevice::_PhysicalKey(const char* path) const
+{
+	BString key;
+	int fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return key;
+	mouse_device_identity identity;
+	if (ioctl(fd, MS_GET_DEVICE_IDENTITY, &identity, sizeof(identity)) == 0
+		&& identity.bus == 1) {
+		key.SetToFormat("usb:%" B_PRIu32, identity.device);
+	}
+	close(fd);
+	return key;
+}
+
+
 MouseDevice*
 MouseInputDevice::_FindDevice(const char* path) const
 {
@@ -870,6 +977,26 @@ MouseInputDevice::_AddDevice(const char* path)
 		return B_NO_MEMORY;
 	}
 
+	// Renga: a further interface of a mouse that already has a node joins
+	// it: it takes the first node's name (and with it its settings) and is
+	// not shown to input_server as a mouse of its own. It runs from now
+	// until its node goes away. The watcher of the first node and of every
+	// joined one read their own interface, so the mouse works whichever
+	// interface its firmware moves on.
+	BString key = _PhysicalKey(path);
+	MouseDevice* primary;
+	{
+		BAutolock _(fGroupLock);
+		primary = fGroups.Add(device, key.String());
+	}
+	if (primary != NULL) {
+		device->JoinAs(primary->DeviceRef()->name);
+		debug_printf("mouse: %s is another interface of %s (%s), joined as "
+			"\"%s\"\n", path, primary->Path(), key.String(),
+			device->DeviceRef()->name);
+		return device->Start();
+	}
+
 	input_device_ref* devices[2];
 	devices[0] = device->DeviceRef();
 	devices[1] = NULL;
@@ -893,6 +1020,20 @@ MouseInputDevice::_RemoveDevice(const char* path)
 		return B_ENTRY_NOT_FOUND;
 	}
 
+	MouseDevice* primary;
+	MouseDevice* promoted;
+	{
+		BAutolock _(fGroupLock);
+		primary = fGroups.PrimaryOf(device);
+		promoted = fGroups.Remove(device);
+	}
+	if (primary != NULL) {
+		// Renga: a joined node; input_server never knew it
+		TRACE("removing joined path: %s\n", path);
+		fDevices.RemoveItem(device);
+		return B_OK;
+	}
+
 	input_device_ref* devices[2];
 	devices[0] = device->DeviceRef();
 	devices[1] = NULL;
@@ -902,6 +1043,14 @@ MouseInputDevice::_RemoveDevice(const char* path)
 	UnregisterDevices(devices);
 
 	fDevices.RemoveItem(device);
+
+	if (promoted != NULL) {
+		// Renga: another interface of the same mouse is still there; it
+		// takes the place of the one that went, under the same name. It is
+		// running already, so the Start() that follows does nothing.
+		devices[0] = promoted->DeviceRef();
+		RegisterDevices(devices);
+	}
 
 	return B_OK;
 }

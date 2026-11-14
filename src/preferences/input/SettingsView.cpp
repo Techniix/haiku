@@ -9,6 +9,8 @@
 
 #include "SettingsView.h"
 
+#include <pointer_acceleration.h>
+
 #include <Box.h>
 #include <Catalog.h>
 #include <Debug.h>
@@ -67,6 +69,22 @@ SettingsView::SettingsView(MouseSettings& settings)
 			new BMessage(kMsgAccelerationFactor), 0, 1000, B_HORIZONTAL);
 	fAccelerationSlider->SetHashMarks(B_HASH_MARKS_BOTTOM);
 	fAccelerationSlider->SetHashMarkCount(7);
+
+	// Renga: how the acceleration is measured
+	// (headers/private/input/pointer_acceleration.h)
+	fAccelerationProfileMenu = new BOptionPopUp("acceleration_profile",
+		B_TRANSLATE("Acceleration profile:"),
+		new BMessage(kMsgAccelerationProfile));
+	fAccelerationProfileMenu->AddOption(B_TRANSLATE("Adaptive"),
+		B_POINTER_ACCELERATION_ADAPTIVE);
+	fAccelerationProfileMenu->AddOption(B_TRANSLATE("Classic"),
+		B_POINTER_ACCELERATION_CLASSIC);
+	fAccelerationProfileMenu->SetToolTip(B_TRANSLATE("Adaptive: the "
+		"acceleration follows how fast you move the mouse, so it feels the "
+		"same whatever rate the mouse reports at (gaming mice report up to "
+		"1000 times a second).\nClassic: the acceleration follows the size "
+		"of each report, as in earlier versions; fast-reporting mice get "
+		"less of it.\nThe same for every mouse."));
 
 	fMouseView = new MouseView(fSettings);
 
@@ -139,6 +157,7 @@ SettingsView::SettingsView(MouseSettings& settings)
 				.AddGroup(B_HORIZONTAL, 0)
 					.Add(fAccelerationSlider)
 					.End()
+				.Add(fAccelerationProfileMenu)
 				.End()
 			.End()
 		.AddStrut(B_USE_DEFAULT_SPACING)
@@ -214,6 +233,8 @@ SettingsView::UpdateFromSettings()
 		fSettings.AcceptFirstClick() ? B_CONTROL_ON : B_CONTROL_OFF);
 	fAcceptFirstClickBox->SetEnabled(
 		fSettings.MouseMode() != B_FOCUS_FOLLOWS_MOUSE);
+
+	fAccelerationProfileMenu->SetValue(fSettings.AccelerationProfile());
 
 	fDragInHardwareBox->SetValue(
 		fSettings.DragBitmapsInHardware() ? B_CONTROL_ON : B_CONTROL_OFF);

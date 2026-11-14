@@ -204,11 +204,17 @@ class InputServer : public BApplication {
 		bool _SanitizeEvents(EventList& events);
 		bool _MethodizeEvents(EventList& events);
 		bool _FilterEvents(EventList& events);
+		void _CoalesceMouseMoved(EventList& events);
+			// Renga
 		void _DispatchEvents(EventList& events);
 
 		void _FilterEvent(BInputServerFilter* filter, EventList& events,
 					int32& index, int32& count);
-		status_t _DispatchEvent(BMessage* event);
+		void _PrepareEvent(BMessage* event);
+		status_t _SendEvent(BMessage* event);
+		void _SendUnsentEvents();
+			// Renga: _DispatchEvent() split, and the events waiting for
+			// room in app_server's port
 
 		status_t _AcquireInput(BMessage& message, BMessage& reply);
 		void _ReleaseInput(BMessage* message);
@@ -240,6 +246,8 @@ class InputServer : public BApplication {
 
 		BLocker			fEventQueueLock;
 		EventList 		fEventQueue;
+		EventList		fUnsentEvents;
+			// Renga: owned; see _DispatchEvents()
 
 		BInputServerMethod*	fActiveMethod;
 		EventList			fMethodQueue;

@@ -2,6 +2,10 @@ SubDir HAIKU_TOP src preferences input ;
 
 UsePrivateHeaders app input ;
 
+# Renga: the acceleration profile's settings functions
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src add-ons input_server devices
+	mouse ] ;
+
 Application Input :
 	Input.cpp
 	InputDeviceView.cpp
@@ -16,6 +20,7 @@ Application Input :
 	MouseView.cpp
 	MouseSettings.cpp
 	SettingsView.cpp
+	PointerAcceleration.cpp
 	: be [ TargetLibsupc++ ] localestub
 	: Input.rdef
 	;

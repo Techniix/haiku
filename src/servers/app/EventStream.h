@@ -64,6 +64,9 @@ class InputServerStream : public EventStream {
 		virtual BMessage* PeekLatestMouseMoved();
 
 	private:
+		bool _ReadAvailable();
+		void _AddEvent(BMessage* event);
+			// Renga: merges queued motion
 		status_t _MessageFromPort(BMessage** _message,
 			bigtime_t timeout = B_INFINITE_TIMEOUT);
 

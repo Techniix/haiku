@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP src add-ons kernel drivers input ce_vmouse ;
+
+# Renga harness: a virtual mouse for the pointer tests (see ce_vmouse.cpp).
+# Only harness images install it (3rdparty/ce/Jamfile).
+
+UsePrivateKernelHeaders ;
+UsePrivateHeaders input ;
+
+KernelAddon ce_vmouse :
+	ce_vmouse.cpp
+;

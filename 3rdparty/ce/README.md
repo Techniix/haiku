@@ -951,6 +951,23 @@ of a 1 GiB guest was, so the bounce path went untested.
   answered "no", has to plan the package from the repository with priority
   1. Nothing is installed; the test removes what it made.
 - **pointer**: absolute pointing devices, see "Mouse integration" above.
+- **pointer_logic** (`pointer_logic_test`, no desktop needed): Adaptive
+  pointer acceleration gives the same distance at 125, 500, 1000 and
+  8000 reports a second for the same hand speed (within 3 %), equals
+  Classic for a steady 125 Hz mouse; Classic gives Haiku's original
+  numbers and depends on the rate; pauses, fractions, factor 0; the mouse
+  add-on's grouping of a mouse's interfaces (join, keyless nodes,
+  promotion).
+- **pointer_rate** (`pointer_rate_test`, harness-only `ce_vmouse` driver):
+  a virtual mouse moved at 1000 Hz while app_server holds the Desktop's
+  window lock (`AS_TEST_STALL_INPUT`): no backlog replayed afterwards, the
+  pointer catches up within 60 ms; presses, a drag, a double and a
+  secondary click made meanwhile arrive in order at the right positions;
+  a click at the end of a 2 s stall is not dropped (app_server's port
+  holds 200 messages); Adaptive acceleration gives the same distance at
+  1000 and 125 Hz after a rest (within 5 %); a mouse with two HID mouse
+  interfaces is one device, moves with either, and shares its settings.
+  On the code before the pointer fix 9 of its 20 checks fail.
 - **posix_compat**: eventfd, timerfd, memfd, POSIX message queues, System V
   shared memory, the libc additions, user contexts, and TCP (keepalive,
   `TCP_INFO`, orderly and abortive close). `user_locks_test` (suite

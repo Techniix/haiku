@@ -63,6 +63,11 @@ public:
 		bool DragBitmapsInHardware() const { return fDragInHardware; }
 		void SetDragBitmapsInHardware(bool enabled);
 
+		// Renga: the acceleration profile, the same for every mouse
+		// (headers/private/input/pointer_acceleration.h)
+		int32 AccelerationProfile() const { return fAccelerationProfile; }
+		void SetAccelerationProfile(int32 profile);
+
 		mouse_settings* GetSettings();
 
 private:
@@ -77,6 +82,8 @@ private:
 		bool						fOriginalAcceptFirstClick;
 		bool						fDragInHardware;
 		bool						fOriginalDragInHardware;
+		int32						fAccelerationProfile;
+		int32						fOriginalAccelerationProfile;
 
 		mouse_settings	fSettings, fOriginalSettings;
 };
