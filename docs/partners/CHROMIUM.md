@@ -8,6 +8,12 @@ Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. E
 
 ## Latest
 
+### 2026-11-15: midway image for batch 2 (`2026.11.15-batch2-midway`)
+
+- Nothing changes for the native port: use the `2026.11.15-chromium-readiness` image for builds, since it went through the full checks.
+- Linux Chrome under Renguin (separate from this port): Alpine's chromium renders a page with `--headless --dump-dom --single-process`. Multi-process mode and a window come later.
+- `renga_wayland` now also has `libwayland-egl` and `libwayland-cursor`.
+
 ### 2026-11-15: landed: image `2026.11.15-chromium-readiness` (R-7 compositor side, R-8, SDL3)
 
 Renga `143b8c30`, QEMU Tested. This image includes the compositor's `wl_fixes` v2 (R-7), R-8 with `R_X86_64_IRELATIVE` support, the LinuxKPI `idr_remove()` fix for the mt7921e panic during long builds, the kernel supplied-stack fix, and Renga's libsdl3 3.4.16-104 (SDL's evdev and HIDAPI gamepad back ends; Gamepad API base).

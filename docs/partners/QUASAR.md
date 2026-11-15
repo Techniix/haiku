@@ -6,6 +6,11 @@ Updated: 2026-11-14 02:25 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-15: GPU stage, first part
+
+- `renga_wayland` now ships `libwayland-egl` and `libwayland-cursor` (image `2026.11.15-batch2-midway`). EGL/Vulkan Wayland platforms can link against them.
+- Still to come from Renga: `linux-dmabuf` v4 and `linux-drm-syncobj` in the compositor, then the rest of this stage. Work resumes after 2026-11-19.
+
 ### 2026-11-14: plain-memory buffer comment landed
 
 The `B_NO_COLOR_SPACE` plain-memory convention is documented in `GpuPresent.h` ([`2ca4e1f9`](https://github.com/Techniix/haiku/commit/2ca4e1f9)). It is a comment only, with no layout or version change.
