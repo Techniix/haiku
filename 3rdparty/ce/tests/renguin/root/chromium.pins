@@ -1,7 +1,9 @@
 # Alpine Linux packages for the optional Chromium root (build-chromium-root.sh):
 # Alpine's chromium and every package it needs to start, except mesa,
 # mesa-dri-gallium (with LLVM; software rendering needs neither), gtk+3.0 and
-# xdg-utils (desktop integration). Same format as alpine.pins.
+# xdg-utils (desktop integration). chromium-swiftshader is the software
+# Vulkan driver behind ANGLE (SwANGLE), Chromium's GPU path without a GPU.
+# Same format as alpine.pins.
 branch v3.24
 main abseil-cpp-raw-logging-internal-20250814.1-r0.apk 8f4a392814252cbf7122a2b3c1cd12e18871a9d49c8425f219b9a9ec9b686eab
 main abseil-cpp-strings-20250814.1-r0.apk 84c7c19c83527c9b082a1dbf8f55403d0bc125106f898db6f8270c8925a1600a
@@ -17,6 +19,7 @@ main cairo-1.18.4-r1.apk 23364d77506b5f60eae26daa0a5489cdee8bc100fcd010cd73774df
 community chromium-156.0.8078.79-r0.apk 488b94cfc04e05b59ad6e9ca2799316f413da71964d462e6a5c4d3181af25daa
 community chromium-angle-156.0.8078.79-r0.apk d941ed04dc7a26f9e089d2a105a2e9dfc8056416562e647ab66a6f20f84e7c4a
 community chromium-common-156.0.8078.79-r0.apk 6813a751c9c4a61d81b6ac4a034414f657ee2549955670d31b04acac6869da72
+community chromium-swiftshader-156.0.8078.79-r0.apk d458f9fa5642418d55faea412e027687ed1ec1fa1adfd4d4c2c49d3579850849
 main cjson-1.7.19-r1.apk b1aca971a5ba46e42169311ef7bcfa96eac40d39207b22dbd3af8d4f3103d1d8
 community crc32c-1.1.2-r3.apk 5ce4db9f797e92304bf4f7477d98d2230733f8589f40e1cf330c1d26c88810f3
 main cups-libs-2.4.19-r1.apk 5739c568d90f23006d74ff82619e1a18447a6f698ae2af61970debe6658a7bea

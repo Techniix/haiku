@@ -31,6 +31,10 @@
  *                      shared mapping
  *   fallocate_keep     fallocate(FALLOC_FL_KEEP_SIZE) keeps the size, on a
  *                      memfd and on a file in /tmp
+ *   memfd_shared       two processes' own MAP_SHARED mappings of one memfd
+ *                      see each other's stores (fork, then the child maps
+ *                      the inherited descriptor afresh, as a process that
+ *                      got it over a socket does; Chromium's shared memory)
  *   pty                posix_openpt(), grantpt(), unlockpt(), ptsname()
  *                      (/dev/pts/N), the slave opens and is a terminal,
  *                      TIOCSWINSZ/TIOCGWINSZ through it, data both ways
@@ -56,6 +60,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <stdint.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -337,6 +342,60 @@ test_fallocate(void)
 
 
 static void
+test_memfd_shared(void)
+{
+	int fd = memfd_create("renguin-test-shared", MFD_CLOEXEC);
+	int sized = fd >= 0 ? ftruncate(fd, 65536) : -1;
+	volatile uint32_t* parent = (volatile uint32_t*)mmap(NULL, 65536,
+		PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (fd < 0 || sized != 0 || parent == MAP_FAILED) {
+		result("memfd_shared", 0, "memfd %d, ftruncate %d, mmap %s", fd,
+			sized, parent == MAP_FAILED ? strerror(errno) : "ok");
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+	parent[0] = 0;
+	parent[4096] = 0;	/* a second page */
+	parent[1] = 0x11111111;
+	pid_t child = fork();
+	if (child == 0) {
+		volatile uint32_t* own = (volatile uint32_t*)mmap(NULL, 65536,
+			PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if (own == MAP_FAILED)
+			_exit(2);
+		if (own[1] != 0x11111111)
+			_exit(3);		/* the parent's store before fork() */
+		own[4096] = 0x600d;
+		__atomic_store_n(&own[0], 1, __ATOMIC_SEQ_CST);
+		for (int i = 0; i < 500 && __atomic_load_n(&own[0], __ATOMIC_SEQ_CST)
+				!= 2; i++) {
+			usleep(10000);
+		}
+		_exit(__atomic_load_n(&own[0], __ATOMIC_SEQ_CST) == 2 ? 0 : 4);
+	}
+	int seen = 0;
+	for (int i = 0; i < 500 && child > 0; i++) {
+		if (__atomic_load_n(&parent[0], __ATOMIC_SEQ_CST) == 1) {
+			seen = parent[4096] == 0x600d;
+			__atomic_store_n(&parent[0], 2, __ATOMIC_SEQ_CST);
+			break;
+		}
+		usleep(10000);
+	}
+	int status = -1;
+	if (child > 0)
+		waitpid(child, &status, 0);
+	result("memfd_shared", seen && WIFEXITED(status)
+			&& WEXITSTATUS(status) == 0,
+		"the child's stores %s, child status %d", seen ? "seen" : "not seen",
+		WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+	munmap((void*)parent, 65536);
+	close(fd);
+}
+
+
+static void
 test_pty(void)
 {
 	int master = posix_openpt(O_RDWR | O_NOCTTY);
@@ -446,6 +505,7 @@ main(void)
 	test_connect();
 	test_sigint();
 	test_fallocate();
+	test_memfd_shared();
 	test_pty();
 	if (sFailed == 0)
 		printf("ok\n");
