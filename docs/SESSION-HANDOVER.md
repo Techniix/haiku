@@ -41,3 +41,17 @@ A new session usually gets its own machine. If `/home/claude/haiku` does not exi
 ## Where things stand
 
 See the roadmap's newest work-order paragraph and the dated decision log. At the time of writing (2026-11-13, 20:10 ET): images `2026.11.13-gamepads` and `2026.11.13-devel-vulkan` are delivered (the maintainer publishes them). Open from that batch: publishing Renga's packages (needs the system packages' vendor set to "Techniix", queued) and GitHub Pages on RengaPorts' `packages` branch (the maintainer's step); FFmpeg with Vulkan is a RengaPorts recipe (`07b61ff`) that the maintainer builds with HaikuPorter on a Renga machine; vulkan_loader is not yet in the image. Next, per the newest work order: the pointer and packaging fix, then Renguin (F-27), then the GPU stage. No helper is running at hand-over; start one for the pointer fix, then one for Renguin. Restart the hourly watchdog with `send_later`.
+
+## Agreed batch plan (2026-11-15)
+
+Each batch: per-piece own suites, one four-way sweep, one ISO. GPU parts go last in a batch, and the ISO ships without them if they aren't ready.
+
+1. Current batch, trimmed for usage: SDL3 gamepads, the pointer at 1000 Hz, Renguin fixes, R-7/R-8, the node crash, the FreeBSD Wi-Fi sync with the idr fix; short Chromium readiness checks.
+2. Linux Chrome under Renguin; the GPU stage for Quasar.
+3. Gamepad configurator polish; Chromium phase D; audio routing; GPU leftovers with a Screen → Displays panel (arrangement, per-display mode/scale/rotation, VRR/HDR where supported, colour profile, Wayland switch, workspaces, GPU info; built as a Control Panel page).
+4. Multi-monitor in app_server (accelerant multi-head interface, QUASAR.md entry); boot loader A with automatic restore points before every update; DriveSetup "Write image" fix; KDL USB keyboard input; Renguin leftovers (Renguin Manager, /proc stat and readdir, netlink notifications); icon pass; test health; streaming last.
+5. Control Panel F-28 with search; LinuxKPI completion with Bluetooth and a Devices & Drivers page; first-boot welcome; Linux apps native, and Windows apps native through WINE; HaikuDepot showing every source, including Alpine apk; hardware report tool. No game library.
+6. Lumina, with:
+   - customizable snap layouts: any rows × columns, a zone editor, spanning, modifier-drag to show the grid, per-display and per-workspace layouts, gaps, zone shortcuts, snap assist, saved arrangements, per-app rules;
+   - visible workspaces: a Deskbar switcher with "+" and previews, an overview, per-workspace name, wallpaper and layout, saved sets, "Move to workspace" in the tab menu, a mention in the first-boot welcome.
+7. README redo.
