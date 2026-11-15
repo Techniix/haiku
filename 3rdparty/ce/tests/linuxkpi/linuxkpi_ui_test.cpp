@@ -315,6 +315,21 @@ test_settings_window(BMessenger& app)
 		"%.0f, in a %.0fx%.0f window", label.String(), boxFrame.left,
 		boxFrame.top, boxFrame.right, boxFrame.bottom, saveFrame.bottom,
 		windowFrame.Width(), windowFrame.Height());
+	// the skb bounce workaround of FreeBSD bug 297121 is offered as a
+	// switch (compat.linuxkpi.skb.mem_limit, read when the driver loads)
+	request.MakeEmpty();
+	request.what = B_GET_PROPERTY;
+	request.AddSpecifier("Label");
+	request.AddSpecifier("View", "compat.linuxkpi.skb.mem_limit");
+	request.AddSpecifier("Window", index);
+	reply.MakeEmpty();
+	BString memLimitLabel;
+	if (app.SendMessage(&request, &reply, 2000000, 2000000) == B_OK)
+		memLimitLabel = reply.GetString("result", "");
+	report("settings_skb_mem_limit_box",
+		memLimitLabel == "Keep network buffers in low memory",
+		"label \"%s\"", memLimitLabel.String());
+
 	report("settings_window_fits", windowFrame.IsValid()
 			&& screen.Contains(windowFrame),
 		"window (%.0f,%.0f)-(%.0f,%.0f), screen %.0fx%.0f",
