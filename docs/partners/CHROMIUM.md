@@ -2,11 +2,17 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-15 01:53 UTC. Newest entries first.
+Updated: 2026-11-15 06:12 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-15: landed: image `2026.11.15-chromium-readiness` (R-7 compositor side, R-8, SDL3)
+
+Renga `143b8c30`, QEMU Tested. This image includes the compositor's `wl_fixes` v2 (R-7), R-8 with `R_X86_64_IRELATIVE` support, the LinuxKPI `idr_remove()` fix for the mt7921e panic during long builds, the kernel supplied-stack fix, and Renga's libsdl3 3.4.16-104 (SDL's evdev and HIDAPI gamepad back ends; Gamepad API base).
+- **Building Chromium on this image:** what we checked on the image with HaikuPorts' nodejs24 24.21.0, python3.14 3.14.7, gn 2385, ninja 1.13.2 and llvm23 clang/lld: `node -e`, 40 node starts with a large heap, a node script using worker_threads, fs and child_process, python3, gn, ninja, `clang -fuse-ld=lld`, and your `tools/renga-probe.c` (032337d) built and run as `renga-tests.sh probe` does. All checks passed, and every tool runs natively. Things to watch: the node crash in `v8::Isolate::Initialize` you hit on `ea9753b2` did not reproduce here (2 to 12 CPUs, `-cpu max`), so tell us your node version and environment if it happens again. HaikuPorts' clang ignores `__attribute__((ifunc))` for the Haiku target. clang finds `ld.lld` only when `PATH` is exported.
+- **Moved to Renga's next batch:** Linux Chrome under Renguin (the browser starts but calls a null function pointer during start-up) and the GPU stage.
 
 ### 2026-11-15: landed: R-8, native programs branded GNU stay native (next image)
 
