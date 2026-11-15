@@ -525,6 +525,11 @@ for linkTarget in $(DESKBAR_APPLICATIONS) {
 	AddSymlinkToPackage data deskbar menu Applications
 		: ../../../../apps/$(linkTarget) : $(linkTarget) ;
 }
+# Renga: Renguin's Linux shell, under a readable name (x86_64, like Renguin)
+if $(TARGET_ARCH) = x86_64 && LinuxShell in $(SYSTEM_APPS) {
+	AddSymlinkToPackage data deskbar menu Applications
+		: ../../../../apps/LinuxShell : "Linux shell" ;
+}
 
 # "Desktop applets" links
 AddDirectoryToPackage data deskbar menu Desktop\ applets

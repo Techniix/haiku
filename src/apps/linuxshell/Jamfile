@@ -1,0 +1,10 @@
+SubDir HAIKU_TOP src apps linuxshell ;
+
+# Linux shell: the Deskbar entry that opens Terminal with Renguin's Linux
+# shell (the "linux" command, src/bin/linux). x86_64 only, like Renguin.
+
+Application LinuxShell :
+	LinuxShell.cpp
+	: be [ TargetLibstdc++ ]
+	: LinuxShell.rdef LinuxShellIcon.rdef
+;

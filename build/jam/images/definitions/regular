@@ -41,6 +41,7 @@ SYSTEM_APPS += [ FFilterByBuildFeatures
 	LaunchBox
 	LegacyPackageInstaller
 	LinuxKPIManager@x86_64
+	LinuxShell@x86_64
 	Magnify
 	Mail
 	MediaConverter

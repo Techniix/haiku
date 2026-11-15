@@ -27,6 +27,7 @@ HaikuSubInclude icon-o-matic ;
 HaikuSubInclude installer ;
 HaikuSubInclude launchbox ;
 HaikuSubInclude linuxkpimanager ;
+HaikuSubInclude linuxshell ;
 HaikuSubInclude login ;
 HaikuSubInclude magnify ;
 HaikuSubInclude mail ;

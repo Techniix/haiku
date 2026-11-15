@@ -168,3 +168,10 @@ Renga has natively (F-12) and only need mapping; `copy_file_range` and
   noatime) instead of "now"; access times set with utimensat() are kept
   only on volumes that store them. Extended attributes: EOPNOTSUPP until
   the F-52 mapping of BFS attributes.
+- **The `linux` command** (`src/bin/linux`, 2026-11-14): starts the Linux
+  root's login shell, or runs one command, with a clean Linux environment
+  (Linux PATH, HOME, TERM, LANG, XDG_RUNTIME_DIR, WAYLAND_DISPLAY); the
+  shell's prompt starts with a coloured `[linux]` (`/etc/profile.d/renga.sh`)
+  and Terminal's title is "Linux (Renguin)". `linux --setup` installs Alpine's
+  minirootfs (pinned SHA-256) when there is no root. Deskbar's "Linux
+  shell" (`src/apps/linuxshell`) opens Terminal with it.

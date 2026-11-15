@@ -41,6 +41,8 @@
 	  dyn.coreutils            GNU coreutils (ls, sort, head, sha256sum)
 	  dyn.net_musl/glibc       sockets, SCM_RIGHTS, getaddrinfo, netlink
 	                           (getifaddrs, if_nameindex, RTM_GETROUTE)
+	  linux_command            the linux command's clean environment: the
+	                           Linux PATH, apk found, Wayland variables
 	  dyn.sys_musl/glibc       connect() to an unreachable IPv6 address
 	                           fails (apk), SIGINT interrupts blocked
 	                           calls, posix_fallocate on a sealed memfd
@@ -205,6 +207,13 @@ static const RootCheck kRootChecks[] = {
 	{ "dyn.fds_glibc", "$R/opt/renguin-tests/fds-glibc", 0,
 		"epoll ok\neventfd ok\ntimerfd ok\nsignalfd ok\ninotify ok\n"
 		"memfd ok\nok" },
+	// the linux command (src/bin/linux): a clean Linux environment, so
+	// Linux tools are found before Haiku's (hardware: apk, ip "not found"
+	// from busybox sh started with Haiku's PATH)
+	{ "linux_command", "/bin/linux sh -c 'echo $PATH; command -v apk; "
+		"echo $XDG_RUNTIME_DIR $WAYLAND_DISPLAY'", 0,
+		"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+		"/sbin/apk\n/tmp/xdg-runtime wayland-0" },
 	{ "dyn.sys_musl", "$R/opt/renguin-tests/sys-musl", 0,
 		"connect6_nonblock ok\nconnect6_block ok\nconnect_fallback ok\n"
 		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"

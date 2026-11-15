@@ -1,0 +1,9 @@
+SubDir HAIKU_TOP src bin linux ;
+
+# linux: a shell or one command in Renguin's Linux root with a clean Linux
+# environment (Renga, roadmap F-27).
+
+Application linux :
+	linux.cpp
+	: [ TargetLibstdc++ ]
+;
