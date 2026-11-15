@@ -52,7 +52,7 @@ local programs ;
 for name in hello ebadf enosys exit xmm {
 	programs += [ RenguinLinuxProgram $(name) : $(name).S : raw ] ;
 }
-for name in args mem fileio ids proc threads signals {
+for name in args mem fileio ids proc threads signals segv {
 	programs += [ RenguinLinuxProgram $(name) : $(name).c : raw ] ;
 }
 programs += [ RenguinLinuxProgram libc : libc.c : libc : -static ] ;
@@ -100,8 +100,73 @@ actions BuildRenguinLinuxRoot
 }
 BuildRenguinLinuxRoot $(linuxRoot) : $(rootInputs) <build>wayland_scanner ;
 
+actions BuildRenguinChromiumRoot
+{
+	sh $(2[1]) $(1) $(2[2]) $(RENGUIN_ROOT_CACHE) $(RENGUIN_CHROME_PAGES)
+}
+
+# Optional: Alpine's Chromium on top of the Linux root (roadmap F-27,
+# "Linux Chrome under Renguin"; root/build-chromium-root.sh). About 230 MB
+# to download once and 500 MB in the image, so only harness images built
+# with RENGUIN_LINUX_CHROMIUM=1 (ce-test.py --linux-chromium) carry it.
+local chromiumRoot ;
+if $(RENGUIN_LINUX_CHROMIUM) = 1 {
+	chromiumRoot = <renguin-linux>renguin-chromium-root.tar.gz ;
+	MakeLocate $(chromiumRoot) : $(outputDir) ;
+	local chromiumInputs = <renguin-root>build-chromium-root.sh
+		<renguin-root>chromium.pins ;
+	SEARCH on $(chromiumInputs) = $(rootDir) ;
+	local chromePages = <renguin-chrome>index.html ;
+	SEARCH on $(chromePages) = [ FDirName $(SUBDIR) chrome ] ;
+	Depends $(chromiumRoot) : $(chromiumInputs) $(chromePages) ;
+	RENGUIN_CHROME_PAGES on $(chromiumRoot) = [ FDirName $(SUBDIR) chrome ] ;
+	RENGUIN_ROOT_CACHE on $(chromiumRoot)
+		= [ FDirName $(HAIKU_DOWNLOAD_DIR) renguin-linux-root ] ;
+	BuildRenguinChromiumRoot $(chromiumRoot) : $(chromiumInputs) ;
+}
+
 local expected = <renguin-linux-src>expected.txt ;
 SEARCH on $(expected) = $(linuxDir) ;
+
+# A native program with an IFUNC, built the way Chromium's V8 tools are
+# (Chromium R-8): the build host's clang compiles it for Haiku and ld.lld
+# links it against Haiku's glue code and libroot (an R_X86_64_IRELATIVE
+# relocation); EI_OSABI is then set to 3 (ELFOSABI_GNU), as lld does when
+# its inputs use GNU extensions. It must run natively, not under Renguin.
+# (Haiku's GCC refuses the ifunc attribute.) Skipped without clang/ld.lld.
+actions BuildRenguinIfuncNative
+{
+	clang --target=x86_64-unknown-haiku -O2 -fPIC -nostdinc \
+		-I$(RENGUIN_HEADERS)/glibc -I$(RENGUIN_HEADERS)/posix \
+		-I$(RENGUIN_HEADERS) -I$(RENGUIN_HEADERS)/os \
+		-I$(RENGUIN_HEADERS)/os/support -I$(RENGUIN_HEADERS)/os/kernel \
+		-I$(RENGUIN_GCC_LIB_DIR)/include -c $(2[1]) -o $(1).o
+	ld.lld -o $(1) -shared -Bsymbolic --eh-frame-hdr \
+		-z max-page-size=0x1000 $(2[2-5]) $(1).o $(2[8]) \
+		-L$(RENGUIN_GCC_LIB_DIR) -lgcc $(2[6-7])
+	printf '\003' | dd of=$(1) bs=1 seek=7 conv=notrunc status=none
+	rm -f $(1).o
+}
+
+local ifuncNative ;
+local arch = $(TARGET_PACKAGING_ARCH) ;
+if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
+	ifuncNative = <renguin-native>renguin_ifunc_native ;
+	MakeLocate $(ifuncNative) : $(outputDir) ;
+	local ifuncSource = <renguin-native>ifunc_native.c ;
+	SEARCH on $(ifuncSource) = [ FDirName $(SUBDIR) native ] ;
+	local glueBegin = $(HAIKU_EXECUTABLE_BEGIN_GLUE_CODE_$(arch)) ;
+	local glueEnd = $(HAIKU_EXECUTABLE_END_GLUE_CODE_$(arch)) ;
+	local libroot = $(HAIKU_LIBRARY_NAME_MAP_$(arch)_root) ;
+	Depends $(ifuncNative) : $(ifuncSource) $(glueBegin) $(glueEnd)
+		$(libroot) ;
+	RENGUIN_GCC_LIB_DIR on $(ifuncNative) = $(HAIKU_GCC_LIB_DIR_$(arch)) ;
+	RENGUIN_HEADERS on $(ifuncNative) = [ FDirName $(HAIKU_TOP) headers ] ;
+	# sources: the C file, 4 begin and 2 end glue objects, libroot
+	BuildRenguinIfuncNative $(ifuncNative)
+		: $(ifuncSource) $(glueBegin) $(glueEnd) $(libroot) ;
+}
+
 
 Application renguin_test :
 	renguin_test.cpp
@@ -111,7 +176,12 @@ Application renguin_test :
 if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
 	AddFilesToHaikuImage system non-packaged data renguin-tests
 		: $(programs) $(expected) ;
-	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test
+		$(ifuncNative) ;
 	ExtractArchiveToHaikuImage system non-packaged compat linux
 		: $(linuxRoot) ;
+	if $(chromiumRoot) {
+		ExtractArchiveToHaikuImage system non-packaged compat linux
+			: $(chromiumRoot) ;
+	}
 }

@@ -41,6 +41,13 @@
 	  dyn.coreutils            GNU coreutils (ls, sort, head, sha256sum)
 	  dyn.net_musl/glibc       sockets, SCM_RIGHTS, getaddrinfo, netlink
 	                           (getifaddrs, if_nameindex, RTM_GETROUTE)
+	  brand.native_ifunc       Chromium R-8: a native clang/ld.lld program
+	                           with an IFUNC and EI_OSABI 3 runs natively
+	  brand.native_gnu         a native program with EI_OSABI 3 runs
+	                           natively
+	  brand.static_linux       static glibc programs (IFUNCs, EI_OSABI 3)
+	                           stay Linux programs
+	  brand.debugger_fault     a debugger on a Linux team gets its fault
 	  linux_command            the linux command's clean environment: the
 	                           Linux PATH, apk found, Wayland variables
 	  dyn.apk_update           apk update from a local repository on a
@@ -48,14 +55,18 @@
 	                           well inside libfetch's 60 s timeout
 	  dyn.sys_musl/glibc       connect() to an unreachable IPv6 address
 	                           fails and polls writable, UDP connect()
-	                           there fails ENETUNREACH (apk), SIGINT interrupts blocked
-	                           calls, posix_fallocate on a sealed memfd
+	                           there fails ENETUNREACH (apk), SIGINT
+	                           interrupts blocked calls, posix_fallocate on a sealed memfd
 	                           (weston's buffers), FALLOC_FL_KEEP_SIZE,
 	                           Linux pseudo-terminals and forkpty()
 	  dyn.fds_musl/glibc       epoll, eventfd, timerfd, signalfd, inotify,
 	                           memfd with sealing, on Renga's own
 	  dyn.wget                 busybox wget from a busybox nc server on
 	                           localhost (/etc/hosts), Renguin's sockets
+	  chrome.dump_dom          only in images with the Chromium layer
+	                           (ce-test.py --linux-chromium): Alpine's
+	                           Chromium, headless, loads a local page, runs
+	                           its script and prints the DOM
 	  dyn.ip                   busybox ip addr/route (netlink) and ifconfig
 	                           (SIOCGIF* ioctls) show the loopback "lo"
 	  dyn.resolv_conf          /etc/resolv.conf in the root is Haiku's own
@@ -69,8 +80,11 @@
 
 
 #include <OS.h>
+#include <debugger.h>
+#include <image.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,6 +93,8 @@
 
 #include <string>
 #include <vector>
+
+extern char** environ;
 
 
 #define SUITE "renguin"
@@ -335,6 +351,164 @@ run_root_checks()
 }
 
 
+/*!	Alpine's Chromium (the optional Chromium layer of the Linux root,
+	root/build-chromium-root.sh): headless, without Chromium's sandbox
+	(Renguin has no user namespaces or seccomp yet), without the GPU.
+*/
+static void
+run_chromium_check()
+{
+	std::string binary = std::string(kRoot) + "/usr/lib/chromium/chromium";
+	if (access(binary.c_str(), F_OK) != 0) {
+		printf("CE-INFO renguin: no Chromium in the Linux root (build with "
+			"ce-test.py --linux-chromium); chrome.dump_dom not checked\n");
+		fflush(stdout);
+		return;
+	}
+	std::string command = "rm -rf /tmp/rg-chrome; cd /tmp && "
+		"{ timeout 300 /bin/linux /usr/lib/chromium/chromium --headless "
+		"--no-sandbox --no-zygote --in-process-gpu --disable-gpu "
+		"--disable-dev-shm-usage --no-first-run "
+		"--user-data-dir=/tmp/rg-chrome --enable-logging=stderr --dump-dom "
+		"file:///opt/renguin-data/chrome/index.html "
+		"> /tmp/rg-chrome.out 2> /tmp/rg-chrome.err; "
+		"printf 'CE-RC:%d\\n' $?; }; "
+		+ std::string(kRoot) + "/bin/busybox grep -o "
+		"'renguin-chromium-ok[^<]*' /tmp/rg-chrome.out";
+	bigtime_t started = system_time();
+	std::string output = run(command);
+	bigtime_t took = system_time() - started;
+	int status = -1;
+	size_t marker = output.find("CE-RC:");
+	if (marker != std::string::npos)
+		status = atoi(output.c_str() + marker + 6);
+	bool pass = status == 0
+		&& output.find("renguin-chromium-ok 123 number 42") != std::string::npos;
+	std::string errors;
+	if (!pass)
+		errors = run(std::string(kRoot) + "/bin/busybox sh -c \"grep -E "
+			"'FATAL|ERROR|Check failed' /tmp/rg-chrome.err | grep -v dbus "
+			"| cut -c 1-300 | head -n 15; tail -c 400 /tmp/rg-chrome.err\"");
+	report("chrome.dump_dom", pass, "exit %d, %.1f s, output [%s]",
+		status, took / 1000000.0, one_line(output).c_str());
+	// Chromium's error lines, for the record
+	size_t start = 0;
+	while (start < errors.size()) {
+		size_t end = errors.find('\n', start);
+		if (end == std::string::npos)
+			end = errors.size();
+		if (end > start) {
+			printf("CE-INFO renguin chrome: %s\n",
+				errors.substr(start, end - start).c_str());
+		}
+		start = end + 1;
+	}
+	fflush(stdout);
+	run("rm -rf /tmp/rg-chrome /tmp/rg-chrome.out /tmp/rg-chrome.err");
+}
+
+
+/*!	Chromium R-8: which programs Renguin claims, and debuggers.
+	- brand.native_ifunc: a native program built by clang and ld.lld with
+	  an IFUNC and EI_OSABI 3 runs natively;
+	- brand.native_gnu: a copy of a native program with EI_OSABI set to 3
+	  runs natively;
+	- brand.static_linux: the static glibc programs (IFUNCs inside, EI_OSABI
+	  3, libc static and libc-pie static-pie) are still Linux programs
+	  (they ran above; checked here that they carry the brand);
+	- brand.debugger_fault: a debugger installed on a Linux team is told of
+	  its fault (B_DEBUGGER_MESSAGE_EXCEPTION_OCCURRED).
+*/
+static int
+elf_osabi(const char* path)
+{
+	int fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return -1;
+	unsigned char ident[8];
+	ssize_t bytes = read(fd, ident, sizeof(ident));
+	close(fd);
+	return bytes == sizeof(ident) ? ident[7] : -1;
+}
+
+
+static void
+run_brand_checks()
+{
+	const char* ifunc = "/boot/system/non-packaged/bin/ce-tests/"
+		"renguin_ifunc_native";
+	if (access(ifunc, F_OK) == 0) {
+		std::string output = run(std::string(ifunc) + " 2>&1; echo rc=$?");
+		report("brand.native_ifunc", output == "ifunc 42\nrc=0\n",
+			"EI_OSABI %d, output [%s]", elf_osabi(ifunc),
+			one_line(output).c_str());
+	} else {
+		printf("CE-INFO renguin: no %s (no clang/ld.lld on the build host); "
+			"brand.native_ifunc not checked\n", ifunc);
+	}
+
+	std::string copy = "/tmp/renguin-gnu-echo";
+	run("cp /bin/echo " + copy);
+	int fd = open(copy.c_str(), O_WRONLY);
+	bool patched = false;
+	if (fd >= 0) {
+		unsigned char gnu = 3;
+		patched = pwrite(fd, &gnu, 1, 7) == 1;
+		close(fd);
+	}
+	std::string output = run(copy + " native 2>&1; echo rc=$?");
+	report("brand.native_gnu", patched && elf_osabi(copy.c_str()) == 3
+			&& output == "native\nrc=0\n",
+		"copy of /bin/echo with EI_OSABI %d: output [%s]",
+		elf_osabi(copy.c_str()), one_line(output).c_str());
+	unlink(copy.c_str());
+
+	std::string libc = std::string(kWork) + "/libc";
+	std::string libcPie = std::string(kWork) + "/libc-pie";
+	report("brand.static_linux", elf_osabi(libc.c_str()) == 3
+			&& elf_osabi(libcPie.c_str()) == 3,
+		"libc EI_OSABI %d, libc-pie EI_OSABI %d (both ran as Linux "
+		"programs above)", elf_osabi(libc.c_str()),
+		elf_osabi(libcPie.c_str()));
+
+	// a debugger on a Linux team hears of its fault
+	std::string segv = std::string(kWork) + "/segv";
+	const char* args[] = { segv.c_str(), NULL };
+	thread_id thread = load_image(1, args, (const char**)environ);
+	bool told = false;
+	int32 lastCode = -1;
+	if (thread >= 0) {
+		port_id port = create_port(10, "renguin debugger");
+		port_id nub = install_team_debugger(thread, port);
+		resume_thread(thread);
+		bigtime_t end = system_time() + 10000000;
+		while (nub >= 0 && !told && system_time() < end) {
+			debug_debugger_message_data message;
+			int32 code;
+			ssize_t bytes = read_port_etc(port, &code, &message,
+				sizeof(message), B_RELATIVE_TIMEOUT, end - system_time());
+			if (bytes < 0)
+				break;
+			lastCode = code;
+			if (code == B_DEBUGGER_MESSAGE_EXCEPTION_OCCURRED
+				&& message.exception_occurred.exception
+					== B_SEGMENT_VIOLATION) {
+				told = true;
+			} else if (code == B_DEBUGGER_MESSAGE_TEAM_DELETED)
+				break;
+		}
+		kill_team(thread);
+		if (nub >= 0)
+			remove_team_debugger(thread);
+		delete_port(port);
+	}
+	report("brand.debugger_fault", told, "load_image %" B_PRId32 ", %s "
+		"(last message %" B_PRId32 ")", thread,
+		told ? "segment violation reported" : "no exception message",
+		lastCode);
+}
+
+
 int
 main()
 {
@@ -423,7 +597,9 @@ main()
 	}
 	fclose(expected);
 
+	run_brand_checks();
 	run_root_checks();
+	run_chromium_check();
 
 	std::string native = run("/bin/uname -s 2>&1");
 	report("native_after", !native.empty()

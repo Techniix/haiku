@@ -320,6 +320,34 @@ relocate_dependencies(image_t *image)
 }
 
 
+/*!	Renga: IFUNC relocations (R_X86_64_IRELATIVE) call resolvers, code in
+	the image, so they run after remap_images() made the segments
+	executable, and before any initializer (Chromium R-8).
+*/
+static status_t
+resolve_ifuncs(image_t *image)
+{
+	image_t **list;
+	ssize_t count = get_sorted_image_list(image, &list,
+		RFLAG_IFUNCS_RESOLVED);
+	if (count < B_OK)
+		return count;
+
+	for (ssize_t i = 0; i < count; i++) {
+		status_t status = arch_relocate_image_ifuncs(list[i]);
+		if (status < B_OK) {
+			FATAL("%s: Troubles resolving IFUNCs: %s\n", list[i]->path,
+				strerror(status));
+			free(list);
+			return status;
+		}
+	}
+
+	free(list);
+	return B_OK;
+}
+
+
 static void
 init_dependencies(image_t *image, bool initHead)
 {
@@ -477,6 +505,9 @@ preload_addon(char const* path)
 	inject_runtime_loader_api(image);
 
 	remap_images();
+	status = resolve_ifuncs(image);
+	if (status < B_OK)
+		goto err;
 	init_dependencies(image, true);
 
 	// if the image contains an add-on, register it
@@ -574,6 +605,9 @@ load_program(char const *path, void **_entry)
 	inject_runtime_loader_api(gProgramImage);
 
 	remap_images();
+	status = resolve_ifuncs(gProgramImage);
+	if (status < B_OK)
+		goto err;
 	init_dependencies(gProgramImage, true);
 
 	// Since the images are initialized now, we no longer should use our
@@ -704,6 +738,9 @@ load_library(char const *path, uint32 flags, bool addOn, void* caller,
 		clear_image_flags_recursively(image, RFLAG_USE_FOR_RESOLVING);
 
 	remap_images();
+	status = resolve_ifuncs(image);
+	if (status < B_OK)
+		goto err;
 	init_dependencies(image, true);
 
 	KTRACE("rld: load_library(\"%s\") done: id: %" B_PRId32, path, image->id);

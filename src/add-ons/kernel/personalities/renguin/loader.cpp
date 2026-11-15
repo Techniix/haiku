@@ -197,12 +197,55 @@ has_linux_abi_note(int fd, const renguin_phdr* phdr)
 }
 
 
+/*!	True if the executable has a PT_INTERP, or a PT_DYNAMIC with a
+	DT_NEEDED entry (or one that cannot be read): it needs a loader and
+	shared libraries, which a branded static Linux program never does.
+*/
+static bool
+needs_shared_libraries(int fd, const renguin_ehdr* ehdr,
+	const renguin_phdr* phdrs)
+{
+	static const size_t kMaxDynamicSize = 64 * 1024;
+	for (int i = 0; i < ehdr->e_phnum; i++) {
+		const renguin_phdr* phdr = program_header(phdrs, ehdr, i);
+		if (phdr->p_type == RENGUIN_PT_INTERP)
+			return true;
+		if (phdr->p_type != RENGUIN_PT_DYNAMIC)
+			continue;
+		if (phdr->p_filesz == 0)
+			continue;
+		if (phdr->p_filesz > kMaxDynamicSize)
+			return true;
+		uint64* dynamic = (uint64*)malloc(phdr->p_filesz);
+		if (dynamic == NULL)
+			return true;
+		MemoryDeleter dynamicDeleter(dynamic);
+		if (read_exactly(fd, phdr->p_offset, dynamic, phdr->p_filesz)
+				!= B_OK) {
+			return true;
+		}
+		// Elf64_Dyn: d_tag, d_val; DT_NULL (0) ends, DT_NEEDED is 1
+		size_t count = phdr->p_filesz / (2 * sizeof(uint64));
+		for (size_t entry = 0; entry < count; entry++) {
+			uint64 tag = dynamic[entry * 2];
+			if (tag == 0)
+				break;
+			if (tag == 1)
+				return true;
+		}
+	}
+	return false;
+}
+
+
 /*!	Decides whether an executable is a Linux program. The order follows
 	FreeBSD's __elfN(get_brandinfo)(): the interpreter path, then the OS/ABI
 	byte, then the ABI note.
 
-	Haiku's own executables carry EI_OSABI 0, no GNU ABI note, and Haiku's
-	runtime_loader as interpreter (or none), so they are never claimed. A
+	Haiku's own executables carry no GNU ABI note and Haiku's runtime_loader
+	as interpreter (or none); EI_OSABI is 0, or 3 (GNU) when lld or GCC
+	used GNU extensions such as IFUNCs, which counts only for programs
+	without shared libraries. So they are never claimed. A
 	static musl program has none of the markers either; it needs the
 	renguin-brand tool, like FreeBSD's brandelf.
 */
@@ -241,8 +284,17 @@ renguin_probe(const foreign_exec_args* args)
 	}
 
 	// 2. Branded Linux/GNU (glibc's static programs with IFUNCs, or
-	// renguin-brand).
-	if (ehdr->e_ident[RENGUIN_EI_OSABI] == RENGUIN_ELFOSABI_LINUX)
+	// renguin-brand), but only for programs that need no shared library:
+	// no PT_INTERP and no DT_NEEDED (static, or static-pie with only
+	// PT_DYNAMIC for its own relocations). The brand alone proves nothing
+	// for a dynamically linked program: lld and GCC brand native Haiku
+	// programs GNU too when they use IFUNCs or other GNU extensions, and
+	// those have PT_DYNAMIC with DT_NEEDED libroot.so and no PT_INTERP (Haiku
+	// links executables with -shared). A dynamic Linux program has a Linux
+	// interpreter and was taken by check 1 (Chromium R-8: V8's mksnapshot
+	// died with SIGSEGV as a "Linux" program, 2026-11-15).
+	if (ehdr->e_ident[RENGUIN_EI_OSABI] == RENGUIN_ELFOSABI_LINUX
+		&& !needs_shared_libraries(args->fd, ehdr, phdrs))
 		return B_OK;
 
 	// 3. A GNU ABI note saying Linux.

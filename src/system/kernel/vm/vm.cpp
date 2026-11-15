@@ -3989,9 +3989,9 @@ vm_page_fault(addr_t address, addr_t faultAddress, bool isWrite, bool isExecute,
 			// foreign_personality.h).
 			struct sigaction action;
 			if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0) {
-				foreign_personality_fault_signal(thread, SIGSEGV,
+				foreign_personality_fault(thread, SIGSEGV,
 					status == B_PERMISSION_DENIED ? SEGV_ACCERR : SEGV_MAPERR,
-					EFAULT, (void*)address);
+					EFAULT, (void*)address, B_SEGMENT_VIOLATION);
 			} else if ((sigaction(SIGSEGV, NULL, &action) == 0
 					&& action.sa_handler != SIG_DFL
 					&& action.sa_handler != SIG_IGN)

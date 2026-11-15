@@ -25,6 +25,7 @@
 
 #include <module.h>
 #include <thread_types.h>
+#include <debugger.h>
 
 
 #define FOREIGN_PERSONALITY_MODULE_PREFIX	"personalities"
@@ -160,7 +161,19 @@ void		foreign_personality_fault_signal(Thread* thread, int number,
 	// instruction, ...) to a thread with THREAD_FLAGS_FOREIGN_ABI, the way
 	// Linux and FreeBSD do: if the signal is blocked or ignored, it is
 	// unblocked and its default action restored, so the program ends rather
-	// than faulting again forever, and Haiku's debugger is not called in.
+	// than faulting again forever. It does not call the debugger in; use
+	// foreign_personality_fault() from fault paths.
+
+void		foreign_personality_fault(Thread* thread, int number, int32 code,
+				int32 error, void* address, debug_exception_type exception);
+	// Renga: the fault path for threads with THREAD_FLAGS_FOREIGN_ABI
+	// (vm_page_fault(), the x86 exception handlers): logs the fault, tells
+	// an installed user debugger about it the way native threads' faults
+	// are reported (user_debug_exception_occurred(); it may ignore it),
+	// then sends the signal with foreign_personality_fault_signal(). With
+	// no debugger installed, no debugger is started: the program's own
+	// ABI decides (a Linux program dies by the signal, as its parent
+	// expects).
 
 int			foreign_personality_native_proc_open(const char* path,
 				int openMode);

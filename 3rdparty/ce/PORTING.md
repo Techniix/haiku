@@ -1421,6 +1421,18 @@ repositories get 2 on Renga images) carries Renga's `haiku` and
 `haiku_devel` builds, so `pkgman install haiku_devel` gets the development
 files that match the running system.
 
+IFUNCs (x86_64, since the R-8 fix): Renga's runtime_loader applies
+`R_X86_64_IRELATIVE` relocations, after the image's segments have their
+final protection and before any initializer, so programs and libraries
+built with clang and lld (or other toolchains) that use
+`__attribute__((ifunc))` or libraries with IFUNCs load. Haiku's GCC still
+rejects the attribute. Such programs may carry `EI_OSABI` 3
+(`ELFOSABI_GNU`); Renguin takes that byte as a Linux brand only for
+programs without `PT_INTERP` and without `DT_NEEDED` (static Linux
+programs), so they run natively. Cross-image references to IFUNC symbols
+(an IFUNC exported by one library and called from another) are not
+resolved through the resolver yet.
+
 Cross builds (HaikuPorter's cross mode, the cross-tools): build the sysroot
 package from Renga's tree, `jam -q haiku_cross_devel_sysroot_x86_64.hpkg`
 in `generated.x86_64` (it lands in

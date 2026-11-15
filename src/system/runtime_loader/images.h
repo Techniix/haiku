@@ -29,8 +29,10 @@ enum {
 	RFLAG_REMAPPED				= 0x8000,
 
 	RFLAG_VISITED				= 0x10000,
-	RFLAG_USE_FOR_RESOLVING		= 0x20000
+	RFLAG_USE_FOR_RESOLVING		= 0x20000,
 		// temporarily set in the symbol resolution code
+	RFLAG_IFUNCS_RESOLVED		= 0x40000
+		// Renga: the image's IFUNC relocations are done (elf.cpp)
 };
 
 

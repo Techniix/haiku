@@ -28,3 +28,11 @@ arch_relocate_image(image_t *rootImage, image_t *image,
 	debugger("arch_relocate_image: Not Yet Implemented!");
 	return B_OK;
 }
+
+
+status_t
+arch_relocate_image_ifuncs(image_t* image)
+{
+	// Renga: IFUNC relocations are implemented for x86_64 only
+	return B_OK;
+}

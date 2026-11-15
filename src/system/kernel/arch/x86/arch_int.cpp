@@ -219,8 +219,8 @@ x86_unexpected_exception(iframe* frame)
 		// the signal. Otherwise we notify the user debugger first. Foreign ABI
 		// threads get their ABI's semantics (see foreign_personality.h).
 		if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0) {
-			foreign_personality_fault_signal(thread, signalNumber, signalCode,
-				signalError, (void*)signalAddress);
+			foreign_personality_fault(thread, signalNumber, signalCode,
+				signalError, (void*)signalAddress, type);
 		} else if ((sigaction(signalNumber, NULL, &action) == 0
 				&& action.sa_handler != SIG_DFL
 				&& action.sa_handler != SIG_IGN)

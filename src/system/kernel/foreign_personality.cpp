@@ -23,6 +23,7 @@
 #include <syscalls.h>
 #include <team.h>
 #include <thread.h>
+#include <user_debugger.h>
 #include <util/AutoLock.h>
 #include <util/ThreadAutoLock.h>
 #include <vfs.h>
@@ -330,6 +331,33 @@ foreign_personality_fault_signal(Thread* thread, int number, int32 code,
 	Signal signal(number, code, error, team->id);
 	signal.SetAddress(address);
 	send_signal_to_thread(thread, signal, 0);
+}
+
+
+void
+foreign_personality_fault(Thread* thread, int number, int32 code,
+	int32 error, void* address, debug_exception_type exception)
+{
+	// A record for diagnosing foreign programs: their crashes do not start
+	// the debug server. Capped, since some programs (JITs, garbage
+	// collectors) fault on purpose and handle the signal themselves.
+	static int32 sFaultsLogged = 0;
+	if (atomic_add(&sFaultsLogged, 1) < 64) {
+		dprintf("foreign ABI fault: thread %" B_PRId32 " (team %" B_PRId32
+			", %s): signal %d code %" B_PRId32 ", address %p\n", thread->id,
+			thread->team->id, thread->team->Name(), number, code, address);
+	}
+
+	// An installed debugger hears of the fault as for a native thread,
+	// and may ignore it (the debugger then handles it, e.g. by changing
+	// the thread's state). No debugger is started for a foreign program.
+	if ((atomic_get(&thread->team->debug_info.flags)
+			& B_TEAM_DEBUG_DEBUGGER_INSTALLED) != 0
+		&& !user_debug_exception_occurred(exception, number)) {
+		return;
+	}
+
+	foreign_personality_fault_signal(thread, number, code, error, address);
 }
 
 

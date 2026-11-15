@@ -17,3 +17,4 @@ signals||0|ok
 libc-signals||0|raise 2\nsigqueue 4242\nsegv 0x40\npause EINTR\nsigwait 12\npthread_kill\ncancel\naltstack\nok
 libc-fs||0|statx\nstatfs\nchmod\nutimensat\nlinks\nmkfifo\ntruncate\nsendfile\nflock\nfadvise\npoll\nselect\nppoll\nsysinfo\nok
 libc-procfs|x|0|stat\nstatus\ncmdline\nexe\nfd\nlisting\nsystem\nrelative\nlinks\nerrors\nok
+segv||139|

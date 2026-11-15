@@ -437,6 +437,11 @@ def build(args, results_dir, report):
 	if args.installer_upgrade:
 		# room for an upgrade that keeps the old system as a state
 		jam.append("-sHAIKU_IMAGE_SIZE=%d" % INSTALLER_IMAGE_SIZE)
+	if args.linux_chromium:
+		# Alpine's Chromium in the Linux root (renguin_test chrome.*)
+		jam.append("-sRENGUIN_LINUX_CHROMIUM=1")
+		if not args.installer_upgrade:
+			jam.append("-sHAIKU_IMAGE_SIZE=%d" % CHROMIUM_IMAGE_SIZE)
 	if args.verbose:
 		# Trace output is a compile-time switch (see the drivers' Jamfiles).
 		# jam does not notice changed defines, so force the recompile.
@@ -1312,6 +1317,8 @@ INSTALLER_USER_PACKAGE = "ce_userapp-1.0-1-any.hpkg"
 INSTALLER_OLDER_STATE = "state_2025-01-01_12:00:00"
 # Big enough for an upgrade that keeps the old system as a state.
 INSTALLER_IMAGE_SIZE = 1200
+# MB; the Chromium layer of the Linux root is about 500 MB extracted
+CHROMIUM_IMAGE_SIZE = 1600
 INSTALLER_USER_PACKAGE_INFO = """name			ce_userapp
 version			1.0-1
 architecture	any
@@ -4027,10 +4034,16 @@ def main():
 		help="seconds without serial output before the harness enters the "
 			"kernel debugger to record backtraces")
 	parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
+	parser.add_argument("--linux-chromium", action="store_true",
+		help="put Alpine's Chromium into the Linux root (about 230 MB to "
+			"download once, a %d MB image, at least 2048 MB of memory) for "
+			"renguin_test's chrome checks" % CHROMIUM_IMAGE_SIZE)
 	parser.add_argument("--verbose", action="store_true",
 		help="build the drivers under test with their TRACE() output on")
 	args = parser.parse_args()
 	args.output = os.path.abspath(args.output)
+	if args.linux_chromium and args.memory < 2048:
+		args.memory = 2048
 	if args.profile is None:
 		args.profile = "minimum-anyboot" \
 			if args.firmware == "uefi" or args.media == "cdrom" \

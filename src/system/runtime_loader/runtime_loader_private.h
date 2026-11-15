@@ -108,6 +108,9 @@ status_t heap_reinit_after_fork();
 // arch dependent prototypes
 status_t arch_relocate_image(image_t* rootImage, image_t* image,
 	SymbolLookupCache* cache);
+status_t arch_relocate_image_ifuncs(image_t* image);
+	// Renga: the image's IFUNC relocations, once its segments have their
+	// final protection (resolvers are code in the image)
 
 }
 

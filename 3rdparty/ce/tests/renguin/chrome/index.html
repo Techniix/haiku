@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!-- Renguin test page (renguin_test chrome.dump_dom): the script writes
+     its result into the document, which headless Chromium prints with
+     dump-dom. -->
+<html>
+<head><meta charset="utf-8"><title>Renguin Chromium test</title></head>
+<body>
+<p id="result">script did not run</p>
+<script>
+const n = [3, 1, 2].sort().join("");
+const crypto_ok = typeof crypto.getRandomValues(new Uint8Array(4))[0];
+document.getElementById("result").textContent
+	= "renguin-chromium-ok " + n + " " + crypto_ok + " " + (6 * 7);
+</script>
+</body>
+</html>
