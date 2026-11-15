@@ -61,11 +61,16 @@ bool WaylandWindow::QuitRequested()
 void WaylandWindow::WindowActivated(bool isActive)
 {
 	WaylandEnv vlEnv(this);
+	// Renga: the activation message can arrive after the client destroyed
+	// the toplevel (or went away); the window then has none.
+	if (fToplevel == NULL)
+		return;
 	// Renga: a locked or confined pointer is released with the window
-	if (!isActive && fToplevel != NULL && fToplevel->XdgSurface() != NULL
+	if (!isActive && fToplevel->XdgSurface() != NULL
 		&& fToplevel->XdgSurface()->Surface() != NULL)
 		HaikuPointerConstraintsFocusLost(fToplevel->XdgSurface()->Surface());
-	if (isActive != fToplevel->fState.activated) {
+	if (isActive != fToplevel->fState.activated
+		&& fToplevel->XdgSurface() != NULL) {
 		fToplevel->fState.activated = !fToplevel->fState.activated;
 		fToplevel->DoSendConfigure();
 		fToplevel->XdgSurface()->SendConfigure(fToplevel->XdgSurface()->NextSerial());
