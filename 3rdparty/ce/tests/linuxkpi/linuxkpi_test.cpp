@@ -241,7 +241,7 @@ static const char* kEduChecks[] = {
 
 static const char* kSelftests[] = {
 	"1 timeout", "2 wake", "3 tasklet", "4 workqueue", "5 jiffies",
-	"6 page_pool"
+	"6 page_pool", "7 idr_remove_free", "8 idr_stress"
 };
 
 

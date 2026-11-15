@@ -13,6 +13,12 @@
  *   5. msleep()/jiffies advance at 1 per ms
  *   6. page_pool hands out pages (mt76 fills its RX rings from it), below
  *      4 GiB for GFP_DMA32, and virt_to_head_page() finds them again
+ *   7. idr_remove() of an id that is not allocated returns NULL and leaves
+ *      the idr intact, as in Linux (mt76's tx-status timeout path removes
+ *      id 0, which is never allocated; FreeBSD's copy panicked)
+ *   8. idr stress: 20000 rounds of allocations and removals in mt76's
+ *      pattern (ids from 1, removals of live and of free ids), checked
+ *      against a shadow table
  *
  * Results go to syslog as "linuxkpi: selftest ...". Runs once per driver
  * load, after all other LinuxKPI SYSINITs; takes about 100 ms.
@@ -32,6 +38,7 @@
 #include <linux/delay.h>
 #include <linux/mm.h>
 #include <net/page_pool/helpers.h>
+#include <linux/idr.h>
 
 static DECLARE_WAIT_QUEUE_HEAD(st_wq);
 static volatile int st_flag;
@@ -136,6 +143,68 @@ lkpi_selftest(void *arg __unused)
 				page_pool_put_full_page(pp, pg, false);
 			page_pool_destroy(pp);
 		}
+	}
+
+	/* 7 */
+	{
+		struct idr idr;
+		int a, b, ok;
+		static int x, y;
+
+		idr_init(&idr);
+		a = idr_alloc(&idr, &x, 1, 0x80, GFP_KERNEL);
+		b = idr_alloc(&idr, &y, 1, 0x80, GFP_KERNEL);
+		ok = a == 1 && b == 2
+		    && idr_remove(&idr, 0) == NULL	/* never allocated */
+		    && idr_remove(&idr, 77) == NULL	/* beyond, free */
+		    && idr_remove(&idr, a) == &x
+		    && idr_remove(&idr, a) == NULL	/* twice */
+		    && idr_find(&idr, b) == &y
+		    && idr_alloc(&idr, &x, 1, 0x80, GFP_KERNEL) == 1;
+		idr_destroy(&idr);
+		printf("linuxkpi: selftest 7 idr_remove_free: %s\n",
+		    ok ? "OK" : "FAIL");
+	}
+
+	/* 8 */
+	{
+		static void *shadow[128];
+		static int objects[128];
+		struct idr idr;
+		uint32_t seed = 12345;
+		int round, id, bad = 0;
+
+		memset(shadow, 0, sizeof(shadow));
+		idr_init(&idr);
+		for (round = 0; round < 20000 && bad == 0; round++) {
+			seed = seed * 1103515245 + 12345;
+			if ((seed >> 16) % 3 != 0) {
+				/* allocate, as mt76_tx_status_skb_add() */
+				int slot = (seed >> 8) % 128;
+				id = idr_alloc(&idr, &objects[slot], 1, 128,
+				    GFP_ATOMIC);
+				if (id >= 1 && id < 128) {
+					if (shadow[id] != NULL)
+						bad = 1;
+					shadow[id] = &objects[slot];
+				} else if (id != -ENOSPC)
+					bad = 2;
+			} else {
+				/* remove a live or a free id, as the timeout
+				 * path may */
+				id = (seed >> 9) % 128;
+				if (idr_remove(&idr, id) != shadow[id])
+					bad = 3;
+				shadow[id] = NULL;
+			}
+		}
+		for (id = 0; id < 128 && bad == 0; id++) {
+			if (idr_find(&idr, id) != shadow[id])
+				bad = 4;
+		}
+		idr_destroy(&idr);
+		printf("linuxkpi: selftest 8 idr_stress: %s (%d rounds, error "
+		    "%d)\n", bad == 0 ? "OK" : "FAIL", round, bad);
 	}
 }
 SYSINIT(lkpi_selftest, SI_SUB_LAST, SI_ORDER_ANY, lkpi_selftest, NULL);

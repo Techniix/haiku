@@ -79,6 +79,8 @@ struct idr {
 void	idr_preload(gfp_t gfp_mask);
 void	idr_preload_end(void);
 void	*idr_find(struct idr *idp, int id);
+/* Renga: idr_remove() calls with an id that was not allocated */
+unsigned int lkpi_idr_bad_remove_count(void);
 void	*idr_get_next(struct idr *idp, int *nextid);
 bool	idr_is_empty(struct idr *idp);
 int	idr_pre_get(struct idr *idp, gfp_t gfp_mask);

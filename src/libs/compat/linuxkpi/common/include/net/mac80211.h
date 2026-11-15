@@ -1784,8 +1784,11 @@ ieee80211_request_smps(struct ieee80211_vif *vif, u_int link_id,
 	if (vif->type != NL80211_IFTYPE_STATION)
 		return;
 
-	if (smps >= nitems(smps_mode_name))
-		panic("%s: unsupported smps value: %d\n", __func__, smps);
+	if (smps >= nitems(smps_mode_name)) {
+		/* Renga: log and ignore (FreeBSD panics) */
+		printf("%s: unsupported smps value: %d\n", __func__, smps);
+		return;
+	}
 
 	IMPROVE("XXX LKPI80211 TODO smps %d %s\n", smps, smps_mode_name[smps]);
 }

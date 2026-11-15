@@ -34,6 +34,7 @@
 #include <sys/sysctl.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <machine/atomic.h>
 #include <sys/stdarg.h>
 
 #include <linux/bitmap.h>
@@ -229,38 +230,61 @@ idr_remove_all(struct idr *idr)
 	IDR_UNLOCK(idr);
 }
 
+/*
+ * Renga: removing an id that is not allocated returns NULL, as in Linux,
+ * whose idr_remove() is radix_tree_delete_item() and just finds nothing.
+ * FreeBSD's copy panicked here. mt76 relies on Linux's behaviour: its
+ * tx-status bookkeeping (mt76_tx_status_skb_get()) removes ids that may
+ * already be gone when a status times out, and the panic took a machine
+ * down with an MT7922 during a long build (2026-11-15: "idr_remove: Item 0
+ * not allocated", from mt792x_mac_work). Nothing is changed in that case;
+ * a few lines are logged (the first 16, then every 1024th).
+ */
+static unsigned int lkpi_idr_bad_removes;
+
+unsigned int
+lkpi_idr_bad_remove_count(void)
+{
+	return (lkpi_idr_bad_removes);
+}
+
 static void *
 idr_remove_locked(struct idr *idr, int id)
 {
+	struct idr_layer *path[MAX_LEVEL];
 	struct idr_layer *il;
 	void *res;
 	int layer;
 	int idx;
+	unsigned int count;
 
 	id &= MAX_ID_MASK;
 	il = idr->top;
 	layer = idr->layers - 1;
 	if (il == NULL || id > idr_max(idr))
 		return (NULL);
-	/*
-	 * Walk down the tree to this item setting bitmaps along the way
-	 * as we know at least one item will be free along this path.
-	 */
+	/* Find the item first; change nothing if it is not there. */
 	while (layer && il) {
-		idx = idr_pos(id, layer);
-		il->bitmap |= 1 << idx;
-		il = il->ary[idx];
+		path[layer] = il;
+		il = il->ary[idr_pos(id, layer)];
 		layer--;
 	}
 	idx = id & IDR_MASK;
+	if (il == NULL || (il->bitmap & (1 << idx)) != 0) {
+		count = atomic_fetchadd_int(&lkpi_idr_bad_removes, 1);
+		if (count < 16 || (count % 1024) == 0) {
+			printf("linuxkpi: idr_remove: id %d not allocated "
+			    "(idr %p; %u so far), ignored as in Linux\n", id, idr,
+			    count + 1);
+		}
+		return (NULL);
+	}
 	/*
-	 * At this point we've set free space bitmaps up the whole tree.
-	 * We could make this non-fatal and unwind but linux dumps a stack
-	 * and a warning so I don't think it's necessary.
+	 * Set the free space bitmaps along the path, as at least one item
+	 * will be free along it.
 	 */
-	if (il == NULL || (il->bitmap & (1 << idx)) != 0)
-		panic("idr_remove: Item %d not allocated (%p, %p)\n",
-		    id, idr, il);
+	for (layer = idr->layers - 1; layer > 0; layer--)
+		path[layer]->bitmap |= 1 << idr_pos(id, layer);
 	res = il->ary[idx];
 	il->ary[idx] = NULL;
 	il->bitmap |= 1 << idx;

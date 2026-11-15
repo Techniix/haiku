@@ -194,7 +194,7 @@ static inline void *
 kmalloc_array(size_t n, size_t size, gfp_t flags)
 {
 	if (WOULD_OVERFLOW(n, size))
-		panic("%s: %zu * %zu overflowed", __func__, n, size);
+		return (NULL);	/* Renga: as Linux; FreeBSD panics */
 
 	return (kmalloc(size * n, flags));
 }
@@ -211,7 +211,7 @@ static inline void *
 kmalloc_array_node(size_t n, size_t size, gfp_t flags, int node)
 {
 	if (WOULD_OVERFLOW(n, size))
-		panic("%s: %zu * %zu overflowed", __func__, n, size);
+		return (NULL);	/* Renga: as Linux; FreeBSD panics */
 
 	return (kmalloc_node(size * n, flags, node));
 }
@@ -266,7 +266,7 @@ static inline void *
 kvmalloc_array(size_t n, size_t size, gfp_t flags)
 {
 	if (WOULD_OVERFLOW(n, size))
-		panic("%s: %zu * %zu overflowed", __func__, n, size);
+		return (NULL);	/* Renga: as Linux; FreeBSD panics */
 
 	return (kvmalloc(size * n, flags));
 }

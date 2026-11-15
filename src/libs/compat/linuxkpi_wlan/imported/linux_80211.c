@@ -1164,10 +1164,16 @@ lkpi_lsta_free(struct lkpi_sta *lsta, struct ieee80211_node *ni)
 {
 	struct mbuf *m;
 
-	if (lsta->added_to_drv)
-		panic("%s: Trying to free an lsta still known to firmware: "
-		    "lsta %p ni %p added_to_drv %d\n",
+	if (lsta->added_to_drv) {
+		/*
+		 * Renga: FreeBSD panics here. The firmware may still use the
+		 * station, so it is not freed (a leak); the machine stays up.
+		 */
+		printf("%s: Trying to free an lsta still known to firmware: "
+		    "lsta %p ni %p added_to_drv %d; kept\n",
 		    __func__, lsta, ni, lsta->added_to_drv);
+		return;
+	}
 
 	/* XXX-BZ free resources, ... */
 	IMPROVE();
@@ -1247,7 +1253,8 @@ lkpi_nl80211_band_to_net80211_band(enum nl80211_band band)
 	case NL80211_BAND_6GHZ:
 		break;
 	default:
-		panic("%s: unsupported band %u\n", __func__, band);
+		/* Renga: FreeBSD panics; no net80211 band for it */
+		printf("%s: unsupported band %u\n", __func__, band);
 		break;
 	}
 
@@ -1273,8 +1280,7 @@ lkpi_nl80211_band_name(enum nl80211_band band)
 		return "6Ghz";
 		break;
 	default:
-		panic("%s: unsupported band %u\n", __func__, band);
-		break;
+		return "unknown";	/* Renga: FreeBSD panics */
 	}
 }
 #endif
@@ -4789,8 +4795,10 @@ lkpi_scan_ies_add(uint8_t *p, struct ieee80211_scan_ies *scan_ies,
 				flags |= IEEE80211_CHAN_A;
 				break;
 			default:
-				panic("%s:%d: unupported band %d\n",
+				/* Renga: skip the channel; FreeBSD panics */
+				printf("%s:%d: unsupported band %d\n",
 				    __func__, __LINE__, band);
+				continue;
 			}
 
 			chan = ieee80211_find_channel(ic,
@@ -7327,9 +7335,12 @@ linuxkpi_ieee80211_iffree(struct ieee80211_hw *hw)
 
 		list_for_each_entry_safe(lchanctx, next, &lhw->lchanctx_list_reserved, entry) {
 			list_del(&lchanctx->entry);
-			if (lchanctx->added_to_drv)
-				panic("%s: lchanctx %p on reserved list still added_to_drv\n",
-				    __func__, lchanctx);
+			if (lchanctx->added_to_drv) {
+				/* Renga: kept (leaked) instead of FreeBSD's panic */
+				printf("%s: lchanctx %p on reserved list still "
+				    "added_to_drv; kept\n", __func__, lchanctx);
+				continue;
+			}
 			free(lchanctx, M_LKPI80211);
 		}
 	}
