@@ -186,6 +186,27 @@ if [ -n "$scanner" ]; then
 	done
 fi
 
+# An apk repository on a dual-stack name (renguin_test's dyn.apk_update):
+# renga-dual.test is 2001:db8::1 (no route in the guest) and 127.0.0.1, as
+# dl-cdn.alpinelinux.org has IPv6 addresses first on a network without
+# IPv6 (apk hung on hardware). The repository's empty index is served by
+# busybox nc from a canned HTTP response.
+printf '2001:db8::1\trenga-dual.test\n127.0.0.1\trenga-dual.test\n' \
+	>> "$root/etc/hosts"
+apk=$work/apkrepo
+mkdir -p "$root/opt/renguin-data"
+mkdir -p "$apk"
+printf 'renga test repository' > "$apk/DESCRIPTION"
+: > "$apk/APKINDEX"
+tar -C "$apk" --owner=0 --group=0 --numeric-owner -czf "$apk/APKINDEX.tar.gz" \
+	DESCRIPTION APKINDEX
+size=$(wc -c < "$apk/APKINDEX.tar.gz")
+{
+	printf 'HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\n'
+	printf 'Content-Length: %s\r\n\r\n' "$size"
+	cat "$apk/APKINDEX.tar.gz"
+} > "$root/opt/renguin-data/apk-response"
+
 # The host's glibc loader and libraries for the -glibc programs.
 interp=$(readelf -l "$root/opt/renguin-tests/hello-glibc" \
 	| sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')

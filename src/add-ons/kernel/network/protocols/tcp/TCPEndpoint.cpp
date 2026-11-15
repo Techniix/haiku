@@ -677,8 +677,14 @@ TCPEndpoint::Connect(const sockaddr* address)
 	}
 
 	status_t status = _PrepareSendPath(address);
-	if (status < B_OK)
+	if (status < B_OK) {
+		// The connection attempt is over (no route to the peer, say).
+		// Let poll() and select() report the socket as writable and hung
+		// up, as Linux does, instead of leaving a caller that polls for
+		// the end of a non-blocking connect waiting for its whole timeout.
+		fFlags |= FLAG_CAN_NOTIFY;
 		return status;
+	}
 
 	TRACE("  Connect(): starting 3-way handshake...");
 

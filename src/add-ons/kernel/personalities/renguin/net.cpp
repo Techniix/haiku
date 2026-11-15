@@ -1759,6 +1759,53 @@ renguin_sys_bind(int fd, uint64 address, uint64 length)
 }
 
 
+/*!	True when \a fd is a connected IPv4/IPv6 datagram socket whose local
+	address stayed unspecified, meaning the stack found no route to the peer.
+*/
+static bool
+datagram_connect_unroutable(int fd)
+{
+	int32 type = 0;
+	socklen_t typeLength = sizeof(type);
+	renguin_scratch scratch;
+	renguin_scratch_init(&scratch);
+	uint64 userType = renguin_scratch_alloc(&scratch, sizeof(type));
+	uint64 userTypeLength = renguin_scratch_put(&scratch, &typeLength,
+		sizeof(typeLength));
+	if (userType == 0 || userTypeLength == 0
+		|| _user_getsockopt(fd, SOL_SOCKET, SO_TYPE, (void*)(addr_t)userType,
+			(socklen_t*)(addr_t)userTypeLength) != B_OK
+		|| renguin_copy_in(&type, userType, sizeof(type)) != B_OK
+		|| type != SOCK_DGRAM) {
+		return false;
+	}
+
+	sockaddr_storage local;
+	socklen_t length = sizeof(local);
+	renguin_scratch_init(&scratch);
+	uint64 userAddress = renguin_scratch_alloc(&scratch, sizeof(local));
+	uint64 userLength = renguin_scratch_put(&scratch, &length,
+		sizeof(length));
+	if (userAddress == 0 || userLength == 0
+		|| _user_getsockname(fd, (sockaddr*)(addr_t)userAddress,
+			(socklen_t*)(addr_t)userLength) != B_OK
+		|| renguin_copy_in(&local, userAddress, sizeof(local)) != B_OK) {
+		return false;
+	}
+	if (local.ss_family == AF_INET)
+		return ((sockaddr_in&)local).sin_addr.s_addr == INADDR_ANY;
+	if (local.ss_family == AF_INET6) {
+		const uint8* bytes = ((sockaddr_in6&)local).sin6_addr.s6_addr;
+		for (int i = 0; i < 16; i++) {
+			if (bytes[i] != 0)
+				return false;
+		}
+		return true;
+	}
+	return false;
+}
+
+
 int64
 renguin_sys_connect(int fd, uint64 address, uint64 length)
 {
@@ -1786,6 +1833,24 @@ renguin_sys_connect(int fd, uint64 address, uint64 length)
 	result = renguin_encode(connectStatus);
 	if (result == -LX_EINTR)
 		renguin_set_restart(RENGUIN_RESTART_SYS, NULL);
+	if (result == 0 && (haiku.ss_family == AF_INET
+			|| haiku.ss_family == AF_INET6)
+		&& datagram_connect_unroutable(fd)) {
+		// Linux fails connect() on a datagram socket with ENETUNREACH when
+		// there is no route to the peer. Haiku accepts it and leaves the
+		// local address unspecified. Resolvers (musl's RFC 6724 sorting in
+		// getaddrinfo) probe reachability this way, so match Linux and undo
+		// the association.
+		sockaddr unspec = {};
+		unspec.sa_len = sizeof(unspec);
+		unspec.sa_family = AF_UNSPEC;
+		renguin_scratch_init(&scratch);
+		user = renguin_scratch_put(&scratch, &unspec, sizeof(unspec));
+		if (user != 0)
+			_user_connect(fd, (sockaddr*)(addr_t)user, sizeof(unspec));
+		TRACE("connect(%d): no route, ENETUNREACH\n", fd);
+		return renguin_encode(ENETUNREACH);
+	}
 	return result;
 }
 

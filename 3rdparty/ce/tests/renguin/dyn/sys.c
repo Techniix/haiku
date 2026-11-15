@@ -12,9 +12,15 @@
  *                      EHOSTUNREACH), or reports the error through poll()
  *                      and SO_ERROR within 5 s (apk hung on dl-cdn's IPv6
  *                      addresses with no IPv6 route)
+ *   connect6_failed_poll  after such an immediate failure poll() reports
+ *                      POLLOUT within 1 s (libfetch polls the failed socket)
+ *   udp6_route         a UDP connect() to that address fails with
+ *                      ENETUNREACH, as on Linux (musl's address sorting)
  *   connect6_block     the same with a blocking connect() returns an error
  *                      within 5 s
  *   connect_fallback   then IPv4 to a local listener connects
+ *   connect_nonblock_poll  a non-blocking IPv4 connect reports POLLOUT and
+ *                      SO_ERROR 0 within 2 s (apk's libfetch way)
  *   sigint_read        SIGINT (default action) ends a child blocked in
  *                      read() at once (Ctrl+C did nothing during apk's hang)
  *   sigint_poll        a SIGINT handler (no SA_RESTART) makes a blocked
@@ -125,6 +131,16 @@ test_connect(void)
 		result("connect6_nonblock", 0, "connected to 2001:db8::1");
 	} else if (error == ENETUNREACH || error == EHOSTUNREACH) {
 		result("connect6_nonblock", 1, "");
+		// libfetch polls the socket for POLLOUT even after connect() failed
+		// at once; Linux reports POLLOUT|POLLHUP straight away
+		struct pollfd poller = { fd, POLLOUT, 0 };
+		long long pollStart = now_ms();
+		int ready = poll(&poller, 1, 3000);
+		result("connect6_failed_poll", ready == 1
+				&& (poller.revents & POLLOUT) != 0
+				&& now_ms() - pollStart < 1000,
+			"poll %d (revents %#x) after %lld ms", ready, poller.revents,
+			now_ms() - pollStart);
 	} else if (error == EINPROGRESS) {
 		struct pollfd poller = { fd, POLLOUT, 0 };
 		int ready = poll(&poller, 1, 5000);
@@ -140,6 +156,23 @@ test_connect(void)
 	}
 	if (fd >= 0)
 		close(fd);
+
+	// musl's getaddrinfo() sorts addresses (RFC 6724) by connect()ing a
+	// UDP socket to each: Linux fails that with ENETUNREACH when there is
+	// no route, which puts IPv4 first
+	fd = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	error = errno;
+	if (fd < 0) {
+		result("udp6_route", error == EAFNOSUPPORT, "socket: %s",
+			strerror(error));
+	} else {
+		status = connect(fd, (struct sockaddr*)&address, sizeof(address));
+		error = errno;
+		result("udp6_route", status != 0
+				&& (error == ENETUNREACH || error == EHOSTUNREACH),
+			"connect %d, errno %d (%s)", status, error, strerror(error));
+		close(fd);
+	}
 
 	struct sigaction action;
 	memset(&action, 0, sizeof(action));
@@ -172,6 +205,26 @@ test_connect(void)
 	status = connect(fd, (struct sockaddr*)&local, sizeof(local));
 	result("connect_fallback", status == 0, "IPv4 connect: %s",
 		strerror(errno));
+	close(fd);
+
+	// apk's (libfetch's) way: a non-blocking connect, then poll() for
+	// POLLOUT and SO_ERROR (apk waited its whole 60 s timeout on hardware)
+	fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+	start = now_ms();
+	status = connect(fd, (struct sockaddr*)&local, sizeof(local));
+	error = errno;
+	struct pollfd writable = { fd, POLLOUT, 0 };
+	int ready = status == 0 ? 1 : poll(&writable, 1, 5000);
+	int soError = -1;
+	socklen_t soLength = sizeof(soError);
+	getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &soLength);
+	result("connect_nonblock_poll", (status == 0 || error == EINPROGRESS)
+			&& ready == 1 && (writable.revents & POLLOUT) != 0 && soError == 0
+			&& now_ms() - start < 2000,
+		"connect %d (%s), poll %d revents %#x, SO_ERROR %d, %lld ms", status,
+		status == 0 ? "done" : strerror(error), ready, writable.revents,
+		soError, now_ms() - start);
 	close(fd);
 	close(listener);
 }

@@ -43,8 +43,12 @@
 	                           (getifaddrs, if_nameindex, RTM_GETROUTE)
 	  linux_command            the linux command's clean environment: the
 	                           Linux PATH, apk found, Wayland variables
+	  dyn.apk_update           apk update from a local repository on a
+	                           dual-stack name (IPv6 unreachable first),
+	                           well inside libfetch's 60 s timeout
 	  dyn.sys_musl/glibc       connect() to an unreachable IPv6 address
-	                           fails (apk), SIGINT interrupts blocked
+	                           fails and polls writable, UDP connect()
+	                           there fails ENETUNREACH (apk), SIGINT interrupts blocked
 	                           calls, posix_fallocate on a sealed memfd
 	                           (weston's buffers), FALLOC_FL_KEEP_SIZE,
 	                           Linux pseudo-terminals and forkpty()
@@ -214,12 +218,30 @@ static const RootCheck kRootChecks[] = {
 		"echo $XDG_RUNTIME_DIR $WAYLAND_DISPLAY'", 0,
 		"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
 		"/sbin/apk\n/tmp/xdg-runtime wayland-0" },
+	// apk update from a repository on a dual-stack name whose IPv6
+	// address has no route (renga-dual.test, root/build-root.sh): apk must
+	// fall back to IPv4 (it hung on hardware with dl-cdn.alpinelinux.org)
+	{ "dyn.apk_update", BB " nc -l -p 8089 -s 127.0.0.1 < "
+		"$R/opt/renguin-data/apk-response > /dev/null &\nserver=$!\n"
+		"sleep 2\nstart=$(date +%s)\n"
+		"/bin/linux timeout 60 apk --allow-untrusted --no-cache "
+		"--repositories-file /dev/null --repository "
+		"http://renga-dual.test:8089/repo update > /tmp/rg-apk.log 2>&1\n"
+		"status=$?\nelapsed=$(($(date +%s) - start))\n"
+		"kill $server 2>/dev/null\nwait $server 2>/dev/null\n"
+		"echo rc=$status\n[ $status = 0 ] || cat /tmp/rg-apk.log\n"
+		"[ $elapsed -lt 15 ] && echo fast || echo \"slow: ${elapsed} s\"\n"
+		"rm -f /tmp/rg-apk.log", 0, "rc=0\nfast" },
 	{ "dyn.sys_musl", "$R/opt/renguin-tests/sys-musl", 0,
-		"connect6_nonblock ok\nconnect6_block ok\nconnect_fallback ok\n"
+		"connect6_nonblock ok\nconnect6_failed_poll ok\nudp6_route ok\n"
+		"connect6_block ok\nconnect_fallback ok\n"
+		"connect_nonblock_poll ok\n"
 		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
 		"fallocate_keep ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
 	{ "dyn.sys_glibc", "$R/opt/renguin-tests/sys-glibc", 0,
-		"connect6_nonblock ok\nconnect6_block ok\nconnect_fallback ok\n"
+		"connect6_nonblock ok\nconnect6_failed_poll ok\nudp6_route ok\n"
+		"connect6_block ok\nconnect_fallback ok\n"
+		"connect_nonblock_poll ok\n"
 		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
 		"fallocate_keep ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
 	// Alpine's busybox has no httpd: busybox nc answers one request with a

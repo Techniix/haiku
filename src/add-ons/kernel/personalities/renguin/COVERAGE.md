@@ -156,6 +156,11 @@ Renga has natively (F-12) and only need mapping; `copy_file_range` and
   performance hints accepted, others ENOPROTOOPT; TCP_INFO is not mapped
   yet. Interfaces are named "lo" and "eth0", "eth1", ... (Haiku's link
   layer does not tell Wi-Fi from Ethernet); indexes are Haiku's.
+  connect() on a UDP socket with no route to the peer fails with
+  ENETUNREACH, as on Linux (musl's getaddrinfo() orders addresses by this
+  probe, so an unroutable IPv6 address no longer comes first); a TCP
+  socket whose connect() failed at once polls writable (stack change in
+  TCPEndpoint::Connect, Linux semantics).
 - **fallocate**: mode 0 and FALLOC_FL_KEEP_SIZE. On file systems without
   preallocation (memfds live on one) mode 0 grows the file with ftruncate,
   seals applying; KEEP_SIZE is accepted (space is reserved on write); hole
