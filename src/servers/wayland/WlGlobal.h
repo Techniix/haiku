@@ -16,4 +16,15 @@ public:
 
 	static WlGlocal *FromGlocal(struct wl_global *global) {return static_cast<WlGlocal*>(wl_global_get_user_data(global));}
 	struct wl_global *ToGlocal() const {return fGlobal;}
+
+	/*!	Renga: removes the global (wl_registry.global_remove) and deletes
+		this object once no client can bind it any more: every client that
+		has wl_fixes version 2 acknowledged the removal (or went away), and
+		clients without it had a short grace period (RengaProtocols.cpp).
+		Until then binds still work. Do not use the object afterwards.
+	*/
+	void Retire();
+	//! Renga: hands over the wl_global; the destructor leaves it alone.
+	struct wl_global *ReleaseGlobal()
+		{struct wl_global *global = fGlobal; fGlobal = NULL; return global;}
 };

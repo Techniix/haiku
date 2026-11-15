@@ -17,6 +17,13 @@
 	                      the screen's, names "RENGA-<n>", wl_output's name
 	  wl_fixes            a registry destroyed through wl_fixes; the
 	                      connection stays healthy
+	  fixes_v2.version    wl_fixes is offered at version 2 (Chromium 156)
+	  fixes_v2.kept       a removed global stays (and can be bound) until
+	                      the wl_fixes v2 client acknowledges it, past the
+	                      grace period of a client without wl_fixes v2
+	  fixes_v2.ack        ack_global_remove: the global is destroyed
+	  fixes_v2.bad_ack    acknowledging an unknown name or a global that
+	                      is not removed is the invalid_ack_remove error
 	  bounds              xdg_toplevel.configure_bounds before the first
 	                      configure: positive and within the screen
 	  capabilities        wm_capabilities: maximize, fullscreen, minimize
@@ -66,6 +73,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -123,6 +131,7 @@ struct Connection {
 	wl_display*		display = NULL;
 	wl_registry*	registry = NULL;
 	std::multimap<std::string, Global> globals;
+	std::vector<uint32> removed;
 
 	bool Has(const char* interface) const
 	{
@@ -159,8 +168,9 @@ registry_global(void* data, wl_registry*, uint32_t name,
 
 
 static void
-registry_global_remove(void*, wl_registry*, uint32_t)
+registry_global_remove(void* data, wl_registry*, uint32_t name)
 {
+	((Connection*)data)->removed.push_back(name);
 }
 
 
@@ -354,6 +364,132 @@ test_fixes(Connection& connection)
 	wl_fixes_destroy(fixes);
 	report("wl_fixes", ok, "registry destroyed, connection %s",
 		ok ? "healthy" : "failed");
+}
+
+
+/*!	wl_fixes version 2 (Chromium 156, R-7): a removed global stays until
+	every client with wl_fixes v2 acknowledged its removal; a bad
+	acknowledgement is the protocol error invalid_ack_remove. The
+	compositor adds and retires a spare wl_fixes global on request
+	(messages 'RgTa', 'RgTr', 'RgTq', for the harness). Connection b is
+	a client without wl_fixes: it is waited for only the 2 s grace.
+*/
+#ifndef WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION
+#	error "wayland-client-protocol.h lacks wl_fixes version 2 (R-7)"
+#endif
+
+static bool
+compositor_request(uint32 what, uint32 name, BMessage& reply)
+{
+	BMessage request(what);
+	request.AddUInt32("name", name);
+	return BMessenger(kCompositorSignature).SendMessage(&request, &reply,
+		5000000, 5000000) == B_OK;
+}
+
+
+static bool
+retired_pending(uint32 name)
+{
+	BMessage reply;
+	return compositor_request('RgTq', name, reply)
+		&& reply.GetBool("pending", false);
+}
+
+
+static bool
+bad_ack_error(uint32 name, uint32* code)
+{
+	Connection connection;
+	if (!connect(connection))
+		return false;
+	wl_fixes* fixes = (wl_fixes*)connection.Bind("wl_fixes",
+		&wl_fixes_interface, 2);
+	bool error = false;
+	if (fixes != NULL && wl_proxy_get_version((wl_proxy*)fixes) >= 2) {
+		wl_fixes_ack_global_remove(fixes, connection.registry, name);
+		wl_display_roundtrip(connection.display);
+		const wl_interface* interface = NULL;
+		uint32 id;
+		*code = wl_display_get_protocol_error(connection.display, &interface,
+			&id);
+		error = interface == &wl_fixes_interface
+			&& *code == WL_FIXES_ERROR_INVALID_ACK_REMOVE;
+	}
+	wl_display_disconnect(connection.display);
+	return error;
+}
+
+
+static void
+test_fixes_v2(Connection& connection, Connection& legacy)
+{
+	uint32 version = connection.Version("wl_fixes");
+	report("fixes_v2.version", version >= 2, "wl_fixes version %u (want 2)",
+		version);
+	wl_fixes* fixes = (wl_fixes*)connection.Bind("wl_fixes",
+		&wl_fixes_interface, 2);
+	BMessage reply;
+	uint32 name = 0;
+	if (fixes == NULL || version < 2 || !compositor_request('RgTa', 0, reply)
+		|| (name = reply.GetUInt32("name", 0)) == 0) {
+		report("fixes_v2.kept", false, "no spare global (version %u)",
+			version);
+		if (fixes != NULL)
+			wl_fixes_destroy(fixes);
+		return;
+	}
+	wl_display_roundtrip(connection.display);
+	wl_display_roundtrip(legacy.display);
+	bool offered = false;
+	for (auto& global : connection.globals) {
+		if (global.second.name == name)
+			offered = true;
+	}
+
+	reply.MakeEmpty();
+	bool retired = compositor_request('RgTr', name, reply)
+		&& reply.GetBool("retired", false);
+	wl_display_roundtrip(connection.display);
+	wl_display_roundtrip(legacy.display);
+	bool removeSeen = std::find(connection.removed.begin(),
+		connection.removed.end(), name) != connection.removed.end();
+	// past the grace period of the client without wl_fixes v2
+	dispatch_until(legacy.display, 2600000, NULL);
+	bool kept = retired_pending(name);
+	// a bind queued before the client saw the removal still works
+	wl_fixes* late = (wl_fixes*)wl_registry_bind(connection.registry, name,
+		&wl_fixes_interface, 1);
+	bool bindOK = connection_ok(connection);
+	if (late != NULL)
+		wl_fixes_destroy(late);
+	report("fixes_v2.kept", offered && retired && removeSeen && kept
+			&& bindOK,
+		"offered %d, retired %d, global_remove seen %d, kept after 2.6 s "
+		"without ack %d, late bind ok %d", offered, retired, removeSeen, kept,
+		bindOK);
+
+	wl_fixes_ack_global_remove(fixes, connection.registry, name);
+	bool ackOK = connection_ok(connection);
+	bool gone = false;
+	for (int i = 0; i < 20 && !gone; i++) {
+		gone = !retired_pending(name);
+		if (!gone)
+			snooze(50000);
+	}
+	report("fixes_v2.ack", ackOK && gone, "ack accepted %d, global destroyed "
+		"after the ack %d", ackOK, gone);
+	wl_fixes_destroy(fixes);
+
+	uint32 unknownCode = ~0u;
+	uint32 liveCode = ~0u;
+	bool unknown = bad_ack_error(0x7ffffff0, &unknownCode);
+	auto compositor = connection.globals.find("wl_compositor");
+	bool live = compositor != connection.globals.end()
+		&& bad_ack_error(compositor->second.name, &liveCode);
+	report("fixes_v2.bad_ack", unknown && live, "unknown name: error %d "
+		"(code %d), live global: error %d (code %d), want "
+		"invalid_ack_remove", unknown, (int)unknownCode, live, (int)liveCode);
 }
 
 
@@ -1132,6 +1268,7 @@ main()
 	test_globals(a);
 	test_outputs(a);
 	test_fixes(a);
+	test_fixes_v2(a, b);
 	test_window(a);
 	test_seat(a);
 	test_activation(a);

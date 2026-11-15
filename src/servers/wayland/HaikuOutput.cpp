@@ -1,4 +1,5 @@
 #include "HaikuOutput.h"
+#include "RengaProtocols.h"
 #include "HaikuCompositor.h"
 #include "XdgOutputUnstableV1.h"
 
@@ -173,11 +174,12 @@ HaikuOutputCheckScreens(struct wl_display *display)
 {
 	int32 count = count_screens();
 	// screens that went away: the global goes (clients get
-	// wl_registry.global_remove)
+	// wl_registry.global_remove; wl_fixes v2 clients acknowledge it before
+	// the global is destroyed, RengaProtocols.cpp)
 	while ((int32)sOutputGlobals.size() > count) {
 		HaikuOutputGlobal *last = sOutputGlobals.back();
-		wl_global_destroy(last->ToGlocal());
-		delete last;
+		sOutputGlobals.pop_back();
+		last->Retire();
 	}
 	for (HaikuOutputGlobal *global : sOutputGlobals) {
 		BRect frame;

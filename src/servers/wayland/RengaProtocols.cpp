@@ -25,8 +25,12 @@
 #include <Font.h>
 #include <OS.h>
 
+#include <algorithm>
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
+#include <vector>
 #include <new>
 
 extern const struct wl_interface wl_fixes_interface;
@@ -67,6 +71,185 @@ bind_simple(struct wl_client *client, uint32_t version, uint32_t id)
 
 //#pragma mark - wl_fixes
 
+/*	Removal of globals (wl_fixes version 2). A removed global must stay
+	bindable until no client can still send a bind for it: a client that
+	saw wl_registry.global_remove but had already queued a bind would
+	otherwise be disconnected for binding an unknown name. At removal,
+	every client with a wl_registry is waited for. A client with wl_fixes
+	version 2 tells when it is done (ack_global_remove, required by the
+	protocol even if it never bound the global); a client without it
+	cannot, so it is waited for only a grace period, the timed approach
+	libwayland documents for wl_global_remove(). Clients that go away are
+	done. When none is left, the global is destroyed and its object
+	deleted.
+*/
+
+static const int32_t kRetireGraceMs = 2000;
+
+struct RetiredGlobal;
+
+struct RetireWaiter {
+	struct wl_listener clientDestroyed;
+	RetiredGlobal *retired;
+	struct wl_client *client;
+};
+
+struct RetiredGlobal {
+	WlGlocal *object;
+	struct wl_global *global;
+	uint32_t name;
+	std::vector<RetireWaiter*> waiters;
+	struct wl_event_source *graceTimer;
+	bool graceOver;
+};
+
+static std::vector<RetiredGlobal*> sRetiredGlobals;
+
+
+static bool
+client_has_resource(struct wl_client *client, const char *className,
+	uint32_t minVersion)
+{
+	struct Search {
+		const char *className;
+		uint32_t minVersion;
+		bool found;
+	} search = {className, minVersion, false};
+	wl_client_for_each_resource(client,
+		[](struct wl_resource *resource, void *data) {
+			Search *search = (Search*)data;
+			if (strcmp(wl_resource_get_class(resource), search->className) == 0
+				&& (uint32_t)wl_resource_get_version(resource)
+					>= search->minVersion) {
+				search->found = true;
+				return WL_ITERATOR_STOP;
+			}
+			return WL_ITERATOR_CONTINUE;
+		}, &search);
+	return search.found;
+}
+
+
+static void
+retired_remove_waiter(RetiredGlobal *retired, RetireWaiter *waiter)
+{
+	wl_list_remove(&waiter->clientDestroyed.link);
+	retired->waiters.erase(std::remove(retired->waiters.begin(),
+		retired->waiters.end(), waiter), retired->waiters.end());
+	delete waiter;
+}
+
+
+static void
+retired_check(RetiredGlobal *retired)
+{
+	if (retired->graceOver) {
+		// clients that cannot acknowledge have had their time
+		for (size_t i = retired->waiters.size(); i-- > 0;) {
+			RetireWaiter *waiter = retired->waiters[i];
+			if (!client_has_resource(waiter->client, "wl_fixes", 2))
+				retired_remove_waiter(retired, waiter);
+		}
+	}
+	if (!retired->waiters.empty() || !retired->graceOver)
+		return;
+
+	sRetiredGlobals.erase(std::remove(sRetiredGlobals.begin(),
+		sRetiredGlobals.end(), retired), sRetiredGlobals.end());
+	if (retired->graceTimer != NULL)
+		wl_event_source_remove(retired->graceTimer);
+	wl_global_destroy(retired->global);
+	delete retired->object;
+	delete retired;
+}
+
+
+static void
+retired_client_destroyed(struct wl_listener *listener, void *)
+{
+	RetireWaiter *waiter = wl_container_of(listener, waiter, clientDestroyed);
+	RetiredGlobal *retired = waiter->retired;
+	retired_remove_waiter(retired, waiter);
+	retired_check(retired);
+}
+
+
+static int
+retired_grace_over(void *data)
+{
+	RetiredGlobal *retired = (RetiredGlobal*)data;
+	retired->graceOver = true;
+	retired_check(retired);
+	return 0;
+}
+
+
+void
+RengaRetireGlobal(WlGlocal *object)
+{
+	struct wl_global *global = object->ReleaseGlobal();
+	if (global == NULL) {
+		delete object;
+		return;
+	}
+	struct wl_display *display = wl_global_get_display(global);
+	RetiredGlobal *retired = new(std::nothrow) RetiredGlobal;
+	if (retired == NULL) {
+		// no memory: the old way, at once
+		wl_global_destroy(global);
+		delete object;
+		return;
+	}
+	retired->object = object;
+	retired->global = global;
+	retired->name = wl_global_get_name(global, NULL);
+	retired->graceTimer = NULL;
+	retired->graceOver = false;
+	wl_global_remove(global);
+
+	bool legacyClients = false;
+	struct wl_client *client;
+	wl_client_for_each(client, wl_display_get_client_list(display)) {
+		if (!client_has_resource(client, "wl_registry", 1))
+			continue;
+		RetireWaiter *waiter = new(std::nothrow) RetireWaiter;
+		if (waiter == NULL)
+			continue;
+		waiter->retired = retired;
+		waiter->client = client;
+		waiter->clientDestroyed.notify = retired_client_destroyed;
+		wl_client_add_destroy_listener(client, &waiter->clientDestroyed);
+		retired->waiters.push_back(waiter);
+		if (!client_has_resource(client, "wl_fixes", 2))
+			legacyClients = true;
+	}
+	sRetiredGlobals.push_back(retired);
+
+	if (legacyClients) {
+		retired->graceTimer = wl_event_loop_add_timer(
+			wl_display_get_event_loop(display), retired_grace_over, retired);
+		if (retired->graceTimer != NULL
+			&& wl_event_source_timer_update(retired->graceTimer,
+				kRetireGraceMs) == 0) {
+			return;
+		}
+	}
+	retired->graceOver = true;
+	retired_check(retired);
+}
+
+
+bool
+RengaRetiredGlobalPending(uint32_t name)
+{
+	for (RetiredGlobal *retired : sRetiredGlobals) {
+		if (retired->name == name)
+			return true;
+	}
+	return false;
+}
+
+
 class HaikuFixes: public WlFixes {
 public:
 	void HandleDestroyRegistry(struct wl_resource *registry) final
@@ -74,9 +257,30 @@ public:
 		// The client no longer uses the registry: libwayland can free it.
 		wl_resource_destroy(registry);
 	}
+
+	void HandleAckGlobalRemove(struct wl_resource *registry, uint32_t name)
+		final
+	{
+		for (RetiredGlobal *retired : sRetiredGlobals) {
+			if (retired->name != name)
+				continue;
+			for (RetireWaiter *waiter : retired->waiters) {
+				if (waiter->client == Client()) {
+					retired_remove_waiter(retired, waiter);
+					retired_check(retired);
+					break;
+				}
+			}
+			// a client that was not waited for (its registry came later)
+			// may still acknowledge: nothing to do
+			return;
+		}
+		wl_resource_post_error(ToResource(), WL_FIXES_ERROR_INVALID_ACK_REMOVE,
+			"global %" PRIu32 " is unknown or not removed", name);
+	}
 };
 
-DEFINE_CREATE(HaikuFixesGlobal, wl_fixes_interface, 1)
+DEFINE_CREATE(HaikuFixesGlobal, wl_fixes_interface, 2)
 
 void HaikuFixesGlobal::Bind(struct wl_client *client, uint32_t version, uint32_t id)
 {

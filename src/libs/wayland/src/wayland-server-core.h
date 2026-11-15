@@ -285,6 +285,10 @@ wl_global_get_version(const struct wl_global *global);
 struct wl_display *
 wl_global_get_display(const struct wl_global *global);
 
+uint32_t
+wl_global_get_name(const struct wl_global *global,
+		   const struct wl_client *client);
+
 void *
 wl_global_get_user_data(const struct wl_global *global);
 

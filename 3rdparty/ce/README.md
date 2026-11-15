@@ -1076,7 +1076,9 @@ of a 1 GiB guest was, so the bounce path went untested.
 - **wayland_protocols** (x86_64 images, `wayland_protocols_test`; the
   2026-11-14 compositor batch): the new globals and versions (xdg_wm_base
   6, wl_seat 10, wl_output 4), xdg-output per wl_output, wl_fixes,
-  configure_bounds before the first configure and within the screen,
+  wl_fixes v2 (`fixes_v2.*`: a retired spare global stays bindable past
+  the 2 s grace until the v2 client acks, then goes; bad acks are
+  invalid_ack_remove), configure_bounds before the first configure and within the screen,
   wm_capabilities, xdg-decoration server-side (the window has a tab) and
   client-side on request (no tab), fractional scale, idle inhibit (the
   screen saver's inhibit port exists only while inhibited), cursor shape,

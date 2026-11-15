@@ -1,4 +1,5 @@
 #include "WlGlobal.h"
+#include "RengaProtocols.h"
 
 
 void WlGlocal::Binder(struct wl_client *wl_client, void *data, uint32_t version, uint32_t id)
@@ -19,4 +20,9 @@ bool WlGlocal::Init(struct wl_display *display, const struct wl_interface *inter
 	if (global == NULL) return false;
 	fGlobal = global;
 	return true;
+}
+
+void WlGlocal::Retire()
+{
+	RengaRetireGlobal(this);
 }

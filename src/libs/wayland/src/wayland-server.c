@@ -1465,6 +1465,26 @@ wl_global_get_display(const struct wl_global *global)
 	return global->display;
 }
 
+/** Get the name of the global.
+ *
+ * \param global The global object.
+ * \param client Client for which to look up the global, or NULL.
+ * \return The name of the global, or 0 if the global is not visible to
+ * the client.
+ *
+ * \memberof wl_global
+ * \since 1.22 (Renga: added for wl_fixes v2 ack_global_remove)
+ */
+WL_EXPORT uint32_t
+wl_global_get_name(const struct wl_global *global,
+		   const struct wl_client *client)
+{
+	if (client != NULL
+	    && !wl_global_is_visible(client, global))
+		return 0;
+	return global->name;
+}
+
 WL_EXPORT void *
 wl_global_get_user_data(const struct wl_global *global)
 {

@@ -32,5 +32,6 @@ provides {
 }
 
 requires {
-	haiku >= %HAIKU_VERSION%
+	haiku
+	renga
 }

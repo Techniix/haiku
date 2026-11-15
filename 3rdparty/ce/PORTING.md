@@ -1548,7 +1548,11 @@ and native programs linked against a socket-transport libwayland-client.
     window's screen without Deskbar, minus Renga's frame when the window
     has one) before each configure, `wm_capabilities` (maximize,
     fullscreen, minimize; `set_minimized` works).
-  - `wl_fixes` (`destroy_registry`).
+  - `wl_fixes` version 2 (`destroy_registry`; `ack_global_remove`: a
+    removed global, such as a wl_output whose screen went away, stays
+    bindable until every client with wl_fixes v2 acknowledged it; clients
+    without it get a 2 s grace; a bad acknowledgement is
+    `invalid_ack_remove`).
   - `wl_seat` version 10: `wl_pointer` 9 (`axis_value120` replaces
     `axis_discrete` from version 8, `axis_relative_direction`),
     `wl_keyboard` 10: Haiku's own key repeat arrives as the key state
@@ -1592,7 +1596,14 @@ and native programs linked against a socket-transport libwayland-client.
     `lib/libwayland-server-renga.so.0` (version 1.21.90, X547's fork built
     with the socket transport). Their own names, so the package installs
     next to HaikuPorts' `wayland`; a process must load one or the other,
-    never both (the symbols are the same).
+    never both (the symbols are the same). The core protocol is Wayland
+    1.24's, with `wl_fixes` at version 2 from upstream Wayland's later
+    release (`wl_fixes_ack_global_remove()`,
+    `WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION`; libwayland-server adds
+    `wl_global_get_name()`).
+  - Updates: the package also comes from the Renga repository, and it
+    requires only `renga`, so `pkgman update renga_wayland` brings a newer
+    build to an installed system without a system update.
   - Headers: `develop/headers/renga_wayland/` (`wayland-client.h`,
     `wayland-client-core.h`, `wayland-client-protocol.h`, the server
     counterparts, `wayland-util.h`, `wayland-version.h`). Compile with

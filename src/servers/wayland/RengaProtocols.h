@@ -4,7 +4,8 @@
 
 
 /*	Renga: smaller protocols of the compositor (RengaProtocols.cpp).
-	- wl_fixes: wl_registry destruction;
+	- wl_fixes (version 2): wl_registry destruction, and acknowledged
+	  removal of globals (WlGlocal::Retire());
 	- wp_fractional_scale_manager_v1: the preferred scale (Renga's UI scale,
 	  from the system font size);
 	- zwp_idle_inhibit_manager_v1: keeps the screen saver from starting
@@ -44,6 +45,11 @@ bool HaikuPointerConstraintsMotion(HaikuSurface *surface, bigtime_t when,
 //! The surface's window lost activation.
 void HaikuPointerConstraintsFocusLost(HaikuSurface *surface);
 void HaikuPointerConstraintsSurfaceGone(HaikuSurface *surface);
+
+//! wl_fixes v2: removes \a global once every client is done with it.
+void RengaRetireGlobal(WlGlocal *global);
+//! For the harness: is a retired global with this name still kept?
+bool RengaRetiredGlobalPending(uint32_t name);
 
 //! The scale wp_fractional_scale_v1 reports, in 1/120 (120 = 1.0).
 uint32_t HaikuPreferredScale120();

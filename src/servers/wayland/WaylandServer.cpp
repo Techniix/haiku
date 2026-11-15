@@ -21,6 +21,7 @@
 #include <xdg-shell-protocol.h>
 #include <stdio.h>
 #include <new>
+#include <vector>
 
 #include <Application.h>
 #include <String.h>
@@ -90,6 +91,42 @@ void Application::MessageReceived(BMessage *msg)
 			if (seat != NULL)
 				seat->UpdateKeymap();
 		}
+		return;
+	}
+	case 'RgTa':
+	case 'RgTr':
+	case 'RgTq': {
+		// Renga harness (wayland_protocols_test fixes_v2.*): a spare
+		// wl_fixes global to add, retire (wl_fixes v2 removal) and ask
+		// about; it does nothing a client could not get from the real one.
+		static std::vector<HaikuFixesGlobal*> sTestGlobals;
+		BMessage reply(B_REPLY);
+		if (sDisplay == NULL) return;
+		WaylandEnv env(this);
+		if (msg->what == 'RgTa') {
+			HaikuFixesGlobal *global = HaikuFixesGlobal::Create(sDisplay);
+			if (global != NULL) {
+				sTestGlobals.push_back(global);
+				reply.AddUInt32("name",
+					wl_global_get_name(global->ToGlocal(), NULL));
+			}
+		} else if (msg->what == 'RgTr') {
+			uint32 name = msg->GetUInt32("name", 0);
+			for (size_t i = 0; i < sTestGlobals.size(); i++) {
+				if (wl_global_get_name(sTestGlobals[i]->ToGlocal(), NULL)
+						!= name)
+					continue;
+				HaikuFixesGlobal *global = sTestGlobals[i];
+				sTestGlobals.erase(sTestGlobals.begin() + i);
+				global->Retire();
+				reply.AddBool("retired", true);
+				break;
+			}
+		} else {
+			reply.AddBool("pending",
+				RengaRetiredGlobalPending(msg->GetUInt32("name", 0)));
+		}
+		msg->SendReply(&reply);
 		return;
 	}
 	}
