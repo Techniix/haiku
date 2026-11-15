@@ -2,11 +2,15 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-15 00:35 UTC. Newest entries first.
+Updated: 2026-11-15 01:53 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-15: landed: R-8, native programs branded GNU stay native (next image)
+
+QEMU Tested (`b2484110`); kernel and runtime_loader side, so it arrives with the next image. Renguin takes `EI_OSABI` 3 as a Linux brand only for programs without `PT_INTERP` and without `DT_NEEDED` (glibc's static and static-pie programs); `mksnapshot` and other lld-linked Haiku programs run natively. Faults of Linux threads now reach an attached debugger as for native threads and are logged; without a debugger a Linux program still dies by the signal. Also: Renga's runtime_loader now applies `R_X86_64_IRELATIVE` (after the segments are mapped executable, before initializers), so native programs with IFUNCs built by clang and lld load; on the current image they fail with "Troubles relocating: Bad data". Not yet: IFUNC symbols referenced from another image. Until the image: keep resetting byte 7 as you do.
 
 ### 2026-11-14: landed: R-7, wl_fixes version 2 (package `renga_wayland` `r1~beta6_hrev60381_305-1`)
 
