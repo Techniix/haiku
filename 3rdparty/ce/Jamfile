@@ -67,6 +67,15 @@ if $(CE_HARNESS) {
 	if ! $(HAIKU_RENGA_IMAGE) {
 		AddDriversToHaikuImage audio hmulti : usb_audio ;
 	}
+
+	# Package files the harness adds for one run (ce-test.py --toolchain:
+	# HaikuPorts' Chromium build toolchain, checked against its pins).
+	local packageFile ;
+	for packageFile in $(CE_EXTRA_PACKAGE_FILES) {
+		local target = $(packageFile:BS:G=ce-extra-package) ;
+		SEARCH on $(target) = $(packageFile:D) ;
+		AddPackageFilesToHaikuImage system packages : $(target) ;
+	}
 }
 
 

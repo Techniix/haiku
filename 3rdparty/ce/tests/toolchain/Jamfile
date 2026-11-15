@@ -1,0 +1,20 @@
+SubDir HAIKU_TOP 3rdparty ce tests toolchain ;
+
+# The Chromium build toolchain from HaikuPorts (toolchain_test.cpp; the
+# packages come in with ce-test.py --toolchain, see haikuports.pins).
+Application toolchain_test :
+	toolchain_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : toolchain_test ;
+}
+
+# Chromium-HaikuOS' probe (tools/renga-probe.c from its renga branch,
+# 032337d; BSD-style licence of the Chromium Authors), compiled in the guest.
+if $(CE_HARNESS) {
+	local probe = <ce-toolchain>renga-probe.c ;
+	SEARCH on $(probe) = $(SUBDIR) ;
+	AddFilesToHaikuImage system non-packaged data ce-toolchain : $(probe) ;
+}

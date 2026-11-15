@@ -981,6 +981,17 @@ of a 1 GiB guest was, so the bounce path went untested.
   agent runs as a foreground application (it would show in Deskbar), the
   gamepad agent runs as a background app, and neither Gamepads nor System
   logs was started for agent work.
+- **toolchain** (`toolchain_test`; checks only in images built with
+  `ce-test.py --toolchain`, which adds HaikuPorts' nodejs24, python3.14, gn,
+  ninja and llvm23 clang/lld from `tests/toolchain/haikuports.pins`; use a
+  renga-* profile): the Chromium build readiness gate. `node -e`, 40 node
+  starts with a large heap, a node script with worker_threads, fs and
+  child_process, python3, gn, ninja, `clang -fuse-ld=lld`, Chromium-HaikuOS'
+  `tools/renga-probe.c` built and run as its `renga-tests.sh probe` does,
+  and that all of them are native programs. Other options for this kind of
+  run: `--cpu max` (a richer emulated CPU without KVM) and
+  `--linux-chromium` (Alpine's Chromium in the Linux root for
+  `renguin.chrome.dump_dom`; work in progress).
 - **renguin** (`renguin_test`, x86_64): Linux programs under Renguin
   (roadmap F-27). The Linux test programs in `tests/renguin/linux` (from
   Techniix/Renguin) are built with the build host's Linux gcc during the

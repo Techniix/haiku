@@ -35,6 +35,7 @@ run without crashing, and every check passed.
 import argparse
 import datetime
 import glob
+import hashlib
 import json
 import math
 import os
@@ -235,7 +236,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"pointer_logic_test", "pointer_rate_test", "ce_vmouse", "<input>mouse",
 	"Input", "background_agents_test", "gamepad_agent",
 	"crash_report_notifier", "audio_device_agent", "Gamepads",
-	"renguin", "renguin_test", "kernel_x86_64",
+	"renguin", "renguin_test", "toolchain_test", "kernel_x86_64",
 	"wayland_compositor", "wayland_test", "wayland_protocols_test",
 	"virtio_input", "<input>tablet", "<input>virtio",
 	"usb_audio", "usb", "<usb>xhci", "usb_audio_test",
@@ -437,6 +438,13 @@ def build(args, results_dir, report):
 	if args.installer_upgrade:
 		# room for an upgrade that keeps the old system as a state
 		jam.append("-sHAIKU_IMAGE_SIZE=%d" % INSTALLER_IMAGE_SIZE)
+	if args.toolchain:
+		files = toolchain_packages(args)
+		if files is None:
+			return False
+		jam.append("-sCE_EXTRA_PACKAGE_FILES=" + " ".join(files))
+		if not args.installer_upgrade and not args.linux_chromium:
+			jam.append("-sHAIKU_IMAGE_SIZE=%d" % TOOLCHAIN_IMAGE_SIZE)
 	if args.linux_chromium:
 		# Alpine's Chromium in the Linux root (renguin_test chrome.*)
 		jam.append("-sRENGUIN_LINUX_CHROMIUM=1")
@@ -1319,6 +1327,44 @@ INSTALLER_OLDER_STATE = "state_2025-01-01_12:00:00"
 INSTALLER_IMAGE_SIZE = 1200
 # MB; the Chromium layer of the Linux root is about 500 MB extracted
 CHROMIUM_IMAGE_SIZE = 1600
+# MB; HaikuPorts' Chromium build toolchain is about 280 MB of packages,
+# on top of a renga-* image (1400 MB)
+TOOLCHAIN_IMAGE_SIZE = 2000
+TOOLCHAIN_PINS = os.path.join(HAIKU_TOP, "3rdparty", "ce", "tests",
+	"toolchain", "haikuports.pins")
+TOOLCHAIN_MIRROR = ("https://eu.hpkg.haiku-os.org/haikuports/master/x86_64/"
+	"current/packages/")
+
+
+def toolchain_packages(args):
+	"""Downloads (once) and checks the packages in TOOLCHAIN_PINS; returns
+	their paths, or None after logging what failed."""
+	cache = os.path.join(args.output, "download", "ce-toolchain")
+	os.makedirs(cache, exist_ok=True)
+	files = []
+	for line in open(TOOLCHAIN_PINS):
+		line = line.strip()
+		if not line or line.startswith("#"):
+			continue
+		fields = line.split()
+		name, digest = fields[0], fields[1]
+		mirror = fields[2] if len(fields) > 2 else TOOLCHAIN_MIRROR
+		path = os.path.join(cache, name)
+		if not os.path.exists(path):
+			code = subprocess.call(["curl", "-sSfL", "-o", path + ".part",
+				mirror + name])
+			if code != 0:
+				log("cannot download %s (HaikuPorts dropped it? update %s)"
+					% (name, TOOLCHAIN_PINS))
+				return None
+			os.rename(path + ".part", path)
+		with open(path, "rb") as package:
+			if hashlib.sha256(package.read()).hexdigest() != digest:
+				log("%s does not match its pinned SHA-256" % name)
+				os.remove(path)
+				return None
+		files.append(path)
+	return files
 INSTALLER_USER_PACKAGE_INFO = """name			ce_userapp
 version			1.0-1
 architecture	any
@@ -2383,6 +2429,9 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		]
 	if os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.W_OK):
 		qemu += ["-enable-kvm", "-cpu", "host"]
+	elif args.cpu:
+		# a richer emulated CPU (e.g. "max": AVX2, larger XSAVE state)
+		qemu += ["-cpu", args.cpu]
 	if args.firmware == "uefi":
 		# OVMF comes as read-only code plus a variable store the firmware
 		# writes to (boot entries, the boot order); each run gets a fresh
@@ -4034,6 +4083,12 @@ def main():
 		help="seconds without serial output before the harness enters the "
 			"kernel debugger to record backtraces")
 	parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
+	parser.add_argument("--cpu", default=None, metavar="MODEL",
+		help="QEMU CPU model without KVM (default QEMU's qemu64), e.g. max")
+	parser.add_argument("--toolchain", action="store_true",
+		help="add HaikuPorts' Chromium build toolchain (nodejs24, python3.14, "
+			"gn, ninja, llvm23 clang and lld; tests/toolchain/haikuports.pins) "
+			"for the toolchain suite; use with a renga-* profile")
 	parser.add_argument("--linux-chromium", action="store_true",
 		help="put Alpine's Chromium into the Linux root (about 230 MB to "
 			"download once, a %d MB image, at least 2048 MB of memory) for "

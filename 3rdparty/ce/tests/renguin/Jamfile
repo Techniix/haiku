@@ -175,9 +175,8 @@ Application renguin_test :
 
 if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
 	AddFilesToHaikuImage system non-packaged data renguin-tests
-		: $(programs) $(expected) ;
-	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test
-		$(ifuncNative) ;
+		: $(programs) $(expected) $(ifuncNative) ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test ;
 	ExtractArchiveToHaikuImage system non-packaged compat linux
 		: $(linuxRoot) ;
 	if $(chromiumRoot) {

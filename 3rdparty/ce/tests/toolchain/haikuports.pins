@@ -1,0 +1,19 @@
+# HaikuPorts packages for the toolchain suite (ce-test.py --toolchain, the
+# Chromium build readiness gate): HaikuPorts' nodejs24, python3.14, gn, ninja,
+# llvm23_clang and llvm23_lld with what they need beyond the renga images'
+# packages. <file> <SHA-256>, from HaikuPorts' x86_64 'current' repository
+# (2026-11-15), or from the URL in a third column (python3.14 3.14.7 from
+# HaikuPorts' build-packages: 3.14.10 needs a newer libedit than the image
+# has). Replace a line when HaikuPorts drops the version.
+c_ares-1.34.8-1-x86_64.hpkg 55e8458d083198a248ebaec53c342bc575e7a1d3f7cc48dff96064aab3a0a882
+file-5.43-2-x86_64.hpkg 33b0f44a00792f9bc55b136ecc61eac23092cf915ad6a29d40ecd3e11f46fa5c
+file_data-5.43-2-any.hpkg 668db41892e934304ff80f9516f632262b87a5e38ca943f7db15e713b7b026c7
+gn-0.2385.9ece3f52-1-x86_64.hpkg 223a1a2d90926de41590e044e3d9548bb33960248f7cff4f0b6dd2e0487c5f3d
+libffi-3.4.6-1-x86_64.hpkg 9f3788e433701498e4409f2d7e2f8aec38d608af05b8391a79947145ab576685
+libuv-1.52.1-1-x86_64.hpkg e91b975fe5112accd6fde059558aa483eeb087efdeda061023527ba783dd522e
+llvm23_clang-23.1.4-2-x86_64.hpkg b9a4971a008325a30e0fb4632927356d06f6adac58b5cae738f1b8ec8c2bb73a
+llvm23_libs-23.1.4-2-x86_64.hpkg 7f1f0484441fb762ecc7faef5e260c5da4fb963e0d6366ef98bc4e7f64235ccc
+llvm23_lld-23.1.4-2-x86_64.hpkg 17852961158258e5876b2e3c09492e63692116627d576e2dc9680118616d1ac0
+ninja-1.13.2-3-x86_64.hpkg 075c95bec05efd9d1d964fdc7b65748beee53ad0194c6e73dfd55d8c7ca9c923
+nodejs24-24.21.0-1-x86_64.hpkg 1bad9a83a0a9d59bd6e5dfb63655ec180c572c43db5ed9c343cfc0151f032a76
+python3.14-3.14.7-1-x86_64.hpkg 3eec52bede4327b7e90c7df6b8f4f8591c026361b16ad1ed857965b8337d1e9b https://eu.hpkg.haiku-os.org/haikuports/master/build-packages/packages/

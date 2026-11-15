@@ -435,8 +435,8 @@ elf_osabi(const char* path)
 static void
 run_brand_checks()
 {
-	const char* ifunc = "/boot/system/non-packaged/bin/ce-tests/"
-		"renguin_ifunc_native";
+	std::string ifuncPath = std::string(kWork) + "/renguin_ifunc_native";
+	const char* ifunc = ifuncPath.c_str();
 	if (access(ifunc, F_OK) == 0) {
 		std::string output = run(std::string(ifunc) + " 2>&1; echo rc=$?");
 		report("brand.native_ifunc", output == "ifunc 42\nrc=0\n",
