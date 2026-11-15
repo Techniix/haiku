@@ -306,8 +306,35 @@ renguin_sys_mprotect(uint64 addr, uint64 length, uint64 prot)
 }
 
 
+//! Whether [address, address + size) is mapped, in one or more areas.
+static bool
+range_is_mapped(addr_t address, size_t size)
+{
+	addr_t end = address + size;
+	if (end < address)
+		return false;
+	while (address < end) {
+		area_id area = area_for((void*)address);
+		area_info info;
+		if (area < 0 || get_area_info(area, &info) != B_OK)
+			return false;
+		addr_t areaEnd = (addr_t)info.address + info.size;
+		if (areaEnd <= address)
+			return false;
+		address = areaEnd;
+	}
+	return true;
+}
+
+
 /*!	mremap: only shrinking in place, as in FreeBSD's linux_mremap(). glibc's
 	realloc() falls back to allocate-copy-free when growing fails.
+	As on Linux, an old range that is not mapped gives EFAULT, not ENOMEM:
+	musl's pthread_getattr_np() finds the main thread's stack size by
+	growing one page after another below the stack until mremap() fails
+	with something else than ENOMEM. With ENOMEM for everything it walked
+	down the whole address space (Chromium's renderer hung there, with its
+	main thread busy and no connection to the browser after 15 seconds).
 */
 int64
 renguin_sys_mremap(uint64 oldAddr, uint64 oldSize, uint64 newSize,
@@ -325,6 +352,11 @@ renguin_sys_mremap(uint64 oldAddr, uint64 oldSize, uint64 newSize,
 	newSize = PAGE_ALIGN(newSize);
 	if (newSize == 0)
 		return -LX_EINVAL;
+	if (!IS_USER_ADDRESS((addr_t)oldAddr)
+		|| !range_is_mapped((addr_t)oldAddr,
+			oldSize != 0 ? (size_t)oldSize : B_PAGE_SIZE)) {
+		return -LX_EFAULT;
+	}
 
 	if (newSize < oldSize) {
 		status_t status = _user_unmap_memory(

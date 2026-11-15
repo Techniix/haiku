@@ -18,6 +18,7 @@ static i64 sys(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f)
 #define SYS_mmap 9
 #define SYS_munmap 11
 #define SYS_brk 12
+#define SYS_mremap 25
 #define SYS_uname 63
 #define SYS_exit_group 231
 
@@ -34,6 +35,25 @@ int _start2(void)
 	m[0] = 42; m[4095] = 7;
 	if (m[0] != 42 || m[4095] != 7) quit(3);
 	if (sys(SYS_munmap, p, 4096, 0,0,0,0) != 0) quit(4);
+
+	/* mremap: growing in place into mapped memory is ENOMEM, an unmapped
+	 * old range is EFAULT. musl's pthread_getattr_np() probes the main
+	 * stack downwards this way and stops at the first error that is not
+	 * ENOMEM; with ENOMEM everywhere it never stopped (Chromium). */
+	i64 q = sys(SYS_mmap, 0, 4 * 4096, 0x1|0x2, 0x2|0x20, -1, 0);
+	if (q < 0) quit(10);
+	if (sys(SYS_mremap, q + 4096, 4096, 2 * 4096, 0, 0, 0) != -12) quit(11);
+	if (sys(SYS_munmap, q, 4096, 0,0,0,0) != 0) quit(12);
+	if (sys(SYS_mremap, q, 4096, 2 * 4096, 0, 0, 0) != -14) quit(13);
+	/* the probe loop, growing each page into the mapped one above it:
+	 * pages 2 and 1 (ENOMEM), then page 0 is unmapped (EFAULT) */
+	int pages = 0;
+	while (sys(SYS_mremap, q + 2 * 4096 - pages * 4096, 4096, 2 * 4096, 0, 0,
+			0) == -12 && pages < 64) {
+		pages++;
+	}
+	if (pages != 2) quit(14);
+	sys(SYS_munmap, q, 4 * 4096, 0,0,0,0);
 
 	/* brk: query, then grow by a page and use it */
 	i64 b0 = sys(SYS_brk, 0,0,0,0,0,0);

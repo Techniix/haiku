@@ -318,14 +318,16 @@ log_unimplemented(uint64 number)
 	~/config/settings/kernel/drivers/renguin (or the system settings):
 	  trace_errors <pattern>	every call that returns an error (EAGAIN and
 							EINTR excepted)
-	  trace_all <pattern>		every call
-	of the Linux programs whose command line (the team's arguments, as
-	"ps" shows them) contains <pattern>, with the first three arguments and
-	the result, to the syslog (capped at 4000 lines per boot; with
-	trace_all, only the first matching process and without the most
-	frequent successful calls). Read again
-	at every exec of a Linux program, so it can be changed without
-	restarting. Off by default.
+	  trace_all <pattern>		every call, also when it starts (to see
+							where a thread blocks)
+	of the Linux programs whose command line (read from the program's own
+	argument strings; the team's args stop at 64 characters) contains
+	<pattern> (quote it: driver settings split at "="), with the first
+	three arguments and the result, to the syslog. At most 4000 lines per
+	boot; trace_all follows only the first matching process and leaves out
+	successful file lookups, clocks, getpid/gettid, getrandom, mremap and
+	ENOENT path searches. Read again at every exec of a Linux program, so it can
+	be changed without restarting. Off by default.
 */
 static char sTracePattern[64];
 static bool sTraceAll;
@@ -373,8 +375,6 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 		// Leave out the calls that succeed in great numbers and say
 		// little (memory, file lookups, clocks); their errors still show.
 		switch (number) {
-			case LINUX_mprotect:
-			case LINUX_brk: case LINUX_mremap: case LINUX_madvise:
 			case LINUX_open: case LINUX_openat: case LINUX_stat:
 			case LINUX_fstat: case LINUX_lstat: case LINUX_newfstatat:
 			case LINUX_access: case LINUX_faccessat: case LINUX_readlink:
@@ -385,7 +385,9 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 	}
 	if (sTraceAll && (number == LINUX_mremap
 			|| (!entering && result == -LX_ENOENT))) {
-		return;		// realloc()'s first try (mem.cpp); path searches
+		// path searches, and musl's pthread_getattr_np(), which probes the
+		// main thread's stack with one mremap() per page (mem.cpp)
+		return;
 	}
 	Thread* thread = thread_get_current_thread();
 	renguin_team* data = (renguin_team*)thread->team->personality_data;
