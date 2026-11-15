@@ -79,6 +79,9 @@
 #include <vector>
 
 #include <wayland-client.h>
+#include <wayland-cursor.h>
+#include <wayland-egl.h>
+#include <wayland-egl-backend.h>
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
@@ -1242,6 +1245,69 @@ test_activation(Connection& connection)
 }
 
 
+/*!	libwayland-egl and libwayland-cursor (package renga_wayland, the GPU
+	stage): a wl_egl_window on a surface keeps and reports its size and
+	resize (what an EGL driver reads through wayland-egl-backend.h), and a
+	cursor theme loads (the built-in cursors when no theme is installed)
+	with a "left_ptr" cursor whose image is a wl_shm buffer of its size.
+*/
+static void
+test_egl_cursor(Connection& connection)
+{
+	wl_compositor* compositor = (wl_compositor*)connection.Bind(
+		"wl_compositor", &wl_compositor_interface, 4);
+	wl_shm* shm = (wl_shm*)connection.Bind("wl_shm", &wl_shm_interface, 1);
+	if (compositor == NULL || shm == NULL) {
+		report("egl_window", false, "no wl_compositor or wl_shm");
+		return;
+	}
+	wl_surface* surface = wl_compositor_create_surface(compositor);
+	wl_egl_window* window = wl_egl_window_create(surface, 64, 48);
+	int width = 0, height = 0;
+	if (window != NULL)
+		wl_egl_window_get_attached_size(window, &width, &height);
+	bool created = window != NULL && window->width == 64
+		&& window->height == 48 && window->surface == (void*)surface
+		&& window->version >= 3 && width == 0 && height == 0;
+	if (window != NULL) {
+		// An EGL driver records the size it attached a buffer with.
+		window->attached_width = 64;
+		window->attached_height = 48;
+		wl_egl_window_resize(window, 100, 80, 2, 3);
+		wl_egl_window_get_attached_size(window, &width, &height);
+	}
+	bool resized = window != NULL && window->width == 100
+		&& window->height == 80 && window->dx == 2 && window->dy == 3
+		&& width == 64 && height == 48;
+	report("egl_window", created && resized, "wl_egl_window %s, version %d, "
+		"resize %s, attached size %dx%d", window != NULL ? "made" : "failed",
+		window != NULL ? window->version : 0, resized ? "kept" : "wrong",
+		width, height);
+	if (window != NULL)
+		wl_egl_window_destroy(window);
+	wl_surface_destroy(surface);
+
+	wl_cursor_theme* theme = wl_cursor_theme_load(NULL, 24, shm);
+	wl_cursor* cursor = theme != NULL
+		? wl_cursor_theme_get_cursor(theme, "left_ptr") : NULL;
+	wl_cursor_image* image = cursor != NULL && cursor->image_count > 0
+		? cursor->images[0] : NULL;
+	wl_buffer* buffer = image != NULL ? wl_cursor_image_get_buffer(image)
+		: NULL;
+	wl_display_roundtrip(connection.display);
+	report("cursor_theme", buffer != NULL && image->width > 0
+			&& image->height > 0,
+		"theme %s, left_ptr %s, image %ux%u, buffer %s",
+		theme != NULL ? "loaded" : "missing",
+		cursor != NULL ? "found" : "missing", image != NULL ? image->width : 0,
+		image != NULL ? image->height : 0, buffer != NULL ? "made" : "none");
+	if (theme != NULL)
+		wl_cursor_theme_destroy(theme);
+	wl_shm_destroy(shm);
+	wl_compositor_destroy(compositor);
+}
+
+
 int
 main()
 {
@@ -1274,6 +1340,7 @@ main()
 	test_activation(a);
 	test_primary(a, b);
 	test_clipboard(a, b);
+	test_egl_cursor(a);
 
 	wl_display_disconnect(b.display);
 	wl_display_disconnect(a.display);

@@ -86,3 +86,29 @@ SharedLibrary libwayland-server-renga.so :
 	: libgnu.so network
 	: 0
 ;
+
+# libwayland-egl and libwayland-cursor (2026-11-15, the GPU stage for Quasar,
+# docs/partners/QUASAR.md): upstream wayland 1.21.0's egl/ and cursor/
+# directories, unchanged except for the cursor theme search path on Haiku
+# (cursor/xcursor.c, XCURSORPATH). libwayland-egl is the wl_egl_window
+# interface between a Wayland client and an EGL driver (Mesa's or Quasar's
+# EGL platform reads wl_egl_window through wayland-egl-backend.h); it calls
+# nothing of libwayland-client. libwayland-cursor loads Xcursor themes (or
+# its built-in cursors) into wl_shm buffers, on the Renga client library.
+# Named like the other two (-renga) so that they never mix with HaikuPorts'
+# wayland package.
+SEARCH_SOURCE += [ FDirName $(SUBDIR) egl ] [ FDirName $(SUBDIR) cursor ] ;
+SubDirSysHdrs [ FDirName $(SUBDIR) egl ] ;
+SubDirSysHdrs [ FDirName $(SUBDIR) cursor ] ;
+SharedLibrary libwayland-egl-renga.so :
+	wayland-egl.c
+	: : 1
+;
+
+local cursorSources = wayland-cursor.c xcursor.c os-compatibility.c ;
+Depends [ FGristFiles $(cursorSources:S=$(SUFOBJ)) ] : $(headers) ;
+SharedLibrary libwayland-cursor-renga.so :
+	$(cursorSources)
+	: libwayland-client-renga.so libgnu.so
+	: 0
+;

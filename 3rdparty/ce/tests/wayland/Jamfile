@@ -8,6 +8,8 @@ include [ FDirName $(HAIKU_TOP) src libs wayland WaylandRules ] ;
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
 SubDirSysHdrs $(LOCATE_SOURCE) ;
 SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland src ] ;
+SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland egl ] ;
+SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland cursor ] ;
 SubDirC++Flags -DWL_RENGA_SOCKETS -Wno-missing-field-initializers ;
 SubDirCcFlags -DWL_RENGA_SOCKETS ;
 
@@ -41,7 +43,8 @@ Application wayland_protocols_test :
 	wayland_protocols_test.cpp
 	xdg-shell-protocol.c
 	$(protocolTestProtocols)-protocol.c
-	: be libgnu.so libwayland-client-renga.so network [ TargetLibstdc++ ]
+	: be libgnu.so libwayland-client-renga.so libwayland-egl-renga.so
+		libwayland-cursor-renga.so network [ TargetLibstdc++ ]
 ;
 
 if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {

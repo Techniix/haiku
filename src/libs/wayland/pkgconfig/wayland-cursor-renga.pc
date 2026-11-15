@@ -1,0 +1,12 @@
+# Renga's libwayland-cursor, package renga_wayland.
+# Installed as develop/lib/pkgconfig/wayland-cursor-renga.pc.
+prefix=/boot/system
+libdir=${prefix}/develop/lib
+includedir=${prefix}/develop/headers/renga_wayland
+
+Name: wayland-cursor-renga
+Description: Wayland cursor helper library, Renga build
+Version: 1.21.90
+Requires: wayland-client-renga
+Cflags: -I${includedir}
+Libs: -L${libdir} -lwayland-cursor-renga

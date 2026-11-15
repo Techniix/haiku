@@ -5,14 +5,18 @@ if $(HAIKU_PACKAGING_ARCHS[1]) = x86_64 {
 	local renga_waylandPackage = renga_wayland.hpkg ;
 	HaikuPackage $(renga_waylandPackage) ;
 
-	local libs = libwayland-client-renga.so libwayland-server-renga.so ;
-	AddLibrariesToPackage lib : $(libs) ;
+	local libs = libwayland-client-renga.so libwayland-server-renga.so
+		libwayland-cursor-renga.so ;
+	# libwayland-egl keeps upstream's library version 1
+	AddLibrariesToPackage lib : $(libs) libwayland-egl-renga.so ;
 
 	# development files
 	local lib ;
 	for lib in $(libs) {
 		AddSymlinkToPackage develop lib : ../../lib/$(lib).0 : $(lib) ;
 	}
+	AddSymlinkToPackage develop lib : ../../lib/libwayland-egl-renga.so.1
+		: libwayland-egl-renga.so ;
 
 	local waylandSource = [ FDirName $(HAIKU_TOP) src libs wayland src ] ;
 	local headers = wayland-client.h wayland-client-core.h
@@ -23,13 +27,25 @@ if $(HAIKU_PACKAGING_ARCHS[1]) = x86_64 {
 	AddFilesToPackage develop headers renga_wayland : $(headers)
 		<src!libs!wayland>wayland-client-protocol.h
 		<src!libs!wayland>wayland-server-protocol.h ;
+	local eglHeaders = wayland-egl.h wayland-egl-core.h wayland-egl-backend.h ;
+	eglHeaders = $(eglHeaders:G=renga-wayland-egl-headers) ;
+	SEARCH on $(eglHeaders) = [ FDirName $(HAIKU_TOP) src libs wayland egl ] ;
+	local cursorHeaders = wayland-cursor.h ;
+	cursorHeaders = $(cursorHeaders:G=renga-wayland-cursor-headers) ;
+	SEARCH on $(cursorHeaders)
+		= [ FDirName $(HAIKU_TOP) src libs wayland cursor ] ;
+	AddFilesToPackage develop headers renga_wayland : $(eglHeaders)
+		$(cursorHeaders) ;
 
 	local pkgconfigDir = [ FDirName $(HAIKU_TOP) src libs wayland pkgconfig ] ;
-	local pcFiles = wayland-client-renga.pc wayland-server-renga.pc ;
+	local pcFiles = wayland-client-renga.pc wayland-server-renga.pc
+		wayland-egl-renga.pc wayland-egl-backend-renga.pc
+		wayland-cursor-renga.pc ;
 	pcFiles = $(pcFiles:G=renga-wayland-pc) ;
 	SEARCH on $(pcFiles) = $(pkgconfigDir) ;
 	AddFilesToPackage develop lib pkgconfig : $(pcFiles) ;
-	local plainPcFiles = wayland-client.pc wayland-server.pc ;
+	local plainPcFiles = wayland-client.pc wayland-server.pc wayland-egl.pc
+		wayland-egl-backend.pc wayland-cursor.pc ;
 	plainPcFiles = $(plainPcFiles:G=renga-wayland-plain-pc) ;
 	SEARCH on $(plainPcFiles) = [ FDirName $(pkgconfigDir) plain ] ;
 	AddFilesToPackage data renga_wayland pkgconfig : $(plainPcFiles) ;

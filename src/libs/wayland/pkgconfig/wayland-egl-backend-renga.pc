@@ -1,0 +1,9 @@
+# The wl_egl_window structure for EGL drivers (wayland-egl-backend.h),
+# package renga_wayland. Installed as develop/lib/pkgconfig/wayland-egl-backend-renga.pc.
+prefix=/boot/system
+includedir=${prefix}/develop/headers/renga_wayland
+
+Name: wayland-egl-backend-renga
+Description: Backend wayland-egl interface, Renga build
+Version: 3
+Cflags: -I${includedir}

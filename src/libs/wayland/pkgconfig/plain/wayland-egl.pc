@@ -1,0 +1,12 @@
+# Renga's libwayland-egl (wl_egl_window), package renga_wayland.
+# Installed as data/renga_wayland/pkgconfig/wayland-egl.pc.
+prefix=/boot/system
+libdir=${prefix}/develop/lib
+includedir=${prefix}/develop/headers/renga_wayland
+
+Name: wayland-egl
+Description: Frontend wayland-egl library, Renga build
+Version: 18.1.0
+Requires: wayland-client
+Cflags: -I${includedir}
+Libs: -L${libdir} -lwayland-egl-renga

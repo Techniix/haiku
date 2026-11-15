@@ -9,7 +9,10 @@ talk to the compositor's socket (XDG_RUNTIME_DIR/wayland-0). Includes the header
 and pkg-config files for building ports against them. The libraries have
 their own names (libwayland-client-renga, libwayland-server-renga) and can
 be installed next to HaikuPorts' wayland package, whose libraries use an
-in-process transport; a program uses one or the other."
+in-process transport; a program uses one or the other. Also
+libwayland-egl (wl_egl_window, for EGL drivers' Wayland platform) and
+libwayland-cursor (cursor themes in wl_shm buffers), as libwayland-egl-renga
+and libwayland-cursor-renga."
 
 packager		"The Haiku build system"
 vendor			"%HAIKU_DISTRO_VENDOR%"
@@ -19,6 +22,7 @@ copyrights {
 	"2010-2012 Intel Corporation"
 	"2011 Benjamin Franzke"
 	"2012 Collabora, Ltd."
+	"2002 Keith Packard"
 	"2021-2026 X547"
 }
 licenses		"MIT"
@@ -29,6 +33,10 @@ provides {
 	lib:libwayland_server_renga = 0
 	devel:libwayland_client_renga = 0
 	devel:libwayland_server_renga = 0
+	lib:libwayland_egl_renga = 1
+	devel:libwayland_egl_renga = 1
+	lib:libwayland_cursor_renga = 0
+	devel:libwayland_cursor_renga = 0
 }
 
 requires {
