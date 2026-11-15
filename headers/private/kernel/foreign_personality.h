@@ -164,6 +164,11 @@ void		foreign_personality_fault_signal(Thread* thread, int number,
 	// than faulting again forever. It does not call the debugger in; use
 	// foreign_personality_fault() from fault paths.
 
+void		foreign_personality_log_user_stack(const char* prefix);
+	// Renga: logs the current thread's user instruction pointer and up to 8
+	// callers (frame-pointer walk), each as image or mapped file + offset,
+	// for diagnosing foreign programs (fault and fatal-signal records).
+
 void		foreign_personality_fault(Thread* thread, int number, int32 code,
 				int32 error, void* address, debug_exception_type exception);
 	// Renga: the fault path for threads with THREAD_FLAGS_FOREIGN_ABI

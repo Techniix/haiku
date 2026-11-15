@@ -44,6 +44,14 @@ int check_main(int argc, char** argv)
 	if (sys2(SYS_fcntl, fd2, 1) != 1) return 19;	/* FD_CLOEXEC set */
 	if (sys3(SYS_dup3, fd, fd, 0) != -22) return 20;	/* EINVAL */
 	sys1(SYS_close, fd2);
+	/* Linux's default open-file limit, 1024: descriptors up to 1023 work
+	 * (Chromium moves some to 512 and up at start-up). */
+	u64 nofile[2] = { 0, 0 };
+	if (sys4(SYS_prlimit64, 0, 7, 0, nofile) != 0 || nofile[0] < 1024)
+		return 38;		/* RLIMIT_NOFILE */
+	fd2 = sys3(SYS_fcntl, fd, 1030, 512);		/* F_DUPFD_CLOEXEC */
+	if (fd2 < 512) return 39;
+	sys1(SYS_close, fd2);
 	sys1(SYS_close, fd);
 
 	/* access, errors */

@@ -28,7 +28,10 @@
 
 #include <string.h>
 
+#include <algorithm>
+
 #include <KernelExport.h>
+#include <driver_settings.h>
 
 #include <arch/x86/64/iframe.h>
 #include <team.h>
@@ -263,6 +266,7 @@ enum {
 	LINUX_renameat2			= 316,
 	LINUX_getrandom			= 318,
 	LINUX_memfd_create		= 319,
+	LINUX_membarrier		= 324,
 	LINUX_mlock2			= 325,
 	LINUX_preadv2			= 327,
 	LINUX_pwritev2			= 328,
@@ -310,6 +314,133 @@ log_unimplemented(uint64 number)
 }
 
 
+/*!	Opt-in system call trace, for diagnosing Linux programs. In
+	~/config/settings/kernel/drivers/renguin (or the system settings):
+	  trace_errors <pattern>	every call that returns an error (EAGAIN and
+							EINTR excepted)
+	  trace_all <pattern>		every call
+	of the Linux programs whose command line (the team's arguments, as
+	"ps" shows them) contains <pattern>, with the first three arguments and
+	the result, to the syslog (capped at 4000 lines per boot; with
+	trace_all, only the first matching process and without the most
+	frequent successful calls). Read again
+	at every exec of a Linux program, so it can be changed without
+	restarting. Off by default.
+*/
+static char sTracePattern[64];
+static bool sTraceAll;
+static int32 sTraceGeneration = 1;
+
+
+void
+renguin_reload_trace_settings()
+{
+	char pattern[sizeof(sTracePattern)] = "";
+	bool all = false;
+	if (void* handle = load_driver_settings("renguin")) {
+		const char* value = get_driver_parameter(handle, "trace_all", NULL,
+			NULL);
+		if (value != NULL)
+			all = true;
+		else
+			value = get_driver_parameter(handle, "trace_errors", NULL, NULL);
+		if (value != NULL)
+			strlcpy(pattern, value, sizeof(pattern));
+		unload_driver_settings(handle);
+	}
+	if (strcmp(pattern, sTracePattern) != 0 || all != sTraceAll) {
+		dprintf("renguin: system call trace %s%s%s\n",
+			pattern[0] != '\0' ? (all ? "of all calls" : "of errors") : "off",
+			pattern[0] != '\0' ? " for " : "", pattern);
+		sTraceAll = all;
+		strlcpy(sTracePattern, pattern, sizeof(sTracePattern));
+		atomic_add(&sTraceGeneration, 1);
+	}
+}
+
+
+static void
+trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
+	bool entering = false)
+{
+	if (sTracePattern[0] == '\0' || (entering && !sTraceAll))
+		return;
+	if (!sTraceAll && (result >= 0 || result == -LX_EAGAIN
+			|| result == -LX_EINTR)) {
+		return;
+	}
+	if (sTraceAll && (entering || result >= 0)) {
+		// Leave out the calls that succeed in great numbers and say
+		// little (memory, file lookups, clocks); their errors still show.
+		switch (number) {
+			case LINUX_mprotect:
+			case LINUX_brk: case LINUX_mremap: case LINUX_madvise:
+			case LINUX_open: case LINUX_openat: case LINUX_stat:
+			case LINUX_fstat: case LINUX_lstat: case LINUX_newfstatat:
+			case LINUX_access: case LINUX_faccessat: case LINUX_readlink:
+			case LINUX_getpid: case LINUX_gettid: case LINUX_clock_gettime:
+			case LINUX_getrandom:
+				return;
+		}
+	}
+	if (sTraceAll && (number == LINUX_mremap
+			|| (!entering && result == -LX_ENOENT))) {
+		return;		// realloc()'s first try (mem.cpp); path searches
+	}
+	Thread* thread = thread_get_current_thread();
+	renguin_team* data = (renguin_team*)thread->team->personality_data;
+	if (data == NULL)
+		return;
+	int32 generation = atomic_get(&sTraceGeneration);
+	if (data->trace_generation != generation) {
+		// The command line from the program's own argument strings (the
+		// team's args are cut at 64 characters), once per team and setting.
+		char commandLine[1024];
+		size_t length = data->arg_end > data->arg_start
+			? std::min((size_t)(data->arg_end - data->arg_start),
+				sizeof(commandLine) - 1) : 0;
+		if (length == 0 || renguin_copy_in(commandLine, data->arg_start,
+				length) != B_OK) {
+			length = 0;
+		}
+		for (size_t i = 0; i < length; i++) {
+			if (commandLine[i] == '\0')
+				commandLine[i] = ' ';
+		}
+		commandLine[length] = '\0';
+		// "trace_all": only the first matching process (a program that
+		// starts many alike would use up the record before it is useful)
+		static team_id sTracedTeam = -1;
+		bool match = strstr(commandLine, sTracePattern) != NULL;
+		if (match && sTraceAll) {
+			team_id id = thread->team->id;
+			team_id previous = atomic_test_and_set(&sTracedTeam, id, -1);
+			if (previous != -1 && previous != id)
+				match = false;
+		}
+		data->trace_match = match ? 1 : -1;
+		data->trace_generation = generation;
+	}
+	if (data->trace_match != 1)
+		return;
+	static int32 sTraced = 0;
+	if (atomic_add(&sTraced, 1) >= 4000)
+		return;
+	const char* name = number < LINUX_SYSCALL_COUNT
+		? kLinuxSyscallNames[number] : NULL;
+	if (entering) {
+		// (with trace_all: shows the call a thread blocks in)
+		dprintf("renguin trace: %" B_PRId32 ":%" B_PRId32 " > %s(%#" B_PRIx64
+			", %#" B_PRIx64 ", %#" B_PRIx64 ")\n", thread->team->id,
+			thread->id, name != NULL ? name : "?", a1, a2, a3);
+		return;
+	}
+	dprintf("renguin trace: %" B_PRId32 ":%" B_PRId32 " %s(%#" B_PRIx64
+		", %#" B_PRIx64 ", %#" B_PRIx64 ") = %" B_PRId64 "\n",
+		thread->team->id, thread->id, name != NULL ? name : "?", a1, a2, a3,
+		result);
+}
+
 void
 renguin_syscall(struct iframe* frame)
 {
@@ -330,6 +461,8 @@ renguin_syscall(struct iframe* frame)
 	renguin_thread* threadData = (renguin_thread*)thread->personality_data;
 	if (threadData != NULL)
 		threadData->restart_policy = RENGUIN_RESTART_SYS;
+
+	trace_call(number, a1, a2, a3, 0, true);
 
 	switch (number) {
 		// --- I/O (file.cpp) ---
@@ -1013,9 +1146,19 @@ renguin_syscall(struct iframe* frame)
 			frame->ax = 0;
 			return;
 		case LINUX_exit_group:
+		{
+			// A record of Linux programs that end with an error status
+			// (capped), for diagnosing multi-process programs.
+			static int32 sExitsLogged = 0;
+			if ((a1 & 0xff) != 0 && atomic_add(&sExitsLogged, 1) < 32) {
+				dprintf("renguin: team %" B_PRId32 " (%s): exit_group(%"
+					B_PRIu64 ")\n", thread->team->id, thread->team->Name(),
+					a1 & 0xff);
+			}
 			_user_exit_team((status_t)(a1 & 0xff));
 			frame->ax = 0;
 			return;
+		}
 
 		// --- Threads and futexes (threads.cpp, futex.cpp) ---
 		case LINUX_futex:
@@ -1035,6 +1178,10 @@ renguin_syscall(struct iframe* frame)
 			break;
 		case LINUX_getcpu:
 			result = renguin_sys_getcpu(a1, a2, a3);
+			break;
+		case LINUX_membarrier:
+			result = renguin_sys_membarrier((int64)(int32)a1, (uint32)a2,
+				(int64)(int32)a3);
 			break;
 
 		// No restartable-sequence support; glibc/musl fall back when told so.
@@ -1076,5 +1223,6 @@ renguin_syscall(struct iframe* frame)
 		}
 	}
 
+	trace_call(number, a1, a2, a3, result);
 	frame->ax = (uint64)result;
 }

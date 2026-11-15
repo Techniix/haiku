@@ -18,6 +18,7 @@
 
 #include <arch/generic/user_memory.h>
 #include <kernel.h>
+#include <kimage.h>
 #include <ksignal.h>
 #include <lock.h>
 #include <syscalls.h>
@@ -27,6 +28,16 @@
 #include <util/AutoLock.h>
 #include <util/ThreadAutoLock.h>
 #include <vfs.h>
+#include <vm/vm.h>
+#include <vm/VMArea.h>
+#include <vm/VMCache.h>
+
+#include "cache/vnode_store.h"
+#include "vm/VMAddressSpaceLocking.h"
+
+#ifdef __x86_64__
+#	include <arch/x86/arch_thread.h>
+#endif
 
 
 //#define TRACE_FOREIGN_PERSONALITY
@@ -334,6 +345,121 @@ foreign_personality_fault_signal(Thread* thread, int number, int32 code,
 }
 
 
+/*!	Where a foreign-ABI fault happened, for the fault log: the image (path
+	and offset from its load base) that contains \a address, or "?".
+*/
+struct fault_image_lookup {
+	addr_t	address;
+	char	path[96];
+	addr_t	offset;
+	bool	found;
+};
+
+
+static bool
+find_fault_image(struct image* image, void* cookie)
+{
+	fault_image_lookup* lookup = (fault_image_lookup*)cookie;
+	const image_info& info = image->info.basic_info;
+	addr_t start = (addr_t)info.text;
+	if (lookup->address < start
+		|| lookup->address >= start + (addr_t)info.text_size) {
+		return false;
+	}
+	const char* name = strrchr(info.name, '/');
+	strlcpy(lookup->path, name != NULL ? name + 1 : info.name,
+		sizeof(lookup->path));
+	lookup->offset = lookup->address - (addr_t)image->info.text_delta;
+	lookup->found = true;
+	return true;
+}
+
+
+static void
+describe_fault_address(team_id team, addr_t address, char* buffer,
+	size_t size)
+{
+	fault_image_lookup lookup = {};
+	lookup.address = address;
+	image_iterate_through_team_images(team, &find_fault_image, &lookup);
+	if (lookup.found) {
+		snprintf(buffer, size, "%#lx (%s+%#lx)", address, lookup.path,
+			lookup.offset);
+		return;
+	}
+
+	// Not a registered image (shared libraries that the Linux program's own
+	// dynamic loader mapped): the area's mapped file and the file offset.
+	// The cache walk is the one the core dump writer uses.
+	dev_t device = -1;
+	ino_t node = -1;
+	addr_t fileOffset = 0;
+	{
+		AddressSpaceReadLocker locker(team);
+		VMArea* area = locker.IsLocked()
+			? locker.AddressSpace()->LookupArea(address) : NULL;
+		if (area != NULL) {
+			fileOffset = address - area->Base() + area->cache_offset;
+			VMCache* cache = vm_area_get_locked_cache(area);
+			while (VMCache* source = cache->source) {
+				source->Lock();
+				source->AcquireRefLocked();
+				cache->ReleaseRefAndUnlock();
+				cache = source;
+			}
+			if (cache->type == CACHE_TYPE_VNODE) {
+				VMVnodeCache* vnodeCache = (VMVnodeCache*)cache;
+				device = vnodeCache->DeviceId();
+				node = vnodeCache->InodeId();
+			}
+			cache->ReleaseRefAndUnlock();
+		}
+	}
+	char name[B_FILE_NAME_LENGTH];
+	struct vnode* vnode;
+	if (node >= 0 && vfs_get_vnode(device, node, true, &vnode) == B_OK) {
+		if (vfs_get_vnode_name(vnode, name, sizeof(name)) != B_OK)
+			strlcpy(name, "?", sizeof(name));
+		vfs_put_vnode(vnode);
+		snprintf(buffer, size, "%#lx (file %s offset %#lx)", address, name,
+			fileOffset);
+	} else
+		snprintf(buffer, size, "%#lx (?)", address);
+}
+
+
+void
+foreign_personality_log_user_stack(const char* prefix)
+{
+#ifdef __x86_64__
+	Thread* thread = thread_get_current_thread();
+	iframe* frame = x86_get_user_iframe();
+	if (frame == NULL)
+		return;
+	char where[128];
+	describe_fault_address(thread->team->id, frame->ip, where, sizeof(where));
+	dprintf("%s thread %" B_PRId32 " at %s\n", prefix, thread->id, where);
+	addr_t bp = frame->bp;
+	for (int i = 0; i < 8 && bp != 0 && IS_USER_ADDRESS(bp)
+			&& (bp & 7) == 0; i++) {
+		addr_t pair[2];
+		if (user_memcpy(pair, (void*)bp, sizeof(pair)) != B_OK
+			|| pair[1] == 0) {
+			break;
+		}
+		describe_fault_address(thread->team->id, pair[1], where,
+			sizeof(where));
+		dprintf("%s   called from %s\n", prefix, where);
+		if (pair[0] <= bp)
+			break;
+		bp = pair[0];
+	}
+#else
+	(void)prefix;
+#endif
+}
+
+
 void
 foreign_personality_fault(Thread* thread, int number, int32 code,
 	int32 error, void* address, debug_exception_type exception)
@@ -346,6 +472,30 @@ foreign_personality_fault(Thread* thread, int number, int32 code,
 		dprintf("foreign ABI fault: thread %" B_PRId32 " (team %" B_PRId32
 			", %s): signal %d code %" B_PRId32 ", address %p\n", thread->id,
 			thread->team->id, thread->team->Name(), number, code, address);
+		foreign_personality_log_user_stack("foreign ABI fault:");
+#ifdef __x86_64__
+		// The instruction pointer, and the word at the stack pointer: after
+		// a call through a null function pointer the instruction pointer
+		// is 0 and that word is the caller's return address, which names
+		// the call site (image and offset, for objdump on the host).
+		iframe* frame = x86_get_user_iframe();
+		if (frame != NULL) {
+			addr_t returnAddress = 0;
+			if (!IS_USER_ADDRESS(frame->user_sp)
+				|| user_memcpy(&returnAddress, (void*)frame->user_sp,
+					sizeof(returnAddress)) != B_OK) {
+				returnAddress = 0;
+			}
+			char ip[128];
+			char caller[128];
+			describe_fault_address(thread->team->id, frame->ip, ip,
+				sizeof(ip));
+			describe_fault_address(thread->team->id, returnAddress, caller,
+				sizeof(caller));
+			dprintf("foreign ABI fault: thread %" B_PRId32 " ip %s, sp %#lx,"
+				" [sp] %s\n", thread->id, ip, (addr_t)frame->user_sp, caller);
+		}
+#endif
 	}
 
 	// An installed debugger hears of the fault as for a native thread,

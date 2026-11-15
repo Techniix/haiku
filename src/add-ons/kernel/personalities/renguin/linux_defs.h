@@ -41,6 +41,7 @@
 #define LX_ENOTTY		25
 #define LX_ESPIPE		29
 #define LX_ERANGE		34
+#define LX_EDEADLK		35
 #define LX_ENAMETOOLONG	36
 #define LX_ENOSYS		38
 #define LX_ELOOP		40

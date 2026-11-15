@@ -161,6 +161,9 @@ struct renguin_team {
 	addr_t	arg_start, arg_end;	// argument strings on the initial stack,
 	addr_t	env_start, env_end;	// then the environment (/proc/<pid>/cmdline
 								// and environ, as Linux's mm->arg_start...)
+	int32	trace_match;		// system call trace (syscall.cpp): 0 not yet
+								// checked, 1 traced, -1 not traced
+	int32	trace_generation;	// the trace setting trace_match is for
 
 	// Directory FDs standing for /proc directories (procfs.cpp). The FD is
 	// open on an empty placeholder directory; getdents64 on it lists the
@@ -266,6 +269,8 @@ int64		renguin_sys_clone3(uint64 args, uint64 size);
 int64		renguin_sys_sched_getaffinity(int64 pid, uint64 size, uint64 mask);
 int64		renguin_sys_sched_setaffinity(int64 pid, uint64 size, uint64 mask);
 int64		renguin_sys_getcpu(uint64 cpu, uint64 node, uint64 cache);
+int64		renguin_sys_membarrier(int64 command, uint32 flags, int64 cpu);
+void		renguin_reload_trace_settings();
 
 // futex.cpp
 status_t	renguin_futex_init();

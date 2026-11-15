@@ -767,6 +767,16 @@ renguin_load(foreign_exec_args* args)
 	Team* team = args->team;
 	Thread* thread = args->thread;
 
+	renguin_reload_trace_settings();
+
+	// Linux's default open-file limit is 1024 (RLIMIT_NOFILE soft limit;
+	// Haiku starts teams with 256). Chromium moves descriptors to 512 and
+	// up with F_DUPFD_CLOEXEC at start-up, which failed with EINVAL.
+	if (team->io_context != NULL
+		&& team->io_context->table_size < 1024) {
+		vfs_resize_fd_table(team->io_context, 1024);
+	}
+
 	renguin_team* data = (renguin_team*)malloc(sizeof(renguin_team));
 	if (data == NULL)
 		return B_NO_MEMORY;

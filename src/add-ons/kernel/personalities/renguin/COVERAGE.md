@@ -65,7 +65,8 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `291 epoll_create1`, `292 dup3`, `293 pipe2`, `294 inotify_init1`
 `295 preadv`, `296 pwritev`, `297 rt_tgsigqueueinfo`, `299 recvmmsg`
 `302 prlimit64`, `306 syncfs`, `307 sendmmsg`, `309 getcpu`
-`316 renameat2`, `318 getrandom`, `319 memfd_create`, `327 preadv2`
+`316 renameat2`, `318 getrandom`, `319 memfd_create`, `324 membarrier`
+`327 preadv2`
 `328 pwritev2`, `332 statx`, `435 clone3`, `439 faccessat2`
 `441 epoll_pwait2`, `452 fchmodat2`
 
@@ -106,7 +107,7 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `308 setns`, `310 process_vm_readv`, `311 process_vm_writev`, `312 kcmp`
 `313 finit_module`, `314 sched_setattr`, `315 sched_getattr`
 `317 seccomp`, `320 kexec_file_load`, `321 bpf`, `322 execveat`
-`323 userfaultfd`, `324 membarrier`, `329 pkey_mprotect`, `330 pkey_alloc`
+`323 userfaultfd`, `329 pkey_mprotect`, `330 pkey_alloc`
 `331 pkey_free`, `333 io_pgetevents`, `424 pidfd_send_signal`
 `425 io_uring_setup`, `426 io_uring_enter`, `427 io_uring_register`
 `428 open_tree`, `429 move_mount`, `430 fsopen`, `431 fsconfig`
@@ -118,7 +119,7 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `451 cachestat`, `453 map_shadow_stack`
 
 Next, by use in the application ladder (F-27): `waitid`, `close_range`,
-`execveat`, `restart_syscall`, `membarrier`, `mincore`; the POSIX timers
+`execveat`, `restart_syscall`, `mincore`; the POSIX timers
 (`timer_*`) and message queues (`mq_*`) and System V shared memory, which
 Renga has natively (F-12) and only need mapping; `copy_file_range` and
 `splice`/`tee` (coreutils, cat and cp fall back today); `pidfd_open`,

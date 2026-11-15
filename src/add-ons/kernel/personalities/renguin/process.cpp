@@ -242,6 +242,39 @@ renguin_sys_getresgid(uint64 rgid, uint64 egid, uint64 sgid)
 // #pragma mark - Signals
 
 
+/*!	A record of the signals that end programs (SIGKILL, SIGTERM, SIGABRT,
+	SIGSEGV, SIGBUS, SIGILL, SIGTRAP), sent by Linux programs with kill(),
+	tkill() or tgkill(), for diagnosing programs that end each other or
+	themselves (capped). A signal to the sender's own process comes with
+	the sender's stack (abort(), raise() and crash handlers).
+*/
+static void
+log_signal_send(const char* call, int64 target, int64 signal)
+{
+	if (signal != 9 && signal != 15 && signal != 6 && signal != 11
+		&& signal != 7 && signal != 4 && signal != 5) {
+		return;
+	}
+	static int32 sLogged = 0;
+	if (atomic_add(&sLogged, 1) >= 48)
+		return;
+	Thread* thread = thread_get_current_thread();
+	dprintf("renguin: team %" B_PRId32 " (%s) thread %" B_PRId32 ": %s(%"
+		B_PRId64 ", %" B_PRId64 ")\n", thread->team->id, thread->team->Name(),
+		thread->id, call, target, signal);
+	bool own = target == thread->team->id;
+	if (!own && target > 0) {
+		Thread* targetThread = Thread::Get((thread_id)target);
+		if (targetThread != NULL) {
+			own = targetThread->team == thread->team;
+			targetThread->ReleaseReference();
+		}
+	}
+	if (own)
+		foreign_personality_log_user_stack("renguin:");
+}
+
+
 int64
 renguin_sys_kill(int64 pid, int64 signal)
 {
@@ -256,6 +289,8 @@ renguin_sys_kill(int64 pid, int64 signal)
 	// send_signal expresses as a negative group ID.
 	if (pid == 0)
 		pid = -thread_get_current_thread()->team->group_id;
+
+	log_signal_send("kill", pid, signal);
 
 	return signal_status(_user_send_signal((int32)pid, haikuSignal, NULL, 0));
 }
@@ -273,6 +308,8 @@ renguin_sys_tgkill(int64 tgid, int64 tid, int64 signal)
 		if (haikuSignal == 0)
 			return -LX_EINVAL;
 	}
+
+	log_signal_send(tgid == -1 ? "tkill" : "tgkill", tid, signal);
 
 	// tgkill checks that the thread is in the given thread group; tkill
 	// (tgid == -1) does not.

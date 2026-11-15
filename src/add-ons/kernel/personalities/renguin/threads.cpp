@@ -595,6 +595,15 @@ renguin_thread_exit(status_t status)
 			free_thread_data(teamData, data);
 	}
 
+	if (thread == thread->team->main_thread) {
+		static int32 sLogged = 0;
+		if (atomic_add(&sLogged, 1) < 16) {
+			dprintf("renguin: team %" B_PRId32 " (%s): the main thread "
+				"called exit(%" B_PRId32 ")\n", thread->team->id,
+				thread->team->Name(), status);
+		}
+	}
+
 	_user_exit_thread(status);
 }
 
@@ -759,5 +768,68 @@ renguin_sys_getcpu(uint64 cpuPtr, uint64 nodePtr, uint64 cache)
 		return -LX_EFAULT;
 	if (nodePtr != 0 && renguin_copy_out(nodePtr, &node, sizeof(node)) != B_OK)
 		return -LX_EFAULT;
+	return 0;
+}
+
+
+/*!	membarrier(2). musl's dynamic loader issues MEMBARRIER_CMD_PRIVATE_
+	EXPEDITED whenever dlopen() installs new TLS while other threads run
+	(Chromium does at start-up); when the call fails, musl emulates it by
+	signalling every other thread and waiting for each one, which is slow
+	and depends on all of them being able to take a signal at once. Here
+	every command is one full barrier on every CPU (an inter-processor
+	call; returning from it serializes the CPU, which is also what the
+	SYNC_CORE commands promise). That is stronger than Linux's private
+	commands, which only interrupt CPUs running the caller's threads. The
+	REGISTER commands have nothing to set up and succeed. The cpu argument
+	(MEMBARRIER_CMD_FLAG_CPU, Linux 6.0 RSEQ commands) is not supported.
+*/
+enum {
+	LX_MEMBARRIER_CMD_QUERY								= 0,
+	LX_MEMBARRIER_CMD_GLOBAL							= 1 << 0,
+	LX_MEMBARRIER_CMD_GLOBAL_EXPEDITED					= 1 << 1,
+	LX_MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED			= 1 << 2,
+	LX_MEMBARRIER_CMD_PRIVATE_EXPEDITED					= 1 << 3,
+	LX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED		= 1 << 4,
+	LX_MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE		= 1 << 5,
+	LX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE = 1 << 6,
+};
+
+static const int64 kMembarrierSupported = LX_MEMBARRIER_CMD_GLOBAL
+	| LX_MEMBARRIER_CMD_GLOBAL_EXPEDITED
+	| LX_MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED
+	| LX_MEMBARRIER_CMD_PRIVATE_EXPEDITED
+	| LX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
+	| LX_MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
+	| LX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
+
+
+static void
+membarrier_on_cpu(void* /*cookie*/, int /*cpu*/)
+{
+	memory_full_barrier();
+}
+
+
+int64
+renguin_sys_membarrier(int64 command, uint32 flags, int64 cpu)
+{
+	(void)cpu;
+	if (flags != 0)
+		return -LX_EINVAL;
+	if (command == LX_MEMBARRIER_CMD_QUERY)
+		return kMembarrierSupported;
+	// exactly one supported command bit
+	if (command < 0 || (command & (command - 1)) != 0
+		|| (command & kMembarrierSupported) == 0) {
+		return -LX_EINVAL;
+	}
+	switch (command) {
+		case LX_MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED:
+		case LX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED:
+		case LX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE:
+			return 0;
+	}
+	call_all_cpus_sync(&membarrier_on_cpu, NULL);
 	return 0;
 }

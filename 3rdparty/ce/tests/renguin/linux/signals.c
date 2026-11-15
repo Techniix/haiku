@@ -19,6 +19,7 @@ enum {
 };
 
 #define SIGSEGV 11
+#define SIGTRAP 5
 #define SIGUSR1 10
 #define SIGUSR2 12
 #define SIGALRM 14
@@ -238,6 +239,26 @@ static int read_null(void)
 	return value;
 }
 
+
+/* --- int3: SIGTRAP, resuming after the instruction (as Linux does) --- */
+
+static volatile int trapSignal, trapCode;
+static volatile u64 trapRip, trapReturn;
+
+static void trap_handler(int sig, struct siginfo* info, struct ucontext* uc)
+{
+	trapSignal = sig;
+	trapCode = info->si_code;
+	trapRip = uc->uc_mcontext.rip;
+}
+
+static u64 run_int3(void)
+{
+	u64 after;
+	__asm__ volatile("int3\n\t"
+		"1: lea 1b(%%rip), %0" : "=r"(after) : : "memory");
+	return after;
+}
 
 /* --- alternate stack --- */
 
@@ -692,6 +713,16 @@ int check_main(int argc, char** argv)
 		while (ctid != 0)
 			sys6(SYS_futex, (i64)&ctid, 0, ctid, 0, 0, 0);
 	}
+
+	/* int3 in a Linux program: its SIGTRAP handler runs (no Haiku
+	 * debug_server, which killed Chromium for its IMMEDIATE_CRASH), with
+	 * rip already after the int3, and returning resumes there. */
+	check(set_handler(SIGTRAP, (void*)trap_handler, SA_SIGINFO, 0) == 0,
+		130, "SIGTRAP handler");
+	trapReturn = run_int3();
+	check(trapSignal == SIGTRAP, 131, "int3 delivered SIGTRAP");
+	check(trapRip == trapReturn, 132, "rip after the int3 in the frame");
+	set_handler(SIGTRAP, (void*)0, 0, 0);
 
 	if (failed)
 		return failed;

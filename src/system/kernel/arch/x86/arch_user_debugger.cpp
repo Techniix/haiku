@@ -10,6 +10,7 @@
 
 #include <debugger.h>
 #include <driver_settings.h>
+#include <foreign_personality.h>
 #include <interrupts.h>
 #include <team.h>
 #include <thread.h>
@@ -1122,13 +1123,32 @@ x86_handle_breakpoint_exception(iframe* frame)
 {
 	TRACE(("x86_handle_breakpoint_exception()\n"));
 
-	// reset eip to the int3 instruction
-	frame->ip--;
-
 	if (!IFRAME_IS_USER(frame)) {
+		frame->ip--;
 		panic("breakpoint exception in kernel mode");
 		return;
 	}
+
+	// Renga: a foreign-ABI (Linux) thread gets its ABI's semantics, as for
+	// its other faults: SIGTRAP, with the instruction pointer after the
+	// int3 (Linux does not rewind it), and no debug_server (which would
+	// kill the team without running the program's own signal handler;
+	// Chromium's IMMEDIATE_CRASH() is "int3; ud2", and its handler prints
+	// the stack). With a debugger installed (one debugging the Linux
+	// program, with its own breakpoints), it stays a breakpoint event.
+	Thread* thread = thread_get_current_thread();
+	if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0
+		&& (atomic_get(&thread->team->debug_info.flags)
+			& B_TEAM_DEBUG_DEBUGGER_INSTALLED) == 0) {
+		enable_interrupts();
+		// (the exception type only matters to a debugger; there is none)
+		foreign_personality_fault(thread, SIGTRAP, TRAP_BRKPT, B_OK,
+			(void*)(frame->ip - 1), B_INVALID_OPCODE_EXCEPTION);
+		return;
+	}
+
+	// reset eip to the int3 instruction
+	frame->ip--;
 
 	enable_interrupts();
 

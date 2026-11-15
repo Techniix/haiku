@@ -10,6 +10,7 @@
 enum {
 	SYS_futex = 202, SYS_sched_getaffinity = 204, SYS_set_tid_address = 218,
 	SYS_set_robust_list = 273, SYS_get_robust_list = 274, SYS_getcpu = 309,
+	SYS_membarrier = 324,
 	SYS_clone3 = 435, SYS_arch_prctl = 158,
 };
 
@@ -29,6 +30,9 @@ enum {
 
 #define FUTEX_WAIT			0
 #define FUTEX_WAKE			1
+#define FUTEX_LOCK_PI		6
+#define FUTEX_UNLOCK_PI		7
+#define FUTEX_TRYLOCK_PI	8
 #define FUTEX_CMP_REQUEUE	4
 #define FUTEX_WAKE_OP		5
 #define FUTEX_WAIT_BITSET	9
@@ -153,6 +157,22 @@ static i64 thread_start(void* stack, volatile int* tid, void* tls,
 		(int*)tid, tls, fn, arg);
 }
 
+
+/* --- PI futexes: a thread blocks in FUTEX_LOCK_PI until the owner's
+ * FUTEX_UNLOCK_PI --- */
+static volatile int piLock, piAcquired, piWaiting;
+static struct tls_block_pi { void* self; int magic; } tlsPi;
+
+static int pi_thread(void* arg)
+{
+	(void)arg;
+	piWaiting = 1;
+	i64 r = futex(&piLock, FUTEX_LOCK_PI | 128, 0, 0, 0, 0);
+	int tid = (int)sys0(SYS_gettid);
+	piAcquired = (r == 0 && (piLock & 0x3fffffff) == tid) ? 1 : -1;
+	futex(&piLock, FUTEX_UNLOCK_PI | 128, 0, 0, 0, 0);
+	return 0;
+}
 
 /* --- 1: basic thread, TLS, TIDs --- */
 
@@ -483,6 +503,50 @@ int check_main(int argc, char** argv)
 	unsigned cpu = 999, node = 999;
 	check(sys3(SYS_getcpu, &cpu, &node, 0) == 0 && cpu < 1024 && node == 0,
 		83, "getcpu");
+
+	/* PI futexes (musl probes FUTEX_LOCK_PI for PTHREAD_PRIO_INHERIT;
+	 * PulseAudio asserts on the answer) */
+	{
+		int me = (int)sys0(SYS_gettid);
+		piLock = 0;
+		check(futex(&piLock, FUTEX_LOCK_PI | 128, 0, 0, 0, 0) == 0
+			&& piLock == me, 92, "FUTEX_LOCK_PI takes a free lock");
+		check(futex(&piLock, FUTEX_TRYLOCK_PI | 128, 0, 0, 0, 0) == -35, 93,
+			"FUTEX_TRYLOCK_PI on our own lock: EDEADLK");
+		static volatile int piTid;
+		i64 pt = thread_start(alloc_stack(), &piTid, &tlsPi, pi_thread, 0);
+		check(pt > 0, 94, "start PI thread");
+		if (pt > 0) {
+			while (!piWaiting)
+				;
+			pause_ms(100);
+			check(piAcquired == 0 && (piLock & 0x80000000) != 0, 95,
+				"the waiter blocks and sets FUTEX_WAITERS");
+			check(futex(&piLock, FUTEX_UNLOCK_PI | 128, 0, 0, 0, 0) == 0, 96,
+				"FUTEX_UNLOCK_PI");
+			join(&piTid);
+			check(piAcquired == 1 && piLock == 0, 97,
+				"the waiter got the lock, then released it");
+		}
+		piLock = 12345;
+		check(futex(&piLock, FUTEX_UNLOCK_PI | 128, 0, 0, 0, 0) == -1, 98,
+			"FUTEX_UNLOCK_PI of another thread's lock: EPERM");
+	}
+
+	/* membarrier: musl's dlopen() asks for PRIVATE_EXPEDITED (8) when it
+	 * installs new TLS; QUERY (0) lists it, its REGISTER command (16)
+	 * succeeds, and so does a barrier while another thread runs. */
+	i64 supported = sys3(SYS_membarrier, 0, 0, 0);
+	check(supported > 0 && (supported & 8) != 0 && (supported & 16) != 0,
+		84, "membarrier QUERY lists PRIVATE_EXPEDITED");
+	check(sys3(SYS_membarrier, 16, 0, 0) == 0, 85,
+		"membarrier REGISTER_PRIVATE_EXPEDITED");
+	check(sys3(SYS_membarrier, 8, 0, 0) == 0, 86,
+		"membarrier PRIVATE_EXPEDITED");
+	check(sys3(SYS_membarrier, 8, 1, 0) == -EINVAL, 87,
+		"membarrier unknown flags");
+	check(sys3(SYS_membarrier, 3, 0, 0) == -EINVAL, 88,
+		"membarrier two commands at once");
 
 	/* 9: MXCSR (rounding mode) is inherited, as C11 and Linux require */
 	unsigned savedMxcsr, roundDown;

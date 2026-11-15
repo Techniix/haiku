@@ -1212,6 +1212,25 @@ handle_signals(Thread* thread)
 					}
 
 					if (killTeam || thread == team->main_thread) {
+						// Renga: foreign-ABI (Linux) teams start no debugger,
+						// so record which signal ended one, and who sent it
+						// (capped; see foreign_personality_fault()). A team
+						// that called exit() already has its exit status
+						// (exit_team() ends it with a SIGKILL of its own).
+						if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0
+							&& !team->exit.initialized) {
+							static int32 sForeignEndsLogged = 0;
+							if (atomic_add(&sForeignEndsLogged, 1) < 32) {
+								dprintf("foreign ABI team %" B_PRId32 " (%s) "
+									"ended by signal %" B_PRIu32 " in thread %"
+									B_PRId32 ", code %" B_PRId32 ", sent by %"
+									B_PRId32 "\n", team->id, team->Name(),
+									signal->Number(), thread->id,
+									signal->SignalCode(),
+									signal->SendingProcess());
+							}
+						}
+
 						// The signal is terminal for the team or the thread is
 						// the main thread. In either case the team is going
 						// down. Set its exit status, if that didn't happen yet.

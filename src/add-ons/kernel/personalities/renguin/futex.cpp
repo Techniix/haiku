@@ -20,8 +20,14 @@
  * uses shared futexes inside one process too (pthread_join() waits on the
  * thread's TID word without FUTEX_PRIVATE_FLAG), which works.
  *
- * Priority-inheritance operations (FUTEX_LOCK_PI and friends, used only by
- * PTHREAD_PRIO_INHERIT mutexes) return ENOSYS.
+ * Priority-inheritance futexes (FUTEX_LOCK_PI, FUTEX_LOCK_PI2,
+ * FUTEX_TRYLOCK_PI, FUTEX_UNLOCK_PI; PTHREAD_PRIO_INHERIT mutexes) follow
+ * Linux's protocol on the futex word (owner TID, FUTEX_WAITERS), without
+ * the priority boost itself: a waiter blocks until the owner unlocks. musl
+ * probes FUTEX_LOCK_PI once before it accepts PTHREAD_PRIO_INHERIT and
+ * PulseAudio's client library asserts on the answer (Chromium's
+ * single-process mode aborted there). The requeue-PI operations (for
+ * condition variables on PI mutexes; glibc only) return ENOSYS.
  */
 
 
@@ -57,6 +63,11 @@
 #define LX_FUTEX_WAIT_REQUEUE_PI	11
 #define LX_FUTEX_CMP_REQUEUE_PI		12
 #define LX_FUTEX_LOCK_PI2			13
+
+// the PI futex word
+#define LX_FUTEX_WAITERS			0x80000000u
+#define LX_FUTEX_OWNER_DIED			0x40000000u
+#define LX_FUTEX_TID_MASK			0x3fffffffu
 #define LX_FUTEX_PRIVATE_FLAG		128
 #define LX_FUTEX_CLOCK_REALTIME		256
 #define LX_FUTEX_CMD_MASK			\
@@ -506,6 +517,104 @@ futex_wake_op(team_id team, uint64 address, uint64 address2, int32 wakeCount,
 }
 
 
+/*!	FUTEX_LOCK_PI, FUTEX_LOCK_PI2 and (with \a tryOnly) FUTEX_TRYLOCK_PI:
+	takes the lock word for the calling thread (word = TID, keeping
+	FUTEX_OWNER_DIED clear: a dead owner's lock is simply taken over), or,
+	when it is held, sets FUTEX_WAITERS (so the owner's unlock comes to the
+	kernel) and waits for the unlock.
+*/
+static int64
+futex_lock_pi(team_id team, uint64 address, uint64 userTimeout, bool realtime,
+	bool tryOnly)
+{
+	uint32 flags = B_CAN_INTERRUPT;
+	bigtime_t timeout = 0;
+	if (!tryOnly) {
+		// FUTEX_LOCK_PI's timeout is absolute, on CLOCK_REALTIME
+		// (FUTEX_LOCK_PI2: CLOCK_MONOTONIC unless FUTEX_CLOCK_REALTIME)
+		int64 error = get_timeout(userTimeout, true, realtime, &flags,
+			&timeout);
+		if (error != 0)
+			return error;
+	}
+
+	uint32 tid = (uint32)thread_get_current_thread()->id & LX_FUTEX_TID_MASK;
+	for (int attempt = 0; attempt < 100000; attempt++) {
+		uint32 value;
+		if (renguin_copy_in(&value, address, sizeof(value)) != B_OK)
+			return -LX_EFAULT;
+		uint32 owner = value & LX_FUTEX_TID_MASK;
+		if (owner == tid)
+			return -LX_EDEADLK;
+
+		uint32 seen;
+		if (owner == 0) {
+			// free (or its owner died): take it, keeping the waiters bit
+			uint32 newValue = tid | (value & LX_FUTEX_WAITERS);
+			if (renguin_user_atomic_cmpxchg(address, value, newValue, &seen)
+					!= B_OK) {
+				return -LX_EFAULT;
+			}
+			if (seen == value)
+				return 0;
+			continue;
+		}
+		if (tryOnly)
+			return -LX_EAGAIN;
+
+		if ((value & LX_FUTEX_WAITERS) == 0) {
+			if (renguin_user_atomic_cmpxchg(address, value,
+					value | LX_FUTEX_WAITERS, &seen) != B_OK) {
+				return -LX_EFAULT;
+			}
+			if (seen != value)
+				continue;
+			value |= LX_FUTEX_WAITERS;
+		}
+
+		// Wait while the word still says "held, with waiters"; the unlock
+		// changes it and wakes every waiter, which then try again.
+		int64 result = futex_wait(team, address, value, flags, timeout,
+			LX_FUTEX_BITSET_MATCH_ANY);
+		if (result == -LX_ETIMEDOUT || result == -LX_EINTR)
+			return result;
+		// 0 (woken) or EAGAIN (the word changed): try again
+	}
+	return -LX_EAGAIN;
+}
+
+
+/*!	FUTEX_UNLOCK_PI: the owner releases the lock word and wakes all its
+	waiters (they compete again; the winner sets FUTEX_WAITERS again if
+	others still wait, so no wake-up is lost).
+*/
+static int64
+futex_unlock_pi(team_id team, uint64 address)
+{
+	uint32 tid = (uint32)thread_get_current_thread()->id & LX_FUTEX_TID_MASK;
+	for (int attempt = 0; attempt < 100000; attempt++) {
+		uint32 value;
+		if (renguin_copy_in(&value, address, sizeof(value)) != B_OK)
+			return -LX_EFAULT;
+		if ((value & LX_FUTEX_TID_MASK) != tid)
+			return -LX_EPERM;
+		uint32 seen;
+		if (renguin_user_atomic_cmpxchg(address, value, 0, &seen) != B_OK)
+			return -LX_EFAULT;
+		if (seen != value)
+			continue;
+		if ((value & LX_FUTEX_WAITERS) != 0) {
+			futex_bucket* bucket = bucket_for(team, (addr_t)address);
+			MutexLocker locker(bucket->lock);
+			wake_locked(bucket, team, (addr_t)address, INT32_MAX,
+				LX_FUTEX_BITSET_MATCH_ANY);
+		}
+		return 0;
+	}
+	return -LX_EAGAIN;
+}
+
+
 static void
 log_unsupported(uint32 command)
 {
@@ -526,7 +635,8 @@ renguin_sys_futex(uint64 address, uint64 op, uint64 value, uint64 timeout,
 	uint32 command = (uint32)op & LX_FUTEX_CMD_MASK;
 	bool realtime = (op & LX_FUTEX_CLOCK_REALTIME) != 0;
 	if (realtime && command != LX_FUTEX_WAIT
-		&& command != LX_FUTEX_WAIT_BITSET) {
+		&& command != LX_FUTEX_WAIT_BITSET && command != LX_FUTEX_LOCK_PI
+		&& command != LX_FUTEX_LOCK_PI2) {
 		return -LX_ENOSYS;
 	}
 
@@ -576,13 +686,19 @@ renguin_sys_futex(uint64 address, uint64 op, uint64 value, uint64 timeout,
 			return futex_wake_op(team, address, address2, (int32)value,
 				(int32)timeout, (uint32)value3);
 
-		case LX_FUTEX_FD:
 		case LX_FUTEX_LOCK_PI:
-		case LX_FUTEX_UNLOCK_PI:
+			// always CLOCK_REALTIME
+			return futex_lock_pi(team, address, timeout, true, false);
+		case LX_FUTEX_LOCK_PI2:
+			return futex_lock_pi(team, address, timeout, realtime, false);
 		case LX_FUTEX_TRYLOCK_PI:
+			return futex_lock_pi(team, address, 0, false, true);
+		case LX_FUTEX_UNLOCK_PI:
+			return futex_unlock_pi(team, address);
+
+		case LX_FUTEX_FD:
 		case LX_FUTEX_WAIT_REQUEUE_PI:
 		case LX_FUTEX_CMP_REQUEUE_PI:
-		case LX_FUTEX_LOCK_PI2:
 			log_unsupported(command);
 			return -LX_ENOSYS;
 
