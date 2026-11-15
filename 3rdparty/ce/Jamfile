@@ -200,6 +200,13 @@ if $(HAIKU_RENGA_IMAGE) {
 	RengaPortsPackage libsdl3 : libsdl3-3.4.16-104-x86_64.hpkg
 		: f4b44d9e41a73ec2d90ac8f2718d29a95868caca43f1e159438fac7af6dd0a0c ;
 
+	# libsdl2 (2026-11-15): sdl2-compat 2.32.74 (SDL2's ABI, every call run
+	# on the libsdl3 above), so SDL2 programs see the same evdev gamepads
+	# with database mappings. Replaces HaikuPorts' libsdl2 (BJoystick
+	# only); about 130 KB.
+	RengaPortsPackage libsdl2 : libsdl2-2.32.74-100-x86_64.hpkg
+		: fe4cc715eab0c0de9284104b90e24612727590e233001f017f22f757ec030db1 ;
+
 	# Development files, active (maintainer, 2026-11-13: early users are
 	# porters): haiku_devel built from this tree, with every Renga header
 	# and library, and the compiler (from HaikuPorts, in the profile). The

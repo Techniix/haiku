@@ -30,7 +30,11 @@
 	   (before, it ended and windows crashed: OpenCE on hardware);
 	 - OpenCE's start-up order, 200 starts (10 processes of 20), all SDL
 	   calls on one thread with its own stack, OpenGL window, frames;
-	 - idle: with a pad open, an idle frame loop uses under 5 % of a CPU.
+	 - idle: with a pad open, an idle frame loop uses under 5 % of a CPU;
+	 - SDL2 through sdl2-compat (libsdl2 2.32.74-100, on this SDL3), in a
+	   child process: the virtual Xbox 360 pad is SDL2's only joystick and
+	   a mapped game controller of the Xbox 360 type (skipped when libsdl2
+	   is not installed).
 
 	SDL is loaded with dlopen() so the program runs on images without it
 	(minimum images): then it reports that SDL3 is not installed.
@@ -658,6 +662,119 @@ test_video(const char* self, const char* library)
 }
 
 
+/*	sdl2-compat (RengaPorts' libsdl2, 2.32.74-100): SDL2 programs run on
+	Renga's SDL3, so they see the same evdev gamepads. In its own process,
+	since sdl2-compat loads the same libSDL3.so.0 this test uses. Without
+	libsdl2 installed it only says so.
+*/
+static int
+sdl2_child(void)
+{
+	const char* library = "libSDL2-2.0.so.0";
+	void* handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
+	if (handle == NULL) {
+		printf("CE-INFO sdl3_gamepad: dlopen(%s): %s\n", library, dlerror());
+		return 3;
+	}
+	struct { uint8_t major, minor, patch; } version = { 0, 0, 0 };
+	void (*getVersion)(void*) = (void (*)(void*))dlsym(handle,
+		"SDL_GetVersion");
+	int (*init)(uint32_t) = (int (*)(uint32_t))dlsym(handle, "SDL_Init");
+	void (*quit)(void) = (void (*)(void))dlsym(handle, "SDL_Quit");
+	const char* (*getError)(void) = (const char* (*)(void))dlsym(handle,
+		"SDL_GetError");
+	const char* (*getPlatform)(void) = (const char* (*)(void))dlsym(handle,
+		"SDL_GetPlatform");
+	int (*numJoysticks)(void) = (int (*)(void))dlsym(handle,
+		"SDL_NumJoysticks");
+	int (*isGameController)(int) = (int (*)(int))dlsym(handle,
+		"SDL_IsGameController");
+	const char* (*controllerName)(int) = (const char* (*)(int))dlsym(handle,
+		"SDL_GameControllerNameForIndex");
+	int (*controllerType)(int) = (int (*)(int))dlsym(handle,
+		"SDL_GameControllerTypeForIndex");
+	if (getVersion == NULL || init == NULL || quit == NULL || getError == NULL
+		|| getPlatform == NULL || numJoysticks == NULL
+		|| isGameController == NULL || controllerName == NULL
+		|| controllerType == NULL) {
+		report("sdl2_symbols", false, "SDL2 functions missing in %s", library);
+		return 1;
+	}
+	getVersion(&version);
+	report("sdl2_version", version.major == 2 && version.minor >= 32,
+		"SDL2 API %d.%d.%d (sdl2-compat 2.32 or later wanted)", version.major,
+		version.minor, version.patch);
+
+	struct VirtualPad pad;
+	if (!create_pad(&pad, 0x045e, 0x028e, 0x0114,
+			"Microsoft X-Box 360 pad")) {
+		report("sdl2_uinput_pad", false, "no virtual pad");
+		return 1;
+	}
+	snooze(200000);
+	// SDL_INIT_GAMECONTROLLER (with the joystick subsystem it implies)
+	int initStatus = init(0x00002000);
+	const char* platform = getPlatform();
+	report("sdl2_init", initStatus == 0, "SDL_Init(GAMECONTROLLER) %d %s, "
+		"platform \"%s\"", initStatus, initStatus == 0 ? "" : getError(),
+		platform != NULL ? platform : "");
+	int found = -1;
+	int count = initStatus == 0 ? numJoysticks() : 0;
+	for (int i = 0; i < count; i++) {
+		const char* name = controllerName(i);
+		printf("CE-INFO sdl3_gamepad: SDL2 joystick %d: controller %d \"%s\" "
+			"type %d\n", i, isGameController(i), name != NULL ? name : "",
+			controllerType(i));
+		if (isGameController(i) && found < 0)
+			found = i;
+	}
+	// SDL_CONTROLLER_TYPE_XBOX360 is 1
+	report("sdl2_gamecontroller", count == 1 && found == 0
+			&& controllerType(found) == 1,
+		"%d joystick(s), %s", count, found >= 0
+			? "the virtual Xbox 360 pad is a game controller (mapped)"
+			: "no game controller");
+	if (initStatus == 0)
+		quit();
+	close(pad.fd);
+	return sFailures == 0 ? 0 : 1;
+}
+
+
+static void
+test_sdl2(const char* self)
+{
+	if (access("/boot/system/lib/libSDL2-2.0.so.0", F_OK) != 0) {
+		printf("CE-INFO sdl3_gamepad: libsdl2 (sdl2-compat) not installed; "
+			"SDL2 not checked\n");
+		return;
+	}
+	char* argv[] = { (char*)self, (char*)"sdl2", NULL };
+	extern char** environ;
+	pid_t child;
+	if (posix_spawn(&child, self, NULL, NULL, argv, environ) != 0) {
+		report("sdl2_child", false, "could not start %s: %s", self,
+			strerror(errno));
+		return;
+	}
+	int status = 0;
+	bigtime_t end = system_time() + 30000000;
+	pid_t done = 0;
+	while ((done = waitpid(child, &status, WNOHANG)) == 0
+		&& system_time() < end)
+		snooze(100000);
+	if (done == 0) {
+		kill(child, SIGKILL);
+		waitpid(child, &status, 0);
+	}
+	// the child reports its own checks; this one is for a crash or a hang
+	bool ok = done != 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	report("sdl2_child", ok, "SDL2 checks %s (status %d)",
+		done == 0 ? "did not finish in 30 s" : ok ? "done" : "failed",
+		WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+}
+
+
 int
 main(int argc, char** argv)
 {
@@ -672,6 +789,8 @@ main(int argc, char** argv)
 		return quitrequest_child(library);
 	if (argc > 1 && strcmp(argv[1], "idle") == 0)
 		return idle_child(library);
+	if (argc > 1 && strcmp(argv[1], "sdl2") == 0)
+		return sdl2_child();
 
 	printf("CE-SUITE " SUITE " START\n");
 	fflush(stdout);
@@ -838,6 +957,7 @@ main(int argc, char** argv)
 	test_quit_request(argv[0], library);
 	test_opence(argv[0], library);
 	test_idle(argv[0], library);
+	test_sdl2(argv[0]);
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	return sFailures == 0 ? 0 : 1;
