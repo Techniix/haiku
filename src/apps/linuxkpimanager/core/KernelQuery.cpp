@@ -135,4 +135,113 @@ KernelQuery::QueryValues(const char* interface, uint32 op, BStringList& keys,
 }
 
 
+/*!	Renga: where a Wi-Fi link's speed goes ("lkpictl wifi-stats", the
+	Wi-Fi tab of LinuxKPI Manager): link mode, channel and width, the
+	driver's RX and TX rates, aggregation (A-MPDU block-ack sessions and
+	A-MSDU), hardware encryption, the skb low-memory switch and DMA
+	bounces, packet, drop and retry counts, and the data path's interrupt,
+	NAPI and 802.11 receive counts with their time. Plain text, one fact
+	per line, for people and for reports.
+*/
+static BString
+value_of(const BStringList& keys, const BStringList& values, const char* key,
+	const char* fallback = "-")
+{
+	int32 index = keys.IndexOf(key);
+	return index >= 0 ? values.StringAt(index) : BString(fallback);
+}
+
+
+static void
+add_line(BString& out, const char* label, const BString& value)
+{
+	BString line;
+	line.SetToFormat("  %-24s %s\n", label, value.String());
+	out << line;
+}
+
+
+static BString
+per_event(const BString& totalUs, const BString& count, const char* unit)
+{
+	long long total = strtoll(totalUs.String(), NULL, 10);
+	long long n = strtoll(count.String(), NULL, 10);
+	BString text;
+	if (n <= 0)
+		text.SetToFormat("%s (none yet)", count.String());
+	else {
+		text.SetToFormat("%lld, %lld us in all, %.1f us per %s", n, total,
+			(double)total / n, unit);
+	}
+	return text;
+}
+
+
+status_t
+KernelQuery::WifiReport(const char* interface, BString& out)
+{
+	BStringList keys, values, tunKeys, tunValues;
+	status_t status = QueryValues(interface, LKPI_CTL_GET_STATS, keys,
+		values);
+	if (status != B_OK)
+		return status;
+	QueryValues(interface, LKPI_CTL_GET_TUNABLES, tunKeys, tunValues);
+
+	BString aggregation;
+	for (int32 i = 0; i < keys.CountStrings(); i++) {
+		const BString& key = keys.StringAt(i);
+		if (key.StartsWith("wlan.rx_ba.") || key.StartsWith("wlan.tx_ba.")) {
+			BString name(key.String() + 5);
+			aggregation << name << " (" << values.StringAt(i) << ") ";
+		}
+	}
+
+	out << "Link\n";
+	add_line(out, "State", value_of(keys, values, "wlan.state"));
+	add_line(out, "Mode", value_of(keys, values, "wlan.channel_mode"));
+	BString channel;
+	channel << value_of(keys, values, "wlan.channel") << " ("
+		<< value_of(keys, values, "wlan.band") << ", "
+		<< value_of(keys, values, "wlan.width_mhz") << " MHz)";
+	add_line(out, "Channel", channel);
+	add_line(out, "Station flags", value_of(keys, values, "wlan.node_flags"));
+	add_line(out, "Signal (dBm)", value_of(keys, values, "wlan.signal_dbm"));
+	out << "Rates (from the driver)\n";
+	add_line(out, "Receive", value_of(keys, values, "wlan.rx_rate"));
+	add_line(out, "Send", value_of(keys, values, "wlan.tx_rate"));
+	out << "Aggregation and offloads\n";
+	add_line(out, "Block-ack sessions", aggregation.IsEmpty()
+		? BString("none (no A-MPDU in either direction)") : aggregation);
+	add_line(out, "Hardware encryption",
+		value_of(keys, values, "wlan.hw_crypto"));
+	add_line(out, "skb low memory (297121)", value_of(tunKeys, tunValues,
+		"compat.linuxkpi.skb.mem_limit", "default (off)"));
+	add_line(out, "DMA maps / bounces", value_of(keys, values, "dma.maps")
+		<< " / " << value_of(keys, values, "dma.bounces"));
+	out << "Traffic\n";
+	add_line(out, "Received packets", value_of(keys, values,
+		"wlan.rx_packets") << ", dropped "
+		<< value_of(keys, values, "wlan.rx_dropped") << ", errors "
+		<< value_of(keys, values, "wlan.ierrors"));
+	add_line(out, "Sent packets", value_of(keys, values, "wlan.tx_packets")
+		<< ", failed " << value_of(keys, values, "wlan.tx_failed")
+		<< ", retries " << value_of(keys, values, "wlan.tx_retries"));
+	out << "Data path\n";
+	add_line(out, "Interrupts", per_event(value_of(keys, values,
+		"perf.irq_us", "0"), value_of(keys, values, "perf.irqs", "0"),
+		"interrupt"));
+	add_line(out, "NAPI polls", per_event(value_of(keys, values,
+		"perf.napi_us", "0"), value_of(keys, values, "perf.napi_runs", "0"),
+		"poll") << ", " << value_of(keys, values, "perf.napi_packets", "0")
+		<< " packets");
+	add_line(out, "802.11 receive", per_event(value_of(keys, values,
+		"perf.rx80211_us", "0"),
+		value_of(keys, values, "perf.rx80211_frames", "0"), "frame"));
+	add_line(out, "To the network stack", per_event(value_of(keys, values,
+		"perf.rxq_us", "0"), value_of(keys, values, "perf.rxq_frames", "0"),
+		"frame"));
+	return B_OK;
+}
+
+
 }	// namespace LKPI

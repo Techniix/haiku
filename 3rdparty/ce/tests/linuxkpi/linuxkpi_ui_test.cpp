@@ -180,6 +180,13 @@ test_cli()
 			&& state.FindFirst("wlan.state") < 0,
 		"exit %d: %s", status, one_line(state).String());
 
+	// Renga: "lkpictl wifi-stats" exists and, with no running Wi-Fi
+	// driver in QEMU, says so (exit 1) instead of failing or hanging
+	BString wifi = run("/bin/lkpictl wifi-stats 2>&1", &status);
+	report("cli_wifi_stats", status == 1
+			&& wifi.FindFirst("No running Wi-Fi driver") >= 0,
+		"exit %d: %s", status, one_line(wifi).String());
+
 	BString coverage = run("/bin/lkpictl coverage 2>&1", &status);
 	report("cli_coverage", status == 0 && coverage.CountChars() > 100,
 		"exit %d, %" B_PRId32 " characters", status, coverage.CountChars());

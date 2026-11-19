@@ -32,6 +32,10 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 
+#ifdef __HAIKU__
+#include "lkpi_control_kern.h"	/* Renga: data-path counters */
+#endif
+
 #include <linux/bitops.h>
 #include <linux/list.h>
 #include <linux/netdevice.h>
@@ -303,7 +307,13 @@ lkpi_napi_task(void *ctx, int pending)
 	    __func__, napi));
 
 	NAPI_TRACE_TASK(napi, pending, napi->budget);
+#ifdef __HAIKU__
+	uint64_t start = lkpi_perf_now();
+#endif
 	count = napi->poll(napi, napi->budget);
+#ifdef __HAIKU__
+	lkpi_perf_napi(start, count);
+#endif
 	napi->rx_count += count;
 	NAPI_TRACE_TASK(napi, pending, count);
 

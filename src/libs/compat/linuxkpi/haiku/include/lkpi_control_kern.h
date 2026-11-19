@@ -19,6 +19,17 @@ struct lkpi_reply;
 typedef void (*lkpi_control_stats_fn)(struct lkpi_reply *r);
 
 void	lkpi_control_set_stats_provider(lkpi_control_stats_fn fn);
+
+/*
+ * Renga: data-path counters for "lkpictl wifi-stats" (LKPI_CTL_GET_STATS
+ * keys perf.*): interrupts, NAPI polls and the 802.11 receive path, with
+ * the time spent in each (microseconds). Cheap: two atomic adds per event.
+ */
+uint64_t	lkpi_perf_now(void);
+void	lkpi_perf_irq(uint64_t start);
+void	lkpi_perf_napi(uint64_t start, int packets);
+void	lkpi_perf_rx80211(uint64_t start);
+void	lkpi_perf_rxq(uint64_t start, int frames);
 void	lkpi_control_add(struct lkpi_reply *r, const char *key,
 	    const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 

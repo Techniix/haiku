@@ -187,6 +187,9 @@ public:
 	static status_t	Query(const char* interface, uint32 op, BString& reply);
 	static status_t	QueryValues(const char* interface, uint32 op,
 						BStringList& keys, BStringList& values);
+	// Renga: a readable Wi-Fi speed report (lkpictl wifi-stats, the Wi-Fi
+	// tab): link, rates, aggregation, offloads, traffic, data path.
+	static status_t	WifiReport(const char* interface, BString& out);
 };
 
 

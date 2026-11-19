@@ -75,6 +75,9 @@
 
 #include <linux/workqueue.h>
 #include <linux/rculist.h>
+#ifdef __HAIKU__
+#include "lkpi_control_kern.h"	/* Renga: wifi-stats */
+#endif
 #include "linux_80211.h"
 
 /* #define	LKPI_80211_USE_SCANLIST */
@@ -420,6 +423,103 @@ lkpi_80211_dump_lvif_stas(struct lkpi_vif *lvif, struct sbuf *s, bool dump_queue
 	}
 	wiphy_unlock(hw->wiphy);
 }
+
+#ifdef __HAIKU__
+/*
+ * Renga: the station's rates and counters for LKPI_CTL_GET_STATS
+ * ("lkpictl wifi-stats", LinuxKPI Manager's Wi-Fi tab), from the driver's
+ * sta_statistics, as lkpi_80211_dump_lvif_stas() prints them for FreeBSD's
+ * dump_stas sysctl.
+ */
+static const char *
+lkpi_haiku_rate_mode(const struct rate_info *ri)
+{
+	if (ri->flags & RATE_INFO_FLAGS_EHT_MCS)
+		return ("EHT (802.11be)");
+	if (ri->flags & RATE_INFO_FLAGS_HE_MCS)
+		return ("HE (802.11ax)");
+	if (ri->flags & RATE_INFO_FLAGS_VHT_MCS)
+		return ("VHT (802.11ac)");
+	if (ri->flags & RATE_INFO_FLAGS_MCS)
+		return ("HT (802.11n)");
+	return ("legacy");
+}
+
+static void
+lkpi_haiku_add_rate(struct lkpi_reply *r, const char *key,
+    const struct rate_info *ri)
+{
+	if ((ri->flags & (RATE_INFO_FLAGS_MCS | RATE_INFO_FLAGS_VHT_MCS |
+	    RATE_INFO_FLAGS_HE_MCS | RATE_INFO_FLAGS_EHT_MCS)) == 0) {
+		lkpi_control_add(r, key, "legacy %u kbit/s",
+		    (unsigned)ri->legacy * 100);
+		return;
+	}
+	lkpi_control_add(r, key, "%s MCS %u NSS %u width %s%s",
+	    lkpi_haiku_rate_mode(ri), ri->mcs, ri->nss,
+	    lkpi_rate_info_bw_to_str(ri->bw),
+	    (ri->flags & RATE_INFO_FLAGS_SHORT_GI) ? " short-GI" : "");
+}
+
+void
+lkpi_80211_haiku_sta_stats(struct lkpi_reply *r, struct ieee80211vap *vap)
+{
+	struct lkpi_vif *lvif;
+	struct ieee80211_hw *hw;
+	struct ieee80211_vif *vif;
+	struct lkpi_sta *lsta;
+	struct station_info sinfo;
+	int error;
+
+	lvif = VAP_TO_LVIF(vap);
+	vif = LVIF_TO_VIF(lvif);
+	hw = LHW_TO_HW((struct lkpi_hw *)vap->iv_ic->ic_softc);
+#if defined(LKPI_80211_HW_CRYPTO)
+	lkpi_control_add(r, "wlan.hw_crypto", "%s",
+	    lkpi_hwcrypto ? "on" : "off");
+#else
+	lkpi_control_add(r, "wlan.hw_crypto", "not built");
+#endif
+	wiphy_lock(hw->wiphy);
+	list_for_each_entry(lsta, &lvif->lsta_list, lsta_list) {
+		if (!lsta->added_to_drv)
+			continue;
+		memset(&sinfo, 0, sizeof(sinfo));
+		error = lkpi_80211_mo_sta_statistics(hw, vif, LSTA_TO_STA(lsta),
+		    &sinfo);
+		if (error != 0) {
+			lkpi_control_add(r, "wlan.sta_statistics", "error %d",
+			    error);
+			continue;
+		}
+		if ((sinfo.filled & BIT_ULL(NL80211_STA_INFO_RX_BITRATE)) == 0 &&
+		    (lsta->sinfo.filled &
+		    BIT_ULL(NL80211_STA_INFO_RX_BITRATE)) != 0) {
+			sinfo.rxrate = lsta->sinfo.rxrate;
+			sinfo.filled |= BIT_ULL(NL80211_STA_INFO_RX_BITRATE);
+		}
+		if (sinfo.filled & BIT_ULL(NL80211_STA_INFO_TX_BITRATE))
+			lkpi_haiku_add_rate(r, "wlan.tx_rate", &sinfo.txrate);
+		if (sinfo.filled & BIT_ULL(NL80211_STA_INFO_RX_BITRATE))
+			lkpi_haiku_add_rate(r, "wlan.rx_rate", &sinfo.rxrate);
+		lkpi_control_add(r, "wlan.rx_packets", "%u", sinfo.rx_packets);
+		lkpi_control_add(r, "wlan.rx_bytes", "%llu",
+		    (unsigned long long)sinfo.rx_bytes);
+		lkpi_control_add(r, "wlan.rx_dropped", "%u",
+		    sinfo.rx_dropped_misc);
+		lkpi_control_add(r, "wlan.tx_packets", "%u", sinfo.tx_packets);
+		lkpi_control_add(r, "wlan.tx_bytes", "%llu",
+		    (unsigned long long)sinfo.tx_bytes);
+		lkpi_control_add(r, "wlan.tx_failed", "%u", sinfo.tx_failed);
+		lkpi_control_add(r, "wlan.tx_retries", "%u", sinfo.tx_retries);
+		lkpi_control_add(r, "wlan.signal_dbm", "%d", (int)sinfo.signal);
+		lkpi_control_add(r, "wlan.frames_direct_tx", "%llu",
+		    (unsigned long long)lsta->frms_tx);
+		break;	/* the station (one BSS) */
+	}
+	wiphy_unlock(hw->wiphy);
+}
+#endif
 
 static int
 lkpi_80211_dump_stas(SYSCTL_HANDLER_ARGS)
@@ -8052,11 +8152,21 @@ lkpi_80211_lhw_rxq_task(void *ctx, int pending)
 	mbufq_concat(&mq, &lhw->rxq);
 	LKPI_80211_LHW_RXQ_UNLOCK(lhw);
 
+#ifdef __HAIKU__
+	uint64_t perf_start = lkpi_perf_now();	/* Renga: wifi-stats */
+	int perf_frames = 0;
+#endif
 	m = mbufq_dequeue(&mq);
 	while (m != NULL) {
 		lkpi_80211_lhw_rxq_rx_one(lhw, m);
 		m = mbufq_dequeue(&mq);
+#ifdef __HAIKU__
+		perf_frames++;
+#endif
 	}
+#ifdef __HAIKU__
+	lkpi_perf_rxq(perf_start, perf_frames);
+#endif
 }
 
 static void
@@ -8332,6 +8442,9 @@ linuxkpi_ieee80211_rx(struct ieee80211_hw *hw, struct sk_buff *skb,
 	int i, offset, ok, error;
 	uint8_t rssi;
 	bool is_beacon;
+#ifdef __HAIKU__
+	uint64_t perf_start = lkpi_perf_now();	/* Renga: wifi-stats */
+#endif
 
 	lhw = HW_TO_LHW(hw);
 	ic = lhw->ic;
@@ -8576,6 +8689,9 @@ skip_device_ts:
 err:
 	/* The skb is ours so we can free it :-) */
 	kfree_skb(skb);
+#ifdef __HAIKU__
+	lkpi_perf_rx80211(perf_start);
+#endif
 }
 
 uint8_t

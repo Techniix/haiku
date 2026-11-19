@@ -32,6 +32,9 @@
 
 #include "lkpi_control_kern.h"
 
+void	lkpi_80211_haiku_sta_stats(struct lkpi_reply *r,
+	    struct ieee80211vap *vap);	/* imported/linux_80211.c */
+
 #define	LKPI_WLAN_ATTACH_TIMEOUT_MS	20000
 
 extern int (*lkpi_pci_attach_wait_hook)(device_t dev);	/* lkpi_pci.c */
@@ -147,6 +150,7 @@ lkpi_wlan_stats_vap(struct lkpi_reply *r, struct ieee80211vap *vap)
 		}
 		ieee80211_free_node(ni);
 	}
+	lkpi_80211_haiku_sta_stats(r, vap);
 
 	lkpi_control_add(r, "wlan.ierrors", "%llu",
 	    (unsigned long long)counter_u64_fetch(ic->ic_ierrors));

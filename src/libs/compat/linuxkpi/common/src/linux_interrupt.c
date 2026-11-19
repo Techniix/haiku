@@ -36,6 +36,10 @@
 #include <sys/rman.h>
 #include <sys/interrupt.h>
 
+#ifdef __HAIKU__
+#include "lkpi_control_kern.h"	/* Renga: data-path counters */
+#endif
+
 struct irq_ent {
 	struct list_head	links;
 	struct device	*dev;
@@ -78,12 +82,18 @@ lkpi_irq_handler(void *ent)
 		return;
 
 	irqe = ent;
+#ifdef __HAIKU__
+	uint64_t start = lkpi_perf_now();
+#endif
 	if (irqe->handler(irqe->irq, irqe->arg) == IRQ_WAKE_THREAD &&
 	    irqe->thread_handler != NULL) {
 		THREAD_SLEEPING_OK();
 		irqe->thread_handler(irqe->irq, irqe->arg);
 		THREAD_NO_SLEEPING();
 	}
+#ifdef __HAIKU__
+	lkpi_perf_irq(start);
+#endif
 }
 
 static inline void

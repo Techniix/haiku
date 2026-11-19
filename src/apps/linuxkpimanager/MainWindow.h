@@ -53,6 +53,7 @@ private:
 			BView*				_BuildDiagnostics();
 			BView*				_BuildLog();
 			BView*				_BuildCompatibility();
+			BView*				_BuildWifi();
 
 			void				_Refresh();
 			void				_FillOverview();
@@ -62,6 +63,7 @@ private:
 			void				_FillDiagnostics();
 			void				_FillLog();
 			void				_FillCompatibility();
+			void				_FillWifi();
 
 			LKPI::Driver*		_SelectedDriver() const;
 			void				_ToggleBoot();
@@ -91,6 +93,7 @@ private:
 			BCheckBox*			fLogPrevious;
 			BCheckBox*			fLogProblemsOnly;
 			BTextView*			fLogText;
+			BTextView*			fWifiText;
 
 			BColumnListView*	fCoverageList;
 			BStatusBar*			fCoverageBar;

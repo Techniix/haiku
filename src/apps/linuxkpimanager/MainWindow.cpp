@@ -16,6 +16,7 @@
 #include <Alert.h>
 #include <Application.h>
 #include <Button.h>
+#include <Font.h>
 #include <Catalog.h>
 #include <CheckBox.h>
 #include <ColumnListView.h>
@@ -130,6 +131,7 @@ MainWindow::MainWindow()
 	fTabs->AddTab(_BuildDiagnostics());
 	fTabs->AddTab(_BuildLog());
 	fTabs->AddTab(_BuildCompatibility());
+	fTabs->AddTab(_BuildWifi());
 	fTabs->SetBorder(B_NO_BORDER);
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
@@ -306,6 +308,31 @@ MainWindow::_BuildCompatibility()
 }
 
 
+
+/*!	Renga: the Wi-Fi speed report (KernelQuery::WifiReport(), the same as
+	"lkpictl wifi-stats"), refreshed with the window's Refresh command.
+*/
+BView*
+MainWindow::_BuildWifi()
+{
+	fWifiText = make_text_view("wifi");
+	fWifiText->SetWordWrap(false);
+	BFont font(be_fixed_font);
+	fWifiText->SetFontAndColor(&font);
+	BButton* refresh = new BButton("wifi refresh", B_TRANSLATE("Refresh"),
+		new BMessage(kMsgRefresh));
+
+	BView* view = new BView(B_TRANSLATE("Wi-Fi"), 0);
+	BLayoutBuilder::Group<>(view, B_VERTICAL)
+		.SetInsets(B_USE_DEFAULT_SPACING)
+		.Add(new BScrollView("wifi scroll", fWifiText, 0, true, true))
+		.AddGroup(B_HORIZONTAL)
+			.AddGlue()
+			.Add(refresh)
+		.End();
+	return view;
+}
+
 // #pragma mark - content
 
 
@@ -323,6 +350,7 @@ MainWindow::_Refresh()
 	_FillDiagnostics();
 	_FillLog();
 	_FillCompatibility();
+	_FillWifi();
 }
 
 
@@ -662,7 +690,7 @@ MainWindow::MessageReceived(BMessage* message)
 			// in the order of the constructor's AddTab() calls; the
 			// labels are translated, so match on these fixed names
 			static const char* kTabNames[] = { "overview", "drivers",
-				"hardware", "diagnostics", "log", "compatibility" };
+				"hardware", "diagnostics", "log", "compatibility", "wifi" };
 			const char* name = message->GetString("tab", "");
 			for (int32 i = 0; i < (int32)B_COUNT_OF(kTabNames); i++) {
 				if (strcasecmp(name, kTabNames[i]) == 0) {
@@ -730,4 +758,30 @@ MainWindow::MessageReceived(BMessage* message)
 		default:
 			BWindow::MessageReceived(message);
 	}
+}
+
+
+void
+MainWindow::_FillWifi()
+{
+	BString text;
+	for (int32 i = 0; i < fCatalog.CountDrivers(); i++) {
+		Driver* d = fCatalog.DriverAt(i);
+		if (d->driverClass != "network")
+			continue;
+		for (int32 n = 0; n < d->interfaces.CountStrings(); n++) {
+			const char* iface = d->interfaces.StringAt(n).String();
+			BString report;
+			text << iface << " (" << d->name << ")\n";
+			if (KernelQuery::WifiReport(iface, report) == B_OK)
+				text << report << "\n";
+			else
+				text << B_TRANSLATE("  The driver did not answer.") << "\n\n";
+		}
+	}
+	if (text.IsEmpty()) {
+		text = B_TRANSLATE("No LinuxKPI Wi-Fi driver is running with a "
+			"network interface.");
+	}
+	fWifiText->SetText(text.String());
 }

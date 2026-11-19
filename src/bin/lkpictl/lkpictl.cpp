@@ -28,6 +28,8 @@ usage()
 		"  drivers                    list LinuxKPI drivers and their state\n"
 		"  hardware                   list PCI devices a LinuxKPI driver supports\n"
 		"  status <driver>            ask the running driver for its status\n"
+		"  wifi-stats [driver]        where a Wi-Fi link's speed goes (rates,\n"
+		"                             aggregation, offloads, drops, data path)\n"
 		"  log [-a] [driver]          LinuxKPI log lines (-a: include syslog.old)\n"
 		"  diagnose                   explain known problems in the log\n"
 		"  coverage                   LinuxKPI API coverage\n"
@@ -219,6 +221,38 @@ cmd_settings(DriverCatalog& catalog, const char* name)
 }
 
 
+//! Renga: "lkpictl wifi-stats [driver]": KernelQuery::WifiReport() for
+//! every interface of the running Wi-Fi drivers (or the one named).
+static int
+cmd_wifi_stats(DriverCatalog& catalog, const char* name)
+{
+	int shown = 0;
+	for (int32 i = 0; i < catalog.CountDrivers(); i++) {
+		Driver* d = catalog.DriverAt(i);
+		if (name != NULL ? d->name != name : d->driverClass != "network")
+			continue;
+		for (int32 n = 0; n < d->interfaces.CountStrings(); n++) {
+			const char* iface = d->interfaces.StringAt(n).String();
+			BString report;
+			status_t status = KernelQuery::WifiReport(iface, report);
+			if (status != B_OK) {
+				printf("%s (%s): %s\n", iface, d->name.String(),
+					strerror(status));
+				continue;
+			}
+			printf("%s (%s)\n%s", iface, d->name.String(), report.String());
+			shown++;
+		}
+	}
+	if (shown == 0) {
+		printf("No running Wi-Fi driver with a network interface%s%s.\n",
+			name != NULL ? " named " : "", name != NULL ? name : "");
+		return 1;
+	}
+	return 0;
+}
+
+
 int
 main(int argc, char** argv)
 {
@@ -238,6 +272,8 @@ main(int argc, char** argv)
 		return cmd_drivers(catalog);
 	if (strcmp(cmd, "hardware") == 0)
 		return cmd_hardware(catalog);
+	if (strcmp(cmd, "wifi-stats") == 0 && argc <= 3)
+		return cmd_wifi_stats(catalog, argc == 3 ? argv[2] : NULL);
 	if (strcmp(cmd, "status") == 0 && argc == 3)
 		return cmd_status(catalog, argv[2]);
 	if (strcmp(cmd, "log") == 0) {

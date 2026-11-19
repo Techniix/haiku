@@ -125,6 +125,49 @@ build_info(struct lkpi_reply *r, const struct lkpi_control_request *req)
 	    (long long)((system_time() - lkpi_control_load_time) / 1000));
 }
 
+/* Renga: data-path counters (lkpi_control_kern.h) */
+static int64 lkpi_perf_irqs, lkpi_perf_irq_us;
+static int64 lkpi_perf_napi_runs, lkpi_perf_napi_packets, lkpi_perf_napi_us;
+static int64 lkpi_perf_rx_frames, lkpi_perf_rx_us;
+static int64 lkpi_perf_rxq_runs, lkpi_perf_rxq_frames, lkpi_perf_rxq_us;
+
+uint64_t
+lkpi_perf_now(void)
+{
+	return ((uint64_t)system_time());
+}
+
+void
+lkpi_perf_irq(uint64_t start)
+{
+	atomic_add64(&lkpi_perf_irqs, 1);
+	atomic_add64(&lkpi_perf_irq_us, system_time() - (bigtime_t)start);
+}
+
+void
+lkpi_perf_napi(uint64_t start, int packets)
+{
+	atomic_add64(&lkpi_perf_napi_runs, 1);
+	if (packets > 0)
+		atomic_add64(&lkpi_perf_napi_packets, packets);
+	atomic_add64(&lkpi_perf_napi_us, system_time() - (bigtime_t)start);
+}
+
+void
+lkpi_perf_rx80211(uint64_t start)
+{
+	atomic_add64(&lkpi_perf_rx_frames, 1);
+	atomic_add64(&lkpi_perf_rx_us, system_time() - (bigtime_t)start);
+}
+
+void
+lkpi_perf_rxq(uint64_t start, int frames)
+{
+	atomic_add64(&lkpi_perf_rxq_runs, 1);
+	atomic_add64(&lkpi_perf_rxq_frames, frames);
+	atomic_add64(&lkpi_perf_rxq_us, system_time() - (bigtime_t)start);
+}
+
 static void
 build_stats(struct lkpi_reply *r)
 {
@@ -141,6 +184,25 @@ build_stats(struct lkpi_reply *r)
 	reply_add(r, "threads.records_live", "%d", (int)live);
 	reply_add(r, "threads.records_created", "%d", (int)created);
 	reply_add(r, "threads.records_freed", "%d", (int)freed);
+	reply_add(r, "perf.irqs", "%lld", (long long)atomic_get64(&lkpi_perf_irqs));
+	reply_add(r, "perf.irq_us", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_irq_us));
+	reply_add(r, "perf.napi_runs", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_napi_runs));
+	reply_add(r, "perf.napi_packets", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_napi_packets));
+	reply_add(r, "perf.napi_us", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_napi_us));
+	reply_add(r, "perf.rx80211_frames", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_rx_frames));
+	reply_add(r, "perf.rx80211_us", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_rx_us));
+	reply_add(r, "perf.rxq_runs", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_rxq_runs));
+	reply_add(r, "perf.rxq_frames", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_rxq_frames));
+	reply_add(r, "perf.rxq_us", "%lld",
+	    (long long)atomic_get64(&lkpi_perf_rxq_us));
 	if (lkpi_control_stats_provider != NULL)
 		lkpi_control_stats_provider(r);
 }
