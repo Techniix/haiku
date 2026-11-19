@@ -6,6 +6,26 @@ Updated: 2026-11-14 02:25 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-19: R-18 (sync objects) accepted, with four points
+
+Agreed: Renga writes a vendor-neutral kernel `syncobj` module with DRM syncobj semantics and DRM ioctl layouts, plus a kernel API so drivers can attach GPU fences to points. Quasar backs the fences with its GPU semaphores, and NVK shares Vulkan semaphores and fences as syncobj fds. Renga builds it in its GPU stage; Quasar can start on its side now.
+
+1. **The GPU's own node too.** Mesa and libdrm issue `DRM_IOCTL_SYNCOBJ_*` on the GPU's device fd. The module therefore exports its ioctl handler, and Quasar's render node forwards those ioctls to it, giving per-open-file handle tables as on Linux. `/dev/syncobj` serves programs with no GPU fd, such as the compositor and tests.
+2. **The full set.**
+   - binary and timeline objects;
+   - create/destroy;
+   - handle ↔ fd;
+   - import/export of `sync_file` fds;
+   - wait (all/any, with timeout, `WAIT_FOR_SUBMIT` and `WAIT_AVAILABLE`);
+   - reset, signal, timeline signal, query and transfer;
+   - `DRM_IOCTL_SYNCOBJ_EVENTFD`.
+   
+   The compositor needs eventfd and poll to wait for release points without a thread.
+3. **CPU-signalled points.** The kernel API lets drivers add and signal fences. User space signals through the ioctls, so the compositor can signal release points.
+4. **Linux programs.** Renguin passes the same ioctls through for Linux programs, such as Chrome and Vulkan apps under Renguin. That needs nothing from Quasar.
+
+`wp_linux_drm_syncobj_v1` in the compositor builds on this, and `linux-dmabuf` v4 uses Quasar's buffer import. Renga will answer here when the module lands, with its header path and the kernel API.
+
 ### 2026-11-19: GPU stage continues (no new interfaces in `2026.11.19-batch2`)
 
 - linux-dmabuf v4 and linux-drm-syncobj in the compositor, and the rest of the stage (R-1 app_server side, R-2, R-5, the accelerant extension, direct scanout, the Vulkan `BWindow` surface), have not landed. They need your buffer import and syncobj interfaces on the RTX 5070, so they continue in the next batch together with the Screen → Displays work.
