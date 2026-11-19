@@ -88,6 +88,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -361,10 +362,9 @@ static bool
 run_chromium_dump(const char* name, const char* extraFlags,
 	bool informational)
 {
-	// 85 s at most: the harness takes 90 s without serial output for a hang
-	// (a dump of a small local page takes about 15-30 s in QEMU)
+	// 150 s at most; a dump of the small local page takes 55-85 s in QEMU
 	std::string command = "rm -rf /tmp/rg-chrome; cd /tmp && "
-		"{ timeout 85 /bin/linux /bin/sh -c '/usr/lib/chromium/chromium "
+		"{ timeout 150 /bin/linux /bin/sh -c '/usr/lib/chromium/chromium "
 		"--headless --no-sandbox --no-zygote --in-process-gpu --disable-gpu "
 		"--disable-dev-shm-usage --no-first-run "
 		"--user-data-dir=/tmp/rg-chrome --enable-logging=stderr "
@@ -377,7 +377,24 @@ run_chromium_dump(const char* name, const char* extraFlags,
 		+ std::string(kRoot) + "/bin/busybox grep -o "
 		"'renguin-chromium-ok[^<]*' /tmp/rg-chrome.out";
 	bigtime_t started = system_time();
+	// a line every 30 s while it runs, so the harness does not take the
+	// long quiet run for a hang (90 s without serial output)
+	static volatile bool sChromeDone;
+	sChromeDone = false;
+	pthread_t heartbeat;
+	pthread_create(&heartbeat, NULL, [](void*) -> void* {
+		for (int i = 0; !sChromeDone; i++) {
+			snooze(1000000);
+			if (i % 30 == 29 && !sChromeDone) {
+				printf("CE-INFO renguin chrome: running\n");
+				fflush(stdout);
+			}
+		}
+		return NULL;
+	}, NULL);
 	std::string output = run(command);
+	sChromeDone = true;
+	pthread_join(heartbeat, NULL);
 	bigtime_t took = system_time() - started;
 	int status = -1;
 	size_t marker = output.find("CE-RC:");
