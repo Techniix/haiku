@@ -58,4 +58,4 @@ Each batch: per-piece own suites, one four-way sweep, one ISO. GPU parts go last
 
 ## Batch 2: continue from here
 
-Landed (2026-11-15): Renguin fixes and trace (`d08b600e`, `a14d1a58`), Chrome single-process dump (`535f3db1`), renga_wayland egl/cursor (`8dc7b1c3`), skb.mem_limit switch, libsdl2 in images; image `2026.11.15-batch2-midway` without the four-way sweep. Open: multi-process Chrome (children: "no connection after 15 s"; network service does talk over Mojo; next: `trace_all` on the storage/renderer process), Chrome window on Wayland, single-process exit 191 at shutdown, mremap growth, SO_PASSCRED; GPU stage (linux-dmabuf v4, linux-drm-syncobj, rest of QUASAR.md); node crash attempt; CHROMIUM.md/QUASAR.md entries and roadmap status; full sweep.
+Batch 2 ended 2026-11-19 with image `2026.11.19-batch2`; the roadmap's batch-2 status lists what continues (multi-process Chrome, GPU stage, Wi-Fi data path after measurements, node crash).

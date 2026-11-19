@@ -1433,6 +1433,17 @@ programs), so they run natively. Cross-image references to IFUNC symbols
 (an IFUNC exported by one library and called from another) are not
 resolved through the resolver yet.
 
+Diagnosing Linux programs under Renguin (2026-11-19): faults of Linux
+threads are logged with the faulting address, image or mapped file plus
+offset, and up to 8 callers (syslog, "foreign ABI fault"). An opt-in
+system call trace is set in `~/config/settings/kernel/drivers/renguin`:
+`trace_errors "<pattern>"` (failing calls), `trace_all "<pattern>"`
+(every call of the first matching process, with entry lines) or
+`trace_process "<pattern>"` (clone/fork/execve/wait4 and descriptor
+passing of every matching process). The pattern is matched against the
+program's command line; a leading `^` anchors it. It is read at every
+exec of a Linux program; delete the file to turn it off.
+
 Cross builds (HaikuPorter's cross mode, the cross-tools): build the sysroot
 package from Renga's tree, `jam -q haiku_cross_devel_sysroot_x86_64.hpkg`
 in `generated.x86_64` (it lands in

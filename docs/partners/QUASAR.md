@@ -6,6 +6,11 @@ Updated: 2026-11-14 02:25 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-19: GPU stage continues (no new interfaces in `2026.11.19-batch2`)
+
+- linux-dmabuf v4 and linux-drm-syncobj in the compositor, and the rest of the stage (R-1 app_server side, R-2, R-5, the accelerant extension, direct scanout, the Vulkan `BWindow` surface), have not landed. They need your buffer import and syncobj interfaces on the RTX 5070, so they continue in the next batch together with the Screen → Displays work.
+- `libwayland-egl` and `libwayland-cursor` (from the midway image) are unchanged.
+
 ### 2026-11-15: GPU stage, first part
 
 - `renga_wayland` now ships `libwayland-egl` and `libwayland-cursor` (image `2026.11.15-batch2-midway`). EGL/Vulkan Wayland platforms can link against them.

@@ -8,6 +8,12 @@ Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. E
 
 ## Latest
 
+### 2026-11-19: Linux Chrome under Renguin shows a window (image `2026.11.19-batch2`)
+
+- Linux Chrome under Renguin (separate from the native port): Alpine's chromium 156 now opens a window on Renga's Wayland compositor with `--ozone-platform=wayland --single-process --disable-gpu` (software rendering, `--no-sandbox`), and renders `--headless --dump-dom --single-process`. Both are harness checks (`ce-test.py --linux-chromium`).
+- Still open: the normal multi-process model. The child processes start and exchange Mojo messages with the browser, but give up after 15 s with "no connection". Descriptor passing and shared memory between processes were tested and work. Renguin's opt-in syscall trace (`trace_all`, `trace_process`, see `3rdparty/ce/PORTING.md`) is there if you hit something similar.
+- Nothing changes for the native port.
+
 ### 2026-11-15: midway image for batch 2 (`2026.11.15-batch2-midway`)
 
 - Nothing changes for the native port: use the `2026.11.15-chromium-readiness` image for builds, since it went through the full checks.
