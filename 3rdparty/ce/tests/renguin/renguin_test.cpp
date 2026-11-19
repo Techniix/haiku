@@ -214,11 +214,11 @@ static const RootCheck kRootChecks[] = {
 		"fds-glibc\n73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2"
 		"aac7d9ac  -\nls (GNU coreutils) 9.11" },
 	{ "dyn.net_musl", "$R/opt/renguin-tests/net-musl", 0,
-		"tcp4 ok\ntcp6 ok\nudp4 ok\nunix ok\nsocketpair ok\nfdpass ok\n"
+		"tcp4 ok\ntcp6 ok\nudp4 ok\nunix ok\nsocketpair ok\nfdpass ok\nfdpass_socket ok\n"
 		"timeouts ok\nnonblock ok\ngai ok\nifaddrs ok\nifindex ok\n"
 		"route ok\nok" },
 	{ "dyn.net_glibc", "$R/opt/renguin-tests/net-glibc", 0,
-		"tcp4 ok\ntcp6 ok\nudp4 ok\nunix ok\nsocketpair ok\nfdpass ok\n"
+		"tcp4 ok\ntcp6 ok\nudp4 ok\nunix ok\nsocketpair ok\nfdpass ok\nfdpass_socket ok\n"
 		"timeouts ok\nnonblock ok\ngai ok\nifaddrs ok\nifindex ok\n"
 		"route ok\nok" },
 	{ "dyn.fds_musl", "$R/opt/renguin-tests/fds-musl", 0,

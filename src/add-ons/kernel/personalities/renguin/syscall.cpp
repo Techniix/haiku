@@ -320,9 +320,14 @@ log_unimplemented(uint64 number)
 							EINTR excepted)
 	  trace_all <pattern>		every call, also when it starts (to see
 							where a thread blocks)
+	  trace_process <pattern>	only processes, threads and descriptor
+							passing (clone, fork, execve, wait4,
+							socketpair, sendmsg, recvmsg, dup2/3, kill),
+							in every matching process
 	of the Linux programs whose command line (read from the program's own
 	argument strings; the team's args stop at 64 characters) contains
-	<pattern> (quote it: driver settings split at "="), with the first
+	<pattern> (quote it: driver settings split at "="; a leading "^"
+	anchors it at the start), with the first
 	three arguments and the result, to the syslog. At most 4000 lines per
 	boot; trace_all follows only the first matching process and leaves out
 	successful file lookups, clocks, getpid/gettid, getrandom, mremap and
@@ -331,6 +336,7 @@ log_unimplemented(uint64 number)
 */
 static char sTracePattern[64];
 static bool sTraceAll;
+static bool sTraceProcess;
 static int32 sTraceGeneration = 1;
 
 
@@ -339,22 +345,29 @@ renguin_reload_trace_settings()
 {
 	char pattern[sizeof(sTracePattern)] = "";
 	bool all = false;
+	bool process = false;
 	if (void* handle = load_driver_settings("renguin")) {
 		const char* value = get_driver_parameter(handle, "trace_all", NULL,
 			NULL);
+		process = false;
 		if (value != NULL)
 			all = true;
-		else
+		else if ((value = get_driver_parameter(handle, "trace_process", NULL,
+				NULL)) != NULL) {
+			all = process = true;
+		} else
 			value = get_driver_parameter(handle, "trace_errors", NULL, NULL);
 		if (value != NULL)
 			strlcpy(pattern, value, sizeof(pattern));
 		unload_driver_settings(handle);
 	}
-	if (strcmp(pattern, sTracePattern) != 0 || all != sTraceAll) {
+	if (strcmp(pattern, sTracePattern) != 0 || all != sTraceAll
+		|| process != sTraceProcess) {
 		dprintf("renguin: system call trace %s%s%s\n",
 			pattern[0] != '\0' ? (all ? "of all calls" : "of errors") : "off",
 			pattern[0] != '\0' ? " for " : "", pattern);
 		sTraceAll = all;
+		sTraceProcess = process;
 		strlcpy(sTracePattern, pattern, sizeof(sTracePattern));
 		atomic_add(&sTraceGeneration, 1);
 	}
@@ -371,7 +384,19 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 			|| result == -LX_EINTR)) {
 		return;
 	}
-	if (sTraceAll && (entering || result >= 0)) {
+	if (sTraceProcess) {
+		// trace_process: processes, threads and descriptor passing only
+		switch (number) {
+			case LINUX_clone: case LINUX_clone3: case LINUX_fork:
+			case LINUX_vfork: case LINUX_execve: case LINUX_wait4:
+			case LINUX_socketpair: case LINUX_sendmsg: case LINUX_recvmsg:
+			case LINUX_dup2: case LINUX_dup3: case LINUX_kill:
+			case LINUX_tgkill: case LINUX_tkill:
+				break;
+			default:
+				return;
+		}
+	} else if (sTraceAll && (entering || result >= 0)) {
 		// Leave out the calls that succeed in great numbers and say
 		// little (memory, file lookups, clocks); their errors still show.
 		switch (number) {
@@ -413,8 +438,12 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 		// "trace_all": only the first matching process (a program that
 		// starts many alike would use up the record before it is useful)
 		static team_id sTracedTeam = -1;
-		bool match = strstr(commandLine, sTracePattern) != NULL;
-		if (match && sTraceAll) {
+		// a leading '^' anchors the pattern at the start of the command line
+		bool match = sTracePattern[0] == '^'
+			? strncmp(commandLine, sTracePattern + 1,
+				strlen(sTracePattern + 1)) == 0
+			: strstr(commandLine, sTracePattern) != NULL;
+		if (match && sTraceAll && !sTraceProcess) {
 			team_id id = thread->team->id;
 			team_id previous = atomic_test_and_set(&sTracedTeam, id, -1);
 			if (previous != -1 && previous != id)
@@ -430,17 +459,35 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 		return;
 	const char* name = number < LINUX_SYSCALL_COUNT
 		? kLinuxSyscallNames[number] : NULL;
+	// the path argument of the calls that take one, for reading the trace
+	char path[96] = "";
+	uint64 pathArgument = 0;
+	switch (number) {
+		case LINUX_open: case LINUX_stat: case LINUX_lstat:
+		case LINUX_access: case LINUX_readlink: case LINUX_execve:
+			pathArgument = a1;
+			break;
+		case LINUX_openat: case LINUX_newfstatat: case 267:	// readlinkat
+		case LINUX_faccessat:
+			pathArgument = a2;
+			break;
+	}
+	if (pathArgument != 0
+		&& renguin_copy_string_in(path, pathArgument, sizeof(path)) < 0) {
+		path[0] = '\0';
+	}
 	if (entering) {
 		// (with trace_all: shows the call a thread blocks in)
 		dprintf("renguin trace: %" B_PRId32 ":%" B_PRId32 " > %s(%#" B_PRIx64
-			", %#" B_PRIx64 ", %#" B_PRIx64 ")\n", thread->team->id,
-			thread->id, name != NULL ? name : "?", a1, a2, a3);
+			", %#" B_PRIx64 ", %#" B_PRIx64 ")%s%s\n", thread->team->id,
+			thread->id, name != NULL ? name : "?", a1, a2, a3,
+			path[0] != '\0' ? " " : "", path);
 		return;
 	}
 	dprintf("renguin trace: %" B_PRId32 ":%" B_PRId32 " %s(%#" B_PRIx64
-		", %#" B_PRIx64 ", %#" B_PRIx64 ") = %" B_PRId64 "\n",
+		", %#" B_PRIx64 ", %#" B_PRIx64 ") = %" B_PRId64 "%s%s\n",
 		thread->team->id, thread->id, name != NULL ? name : "?", a1, a2, a3,
-		result);
+		result, path[0] != '\0' ? " " : "", path);
 }
 
 void

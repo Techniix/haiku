@@ -19,6 +19,11 @@
  *   unix       a named AF_UNIX stream socket in /tmp: bind, listen,
  *              connect, accept, data both ways, getsockname's sun_path
  *   socketpair AF_UNIX SOCK_STREAM and SOCK_DGRAM pairs (boundaries kept)
+ *   fdpass_socket  Mojo's way between processes: a forked child makes a
+ *              socketpair and sends one end (with 168 bytes) over a stream
+ *              socket, MSG_NOSIGNAL; the parent reads it with MSG_DONTWAIT
+ *              into a large buffer with room for 128 descriptors, then
+ *              both sides talk over the passed socket
  *   fdpass     SCM_RIGHTS: a pipe's read end sent over a socketpair, read
  *              through the received descriptor; MSG_CMSG_CLOEXEC sets
  *              FD_CLOEXEC on it
@@ -48,6 +53,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* Netlink, written out: musl's development files carry no <linux/...>
@@ -324,6 +330,83 @@ socketpair_test(void)
 		&& recv(fds[1], buffer, 8, 0) == 2, "dgram boundaries");
 	close(fds[0]);
 	close(fds[1]);
+	printf("%s ok\n", name);
+}
+
+
+static void
+fdpass_socket_test(void)
+{
+	const char* name = "fdpass_socket";
+	int pair[2];
+	CHECK(name, socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) == 0,
+		"socketpair");
+	pid_t child = fork();
+	if (child == 0) {
+		close(pair[0]);
+		int channel[2];
+		if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, channel) != 0)
+			_exit(2);
+		char data[168];
+		memset(data, 'm', sizeof(data));
+		struct iovec iov = { data, sizeof(data) };
+		char control[CMSG_SPACE(sizeof(int))];
+		memset(control, 0, sizeof(control));
+		struct msghdr message;
+		memset(&message, 0, sizeof(message));
+		message.msg_iov = &iov;
+		message.msg_iovlen = 1;
+		message.msg_control = control;
+		message.msg_controllen = sizeof(control);
+		struct cmsghdr* header = CMSG_FIRSTHDR(&message);
+		header->cmsg_level = SOL_SOCKET;
+		header->cmsg_type = SCM_RIGHTS;
+		header->cmsg_len = CMSG_LEN(sizeof(int));
+		memcpy(CMSG_DATA(header), &channel[1], sizeof(int));
+		if (sendmsg(pair[1], &message, MSG_NOSIGNAL) != (ssize_t)sizeof(data))
+			_exit(3);
+		close(channel[1]);
+		char reply[8] = "";
+		if (read(channel[0], reply, 5) != 5 || memcmp(reply, "hello", 5) != 0)
+			_exit(4);
+		if (write(channel[0], "back", 4) != 4)
+			_exit(5);
+		_exit(0);
+	}
+	close(pair[1]);
+	static char buffer[65536];
+	char control[CMSG_SPACE(128 * sizeof(int))];
+	ssize_t got = -1;
+	struct msghdr message;
+	for (int i = 0; i < 200 && got < 0; i++) {
+		struct iovec iov = { buffer, sizeof(buffer) };
+		memset(&message, 0, sizeof(message));
+		message.msg_iov = &iov;
+		message.msg_iovlen = 1;
+		message.msg_control = control;
+		message.msg_controllen = sizeof(control);
+		got = recvmsg(pair[0], &message, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
+		if (got < 0 && errno == EAGAIN)
+			usleep(10000);
+		else
+			break;
+	}
+	struct cmsghdr* header = got > 0 ? CMSG_FIRSTHDR(&message) : NULL;
+	int fd = -1;
+	if (header != NULL && header->cmsg_type == SCM_RIGHTS)
+		memcpy(&fd, CMSG_DATA(header), sizeof(int));
+	CHECK(name, got == 168 && fd >= 0, "recvmsg %zd bytes, fd %d (%s)", got,
+		fd, got < 0 ? strerror(errno) : "");
+	CHECK(name, write(fd, "hello", 5) == 5, "write to passed socket");
+	char back[8] = "";
+	CHECK(name, read(fd, back, 4) == 4 && memcmp(back, "back", 4) == 0,
+		"reply over passed socket");
+	int status = -1;
+	waitpid(child, &status, 0);
+	CHECK(name, WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		"child status %d", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+	close(fd);
+	close(pair[0]);
 	printf("%s ok\n", name);
 }
 
@@ -632,6 +715,7 @@ main(void)
 	unix_test();
 	socketpair_test();
 	fdpass_test();
+	fdpass_socket_test();
 	timeout_test();
 	nonblock_test();
 	gai_test();
