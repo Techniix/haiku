@@ -6,6 +6,8 @@ SubDir HAIKU_TOP 3rdparty ce tests wayland ;
 include [ FDirName $(HAIKU_TOP) src libs wayland WaylandRules ] ;
 
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+UsePrivateHeaders interface ;
+	# WindowInfo.h: the compositor's windows (decorations, Chrome's window)
 SubDirSysHdrs $(LOCATE_SOURCE) ;
 SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland src ] ;
 SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland egl ] ;
@@ -26,8 +28,6 @@ Application wayland_test :
 ;
 
 # The protocols that complete the compositor (2026-11-14 batch).
-UsePrivateHeaders interface ;
-	# WindowInfo.h: the compositor window's tab (decorations)
 local protocolTestProtocols = xdg-decoration-unstable-v1
 	xdg-output-unstable-v1 fractional-scale-v1 idle-inhibit-unstable-v1
 	primary-selection-unstable-v1 pointer-constraints-unstable-v1

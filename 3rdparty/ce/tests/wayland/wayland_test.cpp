@@ -57,6 +57,7 @@
 #include <Roster.h>
 #include <Screen.h>
 #include <image.h>
+#include <WindowInfo.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -704,6 +705,98 @@ linux_client_test()
 
 
 
+static const char* kChromium
+	= "/boot/system/non-packaged/compat/linux/usr/lib/chromium/chromium";
+
+
+//! Whether the compositor has a window whose title contains \a text.
+static bool
+compositor_window_with(const char* text)
+{
+	team_id team = be_roster->TeamFor("application/x-vnd.Renga-WaylandCompositor");
+	int32 count = 0;
+	int32* tokens = get_token_list(team, &count);
+	bool found = false;
+	for (int32 i = 0; tokens != NULL && i < count && !found; i++) {
+		client_window_info* info = get_window_info(tokens[i]);
+		if (info == NULL)
+			continue;
+		found = strstr(info->name, text) != NULL && !info->is_mini;
+		free(info);
+	}
+	free(tokens);
+	return found;
+}
+
+
+/*!	Linux Chrome under Renguin on the compositor (images built with
+	ce-test.py --linux-chromium): Alpine's chromium with Ozone's Wayland
+	platform and software rendering opens the test page in a window, which
+	the compositor shows with the page's title.
+*/
+static void
+chrome_window_test()
+{
+	if (access(kChromium, X_OK) != 0) {
+		printf("CE-INFO wayland: no Chromium in the Linux root; "
+			"chrome_window not checked\n");
+		return;
+	}
+	// The Linux shell records its PID (= the team, which exec() keeps for
+	// Chromium) before it becomes Chromium, so that it can be ended here.
+	system("rm -rf /tmp/rg-chrome-wl /tmp/rg-chrome-wl.pid; "
+		"(timeout 75 /bin/linux /bin/sh -c 'echo $$ > /tmp/rg-chrome-wl.pid; "
+		"exec /usr/lib/chromium/chromium --ozone-platform=wayland "
+		"--no-sandbox --no-zygote --single-process --in-process-gpu "
+		"--disable-gpu --no-first-run --user-data-dir=/tmp/rg-chrome-wl "
+		"file:///opt/renguin-data/chrome/index.html' "
+		"> /tmp/rg-chrome-wl.log 2>&1 &)");
+	bigtime_t start = system_time();
+	bool found = false;
+	while (!found && system_time() - start < 70000000) {
+		snooze(1000000);
+		found = compositor_window_with("Renguin Chromium test");
+	}
+	if (found) {
+		snooze(3000000);
+		printf("CE-HOST screenshot wayland_chrome_window\n");
+		fflush(stdout);
+		snooze(1000000);
+	}
+	report("chrome_window", found, "window \"Renguin Chromium test\" %s "
+		"after %.0f s", found ? "shown" : "not shown",
+		(system_time() - start) / 1000000.0);
+	if (!found) {
+		FILE* log = popen("grep -v -E 'dbus|udev' /tmp/rg-chrome-wl.log "
+			"| tail -n 8 | cut -c 1-200", "r");
+		char line[256];
+		while (log != NULL && fgets(line, sizeof(line), log) != NULL)
+			printf("CE-INFO wayland chrome: %s", line);
+		if (log != NULL)
+			pclose(log);
+	}
+	// end Chromium (and with it its Wayland connection) before the next
+	// checks, which stop and start the compositor
+	FILE* pidFile = fopen("/tmp/rg-chrome-wl.pid", "r");
+	int pid = -1;
+	if (pidFile != NULL) {
+		if (fscanf(pidFile, "%d", &pid) != 1)
+			pid = -1;
+		fclose(pidFile);
+	}
+	if (pid > 0) {
+		kill_team(pid);
+		for (int i = 0; i < 50; i++) {
+			team_info info;
+			if (get_team_info(pid, &info) != B_OK)
+				break;
+			snooze(100000);
+		}
+	}
+	snooze(1000000);
+}
+
+
 static const char* kScreen = "/boot/system/preferences/Screen";
 
 
@@ -980,6 +1073,9 @@ main()
 		(int)before, (int)after);
 
 	switch_test(socketPath);
+	// last: Chromium's start-up is long, and the compositor's switch test
+	// above must not see its connection
+	chrome_window_test();
 
 	printf("CE-SUITE %s DONE failures=%d\n", SUITE, sFailures);
 	fflush(stdout);
