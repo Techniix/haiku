@@ -65,6 +65,16 @@ Each batch: per-piece own suites, one four-way sweep, one ISO. GPU parts go last
 
 Later: bundled apps `F-44`, Secure Boot `F-53`, NVIDIA-hardware GPU features `F-47`/`F-35`.
 
+## Batch order (maintainer, 2026-11-20, 15:29 ET; replaces items 9-10 above)
+
+8. `F-57` WebKit (this batch), then batch 7 carry-overs as time allows.
+9. Tracker and Deskbar: `F-60` review of both first, then `F-66` Tracker and `F-41` Deskbar, every feature switchable; start-button designs shown to the maintainer before implementing.
+10. Renguin (`F-27`): multi-process Linux Chrome; Linux-programs integration (Open with, Renguin badge, AppImage, Flatpak); the rest of the Renguin Manager; syscall coverage per `COVERAGE.md`; vDSO and shared futexes; gamepad evdev and webcam V4L2 bridges; matching GTK/Qt themes; Linux home and xattr mapping; Wine/Proton under Renguin; the harness ladder.
+11. The rest of audio routing, the rest of the gamepad configurator, the Wi-Fi data path once `lkpictl wifi-stats` numbers arrive.
+12. Installer wizard `F-23`, partition manager `F-24`, graphical themed boot menu `F-22`.
+
+Later: `F-44`, `F-53`, `F-47`/`F-35`.
+
 ## Batch 2: continue from here
 
 Batch 2 ended 2026-11-19 with image `2026.11.19-batch2`; the roadmap's batch-2 status lists what continues (multi-process Chrome, GPU stage, Wi-Fi data path after measurements, node crash).
