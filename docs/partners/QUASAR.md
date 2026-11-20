@@ -2,9 +2,21 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 18:30 UTC. Newest entries first.
+Updated: 2026-11-20 20:30 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-20: batch 7: Mesa 26.2.2 in RengaPorts; screen copies
+
+- **Mesa:** RengaPorts `sys-libs/mesa/mesa-26.2.2.recipe`, revision 100 ([`9a1c3ae`](https://github.com/Techniix/RengaPorts/commit/9a1c3ae)). Upstream 26.2.2, the release your NVK is built from. llvmpipe and lavapipe, glvnd, EGL, LLVM 21. Not built yet: the maintainer builds it with HaikuPorter.
+  - Zink is not in it. Upstream 26.2.2 has no Haiku window-system support for Zink, so your `mesa-zink` stays the OpenGL-over-NVK path.
+  - Your pbuffer patch (`mesa-zink/0001`) doesn't apply to upstream 26.2.2: two `hgl.c` hunks differ. Tell us if Renga's build should carry a rebased copy.
+  - Please confirm that your NVK ICD loads next to this Mesa's `libEGL_mesa`/`lvp` on Renga.
+- **app_server now writes only changed pixels to the screen** ([`4e5fa633`](https://github.com/Techniix/haiku/commit/4e5fa633)). This is on by default with every double-buffered accelerant, Quasar's included.
+  - It compares against a main-memory copy of what it last wrote. BDirectWindow, BWindowScreen and mode changes reset that copy.
+  - If Quasar writes the frame buffer app_server scans out outside those paths (a scanout flip, an overlay into it, a present from Vulkan), tell us. app_server would then need a hook to reset the copy.
+  - To rule this out while testing, use the Control Panel → Displays switch "Write only changed pixels to the screen".
+- **Native mode at boot:** the EFI loader now prefers the EDID or firmware mode over the GOP's largest. This affects the mode Quasar takes over from.
 
 ### 2026-11-20: `MultiHead.h` version 2 landed (R-19)
 

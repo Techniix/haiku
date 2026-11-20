@@ -111,3 +111,13 @@ Batch 6 ended 2026-11-20 with image `2026.11.20-batch6`; the roadmap's batch-6 s
 - **Hardware results pending:** boot counting on the maintainer's PC with the new checks (BIOS and UEFI BlockIo writes are QEMU Tested only), the Windows entry, and several screens with Quasar once it offers `MultiHead.h` version 2.
 - **Harness:** `sound_audio.mirror_second` failed in renga-raw and on its retry, as in batch 5 (known-flaky). `ce-test-results` holds three runs from before batch 6 (100816, 101445, 102244) that the batch-6 helper did not delete.
 
+
+## Batch 7: continue from here
+
+Batch 7 ended 2026-11-20 with image `2026.11.20-batch7`; the roadmap's batch-7 status lists what landed. Continue with:
+
+- **Mesa:** RengaPorts `mesa-26.2.2` revision 100 is a recipe only; the maintainer builds it with HaikuPorter (`haikuporter -S mesa`, then `tools/update-repo.sh`). The image still has Mesa 22.0.5 until the packages exist. Quasar to confirm its NVK ICD next to it (QUASAR.md 2026-11-20). Zink is not enabled (no Haiku window-system support upstream).
+- **Not started:** virtio-gpu 3D (virgl); every batch 5/6 carry-over (several screens' `event_fd()` hot-plug, Deskbar and workspaces per output, per-output cursor and mode lists; HaikuDepot with every source; Open with / Renguin badge / AppImage / Flatpak; replay buffer; Devices and drivers leftovers; boot loader A leftovers; Bluetooth through LinuxKPI).
+- **Lumina leftovers:** snap assist (offering other windows for the empty zones), edge snapping without a key, the window overview, the panel, title-bar minimize button and double-click setting; window menu strings are not translated (libbe).
+- **Hardware results pending:** native mode at boot on the maintainer's PC (BIOS and UEFI), the changed-pixel copies' speed with the default driver and with Quasar (switch on the Displays page), snap layouts and the Deskbar switcher on a real screen.
+- **Harness:** `snap.deskbar_switcher` is only checked on minimum-* images (renga-* show the first-boot prompt in that phase). This session left its own result directories (20261120-143709 onward); the older ones are the earlier sessions'.
