@@ -34,3 +34,4 @@ SubInclude HAIKU_TOP 3rdparty ce tests virtio_block ;
 SubInclude HAIKU_TOP 3rdparty ce tests virtio_sound ;
 SubInclude HAIKU_TOP 3rdparty ce tests wayland ;
 SubInclude HAIKU_TOP 3rdparty ce tests wifi ;
+SubInclude HAIKU_TOP 3rdparty ce tests welcome ;

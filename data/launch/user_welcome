@@ -1,0 +1,19 @@
+# Renga (batch 5): the welcome on the first logins of an installed system,
+# until it is finished or "Don't show this at login again" is ticked
+# (~/config/settings/Renga/welcome). Not on read-only media: the
+# installation medium shows its own first-start prompt.
+target desktop {
+	# (the job is not named after the application: launch_daemon would
+	# otherwise take every start of Welcome, from the Deskbar too, as a
+	# start of this job, with its conditions)
+	job renga-welcome-at-login {
+		launch /boot/system/apps/Welcome
+		if {
+			not file_exists ~/config/settings/Renga/welcome
+			not read_only
+			file_exists /boot/system/apps/Welcome
+		}
+		on initial_volumes_mounted
+		no_safemode
+	}
+}

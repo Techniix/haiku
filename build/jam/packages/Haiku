@@ -283,7 +283,8 @@ AddFilesToPackage data launch : $(launchScripts) ;
 
 local userLaunchScripts = <data!launch>user
 	<data!launch>user_crash_reports <data!launch>user_gamepads
-	<data!launch>user_wayland <data!launch>user_session_bus ;
+	<data!launch>user_wayland <data!launch>user_session_bus
+	<data!launch>user_welcome ;
 SEARCH on $(userLaunchScripts) = [ FDirName $(HAIKU_TOP) data launch ] ;
 AddFilesToPackage data user_launch : $(userLaunchScripts) ;
 

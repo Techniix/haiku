@@ -1123,7 +1123,7 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 - [ ] **Installation previews:** every change is planned first and shown as a list and a before/after picture; nothing is written until confirmed.
 - [ ] **Recovery and rollback where technically possible:** the old partition tables and boot entries are saved before writing and every step is journaled, so a failed or interrupted install can be undone. Overwritten partition contents cannot be restored; the preview says so.
 
-**First-boot welcome (maintainer, 2026-11-11, polish):** after installation, a short welcome on first login in the Renga style: what is new, the shortcut key (Ctrl or Alt), network and Wi-Fi, appearance (light/dark), privacy-relevant permissions (screen recording), and where help lives; skippable, reopenable from the Help menu.
+**First-boot welcome (batch 5, 2026-11-20, QEMU Tested: `/boot/system/apps/Welcome`, eight pages: welcome, network and Wi-Fi, NVIDIA/Quasar detection with "Install Quasar" and Devices and drivers for missing firmware, the Renga repository, the Linux root download, a gamepad test, the shortcut key (Ctrl or Alt), workspaces and help; every action on a button; shown at login until finished or turned off, not on read-only media; reopenable from Deskbar and Control Panel. Light/dark appearance and screen recording permissions are not in it yet.) (maintainer, 2026-11-11, polish):** after installation, a short welcome on first login in the Renga style: what is new, the shortcut key (Ctrl or Alt), network and Wi-Fi, appearance (light/dark), privacy-relevant permissions (screen recording), and where help lives; skippable, reopenable from the Help menu.
 
 #### F-24 Advanced partition manager
 

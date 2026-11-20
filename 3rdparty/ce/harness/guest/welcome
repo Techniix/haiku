@@ -1,0 +1,2 @@
+# harness images: the first-login welcome stays closed (welcome_ui_test opens it)
+done true

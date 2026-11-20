@@ -28,6 +28,11 @@ if $(CE_HARNESS) {
 	SEARCH on $(runner) $(job) = $(guestDir) ;
 	AddFilesToHaikuImage system non-packaged data ce-harness : $(runner) ;
 	AddFilesToHaikuImage system settings launch : $(job) ;
+	# The first-login welcome (batch 5) would cover the desktop the GUI
+	# tests look at; welcome_ui_test opens it itself.
+	local welcomeDone = <ce-harness>welcome ;
+	SEARCH on $(welcomeDone) = $(guestDir) ;
+	AddFilesToHaikuImage home config settings Renga : $(welcomeDone) ;
 
 	# Crashing programs are killed instead of waiting for a user to answer
 	# debug_server's alert (see the file for details).

@@ -220,6 +220,7 @@ HTML5_SCREENSHOTS = ["html5_webm", "html5_mp4"]
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 RENGA_DOCTOR_SCREENSHOTS = ["renga_doctor"]
+WELCOME_SCREENSHOTS = ["welcome_graphics", "welcome_setup"]
 CONTROL_PANEL_SCREENSHOTS = ["control_panel_search",
 	"control_panel_streaming", "control_panel_displays"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
@@ -4468,6 +4469,9 @@ def main():
 		if "bootmenu_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
 				"bootmenu.screenshots")
+		if "welcome_ui_test" in (args.only or available):
+			check_screenshots(results_dir, report, WELCOME_SCREENSHOTS,
+				"welcome.screenshots")
 		if "renga_doctor_test" in (args.only or available):
 			check_screenshots(results_dir, report, RENGA_DOCTOR_SCREENSHOTS,
 				"renga_doctor.screenshots")

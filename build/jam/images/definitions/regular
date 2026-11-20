@@ -58,6 +58,7 @@ SYSTEM_APPS += [ FFilterByBuildFeatures
 	SoftwareUpdater
 	SoundRecorder
 	SystemLogs
+	Welcome
 ] ;
 
 DESKBAR_APPLICATIONS +=
@@ -79,6 +80,7 @@ DESKBAR_APPLICATIONS +=
 	SoftwareUpdater
 	SoundRecorder
 	SystemLogs
+	Welcome
 ;
 
 DESKBAR_DESKTOP_APPLETS +=

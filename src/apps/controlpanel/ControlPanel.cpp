@@ -156,6 +156,10 @@ static const PageInfo kPages[] = {
 		"crash reports, for a bug report.",
 		"/boot/system/apps/RengaDoctor",
 		"doctor bug report diagnostics logs crash support" },
+	{ "welcome", "System", "Welcome",
+		"The first-login tour: network, drivers, software, Linux programs, "
+		"gamepads and the shortcut key.", "/boot/system/apps/Welcome",
+		"welcome tour setup first start getting started" },
 	{ "time", "System", "Date and time", "Time zone, clock and time sync.",
 		"/boot/system/preferences/Time", "clock timezone ntp date" },
 	{ "locale", "System", "Language and region",
@@ -238,6 +242,7 @@ static const SettingInfo kSettings[] = {
 	{ "boot", "Default system", "windows dual boot" },
 	{ "software", "Repositories", "sources renga haikuports" },
 	{ "doctor", "Collect a hardware report", "renga doctor bug" },
+	{ "welcome", "Open the welcome again", "tour first login" },
 	{ "time", "Time zone", "clock" },
 	{ "time", "Synchronize the clock", "ntp internet time" },
 	{ "locale", "Language", "translation" },

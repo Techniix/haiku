@@ -64,4 +64,5 @@ HaikuSubInclude text_search ;
 HaikuSubInclude tracker ;
 HaikuSubInclude tv ;
 HaikuSubInclude webpositive ;
+HaikuSubInclude welcome ;
 HaikuSubInclude workspaces ;

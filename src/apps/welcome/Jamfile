@@ -1,0 +1,23 @@
+SubDir HAIKU_TOP src apps welcome ;
+
+# Renga (batch 5): the first-boot welcome. Its shortcut key choice uses the
+# Keymap preferences' Keymap class (saving and using the keymap).
+
+UsePrivateHeaders interface shared ;
+
+local keymapDir = [ FDirName $(HAIKU_TOP) src preferences keymap ] ;
+SEARCH_SOURCE += $(keymapDir) ;
+SubDirHdrs $(keymapDir) ;
+
+Application Welcome :
+	Welcome.cpp
+	Keymap.cpp
+	: be bnetapi shared localestub [ TargetLibstdc++ ]
+	: Welcome.rdef WelcomeIcon.rdef
+;
+
+DoCatalogs Welcome :
+	x-vnd.Renga-Welcome
+	:
+	Welcome.cpp
+;

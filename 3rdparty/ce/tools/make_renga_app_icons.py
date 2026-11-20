@@ -27,6 +27,8 @@ Icons and where they go:
                          switches, one on (green), one off
     RengaDoctor          src/apps/rengadoctor/RengaDoctorIcon.rdef
                          (batch 5) a report page with a green cross
+    Welcome              src/apps/welcome/WelcomeIcon.rdef
+                         (batch 5) a screen with a gold star
 """
 
 import os
@@ -167,6 +169,21 @@ def renga_doctor():
 	return icon
 
 
+def welcome():
+	icon = hvif.Icon()
+	screen(icon)
+	import math
+	star = []
+	for i in range(10):
+		radius = 13 if i % 2 == 0 else 5.5
+		angle = math.radians(-90 + i * 36)
+		star.append((32 + radius * math.cos(angle), 27 + radius
+			* math.sin(angle)))
+	icon.polygon(skew(star), fill(GOLD, (19, 14), (45, 40)),
+		outline=(OUTLINE, 2))
+	return icon
+
+
 ICONS = [
 	("SystemLogs", system_logs,
 		"src/apps/systemlogs/SystemLogsIcon.rdef"),
@@ -181,6 +198,7 @@ ICONS = [
 		"src/apps/controlpanel/ControlPanelIcon.rdef"),
 	("RengaDoctor", renga_doctor,
 		"src/apps/rengadoctor/RengaDoctorIcon.rdef"),
+	("Welcome", welcome, "src/apps/welcome/WelcomeIcon.rdef"),
 ]
 
 
