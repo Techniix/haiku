@@ -56,6 +56,15 @@ Each batch: per-piece own suites, one four-way sweep, one ISO. GPU parts go last
    - visible workspaces: a Deskbar switcher with "+" and previews, an overview, per-workspace name, wallpaper and layout, saved sets, "Move to workspace" in the tab menu, a mention in the first-boot welcome.
 7. README redo.
 
+## Agreed batch plan, continued (maintainer, 2026-11-20)
+
+7. Lumina (snap layouts, visible workspaces; S1-S8 first), the default display driver (native mode, changed-region copies), software OpenGL without the extra copy, the README redo, batch 5/6 carry-overs; last, current Mesa in RengaPorts and virtio-gpu 3D.
+8. `F-57` WebKit pulled forward: WebPositive quick fixes and speed pass; a time-boxed HaikuWebKit cross-compile on the Linux host (fallback: RengaPorts recipe and patches the maintainer builds); WebKit's own HTML5 sound fix; MSE rebase after the Chromium phases unless the cross-compile goes well.
+9. Finishing half-done work: multi-process Linux Chrome, the rest of audio routing, the rest of the gamepad configurator, the Wi-Fi data path if `wifi-stats` numbers arrive.
+10. Installer wizard `F-23`, partition manager `F-24`, graphical themed boot menu `F-22`.
+
+Later: bundled apps `F-44`, Secure Boot `F-53`, NVIDIA-hardware GPU features `F-47`/`F-35`.
+
 ## Batch 2: continue from here
 
 Batch 2 ended 2026-11-19 with image `2026.11.19-batch2`; the roadmap's batch-2 status lists what continues (multi-process Chrome, GPU stage, Wi-Fi data path after measurements, node crash).
