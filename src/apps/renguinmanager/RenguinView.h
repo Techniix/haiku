@@ -38,6 +38,7 @@ private:
 			BButton*			fShell;
 			BButton*			fSetup;
 			BButton*			fUpgrade;
+			BButton*			fDeskbar;
 			BCheckBox*			fTrace;
 			BTextControl*		fTracePattern;
 			BCheckBox*			fTraceBuffer;

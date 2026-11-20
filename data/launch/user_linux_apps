@@ -1,0 +1,14 @@
+# Renga (batch 5): Deskbar entries for the Linux programs installed in the
+# Linux root (linux-apps, from their .desktop files), refreshed at login.
+# Only where Renguin and a Linux root are there.
+target desktop {
+	job renga-linux-apps {
+		launch /bin/linux-apps sync
+		if {
+			file_exists /bin/linux-apps
+			file_exists /boot/system/non-packaged/compat/linux/bin/sh
+		}
+		on initial_volumes_mounted
+		no_safemode
+	}
+}

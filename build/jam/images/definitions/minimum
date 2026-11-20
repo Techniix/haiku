@@ -58,6 +58,7 @@ SYSTEM_BIN = [ FFilterByBuildFeatures
 	listusb
 	lkpictl@x86_64
 	linux@x86_64
+	linux-apps@x86_64
 	locale
 	logger
 	login

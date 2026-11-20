@@ -19,6 +19,7 @@
 #include <TextControl.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -38,6 +39,7 @@ static const uint32 kMsgShell = 'rshl';
 static const uint32 kMsgSetup = 'rset';
 static const uint32 kMsgUpgrade = 'rupg';
 static const uint32 kMsgTrace = 'rtrc';
+static const uint32 kMsgDeskbar = 'rdsk';
 
 
 static std::string
@@ -89,6 +91,8 @@ RenguinView::RenguinView()
 		new BMessage(kMsgSetup));
 	fUpgrade = new BButton("upgrade", B_TRANSLATE("Update Linux packages"),
 		new BMessage(kMsgUpgrade));
+	fDeskbar = new BButton("deskbarEntries", B_TRANSLATE("Update Deskbar "
+		"entries"), new BMessage(kMsgDeskbar));
 	fTrace = new BCheckBox("trace", B_TRANSLATE("Trace a Linux program's "
 		"processes (for bug reports; written to the system log)"),
 		new BMessage(kMsgTrace));
@@ -109,6 +113,12 @@ RenguinView::RenguinView()
 			.Add(fUpgrade)
 			.AddGlue()
 		.End()
+		.AddGroup(B_HORIZONTAL)
+			.Add(new BStringView("deskbarNote", B_TRANSLATE("Linux programs "
+				"appear in the Deskbar under Applications, Linux.")))
+			.Add(fDeskbar)
+			.AddGlue()
+		.End()
 		.Add(new BSeparatorView(B_HORIZONTAL))
 		.Add(new BStringView("diagnostics", B_TRANSLATE("Diagnostics")))
 		.Add(fTrace)
@@ -125,8 +135,8 @@ void
 RenguinView::AttachedToWindow()
 {
 	BGroupView::AttachedToWindow();
-	BControl* controls[] = { fShell, fSetup, fUpgrade, fTrace, fTracePattern,
-		fTraceBuffer };
+	BControl* controls[] = { fShell, fSetup, fUpgrade, fDeskbar, fTrace,
+		fTracePattern, fTraceBuffer };
 	for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); i++)
 		controls[i]->SetTarget(this);
 	Refresh();
@@ -147,6 +157,9 @@ RenguinView::MessageReceived(BMessage* message)
 		case kMsgUpgrade:
 			in_terminal("Linux packages", "linux apk update && linux apk "
 				"upgrade; echo; read -p 'Press Return to close. '");
+			break;
+		case kMsgDeskbar:
+			system("/bin/linux-apps sync &");
 			break;
 		case kMsgTrace:
 			_SaveTrace();
@@ -205,6 +218,7 @@ RenguinView::Refresh()
 	fShell->SetEnabled(layer && root);
 	fSetup->SetEnabled(layer && !root);
 	fUpgrade->SetEnabled(layer && root);
+	fDeskbar->SetEnabled(layer && root);
 
 	// the trace settings file (PORTING.md, "Diagnosing Linux programs")
 	std::string settings = read_text(trace_settings_path().Path());

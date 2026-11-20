@@ -10,3 +10,14 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
 		: renguin_manager_test ;
 }
+
+# linux-apps (batch 5): Deskbar entries from .desktop files.
+Application linux_apps_test :
+	linux_apps_test.cpp
+	: be translation [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: linux_apps_test ;
+}

@@ -7,3 +7,10 @@ Application linux :
 	linux.cpp
 	: be [ TargetLibstdc++ ]
 ;
+
+# linux-apps: Deskbar entries for the Linux programs of the Linux root,
+# from their .desktop files (batch 5).
+Application linux-apps :
+	linux_apps.cpp
+	: be translation [ TargetLibstdc++ ]
+;
