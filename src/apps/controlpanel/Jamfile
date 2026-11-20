@@ -34,6 +34,7 @@ Application ControlPanel :
 	ApplicationVolumesView.cpp
 	MixerControl.cpp
 	RenguinView.cpp
+	WindowsPage.cpp
 	: liblinuxkpi_manage.a
 		libcolumnlistview.a be media bnetapi network localestub
 		[ TargetLibstdc++ ] [ TargetLibsupc++ ]
@@ -44,4 +45,5 @@ DoCatalogs ControlPanel :
 	x-vnd.Renga-ControlPanel
 	:
 	ControlPanel.cpp
+	WindowsPage.cpp
 ;

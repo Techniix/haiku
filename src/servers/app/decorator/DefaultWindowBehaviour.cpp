@@ -25,6 +25,8 @@
 #include "AppServer.h"
 #include "ClickTarget.h"
 #include "Desktop.h"
+#include "SnapLayouts.h"
+#include <window_layouts.h>
 #include "DefaultDecorator.h"
 #include "DrawingEngine.h"
 #include "Window.h"
@@ -215,8 +217,18 @@ struct DefaultWindowBehaviour::DragState : MouseTrackingState {
 		bool activateOnMouseUp, bool minimizeCheckOnMouseUp)
 		:
 		MouseTrackingState(behavior, where, activateOnMouseUp,
-			minimizeCheckOnMouseUp)
+			minimizeCheckOnMouseUp),
+		fSnapping(false),
+		fAnchorZone(-1),
+		fZoneCount(0),
+		fPointer(where),
+		fStartFrame(fWindow->Frame())
 	{
+	}
+
+	virtual void ExitState(State* nextState)
+	{
+		_StopSnapping();
 	}
 
 	virtual bool MouseDown(BMessage* message, BPoint where, bool& _unhandled)
@@ -234,12 +246,40 @@ struct DefaultWindowBehaviour::DragState : MouseTrackingState {
 		return MouseTrackingState::MouseDown(message, where, _unhandled);
 	}
 
+	virtual void MouseUp(BMessage* message, BPoint where)
+	{
+		int32 buttons = message->FindInt32("buttons");
+		if ((buttons & fMouseButton) == 0 && fSnapping
+			&& fTarget.IsValid()) {
+			// Renga (batch 7): the drop puts the window into the zone
+			BRect target = fTarget;
+			_StopSnapping();
+			SnapLayouts::PlaceWindow(fDesktop, fWindow, target, &fStartFrame);
+		}
+		MouseTrackingState::MouseUp(message, where);
+	}
+
+	virtual void MouseMoved(BMessage* message, BPoint where, bool isFake)
+	{
+		fPointer = where;
+		MouseTrackingState::MouseMoved(message, where, isFake);
+		_UpdateSnapping(message->FindInt32("modifiers"));
+	}
+
+	virtual void ModifiersChanged(BPoint where, int32 modifiers)
+	{
+		fPointer = where;
+		_UpdateSnapping(modifiers);
+	}
+
 	virtual void MouseMovedAction(BPoint& delta, bigtime_t now)
 	{
 		if ((fWindow->Flags() & B_NOT_MOVABLE) == 0) {
 			BPoint oldLeftTop = fWindow->Frame().LeftTop();
 
-			fBehavior.AlterDeltaForSnap(fWindow, delta, now);
+			// no magnetic screen edges while a zone is being chosen
+			if (!fSnapping)
+				fBehavior.AlterDeltaForSnap(fWindow, delta, now);
 			fDesktop->MoveWindowBy(fWindow, delta.x, delta.y);
 
 			// constrain delta to true change in position
@@ -247,6 +287,59 @@ struct DefaultWindowBehaviour::DragState : MouseTrackingState {
 		} else
 			delta = BPoint(0, 0);
 	}
+
+private:
+	/*!	Renga (batch 7, F-25): while the snap modifier is held, the zones
+		of the screen under the pointer are shown and the one under the
+		pointer is chosen; with the span key as well, every zone between
+		the first one chosen and the current one. Without the modifier the
+		drag is exactly the stock drag.
+	*/
+	void _UpdateSnapping(int32 modifiers)
+	{
+		bool span = false;
+		if ((fWindow->Flags() & B_NOT_MOVABLE) != 0 || !fWindow->IsNormal()
+			|| !SnapLayouts::DragActive(modifiers, &span)) {
+			_StopSnapping();
+			return;
+		}
+
+		fZoneCount = SnapLayouts::ZoneFrames(fDesktop, fPointer, fZones,
+			SnapLayouts::kMaxFrames);
+		int32 zone = WindowLayouts::zone_at(fZones, fZoneCount, fPointer);
+		if (zone < 0) {
+			_StopSnapping();
+			return;
+		}
+		if (!fSnapping || !span || fAnchorZone < 0)
+			fAnchorZone = zone;
+		BRect target = span ? WindowLayouts::span_frame(fZones, fZoneCount,
+				fAnchorZone, zone)
+			: fZones[zone];
+		if (fSnapping && target == fTarget)
+			return;
+		fSnapping = true;
+		fTarget = target;
+		SnapLayouts::ShowOverlay(fDesktop, fZones, fZoneCount, fTarget);
+	}
+
+	void _StopSnapping()
+	{
+		if (!fSnapping)
+			return;
+		fSnapping = false;
+		fAnchorZone = -1;
+		fTarget = BRect();
+		SnapLayouts::HideOverlay(fDesktop);
+	}
+
+	bool	fSnapping;
+	int32	fAnchorZone;
+	int32	fZoneCount;
+	BRect	fZones[SnapLayouts::kMaxFrames];
+	BRect	fTarget;
+	BPoint	fPointer;
+	BRect	fStartFrame;
 };
 
 
@@ -379,7 +472,9 @@ struct DefaultWindowBehaviour::ResizeBorderState : MouseTrackingState {
 		MouseTrackingState(behavior, where, true, false,
 			B_SECONDARY_MOUSE_BUTTON),
 		fHorizontal(NONE),
-		fVertical(NONE)
+		fVertical(NONE),
+		fOnTab(region == Decorator::REGION_TAB),
+		fWhere(where)
 	{
 		switch (region) {
 			case Decorator::REGION_TAB:
@@ -426,7 +521,9 @@ struct DefaultWindowBehaviour::ResizeBorderState : MouseTrackingState {
 		MouseTrackingState(behavior, where, true, false,
 			B_SECONDARY_MOUSE_BUTTON),
 		fHorizontal(horizontal),
-		fVertical(vertical)
+		fVertical(vertical),
+		fOnTab(false),
+		fWhere(where)
 	{
 		fDelta = B_ORIGIN;
 	}
@@ -493,12 +590,21 @@ struct DefaultWindowBehaviour::ResizeBorderState : MouseTrackingState {
 
 	virtual void MouseUpWindowAction()
 	{
+		// Renga (batch 7, F-25): a right-click on the tab opens the window
+		// menu (Move to workspace, Snap to, ...); elsewhere on the border
+		// it still sends the window behind
+		if (fOnTab && SnapLayouts::TabMenuEnabled()) {
+			SnapLayouts::ShowWindowMenu(fDesktop, fWindow, fWhere);
+			return;
+		}
 		fDesktop->SendWindowBehind(fWindow);
 	}
 
 private:
 	int8	fHorizontal;
 	int8	fVertical;
+	bool	fOnTab;
+	BPoint	fWhere;
 };
 
 

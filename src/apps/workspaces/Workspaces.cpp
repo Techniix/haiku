@@ -26,10 +26,17 @@
 #include <PopUpMenu.h>
 #include <Roster.h>
 #include <Screen.h>
+#include <Button.h>
+#include <LayoutBuilder.h>
+#include <StringView.h>
+#include <TextControl.h>
 #include <TextView.h>
 #include <Window.h>
 
 #include <ctype.h>
+#include <math.h>
+
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +44,7 @@
 #include <InterfacePrivate.h>
 #include <ViewPrivate.h>
 #include <WindowPrivate.h>
+#include <window_layouts.h>
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "Workspaces"
@@ -56,6 +64,117 @@ static const uint32 kMsgToggleAutoRaise = 'tgAR';
 static const uint32 kMsgToggleAlwaysOnTop = 'tgAT';
 static const uint32 kMsgToggleLiveInDeskbar = 'tgDb';
 static const uint32 kMsgToggleSwitchOnWheel = 'tgWh';
+// Renga (batch 7, F-25): visible workspaces
+static const uint32 kMsgAddWorkspace = 'adWS';
+static const uint32 kMsgRemoveWorkspace = 'rmWS';
+static const uint32 kMsgNameWorkspace = 'nmWS';
+static const uint32 kMsgNameDone = 'nmDn';
+static const uint32 kMsgOverview = 'ovWS';
+static const uint32 kMsgWorkspaceSettings = 'stWS';
+static const char* kControlPanelPath = "/boot/system/apps/ControlPanel";
+
+
+static void
+add_workspace()
+{
+	int32 count = count_workspaces();
+	if (count < 32) {
+		set_workspace_count(count + 1);
+		activate_workspace(count);
+	}
+}
+
+
+static void
+remove_last_workspace()
+{
+	int32 count = count_workspaces();
+	if (count > 1)
+		set_workspace_count(count - 1);
+}
+
+
+//!	"3: Mail", or "Workspace 3" without a name.
+static BString
+workspace_label(int32 index)
+{
+	WindowLayouts::Settings settings;
+	WindowLayouts::load(settings);
+	BString label;
+	if (index >= 0 && index < WindowLayouts::kMaxWorkspaces
+		&& settings.workspaceName[index][0] != '\0') {
+		label.SetToFormat("%" B_PRId32 ": %s", index + 1,
+			settings.workspaceName[index]);
+	} else
+		label.SetToFormat(B_TRANSLATE("Workspace %" B_PRId32), index + 1);
+	return label;
+}
+
+
+static void
+open_overview()
+{
+	const char* args[] = { "--overview", NULL };
+	be_roster->Launch(kSignature, 1, args);
+}
+
+
+//!	A small window to name one workspace.
+class NameWindow : public BWindow {
+public:
+	NameWindow(int32 workspace)
+		:
+		BWindow(BRect(0, 0, 300, 80), B_TRANSLATE("Name this workspace"),
+			B_FLOATING_WINDOW_LOOK, B_FLOATING_ALL_WINDOW_FEEL,
+			B_NOT_RESIZABLE | B_NOT_ZOOMABLE | B_AUTO_UPDATE_SIZE_LIMITS
+				| B_CLOSE_ON_ESCAPE),
+		fWorkspace(workspace)
+	{
+		WindowLayouts::Settings settings;
+		WindowLayouts::load(settings);
+		BString label;
+		label.SetToFormat(B_TRANSLATE("Name of workspace %" B_PRId32 ":"),
+			workspace + 1);
+		fName = new BTextControl("name", label.String(),
+			workspace < WindowLayouts::kMaxWorkspaces
+				? settings.workspaceName[workspace] : "",
+			new BMessage(kMsgNameDone));
+		BButton* done = new BButton("done", B_TRANSLATE("OK"),
+			new BMessage(kMsgNameDone));
+		BLayoutBuilder::Group<>(this, B_VERTICAL)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(fName)
+			.AddGroup(B_HORIZONTAL)
+				.AddGlue()
+				.Add(done)
+			.End();
+		SetDefaultButton(done);
+		CenterOnScreen();
+		fName->MakeFocus(true);
+	}
+
+	virtual void MessageReceived(BMessage* message)
+	{
+		if (message->what != kMsgNameDone) {
+			BWindow::MessageReceived(message);
+			return;
+		}
+		WindowLayouts::Settings settings;
+		WindowLayouts::load(settings);
+		if (fWorkspace >= 0 && fWorkspace < WindowLayouts::kMaxWorkspaces) {
+			BString name(fName->Text());
+			name.ReplaceAll('\n', ' ');
+			strlcpy(settings.workspaceName[fWorkspace], name.String(),
+				sizeof(settings.workspaceName[fWorkspace]));
+			WindowLayouts::save(settings);
+		}
+		Quit();
+	}
+
+private:
+	int32			fWorkspace;
+	BTextControl*	fName;
+};
 
 
 extern "C" _EXPORT BView* instantiate_deskbar_item(float maxWidth,
@@ -144,6 +263,7 @@ class WorkspacesView : public BView {
 
 	private:
 		void _AboutRequested();
+		int32 _WorkspaceAt(BPoint where) const;
 
 		void _UpdateParentClipping();
 		void _ExcludeFromParentClipping();
@@ -157,6 +277,7 @@ class WorkspacesView : public BView {
 		BView*	fParentWhichDrawsOnChildren;
 		BRect	fCurrentFrame;
 		bool	fSwitchOnWheel;
+		int32	fToolTipWorkspace;
 };
 
 class WorkspacesWindow : public BWindow {
@@ -186,6 +307,73 @@ class WorkspacesWindow : public BWindow {
 		float	fBorderWidth;
 };
 
+/*!	Renga (batch 7, F-25): the workspaces overview, every workspace large
+	(app_server draws the previews), opened by Command+Control+Up, the
+	switcher's menu and "Workspaces --overview". A click switches to the
+	workspace and closes it; so do Escape and clicking elsewhere.
+*/
+class OverviewWindow : public BWindow {
+public:
+	OverviewWindow()
+		:
+		BWindow(BRect(0, 0, 100, 100), B_TRANSLATE("Workspaces overview"),
+			B_BORDERED_WINDOW_LOOK, B_FLOATING_ALL_WINDOW_FEEL,
+			B_NOT_RESIZABLE | B_NOT_MOVABLE | B_NOT_ZOOMABLE
+				| B_CLOSE_ON_ESCAPE | B_WILL_ACCEPT_FIRST_CLICK,
+			B_ALL_WORKSPACES),
+		fStartWorkspace(current_workspace())
+	{
+		BScreen screen(this);
+		BRect frame = screen.Frame();
+		uint32 columns, rows;
+		BPrivate::get_workspaces_layout(&columns, &rows);
+		float aspect = frame.Width() / frame.Height();
+		float width = frame.Width() * 0.8f;
+		float height = frame.Height() * 0.8f - 24;
+		// keep each preview at the screen's aspect ratio
+		if (width / columns / aspect > height / rows)
+			width = floorf(height / rows * aspect * columns);
+		else
+			height = floorf(width / columns / aspect * rows);
+		ResizeTo(width, height + 24);
+		CenterOnScreen();
+		BView* view = new WorkspacesView(BRect(0, 0, width, height), false);
+		view->SetName("overview");
+		AddChild(view);
+		BStringView* hint = new BStringView(BRect(8, height + 4, width - 8,
+			height + 22), "hint", B_TRANSLATE("Click a workspace to switch "
+				"to it. Esc closes."));
+		BView* background = new BView(BRect(0, height + 1, width,
+			height + 24), "background", B_FOLLOW_NONE, 0);
+		background->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		AddChild(background);
+		background->AddChild(hint);
+		hint->MoveTo(8, 3);
+	}
+
+	virtual void WorkspaceActivated(int32 workspace, bool active)
+	{
+		if (active && workspace != fStartWorkspace)
+			PostMessage(B_QUIT_REQUESTED);
+	}
+
+	virtual void WindowActivated(bool active)
+	{
+		if (!active)
+			PostMessage(B_QUIT_REQUESTED);
+	}
+
+	virtual bool QuitRequested()
+	{
+		be_app->PostMessage(kMsgOverview);
+		return true;
+	}
+
+private:
+	int32	fStartWorkspace;
+};
+
+
 class WorkspacesApp : public BApplication {
 	public:
 		WorkspacesApp();
@@ -194,10 +382,13 @@ class WorkspacesApp : public BApplication {
 		virtual void AboutRequested();
 		virtual void ArgvReceived(int32 argc, char **argv);
 		virtual void ReadyToRun();
+		virtual void MessageReceived(BMessage* message);
 
 		void Usage(const char *programName);
 
 	private:
+		bool		fOverviewOnly;
+		int32		fOverviews;
 		WorkspacesWindow*	fWindow;
 };
 
@@ -329,7 +520,8 @@ WorkspacesView::WorkspacesView(BRect frame, bool showDragger = true)
 		kWorkspacesViewFlag | B_FRAME_EVENTS),
 	fParentWhichDrawsOnChildren(NULL),
 	fCurrentFrame(frame),
-	fSwitchOnWheel(false)
+	fSwitchOnWheel(false),
+	fToolTipWorkspace(-1)
 {
 	_LoadSettings();
 
@@ -349,7 +541,8 @@ WorkspacesView::WorkspacesView(BMessage* archive)
 	BView(archive),
 	fParentWhichDrawsOnChildren(NULL),
 	fCurrentFrame(Frame()),
-	fSwitchOnWheel(false)
+	fSwitchOnWheel(false),
+	fToolTipWorkspace(-1)
 {
 	_LoadSettings();
 
@@ -562,6 +755,29 @@ WorkspacesView::MessageReceived(BMessage* message)
 			break;
 		}
 
+		case kMsgAddWorkspace:
+			add_workspace();
+			break;
+		case kMsgRemoveWorkspace:
+			remove_last_workspace();
+			break;
+		case kMsgNameWorkspace:
+			(new NameWindow(message->GetInt32("workspace",
+				current_workspace())))->Show();
+			break;
+		case kMsgOverview:
+			open_overview();
+			break;
+		case kMsgWorkspaceSettings:
+		{
+			const char* args[] = { "--page", "workspaces", NULL };
+			BEntry entry(kControlPanelPath);
+			entry_ref ref;
+			if (entry.GetRef(&ref) == B_OK)
+				be_roster->Launch(&ref, 2, args);
+			break;
+		}
+
 		default:
 			BView::MessageReceived(message);
 			break;
@@ -569,10 +785,34 @@ WorkspacesView::MessageReceived(BMessage* message)
 }
 
 
+int32
+WorkspacesView::_WorkspaceAt(BPoint where) const
+{
+	uint32 columns, rows;
+	BPrivate::get_workspaces_layout(&columns, &rows);
+	BRect bounds = Bounds();
+	if (columns == 0 || rows == 0 || !bounds.Contains(where))
+		return -1;
+	int32 column = (int32)((where.x - bounds.left) * columns
+		/ (bounds.Width() + 1));
+	int32 row = (int32)((where.y - bounds.top) * rows
+		/ (bounds.Height() + 1));
+	int32 index = row * columns + column;
+	return index < count_workspaces() ? index : -1;
+}
+
+
 void
 WorkspacesView::MouseMoved(BPoint where, uint32 transit,
 	const BMessage* dragMessage)
 {
+	// Renga (batch 7): the name of the workspace under the pointer
+	int32 index = transit == B_EXITED_VIEW ? -1 : _WorkspaceAt(where);
+	if (index != fToolTipWorkspace) {
+		fToolTipWorkspace = index;
+		SetToolTip(index >= 0 ? workspace_label(index).String() : NULL);
+	}
+
 	WorkspacesWindow* window = dynamic_cast<WorkspacesWindow*>(Window());
 	if (window == NULL || !window->IsAutoRaising())
 		return;
@@ -628,6 +868,34 @@ WorkspacesView::MouseDown(BPoint where)
 		new BMessage(kMsgToggleSwitchOnWheel));
 	menu->AddItem(switchItem);
 	switchItem->SetMarked(fSwitchOnWheel);
+
+	// Renga (batch 7): add, remove and name workspaces, the overview
+	BMenuItem* addItem = new BMenuItem(B_TRANSLATE("Add workspace"),
+		new BMessage(kMsgAddWorkspace));
+	addItem->SetEnabled(count_workspaces() < 32);
+	BMenuItem* removeItem = new BMenuItem(
+		B_TRANSLATE("Remove last workspace"),
+		new BMessage(kMsgRemoveWorkspace));
+	removeItem->SetEnabled(count_workspaces() > 1);
+	int32 clicked = _WorkspaceAt(where);
+	BMessage* nameMessage = new BMessage(kMsgNameWorkspace);
+	nameMessage->AddInt32("workspace",
+		clicked >= 0 ? clicked : current_workspace());
+	BMenuItem* nameItem = new BMenuItem(B_TRANSLATE("Name this workspace"
+		B_UTF8_ELLIPSIS), nameMessage);
+	BMenuItem* overviewItem = new BMenuItem(B_TRANSLATE("Overview"),
+		new BMessage(kMsgOverview));
+	BMenuItem* settingsItem = new BMenuItem(B_TRANSLATE(
+		"Windows and workspaces settings" B_UTF8_ELLIPSIS),
+		new BMessage(kMsgWorkspaceSettings));
+	menu->AddSeparatorItem();
+	menu->AddItem(addItem);
+	menu->AddItem(removeItem);
+	menu->AddItem(nameItem);
+	menu->AddItem(overviewItem);
+	menu->AddItem(settingsItem);
+	BMenuItem* renga[] = { addItem, removeItem, nameItem, overviewItem,
+		settingsItem };
 
 	WorkspacesWindow *window = dynamic_cast<WorkspacesWindow*>(Window());
 	if (window != NULL) {
@@ -690,6 +958,8 @@ WorkspacesView::MouseDown(BPoint where)
 
 	changeItem->SetTarget(this);
 	switchItem->SetTarget(this);
+	for (size_t i = 0; i < sizeof(renga) / sizeof(renga[0]); i++)
+		renga[i]->SetTarget(this);
 
 	ConvertToScreen(&where);
 	menu->Go(where, true, true, true);
@@ -995,7 +1265,9 @@ WorkspacesWindow::SetAutoRaise(bool enable)
 
 
 WorkspacesApp::WorkspacesApp()
-	: BApplication(kSignature)
+	: BApplication(kSignature),
+	fOverviewOnly(false),
+	fOverviews(0)
 {
 	fWindow = new WorkspacesWindow(new WorkspacesSettings());
 }
@@ -1026,6 +1298,8 @@ WorkspacesApp::Usage(const char *programName)
 		"  --notmovable\t\twindow can't be moved around\n"
 		"  --autoraise\t\tauto-raise the workspace window when mouse is at the "
 		"screen edge\n"
+		"  --overview\t\tshow every workspace large, to switch\n"
+		"  --deskbar\t\tput the workspace switcher into the Deskbar\n"
 		"  --help\t\tdisplay this help and exit\n"
 		"  -i\t\t\tdisplay workspace layout and exit\n"
 		"\"workspace\" is the number of the Workspace to which to switch (+|-|0-31)\n"
@@ -1045,7 +1319,24 @@ WorkspacesApp::ArgvReceived(int32 argc, char **argv)
 	for (int i = 1;  i < argc;  i++) {
 		if (argv[i][0] == '-' && argv[i][1] == '-') {
 			// evaluate --arguments
-			if (!strcmp(argv[i], "--notitle"))
+			if (!strcmp(argv[i], "--deskbar")) {
+				// Renga (batch 7): the switcher into the Deskbar (the first
+				// login does this, so workspaces are visible by default)
+				BDeskbar deskbar;
+				BEntry entry;
+				app_info info;
+				if (!deskbar.HasItem(kDeskbarItemName)
+					&& be_app->GetAppInfo(&info) == B_OK)
+					deskbar.AddItem(&info.ref);
+				if (IsLaunching())
+					Quit();
+			} else if (!strcmp(argv[i], "--overview")) {
+				// Renga (batch 7): only the overview when launched for it
+				if (IsLaunching())
+					fOverviewOnly = true;
+				fOverviews++;
+				(new OverviewWindow())->Show();
+			} else if (!strcmp(argv[i], "--notitle"))
 				fWindow->SetLook(B_MODAL_WINDOW_LOOK);
 			else if (!strcmp(argv[i], "--noborder"))
 				fWindow->SetLook(B_NO_BORDER_WINDOW_LOOK);
@@ -1103,11 +1394,148 @@ WorkspacesApp::ArgvReceived(int32 argc, char **argv)
 void
 WorkspacesApp::ReadyToRun()
 {
-	fWindow->Show();
+	if (!fOverviewOnly)
+		fWindow->Show();
+}
+
+
+void
+WorkspacesApp::MessageReceived(BMessage* message)
+{
+	if (message->what == kMsgOverview) {
+		// an overview closed; quit if it was all this launch was for
+		if (--fOverviews <= 0 && fOverviewOnly)
+			PostMessage(B_QUIT_REQUESTED);
+		return;
+	}
+	BApplication::MessageReceived(message);
 }
 
 
 //	#pragma mark -
+
+
+/*!	Renga (batch 7, F-25): the switcher in the Deskbar is the previews
+	followed by a "+" that adds a workspace and switches to it.
+*/
+class AddWorkspaceView : public BView {
+public:
+	AddWorkspaceView(BRect frame)
+		:
+		BView(frame, "add workspace", B_FOLLOW_RIGHT | B_FOLLOW_TOP_BOTTOM,
+			B_WILL_DRAW)
+	{
+		SetToolTip(B_TRANSLATE("Add workspace"));
+	}
+
+	virtual void AttachedToWindow()
+	{
+		BView::AttachedToWindow();
+		if (Parent() != NULL)
+			SetViewColor(Parent()->ViewColor());
+		else
+			SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		SetLowColor(ViewColor());
+	}
+
+	virtual void Draw(BRect updateRect)
+	{
+		BRect bounds = Bounds();
+		SetHighUIColor(B_PANEL_TEXT_COLOR);
+		float size = std::min(bounds.Width(), bounds.Height()) - 4;
+		if (size < 3)
+			size = 3;
+		BPoint center((bounds.left + bounds.right) / 2,
+			(bounds.top + bounds.bottom) / 2);
+		center.x = floorf(center.x);
+		center.y = floorf(center.y);
+		SetPenSize(2);
+		StrokeLine(BPoint(center.x - size / 2, center.y),
+			BPoint(center.x + size / 2, center.y));
+		StrokeLine(BPoint(center.x, center.y - size / 2),
+			BPoint(center.x, center.y + size / 2));
+		SetPenSize(1);
+	}
+
+	virtual void MouseDown(BPoint where)
+	{
+		int32 buttons = 0;
+		if (Window() != NULL && Window()->CurrentMessage() != NULL)
+			Window()->CurrentMessage()->FindInt32("buttons", &buttons);
+		if ((buttons & B_PRIMARY_MOUSE_BUTTON) != 0)
+			add_workspace();
+	}
+};
+
+
+class DeskbarSwitcherView : public BView {
+public:
+	DeskbarSwitcherView(BRect frame, float previewsWidth)
+		:
+		BView(frame, kDeskbarItemName, B_FOLLOW_ALL, 0),
+		fPreviewsWidth(previewsWidth)
+	{
+		_AddChildren();
+	}
+
+	DeskbarSwitcherView(BMessage* archive)
+		:
+		BView(archive),
+		fPreviewsWidth(archive->GetFloat("previews width", 0))
+	{
+		_AddChildren();
+	}
+
+	// Deskbar keeps its items as archives: the children are made again
+	// from the width, not archived. Defined outside the class, so the
+	// symbol exists for instantiate_object().
+	static BArchivable* Instantiate(BMessage* archive);
+
+	virtual status_t Archive(BMessage* archive, bool deep) const
+	{
+		status_t status = BView::Archive(archive, false);
+		if (status == B_OK)
+			status = archive->AddString("add_on", kSignature);
+		if (status == B_OK)
+			status = archive->AddString("class", "DeskbarSwitcherView");
+		if (status == B_OK)
+			status = archive->AddFloat("previews width", fPreviewsWidth);
+		return status;
+	}
+
+	virtual void AttachedToWindow()
+	{
+		BView::AttachedToWindow();
+		if (Parent() != NULL)
+			SetViewColor(Parent()->ViewColor());
+	}
+
+private:
+	void _AddChildren()
+	{
+		BRect frame = Bounds();
+		float width = fPreviewsWidth > 0 ? fPreviewsWidth
+			: floorf(frame.Width() * 0.75f);
+		BRect previews(0, 0, width - 1, frame.Height());
+		WorkspacesView* view = new WorkspacesView(previews, false);
+		view->SetName("previews");
+		view->SetResizingMode(B_FOLLOW_ALL);
+		AddChild(view);
+		BRect plus(width + 1, 0, frame.Width(), frame.Height());
+		AddChild(new AddWorkspaceView(plus));
+	}
+
+	float	fPreviewsWidth;
+};
+
+
+BArchivable*
+DeskbarSwitcherView::Instantiate(BMessage* archive)
+{
+	if (!validate_instantiation(archive, "DeskbarSwitcherView"))
+		return NULL;
+	return new DeskbarSwitcherView(archive);
+}
 
 
 BView*
@@ -1140,6 +1568,16 @@ instantiate_deskbar_item(float maxWidth, float maxHeight)
 	if (width > maxWidth)
 		width = maxWidth;
 
+	// Renga (batch 7): room for the "+" when the switcher setting is on
+	WindowLayouts::Settings settings;
+	WindowLayouts::load(settings);
+	float plusWidth = floorf(height * 0.8f);
+	if (plusWidth < 10)
+		plusWidth = 10;
+	if (settings.switcherPlus && width + plusWidth <= maxWidth) {
+		return new DeskbarSwitcherView(BRect(0, 0, width + plusWidth - 1,
+			height - 1), width);
+	}
 	return new WorkspacesView(BRect (0, 0, width - 1, height - 1), false);
 }
 

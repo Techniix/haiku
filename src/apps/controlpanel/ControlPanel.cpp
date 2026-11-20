@@ -39,6 +39,7 @@
 #include <CheckBox.h>
 #include <ColumnListView.h>
 #include <ColumnTypes.h>
+#include <FindDirectory.h>
 #include <GroupView.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
@@ -73,6 +74,7 @@
 #include "DisplaysView.h"
 #include "LinuxKPIManage.h"
 #include "RenguinView.h"
+#include "WindowsPage.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -177,6 +179,11 @@ static const PageInfo kPages[] = {
 		"Colours, fonts, the window style and scroll bars.",
 		"/boot/system/preferences/Appearance",
 		"theme colour color font decorator" },
+	{ "workspaces", "Appearance", "Windows and workspaces",
+		"Snap layouts, the window menu, workspaces and their names.",
+		NULL,
+		"snap tile tiling zone layout grid workspace virtual desktop "
+		"overview arrange lumina window menu" },
 	{ "backgrounds", "Appearance", "Backgrounds",
 		"The desktop background of each workspace.",
 		"/boot/system/preferences/Backgrounds", "wallpaper desktop image" },
@@ -240,6 +247,16 @@ static const SettingInfo kSettings[] = {
 	{ "screenrecording", "Recording indicator", "red dot" },
 	{ "notifications", "Notification duration", "timeout" },
 	{ "notifications", "Allowed applications", "block mute" },
+	{ "workspaces", "Snap layouts", "snap zones tile drag grid" },
+	{ "workspaces", "Zone editor", "custom layout zones" },
+	{ "workspaces", "Zone shortcuts", "keyboard snap keys" },
+	{ "workspaces", "Window menu on the tab", "move to workspace right click" },
+	{ "workspaces", "Per-application window rules", "rule zone open" },
+	{ "workspaces", "Saved window arrangements", "restore positions" },
+	{ "workspaces", "Workspace names", "label desktop" },
+	{ "workspaces", "Workspace switcher in the Deskbar", "plus add" },
+	{ "workspaces", "Workspaces overview", "expose all" },
+	{ "workspaces", "Saved workspace sets", "profiles" },
 	{ "boot", "System restore points", "rollback undo update" },
 	{ "boot", "Automatic recovery after failed starts",
 		"boot counting safe mode" },
@@ -973,6 +990,8 @@ private:
 				.Add(new RenguinView());
 			return group;
 		}
+		if (strcmp(page->id, "workspaces") == 0)
+			return create_windows_page();
 		if (strcmp(page->id, "streaming") == 0)
 			return new StreamingPage();
 		if (strcmp(page->id, "devices") == 0)

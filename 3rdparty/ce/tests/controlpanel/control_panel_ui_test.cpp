@@ -246,6 +246,23 @@ main()
 		B_PRId32, shown.String(), control_value(messenger, "autoRecovery"),
 		control_value(messenger, "bootState"));
 
+	// batch 7 (F-25): Windows and workspaces
+	search_check("search_snap", "snap", "workspaces", "Snap layouts");
+	search_check("search_workspace_names", "workspace names", "workspaces",
+		"Workspace names");
+	shown = show_page(messenger, "workspaces");
+	snooze(800000);
+	report("window_page_workspaces", shown == "workspaces"
+			&& has_view(messenger, "snap") && has_view(messenger, "zoneEditor")
+			&& has_view(messenger, "tabMenu")
+			&& has_view(messenger, "switcher")
+			&& control_value(messenger, "snap") == 1,
+		"page \"%s\", snap switch %" B_PRId32, shown.String(),
+		control_value(messenger, "snap"));
+	printf("CE-HOST screenshot control_panel_workspaces\n");
+	fflush(stdout);
+	snooze(1500000);
+
 	shown = show_page(messenger, "displays");
 	snooze(500000);
 	report("window_page_displays", shown == "displays", "page \"%s\"",

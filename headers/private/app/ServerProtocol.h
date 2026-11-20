@@ -420,6 +420,18 @@ enum {
 	// Renga (batch 6): read the displays settings again and apply them
 	AS_RELOAD_DISPLAYS,
 
+	// Renga (batch 7, F-25): snap layouts (<window_layouts.h>)
+	AS_SNAP_WINDOW_TO_ZONE,
+		// window link: int32 zone (0-based; -1 restores the frame from
+		// before snapping); replies status_t
+	AS_WINDOW_ARRANGEMENT,
+		// application link: int32 action (0 save, 1 restore), string name;
+		// replies status_t, then int32 windows restored
+	AS_GET_SNAP_ZONES,
+		// application link: BPoint where; replies status_t, int32 count,
+		// count BRects (the zones there, for the current workspace)
+
+
 	AS_LAST_CODE
 };
 

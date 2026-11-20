@@ -253,6 +253,15 @@ public:
 			void				MarkDirty(BRegion& dirtyRegion, BRegion& exposeRegion);
 			void				MarkDirty(BRegion& region)
 									{ return MarkDirty(region, region); }
+
+			// Renga (batch 7, F-25): snap layouts draw their grid and the
+			// chosen zone above every window while a window is dragged
+			// with the snap modifier; nothing else may draw there then.
+			void				SetSnapOverlay(const BRegion& grid,
+									const BRegion& highlight);
+			void				ClearSnapOverlay();
+			bool				HasSnapOverlay() const
+									{ return fSnapOverlay.CountRects() > 0; }
 			void				Redraw();
 			void				RedrawBackground();
 
@@ -382,6 +391,10 @@ private:
 			ServerCursorReference fManagementCursor;
 
 			MultiLocker			fWindowLock;
+
+			BRegion				fSnapGrid;
+			BRegion				fSnapHighlight;
+			BRegion				fSnapOverlay;
 
 			BRegion				fBackgroundRegion;
 			BRegion				fScreenRegion;

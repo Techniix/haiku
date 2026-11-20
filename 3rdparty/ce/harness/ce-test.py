@@ -224,7 +224,7 @@ WELCOME_SCREENSHOTS = ["welcome_graphics", "welcome_setup"]
 RENGUIN_MANAGER_SCREENSHOTS = ["renguin_manager"]
 CONTROL_PANEL_SCREENSHOTS = ["control_panel_search",
 	"control_panel_streaming", "control_panel_displays",
-	"control_panel_devices"]
+	"control_panel_devices", "control_panel_workspaces"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
 	"linuxkpi_hardware", "linuxkpi_compatibility",
 	"linuxkpi_settings_mt7921e"]
@@ -2415,9 +2415,12 @@ class SerialReader(threading.Thread):
 		      0..32767 on both axes
 		  CE-HOST pointer_rel <dx> <dy>
 		      move the PS/2 mouse by dx, dy (at most 200 either way)
-		  CE-HOST pointer_button <device> down|up
-		      press or release the left button of an absolute device the
-		      harness attached (drags, F-59)
+		  CE-HOST pointer_button <device> down|up|right_down|right_up
+		      press or release the left (or right) button of an absolute
+		      device the harness attached (drags, F-59; menus, batch 7)
+		  CE-HOST key_hold shift|ctrl|alt down|up
+		      press or release one modifier key on the guest's keyboard
+		      and keep it so (snap layouts: a key held during a drag)
 		  CE-HOST screenshot <name>
 		      save the screen as screen-<name>.png in the results (name:
 		      up to 40 lower-case letters, digits and underscores)
@@ -2458,6 +2461,15 @@ class SerialReader(threading.Thread):
 					"pointer_button"):
 				if self.qmp_path is not None:
 					request["error"] = qmp_pointer(self.qmp_path, words)
+			elif accepted and words[0] == "key_hold":
+				if self.qmp_path is not None:
+					request["error"] = qmp_execute(self.qmp_path,
+						"input-send-event", events=[{"type": "key",
+							"data": {"down": words[2] == "down",
+								"key": {"type": "qcode",
+									"data": words[1]}}}])
+				else:
+					request["error"] = "no QMP socket"
 			elif accepted and words[0] == "usb_audio":
 				request["error"] = self._usb_audio(words[1])
 			elif accepted and words[0] == "kdl_reboot":
@@ -2669,7 +2681,11 @@ def host_request_allowed(words):
 		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None \
 			and re.fullmatch(r"[0-7]", words[2]) is not None
 	if len(words) == 3 and words[0] == "pointer_button":
-		return words[1] in POINTER_DEVICES and words[2] in ("down", "up")
+		return words[1] in POINTER_DEVICES and words[2] in ("down", "up",
+			"right_down", "right_up")
+	if len(words) == 3 and words[0] == "key_hold":
+		return words[1] in ("shift", "ctrl", "alt") \
+			and words[2] in ("down", "up")
 	if len(words) == 3 and words[0] == "pointer_rel":
 		return all(re.fullmatch(r"-?\d{1,3}", w) is not None
 			and abs(int(w)) <= POINTER_REL_MAX for w in words[1:])
@@ -2757,8 +2773,9 @@ def qmp_pointer(path, words):
 				hmp("mouse_set " + index)
 			if words[0] == "pointer_button":
 				execute("input-send-event", events=[
-					{"type": "btn", "data": {"button": "left",
-						"down": words[2] == "down"}}])
+					{"type": "btn", "data": {"button":
+						"right" if words[2].startswith("right") else "left",
+						"down": words[2] in ("down", "right_down")}}])
 			elif words[0] == "pointer":
 				execute("input-send-event", events=[
 					{"type": "abs", "data": {"axis": "x",

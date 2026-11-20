@@ -57,6 +57,7 @@
 #include "ScreenManager.h"
 #include "ScreenCaptureManager.h"
 #include "ServerApp.h"
+#include "SnapLayouts.h"
 #include "ServerConfig.h"
 #include "ServerCursor.h"
 #include "ServerWindow.h"
@@ -201,6 +202,10 @@ KeyboardFilter::Filter(BMessage* message, EventTarget** _target,
 			system("screenmode --fall-back &");
 			return B_SKIP_MESSAGE;
 		}
+
+		// Renga (batch 7): zone shortcuts and the workspaces overview
+		if (SnapLayouts::HandleKey(fDesktop, key, modifiers))
+			return B_SKIP_MESSAGE;
 
 		bool takeWindow = (modifiers & B_SHIFT_KEY) != 0
 			|| fDesktop->MouseEventWindow() != NULL;
@@ -1439,6 +1444,9 @@ Desktop::ShowWindow(Window* window)
 
 	AutoWriteLocker locker(fWindowLock);
 
+	// Renga (batch 7): per-application snap rules, before it is shown
+	SnapLayouts::WindowShown(this, window);
+
 	window->SetHidden(false);
 	fFocusList.AddWindow(window);
 
@@ -1822,6 +1830,7 @@ Desktop::RemoveWindow(Window *window)
 	if (!window->IsHidden())
 		HideWindow(window);
 
+	SnapLayouts::WindowRemoved(window);
 	fAllWindows.RemoveWindow(window);
 	if (!window->IsNormal())
 		fSubsetWindows.RemoveWindow(window);
@@ -3546,6 +3555,8 @@ Desktop::_RebuildClippingForAllWindows(BRegion& stillAvailableOnScreen)
 
 	// figure out what the entire screen area is
 	stillAvailableOnScreen = fScreenRegion;
+	// Renga: the snap layout overlay is above every window
+	stillAvailableOnScreen.Exclude(&fSnapOverlay);
 
 	// set clipping of each window
 	for (Window* window = CurrentWindows().LastWindow(); window != NULL;
@@ -3604,6 +3615,61 @@ Desktop::_SetBackground(BRegion& background)
 }
 
 
+/*!	Renga (batch 7, F-25): shows the snap layout grid (thin lines) and the
+	chosen zone (a frame in the highlight colour) above every window. The
+	overlay is taken out of every window's clipping and out of the
+	background, like a window in front of all others, so nothing draws
+	over it and the areas it leaves are redrawn by their windows.
+*/
+void
+Desktop::SetSnapOverlay(const BRegion& grid, const BRegion& highlight)
+{
+	AutoWriteLocker _(fWindowLock);
+
+	BRegion old(fSnapOverlay);
+	fSnapHighlight = highlight;
+	fSnapHighlight.IntersectWith(&fScreenRegion);
+	fSnapGrid = grid;
+	fSnapGrid.IntersectWith(&fScreenRegion);
+	fSnapGrid.Exclude(&fSnapHighlight);
+	fSnapOverlay = fSnapGrid;
+	fSnapOverlay.Include(&fSnapHighlight);
+
+	BRegion background;
+	_RebuildClippingForAllWindows(background);
+	_SetBackground(background);
+
+	if (fSnapOverlay.CountRects() > 0
+		&& GetDrawingEngine()->LockParallelAccess()) {
+		DesktopSettings settings(this);
+		rgb_color highlightColor
+			= settings.UIColor(B_KEYBOARD_NAVIGATION_COLOR);
+		rgb_color gridColor = settings.UIColor(B_PANEL_TEXT_COLOR);
+		gridColor.alpha = 255;
+		highlightColor.alpha = 255;
+		if (fSnapGrid.CountRects() > 0)
+			GetDrawingEngine()->FillRegion(fSnapGrid, gridColor);
+		if (fSnapHighlight.CountRects() > 0)
+			GetDrawingEngine()->FillRegion(fSnapHighlight, highlightColor);
+		GetDrawingEngine()->UnlockParallelAccess();
+	}
+
+	BRegion uncovered(old);
+	uncovered.Exclude(&fSnapOverlay);
+	if (uncovered.CountRects() > 0)
+		MarkDirty(uncovered);
+}
+
+
+void
+Desktop::ClearSnapOverlay()
+{
+	if (fSnapOverlay.CountRects() == 0)
+		return;
+	SetSnapOverlay(BRegion(), BRegion());
+}
+
+
 //!	The all window lock must be held when calling this function.
 void
 Desktop::RebuildAndRedrawAfterWindowChange(Window* changedWindow,
@@ -3619,6 +3685,7 @@ Desktop::RebuildAndRedrawAfterWindowChange(Window* changedWindow,
 
 	// figure out what the entire screen area is
 	BRegion stillAvailableOnScreen(fScreenRegion);
+	stillAvailableOnScreen.Exclude(&fSnapOverlay);
 
 	// set clipping of each window
 	for (Window* window = CurrentWindows().LastWindow(); window != NULL;

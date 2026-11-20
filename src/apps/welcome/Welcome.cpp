@@ -656,7 +656,13 @@ private:
 		return _Page(id, B_TRANSLATE("Tips"), _Text("body",
 			B_TRANSLATE("Workspaces: Renga has several desktops. Switch with "
 			"the shortcut key + F1, F2, ...; move a window there by holding "
-			"Shift as well. Workspaces sets how many.\n\n"
+			"Shift as well. Workspaces sets how many; the switcher in the "
+			"Deskbar shows them, its \"+\" adds one, and the shortcut key + "
+			"Control + Up shows them all.\n\n"
+			"Snap layouts: while dragging a window, hold Shift to see the "
+			"zones and drop it into one; right-click a window's tab to move "
+			"it to another workspace. Control Panel, Windows and workspaces "
+			"has the layouts and switches.\n\n"
 			"Help: the Control Panel has every setting with a search; "
 			"Renga Doctor collects a report for a bug report; the "
 			"documentation is in the Deskbar's Help menu.")), NULL,

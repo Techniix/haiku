@@ -70,6 +70,7 @@
 #include "ProfileMessageSupport.h"
 #include "RenderingBuffer.h"
 #include "ServerApp.h"
+#include "SnapLayouts.h"
 #include "ServerBitmap.h"
 #include "ServerPicture.h"
 #include "ServerProtocol.h"
@@ -916,6 +917,25 @@ ServerWindow::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 					yMoveTo - fWindow->Frame().top);
 				fLink.StartMessage(B_OK);
 			}
+			fLink.Flush();
+			break;
+		}
+		case AS_SNAP_WINDOW_TO_ZONE:
+		{
+			// Renga (batch 7, F-25): the window menu's "Snap to" items
+			int32 zone;
+			if (link.Read<int32>(&zone) != B_OK)
+				break;
+			status_t status;
+			if (fWindow->IsDragging())
+				status = B_BUSY;
+			else if (zone < 0) {
+				status = SnapLayouts::RestoreWindow(fDesktop, fWindow.Get())
+					? B_OK : B_ENTRY_NOT_FOUND;
+			} else
+				status = SnapLayouts::PlaceWindowInZone(fDesktop,
+					fWindow.Get(), zone);
+			fLink.StartMessage(status);
 			fLink.Flush();
 			break;
 		}
@@ -4537,6 +4557,7 @@ ServerWindow::_MessageNeedsAllWindowsLocked(uint32 code) const
 		case AS_SET_WORKSPACES:
 		case AS_WINDOW_MOVE:
 		case AS_WINDOW_RESIZE:
+		case AS_SNAP_WINDOW_TO_ZONE:
 		case AS_SET_SIZE_LIMITS:
 		case AS_SYSTEM_FONT_CHANGED:
 		case AS_SET_DECORATOR_SETTINGS:

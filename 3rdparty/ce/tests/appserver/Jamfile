@@ -34,9 +34,16 @@ Application screen_read_direct :
 	: be game [ TargetLibstdc++ ]
 ;
 
+# Snap layouts and visible workspaces (batch 7, F-25), see the source.
+Application snap_layouts_test :
+	snap_layouts_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test
-		hw_cursor_test screen_read_test capture_privacy_test ;
+		hw_cursor_test screen_read_test capture_privacy_test
+		snap_layouts_test ;
 	AddFilesToHaikuImage system non-packaged bin : screen_read_direct ;
 }
 

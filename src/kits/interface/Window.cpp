@@ -38,6 +38,7 @@
 #include <MessageQueue.h>
 #include <MessageRunner.h>
 #include <Path.h>
+#include <PopUpMenu.h>
 #include <PortLink.h>
 #include <PropertyInfo.h>
 #include <Roster.h>
@@ -52,6 +53,7 @@
 #include <ToolTipWindow.h>
 #include <UnicodeChar.h>
 #include <WindowPrivate.h>
+#include <window_layouts.h>
 
 #include <binary_compatibility/Interface.h>
 #include <input_globals.h>
@@ -994,6 +996,93 @@ BWindow::MessageReceived(BMessage* message)
 }
 
 
+/*!	Renga (batch 7, F-25): the window menu that a right-click on the tab
+	opens (app_server's kMsgWindowMenu, see <window_layouts.h>). Its items
+	come back to the window as kMsgWindowMenuAction.
+*/
+static void
+show_window_menu(BWindow* window, BMessage* request)
+{
+	BPoint where;
+	if (request->FindPoint("where", &where) != B_OK)
+		return;
+	int32 current = request->GetInt32("workspace", current_workspace());
+	int32 count = request->GetInt32("workspaces", count_workspaces());
+	int32 zones = request->GetInt32("zones", 0);
+
+	BPopUpMenu* menu = new BPopUpMenu("window menu", false, false);
+	menu->SetAsyncAutoDestruct(true);
+
+	BMenu* workspaces = new BMenu("Move to workspace");
+	for (int32 i = 0; i < count && i < 32; i++) {
+		BString label;
+		const char* name = request->GetString("name", i, "");
+		if (name[0] != '\0')
+			label.SetToFormat("%" B_PRId32 ": %s", i + 1, name);
+		else
+			label.SetToFormat("Workspace %" B_PRId32, i + 1);
+		BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
+		message->AddInt32("workspace", i);
+		BMenuItem* item = new BMenuItem(label.String(), message);
+		item->SetMarked((window->Workspaces() & (1UL << i)) != 0
+			&& window->Workspaces() != B_ALL_WORKSPACES);
+		item->SetEnabled(i != current
+			|| window->Workspaces() == B_ALL_WORKSPACES);
+		workspaces->AddItem(item);
+	}
+	if (count < 32) {
+		workspaces->AddSeparatorItem();
+		BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
+		message->AddInt32("workspace", -2);
+		workspaces->AddItem(new BMenuItem("New workspace", message));
+	}
+	workspaces->SetTargetForItems(window);
+	menu->AddItem(workspaces);
+
+	if (request->GetBool("snap", true) && zones > 0
+		&& (window->Flags() & B_NOT_MOVABLE) == 0) {
+		BMenu* snap = new BMenu("Snap to");
+		for (int32 i = 0; i < zones; i++) {
+			BString label;
+			label.SetToFormat("Zone %" B_PRId32, i + 1);
+			BMessage* message
+				= new BMessage(WindowLayouts::kMsgWindowMenuAction);
+			message->AddInt32("zone", i);
+			snap->AddItem(new BMenuItem(label.String(), message,
+				i < 9 ? '1' + i : 0, B_COMMAND_KEY | B_CONTROL_KEY));
+		}
+		snap->AddSeparatorItem();
+		BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
+		message->AddInt32("zone", -1);
+		snap->AddItem(new BMenuItem("Restore size", message, '0',
+			B_COMMAND_KEY | B_CONTROL_KEY));
+		snap->SetTargetForItems(window);
+		menu->AddItem(snap);
+	}
+
+	menu->AddSeparatorItem();
+	BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
+	message->AddBool("minimize", true);
+	BMenuItem* item = new BMenuItem("Minimize", message);
+	item->SetEnabled((window->Flags() & B_NOT_MINIMIZABLE) == 0);
+	menu->AddItem(item);
+	message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
+	message->AddBool("zoom", true);
+	item = new BMenuItem("Zoom", message);
+	item->SetEnabled((window->Flags() & B_NOT_ZOOMABLE) == 0);
+	menu->AddItem(item);
+	menu->AddSeparatorItem();
+	message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
+	message->AddBool("close", true);
+	item = new BMenuItem("Close", message);
+	item->SetEnabled((window->Flags() & B_NOT_CLOSABLE) == 0);
+	menu->AddItem(item);
+	menu->SetTargetForItems(window);
+
+	menu->Go(where, true, false, true);
+}
+
+
 void
 BWindow::DispatchMessage(BMessage* message, BHandler* target)
 {
@@ -1004,6 +1093,40 @@ BWindow::DispatchMessage(BMessage* message, BHandler* target)
 		case B_ZOOM:
 			Zoom();
 			break;
+
+		case WindowLayouts::kMsgWindowMenu:
+			// Renga (batch 7, F-25): app_server asks for the window menu
+			// (the tab was right-clicked)
+			show_window_menu(this, message);
+			break;
+
+		case WindowLayouts::kMsgWindowMenuAction:
+		{
+			int32 workspace;
+			int32 zone;
+			if (message->FindInt32("workspace", &workspace) == B_OK) {
+				int32 count = count_workspaces();
+				if (workspace == -2 && count < 32) {
+					set_workspace_count(count + 1);
+					workspace = count;
+				}
+				if (workspace >= 0 && workspace < 32)
+					SetWorkspaces(1UL << workspace);
+			} else if (message->FindInt32("zone", &zone) == B_OK) {
+				fLink->StartMessage(AS_SNAP_WINDOW_TO_ZONE);
+				fLink->Attach<int32>(zone);
+				status_t status;
+				fLink->FlushWithReply(status);
+			} else if (message->GetBool("minimize", false)) {
+				if ((Flags() & B_NOT_MINIMIZABLE) == 0)
+					Minimize(true);
+			} else if (message->GetBool("zoom", false)) {
+				if ((Flags() & B_NOT_ZOOMABLE) == 0)
+					Zoom();
+			} else if (message->GetBool("close", false))
+				PostMessage(B_QUIT_REQUESTED);
+			break;
+		}
 
 		case _MINIMIZE_:
 			// Used by the minimize shortcut

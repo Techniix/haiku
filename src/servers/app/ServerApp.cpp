@@ -75,6 +75,7 @@
 #include "ServerPicture.h"
 #include "ServerTokenSpace.h"
 #include "ServerWindow.h"
+#include "SnapLayouts.h"
 #include "Window.h"
 
 
@@ -3632,6 +3633,45 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 				stats.cursor_wait_total, stats.cursor_wait_max, reset);
 			fLink.StartMessage(B_OK);
 			fLink.Attach(&stats, sizeof(stats));
+			fLink.Flush();
+			break;
+		}
+
+		case AS_WINDOW_ARRANGEMENT:
+		{
+			// Renga (batch 7, F-25): saved window arrangements
+			int32 action;
+			BString name;
+			link.Read<int32>(&action);
+			if (link.ReadString(name) != B_OK)
+				break;
+			int32 restored = 0;
+			status_t status = action == 0
+				? SnapLayouts::SaveArrangement(fDesktop, name.String())
+				: SnapLayouts::RestoreArrangement(fDesktop, name.String(),
+					&restored);
+			fLink.StartMessage(status);
+			fLink.Attach<int32>(restored);
+			fLink.Flush();
+			break;
+		}
+
+		case AS_GET_SNAP_ZONES:
+		{
+			BPoint where;
+			if (link.Read<BPoint>(&where) != B_OK)
+				break;
+			BRect frames[SnapLayouts::kMaxFrames];
+			int32 count = 0;
+			if (fDesktop->LockAllWindows()) {
+				count = SnapLayouts::ZoneFrames(fDesktop, where, frames,
+					SnapLayouts::kMaxFrames);
+				fDesktop->UnlockAllWindows();
+			}
+			fLink.StartMessage(B_OK);
+			fLink.Attach<int32>(count);
+			for (int32 i = 0; i < count; i++)
+				fLink.Attach<BRect>(frames[i]);
 			fLink.Flush();
 			break;
 		}
