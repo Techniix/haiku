@@ -55,6 +55,7 @@
 #include <SpaceLayoutItem.h>
 #include <StringView.h>
 #include <TextView.h>
+#include <Url.h>
 #include <Window.h>
 
 #include <dirent.h>
@@ -90,8 +91,15 @@ static const uint32 kMsgFinish = 'fini';
 static const uint32 kMsgAction = 'actn';
 static const uint32 kMsgShortcutCtrl = 'scCt';
 static const uint32 kMsgShortcutAlt = 'scAl';
+static const uint32 kMsgQuasarChecked = 'qsCk';
+static const uint32 kMsgOpenQuasarInstructions = 'qsBi';
+static const char* kQuasarInstructions
+	= "https://github.com/Techniix/nvidia-haiku";
 // from other programs (tests): "id" -> replies "page"
 static const uint32 kMsgShowPage = 'wlPg';
+
+static bool sAssumeNvidia = false;
+	// "--test-assume-nvidia" (welcome_ui_test)
 
 static const char* kPageIDs[] = { "welcome", "network", "graphics",
 	"software", "linux", "gamepads", "setup", "tips" };
@@ -203,6 +211,47 @@ find_things()
 		position++;
 	}
 	return findings;
+}
+
+
+/*!	Whether a configured repository offers the "quasar" package, from the
+	repositories' cached data (pkgman search -a, no download). Runs a
+	program, so the window asks it in a thread.
+*/
+static bool
+quasar_available()
+{
+	std::string output = command_output(
+		"/bin/pkgman search -a quasar 2>/dev/null");
+	// one row per package: "<status>  <name>  <summary>"; the name column
+	// must be exactly "quasar"
+	size_t start = 0;
+	while (start < output.size()) {
+		size_t end = output.find('\n', start);
+		if (end == std::string::npos)
+			end = output.size();
+		std::string line = output.substr(start, end - start);
+		start = end + 1;
+		size_t word = 0;
+		std::vector<std::string> words;
+		while (word < line.size()) {
+			while (word < line.size() && (line[word] == ' '
+					|| line[word] == '\t'))
+				word++;
+			size_t wordEnd = word;
+			while (wordEnd < line.size() && line[wordEnd] != ' '
+					&& line[wordEnd] != '\t')
+				wordEnd++;
+			if (wordEnd > word)
+				words.push_back(line.substr(word, wordEnd - word));
+			word = wordEnd;
+		}
+		for (size_t i = 0; i < words.size() && i < 2; i++) {
+			if (words[i] == "quasar")
+				return true;
+		}
+	}
+	return false;
 }
 
 
@@ -329,7 +378,13 @@ public:
 				| B_AUTO_UPDATE_SIZE_LIMITS),
 		fCurrent(0)
 	{
+		fGraphicsStatus = NULL;
+		fInstallQuasar = NULL;
+		fQuasarInstructions = NULL;
 		fFindings = find_things();
+		// tests only: behave as with an NVIDIA card (QEMU has none)
+		if (sAssumeNvidia)
+			fFindings.nvidia = true;
 
 		fCards = new BCardLayout();
 		BView* cards = new BView("pages", 0, fCards);
@@ -365,6 +420,14 @@ public:
 		}
 		_Show(start);
 		CenterOnScreen();
+
+		// whether a repository has Quasar: pkgman takes a moment, the
+		// window does not wait for it
+		if (fFindings.nvidia && !fFindings.quasar) {
+			thread_id thread = spawn_thread(_CheckQuasarThread,
+				"check quasar", B_LOW_PRIORITY, this);
+			resume_thread(thread);
+		}
 	}
 
 	virtual bool QuitRequested()
@@ -396,6 +459,12 @@ public:
 				break;
 			case kMsgShortcutAlt:
 				set_shortcut_style(BPrivate::SHORTCUT_KEYS_ALT);
+				break;
+			case kMsgQuasarChecked:
+				_QuasarChecked(message->GetBool("available", false));
+				break;
+			case kMsgOpenQuasarInstructions:
+				BUrl(kQuasarInstructions, true).OpenWithPreferredApplication();
 				break;
 			case kMsgShowPage:
 			{
@@ -431,7 +500,8 @@ private:
 	}
 
 	BView* _Page(const char* id, const char* title, BView* body,
-		BView* status, BButton* first = NULL, BButton* second = NULL)
+		BView* status, BButton* first = NULL, BButton* second = NULL,
+		BView* extra = NULL)
 	{
 		BStringView* heading = new BStringView("title", title);
 		BFont font(be_bold_font);
@@ -454,6 +524,8 @@ private:
 				BSpaceLayoutItem::CreateGlue());
 			builder.Add(buttons);
 		}
+		if (extra != NULL)
+			builder.Add(extra);
 		builder.AddGlue();
 		return page;
 	}
@@ -489,9 +561,9 @@ private:
 				status = B_TRANSLATE("NVIDIA graphics card found; Quasar, "
 					"the NVIDIA driver, is installed.");
 			} else {
-				status = B_TRANSLATE("NVIDIA graphics card found. Quasar, "
-					"the NVIDIA driver, can be installed from the Renga "
-					"repository.");
+				status = B_TRANSLATE("NVIDIA graphics card found. Looking "
+					"for Quasar, the NVIDIA driver, in the repositories"
+					B_UTF8_ELLIPSIS);
 			}
 			BString drivers;
 			if (f.missingFirmware > 0) {
@@ -500,15 +572,27 @@ private:
 					"drivers can get it."), f.missingFirmware);
 				status << drivers;
 			}
+			fGraphicsStatus = _Text("graphicsStatus", status);
+			fDriverNote = drivers;
+			// shown when a repository has the package (_QuasarChecked())
+			fInstallQuasar = _ActionButton("installQuasar",
+				B_TRANSLATE("Install Quasar"), "quasar");
+			fInstallQuasar->Hide();
+			fQuasarInstructions = new BButton("quasarInstructions",
+				B_TRANSLATE("How to build Quasar" B_UTF8_ELLIPSIS),
+				new BMessage(kMsgOpenQuasarInstructions));
+			fQuasarInstructions->Hide();
+			BGroupView* buttons = new BGroupView(B_HORIZONTAL);
+			buttons->AddChild(fInstallQuasar);
+			buttons->AddChild(fQuasarInstructions);
+			buttons->AddChild(_ActionButton("openDevices", B_TRANSLATE(
+				"Devices and drivers" B_UTF8_ELLIPSIS), "devices"));
+			buttons->GroupLayout()->AddItem(BSpaceLayoutItem::CreateGlue());
 			return _Page(id, B_TRANSLATE("Graphics and drivers"),
 				_Text("body", B_TRANSLATE("Renga finds the drivers your "
 				"hardware needs. Drivers and firmware come as packages from "
 				"the Renga repository, so updates and restore points cover "
-				"them too.")), _Text("graphicsStatus", status),
-				_ActionButton("installQuasar", B_TRANSLATE("Install Quasar"),
-					"quasar", f.nvidia && !f.quasar),
-				_ActionButton("openDevices", B_TRANSLATE("Devices and drivers"
-					B_UTF8_ELLIPSIS), "devices"));
+				"them too.")), fGraphicsStatus, NULL, NULL, buttons);
 		}
 		if (strcmp(id, "software") == 0) {
 			status = f.rengaRepository
@@ -625,7 +709,45 @@ private:
 			launch("/boot/system/apps/ControlPanel");
 	}
 
+	static status_t _CheckQuasarThread(void* data)
+	{
+		BMessage done(kMsgQuasarChecked);
+		done.AddBool("available", quasar_available());
+		((WelcomeWindow*)data)->PostMessage(&done);
+		return B_OK;
+	}
+
+	/*!	Quasar is only offered when a configured repository has it;
+		otherwise the page says so and links its build instructions.
+	*/
+	void _QuasarChecked(bool available)
+	{
+		if (fGraphicsStatus == NULL)
+			return;
+		BString status;
+		if (available) {
+			status = B_TRANSLATE("NVIDIA graphics card found. Quasar, the "
+				"NVIDIA driver, can be installed from your repositories.");
+			if (fInstallQuasar->IsHidden())
+				fInstallQuasar->Show();
+		} else {
+			status = B_TRANSLATE("NVIDIA graphics card found. Quasar, the "
+				"NVIDIA driver, is not in your repositories yet; it can be "
+				"built from its source.");
+			if (fQuasarInstructions->IsHidden())
+				fQuasarInstructions->Show();
+		}
+		status << fDriverNote;
+		((BTextView*)fGraphicsStatus)->SetText(status);
+		printf("Welcome: Quasar %s in the repositories\n",
+			available ? "found" : "not found");
+	}
+
 	BCardLayout*	fCards;
+	BView*			fGraphicsStatus;
+	BButton*		fInstallQuasar;
+	BButton*		fQuasarInstructions;
+	BString			fDriverNote;
 	BButton*		fBack;
 	BButton*		fNext;
 	BCheckBox*		fDontShow;
@@ -676,16 +798,21 @@ main(int argc, char** argv)
 			"connected %" B_PRId32 "\nnvidia %s\nquasar %s\n"
 			"renga_repository %s\nrenguin %s\nlinux_root %s\n"
 			"missing_firmware %" B_PRId32 "\nshortcut_key %s\n"
-			"done %s\n", f.interfaces, f.wireless, f.connected,
+			"done %s\nquasar_available %s\n", f.interfaces, f.wireless, f.connected,
 			f.nvidia ? "yes" : "no", f.quasar ? "yes" : "no",
 			f.rengaRepository ? "yes" : "no", f.renguin ? "yes" : "no",
 			f.linuxRoot ? "yes" : "no", f.missingFirmware,
 			current_shortcut_style() == BPrivate::SHORTCUT_KEYS_ALT
 				? "alt" : "ctrl",
-			access(settings_path().Path(), F_OK) == 0 ? "yes" : "no");
+			access(settings_path().Path(), F_OK) == 0 ? "yes" : "no",
+			quasar_available() ? "yes" : "no");
 		return 0;
 	}
 	const char* page = NULL;
+	if (argc >= 2 && strcmp(argv[argc - 1], "--test-assume-nvidia") == 0) {
+		sAssumeNvidia = true;
+		argc--;
+	}
 	if (argc == 3 && strcmp(argv[1], "--page") == 0)
 		page = argv[2];
 	else if (argc != 1) {
