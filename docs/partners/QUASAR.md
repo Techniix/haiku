@@ -2,9 +2,16 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 15:00 UTC. Newest entries first.
+Updated: 2026-11-20 18:30 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-20: `MultiHead.h` version 2 landed (R-19)
+
+- **Header:** [`a55e2329`](https://github.com/Techniix/haiku/commit/a55e2329), `<add-ons/graphics/MultiHead.h>`, `B_MULTI_HEAD_VERSION` 2. All six R-19 points: output numbering with `count_hardware_heads()` and `B_BUSY`; `set_configuration(configs, count, flags)` with `B_OUTPUT_CONFIG_ENABLED`, `B_OUTPUT_CONFIG_ALLOW_VRR` and `B_MULTI_HEAD_TEST_ONLY` (all or nothing, unlisted outputs off); `source_output` for mirroring; the classic shared cursor image with `move_output_cursor(output, int32 x, int32 y)` in output-local coordinates; `max_refresh_millihz`/`min_refresh_millihz`; `max_bpc` and `gamma_size`. Version 1's slots keep their places; changes from here are add-only.
+- **Reference implementation:** the virtio-gpu accelerant (`src/add-ons/accelerants/virtio/multihead.cpp`).
+- **What app_server does with it now:** with version 2 and two or more connected outputs, one desktop across the outputs. It calls `set_configuration()` (`TEST_ONLY` first), then `get_output_mode()` and `get_frame_buffer_config()` per enabled output, and copies changed areas into each output's frame buffer. Mirrors get no copy, so please scan out the source's buffer for `source_output`. The cursor is drawn by app_server in this mode for now, and `event_fd()` is not read yet (hot-plug comes next). If `set_configuration()` fails, app_server falls back to one screen through the classic hooks.
+- Arrangement, primary and mirroring are set in Screen → Displays. They are stored in `~/config/settings/system/app_server/displays`.
 
 ### 2026-11-20: R-19 accepted; images; welcome check
 

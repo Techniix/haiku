@@ -41,6 +41,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --installer-upgrade  # upgrade an old install in place
 3rdparty/ce/harness/ce-test.py --restore-points --only bootstate_test,restore_point_test
 3rdparty/ce/harness/ce-test.py --loader-writes  # boot loader writes stay in the state file
+3rdparty/ce/harness/ce-test.py --displays 2 --only displays_multi_test  # several screens
 3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
 3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
 3rdparty/ce/harness/ce-test.py --only epoll,signalfd  # quick, PARTIAL run
@@ -185,6 +186,20 @@ recovery menu and its choice, the plain-date labels, and the pick.
 `bootstate_test` (every run) covers the file format, torn writes and the
 labels, and that the boot loader counted and `bootstate boot` confirmed the
 start of the run itself.
+
+### Several screens
+
+`--displays N` (N > 1) replaces the VGA card with a virtio-gpu card with N
+outputs of 1024x768 (`virtio-gpu-pci,max_outputs=N`). The image gets
+`all_outputs true` in the virtio_gpu driver settings, since QEMU enables
+only the first output without a window. The guest can ask for a picture
+of one output with `CE-HOST screenshot_head <name> <head>`.
+`displays_multi_test` checks app_server's desktop across the outputs
+(`MultiHead.h` version 2), Deskbar on the primary output, a window on the
+second output, Zoom and CenterOnScreen per output, and the Displays page's
+mirroring, primary and placement. The host checks the window's colour on
+head 1 only and the two mirrored heads. With one output the test checks
+the single-screen path.
 
 ### Boot loader write safety
 
