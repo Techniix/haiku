@@ -44,6 +44,8 @@ class Stream : public bfs_inode {
 		status_t GetNextSmallData(const small_data **_smallData) const;
 
 		Volume	&fVolume;
+		off_t	fBlock;
+			// Renga: where the inode was read from (write checks)
 };
 
 }	// namespace BFS

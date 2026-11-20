@@ -109,7 +109,8 @@ CachedBlock::SetTo(block_run run)
 
 Stream::Stream(Volume& volume, block_run run)
 	:
-	fVolume(volume)
+	fVolume(volume),
+	fBlock(volume.ToBlock(run))
 {
 	if (read_pos(volume.Device(), volume.ToOffset(run), this, sizeof(bfs_inode))
 			!= sizeof(bfs_inode))
@@ -119,7 +120,8 @@ Stream::Stream(Volume& volume, block_run run)
 
 Stream::Stream(Volume& volume, off_t id)
 	:
-	fVolume(volume)
+	fVolume(volume),
+	fBlock(id)
 {
 	if (read_pos(volume.Device(), volume.ToOffset(id), this, sizeof(bfs_inode))
 			!= sizeof(bfs_inode))
@@ -415,57 +417,127 @@ Stream::ReadAt(off_t pos, uint8* buffer, size_t* _length)
 }
 
 
-/*!	Renga (boot loader batch A): writes \a buffer over the file's data at
-	\a pos, into the blocks the file already has. The boot loader cannot
-	allocate blocks or change the inode, so nothing beyond the file's size
-	is written (\a _length is cut to it) and no metadata changes; this is
-	enough for the boot state file (headers/private/shared/boot_state.h),
-	which its writers keep at a fixed size. File data is not journalled by
-	BFS, so a later log replay by the kernel cannot bring back old data.
-	Writes go straight to the device in pieces that each stay inside one
-	block run; the device (BIOS: whole sectors only) decides whether it
-	accepts them.
+/*!	Renga (boot loader batch A; checks from batch 6): writes \a buffer
+	over the file's data at \a pos, into the blocks the file already has.
+	The boot loader cannot allocate blocks or change the inode, so no
+	metadata changes; this is enough for the boot state file
+	(headers/private/shared/boot_state.h), which its writers keep at a
+	fixed size. File data is not journalled by BFS, so a later log replay by
+	the kernel cannot bring back old data.
+
+	The maintainer's machines dual-boot other systems from the same disk,
+	so a write must never land anywhere but this file's own blocks. Before
+	anything is written, the whole write is planned and checked:
+
+	- the inode: valid (magic, in use, not deleted, the size the volume
+	  uses), at the block it says it is at, a plain regular file (no
+	  directory, symlink, attribute or index), all its data in direct runs;
+	- the range: inside the file's size; a write that would not fit is
+	  refused, not cut short;
+	- every block run the write touches: Volume::CheckWritableRun() (inside
+	  an allocation group, the volume and the partition, past the bitmap and
+	  the log, not the inode itself, marked used in the bitmap).
+
+	If any check fails nothing is written and B_NOT_ALLOWED or B_BAD_DATA
+	is returned. After writing, every piece is read back and compared. The
+	pieces go to the partition (Partition::WriteAt() refuses writes past
+	its end), which the platform's device writes as whole sectors.
 */
 status_t
 Stream::WriteInPlace(off_t pos, const uint8* buffer, size_t* _length)
 {
-	if (pos < 0 || pos >= data.Size()) {
-		*_length = 0;
+	size_t length = *_length;
+	*_length = 0;
+
+	if (InitCheck() != B_OK || fBlock != fVolume.ToBlock(inode_num)
+		|| !S_ISREG(Mode()) || S_ISLNK(Mode()) || IsContainer()
+		|| (Flags() & (INODE_ATTR_INODE | INODE_DELETED | INODE_NOT_READY))
+			!= 0) {
+		dprintf("bfs: write refused: inode %" B_PRIdOFF " is not a plain, "
+			"valid file\n", fBlock);
+		return B_NOT_ALLOWED;
+	}
+	if (data.Size() <= 0 || data.Size() > data.MaxDirectRange()
+		|| data.MaxIndirectRange() > data.MaxDirectRange()
+		|| data.MaxDoubleIndirectRange() > 0) {
+		dprintf("bfs: write refused: file data is not all in direct runs\n");
+		return B_NOT_ALLOWED;
+	}
+	if (pos < 0 || length == 0 || pos + (off_t)length > data.Size()) {
+		dprintf("bfs: write refused: %" B_PRIuSIZE " bytes at %" B_PRIdOFF
+			" do not fit the file's %" B_PRIdOFF " bytes\n", length, pos,
+			data.Size());
 		return B_BAD_VALUE;
 	}
 
-	size_t length = *_length;
-	if (pos + (off_t)length > data.Size())
-		length = data.Size() - pos;
-
-	size_t written = 0;
-	while (written < length) {
+	// plan and check every piece first
+	static const int32 kMaxPieces = NUM_DIRECT_BLOCKS;
+	off_t diskOffsets[kMaxPieces];
+	size_t sizes[kMaxPieces];
+	int32 pieces = 0;
+	size_t planned = 0;
+	while (planned < length) {
 		block_run run;
 		off_t runOffset;
-		off_t position = pos + written;
-		if (FindBlockRun(position, run, runOffset) < B_OK)
-			break;
+		off_t position = pos + planned;
+		if (pieces == kMaxPieces
+			|| FindBlockRun(position, run, runOffset) < B_OK)
+			return B_BAD_DATA;
+		status_t status = fVolume.CheckWritableRun(run, fBlock);
+		if (status != B_OK)
+			return status;
 
 		off_t runEnd = runOffset
 			+ ((off_t)run.Length() << fVolume.BlockShift());
-		size_t chunk = length - written;
+		size_t chunk = length - planned;
 		if (position + (off_t)chunk > runEnd)
 			chunk = runEnd - position;
 		if (chunk == 0)
-			break;
+			return B_BAD_DATA;
 
-		off_t diskOffset = fVolume.ToOffset(run) + (position - runOffset);
-		ssize_t result = write_pos(fVolume.Device(), diskOffset,
-			buffer + written, chunk);
-		if (result < 0 || (size_t)result != chunk) {
+		diskOffsets[pieces] = fVolume.ToOffset(run) + (position - runOffset);
+		sizes[pieces] = chunk;
+		pieces++;
+		planned += chunk;
+	}
+
+	size_t written = 0;
+	for (int32 i = 0; i < pieces; i++) {
+		ssize_t result = write_pos(fVolume.Device(), diskOffsets[i],
+			buffer + written, sizes[i]);
+		if (result < 0 || (size_t)result != sizes[i]) {
 			*_length = written;
 			return result < 0 ? (status_t)result : B_IO_ERROR;
 		}
-		written += chunk;
+		written += sizes[i];
 	}
 
+	// read back and compare
+	uint8* check = (uint8*)malloc(fVolume.BlockSize());
+	if (check == NULL)
+		return B_NO_MEMORY;
+	size_t verified = 0;
+	status_t status = B_OK;
+	for (int32 i = 0; i < pieces && status == B_OK; i++) {
+		for (size_t done = 0; done < sizes[i]; ) {
+			size_t part = sizes[i] - done;
+			if (part > fVolume.BlockSize())
+				part = fVolume.BlockSize();
+			if (read_pos(fVolume.Device(), diskOffsets[i] + done, check, part)
+					!= (ssize_t)part
+				|| memcmp(check, buffer + verified + done, part) != 0) {
+				dprintf("bfs: write did not read back the same\n");
+				status = B_IO_ERROR;
+				break;
+			}
+			done += part;
+		}
+		verified += sizes[i];
+	}
+	free(check);
+
 	*_length = written;
-	return written == length ? B_OK : B_BAD_VALUE;
+	return status;
 }
 
 

@@ -22,6 +22,28 @@
 	volume without the file (images before Renga batch 5, read-only media,
 	another file system) has no boot counting; nothing is created here,
 	since the loader cannot allocate blocks (Stream::WriteInPlace()).
+
+	Write safety (batch 6). The disk the loader writes to may hold other
+	systems, so a write happens only when all of this holds, and otherwise
+	nothing is written and the start goes on as without boot counting:
+
+	- boot counting is on: "boot_state false" in the kernel settings file
+	  (Boot menu preferences, "Count starts...") turns every loader write
+	  off; the one-shot choice and the automatic recovery menu are then
+	  ignored too, since neither could be taken off the disk again;
+	- the volume was not started from a CD or a boot image (read-only);
+	- the file is exactly kFileSize bytes and each slot holds a valid copy
+	  or zeros only (anything else is not our file and is left alone);
+	- the copy about to be written passes the same check readers use
+	  (BootState::is_valid(), CRC-32);
+	- the BFS loader's checks of the inode and every block run, and the
+	  partition's and the device's bounds (Stream::WriteInPlace()), which
+	  also read the written data back.
+
+	After any failed write no further write is tried during this start.
+	Removable media (USB sticks) get the same checks and are written like
+	fixed disks: the blocks are inside their own Renga partition, and a
+	write-protected stick fails the write and boots normally.
 */
 
 
@@ -36,7 +58,9 @@
 #include <unistd.h>
 
 #include <boot/vfs.h>
+#include <boot/stage2.h>
 #include <boot/stdio.h>
+#include <boot/kernel_args.h>
 #include <boot_state.h>
 #include <driver_settings.h>
 
@@ -48,12 +72,15 @@ static int sSlot = -1;
 static bool sLoaded = false;
 static Directory* sLoadedRoot = NULL;
 static bool sAutoRecovery = true;
+static bool sWritesAllowed = true;
+	// false: boot counting is off, the medium is read-only, the file is not
+	// ours, or a write failed during this start
 static char sNextOnce[BootState::kNextLength];
 	// the one-shot choice this start acts on; cleared on disk at once
 
 
 static bool
-read_auto_recovery_setting(Directory* root)
+read_boolean_setting(Directory* root, const char* name)
 {
 	int fd = open_from(root, "home/config/settings/kernel/drivers/kernel",
 		O_RDONLY);
@@ -63,10 +90,25 @@ read_auto_recovery_setting(Directory* root)
 	close(fd);
 	if (settings == NULL)
 		return true;
-	bool enabled = get_driver_boolean_parameter(settings,
-		"boot_auto_recovery", true, true);
+	bool enabled = get_driver_boolean_parameter(settings, name, true, true);
 	unload_driver_settings(settings);
 	return enabled;
+}
+
+
+//!	Whether a slot is a valid copy or never written (zeros only).
+static bool
+slot_is_ours(const uint8* slot)
+{
+	BootState::Record copy;
+	memcpy(&copy, slot, sizeof(copy));
+	if (BootState::is_valid(copy))
+		return true;
+	for (size_t i = 0; i < BootState::kSlotSize; i++) {
+		if (slot[i] != 0)
+			return false;
+	}
+	return true;
 }
 
 
@@ -111,6 +153,13 @@ load_from(Directory* root)
 		return false;
 	}
 
+	for (size_t slot = 0; slot < BootState::kSlotCount; slot++) {
+		if (!slot_is_ours(file + slot * BootState::kSlotSize)) {
+			dprintf("boot state: slot %d holds something else, nothing will "
+				"be written\n", (int)slot);
+			sWritesAllowed = false;
+		}
+	}
 	sSlot = BootState::newest(file, BootState::kFileSize, sRecord);
 	free(file);
 	sLoaded = true;
@@ -138,11 +187,26 @@ load_from(Directory* root)
 static bool
 write_record(Directory* root, const char* what)
 {
+	if (!sWritesAllowed) {
+		dprintf("boot state: not written (%s): writes are off for this "
+			"start\n", what);
+		return false;
+	}
 	int slot = BootState::next_slot(sSlot);
 	uint8* buffer = (uint8*)malloc(BootState::kSlotSize);
 	if (buffer == NULL)
 		return false;
 	BootState::prepare_write(sRecord, buffer);
+
+	BootState::Record check;
+	memcpy(&check, buffer, sizeof(check));
+	if (!BootState::is_valid(check)) {
+		dprintf("boot state: not written (%s): the new copy does not pass "
+			"its checksum\n", what);
+		free(buffer);
+		sWritesAllowed = false;
+		return false;
+	}
 
 	int fd = open_from(root, BootState::kPath, O_RDWR);
 	ssize_t written = fd < 0 ? fd
@@ -155,6 +219,7 @@ write_record(Directory* root, const char* what)
 	if (written != (ssize_t)BootState::kSlotSize) {
 		dprintf("boot state: cannot write (%s): %s\n", what,
 			strerror(written < 0 ? (status_t)written : B_IO_ERROR));
+		sWritesAllowed = false;
 		return false;
 	}
 	sSlot = slot;
@@ -170,9 +235,33 @@ loader_state_load(BootVolume& volume)
 		return LOADER_STATE_NOTHING;
 	}
 
-	sAutoRecovery = read_auto_recovery_setting(volume.RootDirectory());
+	sWritesAllowed = true;
+	if (!read_boolean_setting(volume.RootDirectory(), "boot_state")) {
+		// read nothing and write nothing: a stale recovery count or one-shot
+		// choice must not act while nothing can clear it
+		dprintf("boot state: off in the Boot menu preferences, nothing "
+			"read or written\n");
+		sWritesAllowed = false;
+		load_from(NULL);
+		return LOADER_STATE_NOTHING;
+	}
+	if (gBootParams.GetInt32(BOOT_METHOD, BOOT_METHOD_DEFAULT) == BOOT_METHOD_CD
+		|| gBootParams.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE, false)) {
+		dprintf("boot state: started from a CD or an image, nothing will be "
+			"written\n");
+		sWritesAllowed = false;
+	}
+	sAutoRecovery = read_boolean_setting(volume.RootDirectory(),
+		"boot_auto_recovery");
 	if (!load_from(volume.RootDirectory()))
 		return LOADER_STATE_NOTHING;
+	if (!sWritesAllowed) {
+		// without a write the one-shot choice would repeat at every start,
+		// and the failed-start count could never go back down
+		sRecord.nextOnce[0] = '\0';
+		sLoaded = false;
+		return LOADER_STATE_NOTHING;
+	}
 
 	// The one-shot choice is taken off the disk before it is acted on: an
 	// operating system started from the menu never comes back here, and
@@ -297,11 +386,20 @@ loader_state_record_start(BootVolume& volume)
 	if (!volume.IsValid())
 		return;
 	if (sLoadedRoot != volume.RootDirectory()) {
-		// another volume was chosen in the menu: count its starts
+		// another volume was chosen in the menu: count its starts, if its
+		// own settings allow it
+		if (!read_boolean_setting(volume.RootDirectory(), "boot_state")) {
+			dprintf("boot state: start not recorded (off in the Boot menu "
+				"preferences)\n");
+			return;
+		}
 		load_from(volume.RootDirectory());
 	}
-	if (!sLoaded)
+	if (!sLoaded || !sWritesAllowed) {
+		dprintf("boot state: start not recorded (%s)\n", !sWritesAllowed
+			? "writes are off for this start" : "no state file");
 		return;
+	}
 
 	PackageVolumeState* state = volume.GetPackageVolumeState();
 	BootState::start_attempt(sRecord, state != NULL ? state->Name() : NULL);

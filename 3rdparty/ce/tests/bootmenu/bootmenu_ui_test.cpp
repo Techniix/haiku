@@ -232,6 +232,33 @@ main()
 			&& other_lines_kept(original, text),
 		"off writes the line, on removes it: %s", recoveryOff ? "yes" : "no");
 
+	// batch 6: the switch for every boot loader write ("boot_state false"
+	// when off); off, "Restart into" is refused, since the loader would
+	// ignore it
+	command = "";
+	command << kApp << " --set-boot-state off";
+	run(command.String(), &status);
+	text = read_file(kSettings);
+	command = "";
+	command << kApp << " --show";
+	shown = run(command.String());
+	bool stateOff = status == 0
+		&& text.FindFirst("\nboot_state false\n") >= 0
+		&& shown.FindFirst("boot_state off") >= 0;
+	int restartStatus = 0;
+	command = "";
+	command << kApp << " --restart-into menu";
+	run(command.String(), &restartStatus);
+	command = "";
+	command << kApp << " --set-boot-state on";
+	run(command.String(), &status);
+	text = read_file(kSettings);
+	report("cli_boot_state", stateOff && restartStatus != 0 && status == 0
+			&& text.FindFirst("boot_state") < 0
+			&& other_lines_kept(original, text),
+		"off writes the line (%s), Restart into refused while off (exit %d), "
+		"on removes it", stateOff ? "yes" : "no", restartStatus);
+
 	command = "";
 	command << kApp << " --restart-into system 'Windows Boot Manager'";
 	run(command.String(), &status);

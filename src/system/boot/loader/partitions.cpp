@@ -199,13 +199,16 @@ ssize_t
 Partition::WriteAt(void *cookie, off_t position, const void *buffer,
 	size_t bufferSize)
 {
-	if (position > this->size)
-		return 0;
-	if (position < 0)
+	// Renga (batch 6, boot loader write safety): a write that does not fit
+	// the partition entirely is refused, never cut to fit, so nothing can
+	// reach the partition after this one (another system on the same disk).
+	if (position < 0 || this->size < 0 || position > this->size
+		|| (off_t)bufferSize > this->size - position) {
+		dprintf("partition: write of %" B_PRIuSIZE " bytes at %" B_PRIdOFF
+			" refused (partition has %" B_PRIdOFF ")\n", bufferSize,
+			position, this->size);
 		return B_BAD_VALUE;
-
-	if (position + (off_t)bufferSize > this->size)
-		bufferSize = this->size - position;
+	}
 
 	ssize_t result = write_pos(fFD, this->offset + position, buffer,
 		bufferSize);

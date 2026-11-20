@@ -599,6 +599,17 @@ BIOSDrive::WriteAt(void* cookie, off_t pos, const void* buffer,
 		return B_UNSUPPORTED;
 	}
 
+	// Renga (batch 6): never past the end of the drive, and every write
+	// logged, so that the harness can show the loader wrote nothing outside
+	// the boot state file (ce-test.py --loader-writes).
+	if (pos < 0 || (off_t)bufferSize > fSize - pos) {
+		dprintf("BIOSDrive::WriteAt(): %" B_PRIuSIZE " bytes at %" B_PRIdOFF
+			" are past the end of drive 0x%x\n", bufferSize, pos, fDriveID);
+		return B_BAD_VALUE;
+	}
+	dprintf("loader write: drive 0x%x offset %" B_PRIdOFF " size %" B_PRIuSIZE
+		"\n", fDriveID, pos, bufferSize);
+
 	// we support only block-aligned writes
 	if (pos % fBlockSize != 0 || bufferSize % fBlockSize != 0) {
 		dprintf("BIOSDrive::WriteAt(pos: %" B_PRIdOFF ", size: %" B_PRIuSIZE

@@ -40,6 +40,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --other-systems  # boot other systems from the menu
 3rdparty/ce/harness/ce-test.py --installer-upgrade  # upgrade an old install in place
 3rdparty/ce/harness/ce-test.py --restore-points --only bootstate_test,restore_point_test
+3rdparty/ce/harness/ce-test.py --loader-writes  # boot loader writes stay in the state file
 3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
 3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
 3rdparty/ce/harness/ce-test.py --only epoll,signalfd  # quick, PARTIAL run
@@ -184,6 +185,35 @@ recovery menu and its choice, the plain-date labels, and the pick.
 `bootstate_test` (every run) covers the file format, torn writes and the
 labels, and that the boot loader counted and `bootstate boot` confirmed the
 start of the run itself.
+
+### Boot loader write safety
+
+`--loader-writes` (BIOS or UEFI; batch 6) checks that the boot loader
+writes nothing but the boot state file's own blocks. Each case boots its
+own copy of the minimum anyboot image with a 16 MiB "other system"
+partition (MBR type 0x07, a fixed pattern) appended to the same disk, and
+QEMU is stopped as soon as the loader logs `boot state: start N ...
+recorded`, `start not recorded` or `cannot write`, before the kernel
+touches the disk. The host finds the file's inode and blocks in the image
+itself (inode scan, parent "boot", 8 KiB) and compares the disk with its
+copy from before the boot byte for byte. The loader logs every device
+write (`loader write: ... offset N size M`, whole-disk offsets).
+
+| Case | Disk | Expected |
+| --- | --- | --- |
+| `lw-disk`, `lw-usb` | hard disk, USB stick | one 4 KiB write, inside the file |
+| `lw-cdrom` | CD | nothing written (CD boot or read-only medium) |
+| `lw-off` | `boot_state false` | nothing written (Boot menu preferences switch) |
+| `lw-free-run` | file's run moved to free blocks | refused by the bitmap check |
+| `lw-superblock-run` | file's run moved to block 0 | refused (not our data, or the file system's own area) |
+| `lw-foreign-data` | slot 1 holds other data | refused, the file is left alone |
+
+Checks per case: `stopped_in_loader`, `nothing_outside_file`,
+`foreign_unchanged`, `logged_writes_inside_file`, and `written_and_counted`
+or `nothing_written` (with the loader's reason logged).
+`--loader-writes-cases lw-disk,...` runs some of them. With the batch 5
+loader, `lw-free-run` and `lw-superblock-run` fail: it wrote into free
+blocks and over the BFS super block.
 
 ### Installing over an existing installation
 

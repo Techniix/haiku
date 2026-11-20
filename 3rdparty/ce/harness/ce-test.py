@@ -532,7 +532,13 @@ def boot_drive(args, image, decoy=None):
 			"-device", "ide-hd,drive=decoy,bus=ide.0,unit=0,bootindex=0",
 			"-drive", "file=%s,format=raw,if=none,id=boot" % image,
 			"-device", "ide-hd,drive=boot,bus=ide.0,unit=1,bootindex=1"]
-	if args.media == "cdrom":
+	attachment = getattr(args, "boot_attachment", None)
+	if attachment == "usb":
+		# --loader-writes: the image as a USB stick
+		return ["-device", "qemu-xhci,id=bootusb",
+			"-drive", "file=%s,format=raw,if=none,id=boot" % image,
+			"-device", "usb-storage,bus=bootusb.0,drive=boot,bootindex=0"]
+	if args.media == "cdrom" or attachment == "cdrom":
 		return ["-drive",
 			"file=%s,format=raw,if=ide,media=cdrom,readonly=on" % image]
 	if args.other_systems and args.disk_bus == "ide":
@@ -1746,6 +1752,354 @@ def check_restore_point_boots(args, results_dir, report):
 				bootReport.get("runner_finished"))})
 
 
+# #pragma mark - boot loader writes (--loader-writes)
+
+
+# Batch 6 safety review of the boot loader's state-file writes: every case
+# boots a copy of the anyboot image as a hard disk (or a USB stick, or a CD)
+# with a foreign "other system" partition appended to the same disk, and is
+# stopped as soon as the loader has made (or refused) its write, before the
+# kernel touches the disk. The copy is then compared with what it was before
+# the boot, byte for byte.
+LOADER_WRITES_FOREIGN_MB = 16
+LOADER_WRITES_STOP = (r"boot state: (start \d+ of .* recorded|cannot write"
+	r"|start not recorded)")
+# tag: (attachment, fixture, expect a write)
+LOADER_WRITES_CASES = (
+	("lw-disk", "disk", "valid", True),
+	("lw-usb", "usb", "valid", True),
+	("lw-cdrom", "cdrom", "valid", False),
+	("lw-off", "disk", "off", False),
+	("lw-free-run", "disk", "free-run", False),
+	("lw-superblock-run", "disk", "superblock-run", False),
+	("lw-foreign-data", "disk", "foreign-data", False),
+)
+BOOT_STATE_MAGIC = 0x52624253
+BFS_INODE_MAGIC1 = 0x3bbe0ad9
+
+
+def bfs_superblock(disk, offset):
+	disk.seek(offset + 512)
+	data = disk.read(132)
+	(blockSize, blockShift, numBlocks, usedBlocks, inodeSize, magic2,
+		blocksPerAg, agShift, numAgs, flags) = struct.unpack("<IIqqiiiiii",
+		data[40:88])
+	logAg, logStart, logLength = struct.unpack("<iHH", data[88:96])
+	return {"block_size": blockSize, "block_shift": blockShift,
+		"num_blocks": numBlocks, "ag_shift": agShift, "num_ags": numAgs,
+		"log": ((logAg << agShift) | logStart, logLength)}
+
+
+def bfs_run_block(sb, ag, start):
+	return (ag << sb["ag_shift"]) | start
+
+
+def bfs_inode_name(block):
+	"""The name in an inode's small data ("\\x13" key), or None."""
+	position = 232
+	while position + 8 <= len(block):
+		kind, nameSize, dataSize = struct.unpack("<IHH",
+			block[position:position + 8])
+		if kind == 0 and nameSize == 0:
+			return None
+		# small_data: the name, 3 bytes, the data, a null byte
+		name = block[position + 8:position + 8 + nameSize]
+		value = block[position + 8 + nameSize + 3:position + 8 + nameSize
+			+ 3 + dataSize]
+		if name == b"\x13":
+			return value.split(b"\0")[0].decode("utf-8", "replace")
+		position += 8 + nameSize + 3 + dataSize + 1
+	return None
+
+
+def find_boot_state_inode(path):
+	"""Finds system/settings/boot/state in the BFS volume of the image at
+	\\a path: (volume offset, super block, inode block, inode bytes,
+	[(absolute start, end)] of its data). Scans for inodes named "state"
+	with a parent named "boot" and 8 KiB of data."""
+	offset = bfs_volume_offset(path)
+	if offset is None:
+		return None
+	with open(path, "rb") as disk:
+		sb = bfs_superblock(disk, offset)
+		size = sb["block_size"]
+		disk.seek(offset)
+		while True:
+			chunkStart = disk.tell()
+			if chunkStart >= offset + sb["num_blocks"] * size:
+				break
+			chunk = disk.read(size * 1024)
+			if not chunk:
+				break
+			for i in range(0, len(chunk) - size + 1, size):
+				data = chunk[i:i + size]
+				if struct.unpack("<I", data[:4])[0] != BFS_INODE_MAGIC1:
+					continue
+				if bfs_inode_name(data) != "state":
+					continue
+				fileSize = struct.unpack("<q", data[208:216])[0]
+				if fileSize != 8192:
+					continue
+				pAg, pStart, _ = struct.unpack("<iHH", data[44:52])
+				here = disk.tell()
+				disk.seek(offset + bfs_run_block(sb, pAg, pStart) * size)
+				parent = disk.read(size)
+				disk.seek(here)
+				if bfs_inode_name(parent) != "boot":
+					continue
+				ranges = []
+				left = fileSize
+				for r in range(12):
+					ag, start, length = struct.unpack("<iHH",
+						data[72 + 8 * r:80 + 8 * r])
+					if length == 0 or left <= 0:
+						break
+					first = offset + bfs_run_block(sb, ag, start) * size
+					count = min(length * size, left)
+					ranges.append((first, first + count))
+					left -= count
+				inodeBlock = (chunkStart - offset + i) // size
+				ag, start, _ = struct.unpack("<iHH", data[4:12])
+				if bfs_run_block(sb, ag, start) != inodeBlock:
+					continue
+				return (offset, sb, inodeBlock, data, ranges)
+	return None
+
+
+def boot_state_record(sequence, next_once=b""):
+	"""One 4 KiB slot holding a valid record (boot_state.h, version 1:
+	eight uint32, booting[64], lastGood[64], lastGoodValid, nextOnce[128],
+	checksum; 296 bytes)."""
+	import zlib
+	record = struct.pack("<8I", BOOT_STATE_MAGIC, 1, 296, sequence, 0, 3,
+		0, 0)
+	record += b"\0" * 128 + struct.pack("<I", 1)
+	record += next_once[:127].ljust(128, b"\0")
+	record += struct.pack("<I", zlib.crc32(record) & 0xffffffff)
+	assert len(record) == 296
+	return record.ljust(4096, b"\0")
+
+
+def make_loader_writes_disk(args, results_dir, tag, fixture):
+	"""The disk of one --loader-writes case; returns (path, file ranges,
+	foreign range, error)."""
+	source = os.path.join(args.output, "haiku-minimum-anyboot.iso") \
+		if not args.profile.endswith("anyboot") else image_path(args)
+	disk = os.path.join(results_dir, tag + ".img")
+	shutil.copyfile(source, disk)
+	if fixture == "off":
+		settings = os.path.join(results_dir, tag + ".kernel-settings")
+		with open(os.path.join(HAIKU_TOP, "data", "settings", "kernel",
+				"drivers", "kernel")) as original:
+			text = original.read().rstrip("\n") + "\n\nboot_state false\n"
+		with open(settings, "w") as out:
+			out.write(text)
+		status, output = bfs_shell_run(args, disk, "cp -f :%s %s\ncat %s\n"
+			% (settings, KERNEL_SETTINGS_FILE, KERNEL_SETTINGS_FILE))
+		os.remove(settings)
+		if status != 0 or "boot_state false" not in output:
+			return disk, None, None, "bfs_shell: " + output[-200:]
+	found = find_boot_state_inode(disk)
+	if found is None:
+		return disk, None, None, "no system/settings/boot/state in the image"
+	offset, sb, inodeBlock, inode, ranges = found
+
+	with open(disk, "r+b") as out:
+		# the foreign partition: after the image, in a free MBR entry
+		out.seek(0, os.SEEK_END)
+		end = out.tell()
+		start = (end + 1024 * 1024 - 1) // (1024 * 1024) * (1024 * 1024)
+		foreignSize = LOADER_WRITES_FOREIGN_MB * 1024 * 1024
+		out.truncate(start)
+		pattern = hashlib.sha256(b"renga foreign partition").digest() * 128
+		for _ in range(foreignSize // len(pattern)):
+			out.write(pattern)
+		out.seek(0)
+		mbrData = bytearray(out.read(512))
+		for index in range(4):
+			entry = 446 + 16 * index
+			if mbrData[entry + 4] == 0:
+				mbrData[entry:entry + 16] = struct.pack("<B3sB3sII", 0,
+					b"\xfe\xff\xff", 0x07, b"\xfe\xff\xff", start // 512,
+					foreignSize // 512)
+				break
+		else:
+			return disk, None, None, "no free MBR entry"
+		out.seek(0)
+		out.write(bytes(mbrData))
+
+		# a known state: a valid copy in slot 0, slot 1 empty
+		content = boot_state_record(1) + b"\0" * 4096
+		if fixture == "foreign-data":
+			content = boot_state_record(1) + b"NOT A BOOT STATE" * 256
+		done = 0
+		for first, last in ranges:
+			out.seek(first)
+			out.write(content[done:done + last - first])
+			done += last - first
+
+		if fixture in ("free-run", "superblock-run"):
+			# point the file's first run somewhere else
+			ag, runStart, length = struct.unpack("<iHH", inode[72:80])
+			if fixture == "superblock-run":
+				target = 0
+			else:
+				# free, zero-filled blocks near the volume's end
+				bitmap = offset + sb["block_size"]
+				target = None
+				candidate = sb["num_blocks"] - length - 16
+				while candidate > sb["num_blocks"] // 2:
+					free = True
+					for b in range(candidate, candidate + length):
+						out.seek(bitmap + b // 8)
+						if out.read(1)[0] & (1 << (b % 8)):
+							free = False
+							break
+					if free:
+						out.seek(offset + candidate * sb["block_size"])
+						if out.read(length * sb["block_size"]).strip(b"\0"):
+							free = False
+					if free:
+						target = candidate
+						break
+					candidate -= length
+				if target is None:
+					return disk, None, None, "no free run for the fixture"
+			newRun = struct.pack("<iHH", target >> sb["ag_shift"],
+				target & ((1 << sb["ag_shift"]) - 1), length)
+			out.seek(offset + inodeBlock * sb["block_size"] + 72)
+			out.write(newRun)
+			# what the loader will read there is the "file" now
+			first = offset + target * sb["block_size"]
+			ranges = [(first, first + length * sb["block_size"])] + ranges[1:]
+	return disk, ranges, (start, start + foreignSize), None
+
+
+def run_loader_write_boots(args, results_dir, report):
+	"""--loader-writes: the cases of LOADER_WRITES_CASES, each on its own
+	copy of the image; the copy before the boot is kept as <tag>.before."""
+	setups = report.setdefault("loader_writes_setup", {})
+	for tag, attachment, fixture, _ in LOADER_WRITES_CASES:
+		if args.loader_writes_cases and tag not in args.loader_writes_cases:
+			continue
+		disk, ranges, foreign, error = make_loader_writes_disk(args,
+			results_dir, tag, fixture)
+		setups[tag] = {"error": error, "ranges": ranges, "foreign": foreign}
+		if error is not None:
+			log("%s: %s" % (tag, error))
+			continue
+		shutil.copyfile(disk, disk + ".before")
+		args.boot_attachment = attachment
+		boot(args, results_dir, report, image=disk, tag=tag, persist=True,
+			kill_on=LOADER_WRITES_STOP)
+		args.boot_attachment = None
+
+
+def changed_ranges(before, after, block=65536):
+	"""Byte ranges in which two files differ, as (start, end) pairs."""
+	ranges = []
+	with open(before, "rb") as a, open(after, "rb") as b:
+		position = 0
+		while True:
+			x = a.read(block)
+			y = b.read(block)
+			if not x and not y:
+				break
+			if x != y:
+				for i in range(max(len(x), len(y))):
+					if x[i:i + 1] != y[i:i + 1]:
+						at = position + i
+						if ranges and ranges[-1][1] == at:
+							ranges[-1] = (ranges[-1][0], at + 1)
+						else:
+							ranges.append((at, at + 1))
+			position += max(len(x), len(y))
+	return ranges
+
+
+def inside(ranges, start, end):
+	return any(first <= start and end <= last for first, last in ranges)
+
+
+def check_loader_write_boots(args, results_dir, report):
+	"""Every change to each case's disk lies inside the boot state file's
+	blocks, every write the loader logged too, the foreign partition is
+	unchanged, and the cases that must not write wrote nothing."""
+	if not args.loader_writes:
+		return
+	checks = report.setdefault("host_checks", [])
+	setups = report.get("loader_writes_setup", {})
+	for tag, attachment, fixture, wantWrite in LOADER_WRITES_CASES:
+		if tag not in setups:
+			continue
+		setup = setups[tag]
+		name = "loader_writes." + tag[3:].replace("-", "_")
+		if setup["error"] is not None:
+			checks.append({"name": name + ".setup", "pass": False,
+				"detail": setup["error"]})
+			continue
+		disk = os.path.join(results_dir, tag + ".img")
+		try:
+			with open(os.path.join(results_dir, tag, "serial.log"),
+					errors="replace") as serial:
+				text = serial.read()
+		except OSError:
+			text = ""
+		fileRanges = [tuple(r) for r in setup["ranges"]]
+		changes = changed_ranges(disk + ".before", disk)
+		outside = [r for r in changes if not inside(fileRanges, *r)]
+		foreignStart, foreignEnd = setup["foreign"]
+		foreignChanged = [r for r in changes
+			if r[1] > foreignStart and r[0] < foreignEnd]
+		# "loader write:" offsets are of the whole disk
+		writes = [(int(m.group(1)), int(m.group(1)) + int(m.group(2)))
+			for m in re.finditer(r"loader write: [^\n]*?offset (\d+) size "
+				r"(\d+)", text)]
+		stopped = report.get("boots", {}).get(tag, {}).get("status")
+		checks.append({"name": name + ".stopped_in_loader",
+			"pass": stopped == "stopped",
+			"detail": "boot status %s" % stopped})
+		checks.append({"name": name + ".nothing_outside_file",
+			"pass": not outside,
+			"detail": "%d changed range(s), outside the file: %s" % (
+				len(changes), ", ".join("%d-%d" % r for r in outside[:5])
+				or "none")})
+		checks.append({"name": name + ".foreign_unchanged",
+			"pass": not foreignChanged,
+			"detail": "%d range(s) changed in the other system's partition"
+				% len(foreignChanged)})
+		loggedOutside = [w for w in writes if not inside(fileRanges, *w)]
+		checks.append({"name": name + ".logged_writes_inside_file",
+			"pass": not loggedOutside,
+			"detail": "%d logged write(s), outside: %s" % (len(writes),
+				", ".join("%d+%d" % (a, b - a) for a, b in loggedOutside[:5])
+				or "none")})
+		if wantWrite:
+			checks.append({"name": name + ".written_and_counted",
+				"pass": bool(changes) and bool(writes) and re.search(
+					r"boot state: start \d+ of .* recorded", text) is not None,
+				"detail": "%d change(s), %d logged write(s)" % (len(changes),
+					len(writes))})
+		else:
+			reason = {
+				"cdrom": r"started from a CD or an image|cannot write",
+				"off": r"off in the Boot menu preferences",
+				"free-run": r"write refused",
+				"superblock-run": r"write refused|holds something else",
+				"foreign-data": r"holds something else",
+			}.get(fixture if attachment != "cdrom" else "cdrom", "")
+			checks.append({"name": name + ".nothing_written",
+				"pass": not changes and not writes
+					and re.search(reason, text) is not None,
+				"detail": "%d change(s), %d logged write(s), reason %s" % (
+					len(changes), len(writes), "logged"
+					if re.search(reason, text) else "missing")})
+		if all(c["pass"] for c in checks if c["name"].startswith(name)):
+			for path in (disk, disk + ".before"):
+				if os.path.exists(path):
+					os.remove(path)
+
+
 def check_installer_boots(args, results_dir, report):
 	if not args.installer_upgrade:
 		return
@@ -2108,6 +2462,14 @@ class SerialReader(threading.Thread):
 						and monitor_command(self.monitor_path,
 							"screendump " + path):
 					self.screenshots.append(path)
+			elif accepted and words[0] == "screenshot_head":
+				path = os.path.join(os.path.dirname(self.log_path),
+					"screen-%s.ppm" % words[1])
+				if self.monitor_path is not None \
+						and monitor_command(self.monitor_path,
+							"screendump %s %s %s" % (path, DISPLAYS_DEVICE,
+								words[2])):
+					self.screenshots.append(path)
 			elif accepted and self.monitor_path is not None:
 				threading.Thread(target=monitor_command, daemon=True,
 					args=(self.monitor_path, " ".join(words))).start()
@@ -2267,6 +2629,9 @@ class SerialReader(threading.Thread):
 			self.debug_done.set()
 
 
+DISPLAYS_DEVICE = "cegpu"
+
+
 def host_request_allowed(words):
 	"""Whether a CE-HOST request (its words after "CE-HOST") is on the list
 	SerialReader._host_requests documents."""
@@ -2292,6 +2657,10 @@ def host_request_allowed(words):
 		return True
 	if len(words) == 2 and words[0] == "screenshot":
 		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None
+	if len(words) == 3 and words[0] == "screenshot_head":
+		# --displays: one output of the virtio-gpu device
+		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None \
+			and re.fullmatch(r"[0-7]", words[2]) is not None
 	if len(words) == 3 and words[0] == "pointer_button":
 		return words[1] in POINTER_DEVICES and words[2] in ("down", "up")
 	if len(words) == 3 and words[0] == "pointer_rel":
@@ -2539,7 +2908,10 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		"-m", str(args.memory),
 		"-smp", str(args.smp),
 		"-display", "none",
-		"-vga", "std",
+	] + (["-vga", "std"] if args.displays <= 1 else [
+		# --displays: virtio-gpu with several outputs (<MultiHead.h>)
+		"-vga", "none", "-device", "virtio-gpu-pci,id=%s,max_outputs=%d,"
+			"xres=1024,yres=768" % (DISPLAYS_DEVICE, args.displays)]) + [
 		"-serial", "stdio",
 		# A monitor socket lets the harness press keys when the guest stalls.
 		"-monitor", "unix:%s,server=on,wait=off" % monitor_path,
@@ -4001,6 +4373,72 @@ def check_screenshots(results_dir, report, names, check):
 HW_CURSOR_SCREENSHOTS = ["hw_cursor_software_drag", "input_drag_setting"]
 
 
+def check_multi_screens(args, results_dir, report):
+	"""displays_multi_test's screenshots (--displays 2): the magenta window
+	placed on output 1 is drawn on head 1 and not on head 0, and with
+	mirroring both heads show the same picture (fewer than 1% of the
+	pixels differ, for the cursor)."""
+	checks = report.setdefault("host_checks", [])
+	if args.displays < 2:
+		return
+	try:
+		from PIL import Image
+	except ImportError:
+		checks.append({"name": "multi.screens_checked", "pass": True,
+			"detail": "not checked (no Pillow)"})
+		return
+
+	def load(name):
+		path = os.path.join(results_dir, "screen-%s.png" % name)
+		if not os.path.exists(path):
+			path = path[:-4] + ".ppm"
+		return Image.open(path).convert("RGB")
+
+	def magenta_rows(picture):
+		width, height = picture.size
+		pixels = picture.load()
+		rows = 0
+		for y in range(height):
+			run = longest = 0
+			for x in range(width):
+				r, g, b = pixels[x, y]
+				if r >= 230 and g <= 30 and b >= 230:
+					run += 1
+					longest = max(longest, run)
+				else:
+					run = 0
+			if longest >= 200:
+				rows += 1
+		return rows
+
+	try:
+		head0 = magenta_rows(load("multi_head0"))
+		head1 = magenta_rows(load("multi_head1"))
+		checks.append({"name": "multi.drawn_on_second_head",
+			"pass": head1 >= 150 and head0 == 0,
+			"detail": "rows with 200 or more magenta pixels: head 0 %d "
+				"(want 0), head 1 %d (want 150 or more)" % (head0, head1)})
+	except OSError as error:
+		checks.append({"name": "multi.drawn_on_second_head", "pass": False,
+			"detail": "no screenshot: %s" % error})
+	try:
+		a = load("multi_mirror0")
+		b = load("multi_mirror1")
+		if a.size != b.size:
+			raise OSError("sizes %s and %s" % (a.size, b.size))
+		pa = a.load()
+		pb = b.load()
+		differ = sum(1 for y in range(0, a.size[1], 2)
+			for x in range(0, a.size[0], 2) if pa[x, y] != pb[x, y])
+		total = (a.size[0] // 2) * (a.size[1] // 2)
+		checks.append({"name": "multi.mirror_same_picture",
+			"pass": differ * 100 < total,
+			"detail": "%d of %d sampled pixels differ" % (differ, total)})
+	except OSError as error:
+		checks.append({"name": "multi.mirror_same_picture", "pass": False,
+			"detail": "no screenshot: %s" % error})
+
+
 def check_hw_cursor_drag(results_dir, report):
 	"""hw_cursor.software_drag_drawn: when the hardware cursor cannot take a
 	drag image, the software cursor shows it. The test drags an opaque red
@@ -4251,6 +4689,18 @@ def main():
 			"boot loader counted them, the recovery menu starts the last "
 			"working state, then the boot menu (a one-shot choice) picks "
 			"the restore point (hard disk, BIOS or UEFI; see README)")
+	parser.add_argument("--displays", type=int, default=1, metavar="N",
+		help="N > 1: a virtio-gpu card with N outputs instead of the VGA "
+			"card, for app_server's several screens (displays_multi_test)")
+	parser.add_argument("--loader-writes", action="store_true",
+		help="boot loader write safety: boot copies of the anyboot image "
+			"(hard disk, USB stick, CD) with another system's partition on "
+			"the same disk, stop each in the boot loader and check that "
+			"nothing but the boot state file's blocks changed; also with "
+			"boot counting off and with damaged inodes (see README)")
+	parser.add_argument("--loader-writes-cases", default="",
+		type=lambda text: [t for t in text.split(",") if t],
+		help="only these --loader-writes cases (lw-disk, lw-usb, ...)")
 	parser.add_argument("--installer-upgrade", action="store_true",
 		help="build a %d MB image, attach two copies of it made to look like "
 			"an older Haiku installation (older system package, a user "
@@ -4310,7 +4760,13 @@ def main():
 	if args.profile is None:
 		args.profile = "minimum-anyboot" \
 			if args.firmware == "uefi" or args.media == "cdrom" \
+				or args.loader_writes \
 			else "minimum-raw"
+	if args.loader_writes and (args.media != "disk" or args.restore_points
+			or args.installer_upgrade or args.other_systems
+			or args.two_installs or args.only):
+		parser.error("--loader-writes picks its own media and boots only "
+			"as far as the boot loader")
 	if args.timeout is None:
 		args.timeout = 2700 if args.profile.startswith("renga-") else 1800
 	available = installed_tests(args.profile,
@@ -4366,6 +4822,7 @@ def main():
 		"other_systems": args.other_systems,
 		"installer_upgrade": args.installer_upgrade,
 		"restore_points": args.restore_points,
+		"loader_writes": args.loader_writes,
 		"boot_menu_timeout": args.boot_menu_timeout,
 		"pointer_devices": args.pointer_devices,
 		"usb_controller": args.usb_controller,
@@ -4391,6 +4848,14 @@ def main():
 					"unit=0"]
 		if args.restore_points:
 			run_restore_point_boots(args, results_dir, report)
+		elif args.loader_writes:
+			run_loader_write_boots(args, results_dir, report)
+			# only the boot loader ran: its checks are the whole run
+			check_loader_write_boots(args, results_dir, report)
+			summary, passed = write_report(results_dir, report)
+			print(summary)
+			log("results in " + results_dir)
+			return 0 if passed else 1
 		else:
 			boot(args, results_dir, report, extra_drives=extra)
 		if disks:
@@ -4491,6 +4956,8 @@ def main():
 		if "linuxkpi_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, LINUXKPI_SCREENSHOTS,
 				"linuxkpi_ui.screenshots")
+		if "displays_multi_test" in (args.only or available):
+			check_multi_screens(args, results_dir, report)
 		if "wayland_test" in (args.only or available):
 			check_screenshots(results_dir, report, WAYLAND_SCREENSHOTS
 				+ WAYLAND_LINUX_SCREENSHOTS, "wayland.screenshots")

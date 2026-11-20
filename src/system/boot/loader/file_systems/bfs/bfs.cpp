@@ -5,6 +5,8 @@
 
 
 #include <fcntl.h>
+#include <stdlib.h>
+#include <ByteOrder.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
@@ -34,6 +36,7 @@ Volume::Volume(boot::Partition *partition)
 	:
 	fRootNode(NULL)
 {
+	fPartitionSize = partition->Size();
 	fDevice = open_node(partition, O_RDONLY);
 	if (fDevice < B_OK)
 		return;
@@ -117,6 +120,106 @@ Volume::ValidateBlockRun(block_run run)
 		return B_BAD_DATA;
 	}
 	return B_OK;
+}
+
+
+/*!	Renga (batch 6, boot loader write safety): whether the boot loader may
+	write file data into \a run, a run of the file whose inode is at block
+	\a inodeBlock. Stricter than ValidateBlockRun(), which lets the
+	allocation group equal the group count and is meant for reading:
+
+	- the run lies inside one allocation group of this volume and inside
+	  the volume's block count;
+	- it is past the super block, the block bitmap and the log, so that no
+	  file system structure the kernel relies on can be overwritten;
+	- it does not contain the file's own inode;
+	- the volume, and so the run, ends inside the partition it is on (a
+	  super block claiming more blocks than the partition has is refused);
+	- every block of it is marked used in the block bitmap.
+
+	Any failure means "do not write"; the caller boots normally.
+*/
+status_t
+Volume::CheckWritableRun(block_run run, off_t inodeBlock)
+{
+	if (run.AllocationGroup() < 0
+		|| run.AllocationGroup() >= (int32)AllocationGroups()
+		|| run.Length() == 0
+		|| (uint32)run.Start() + run.Length()
+			> (1UL << AllocationGroupShift())) {
+		dprintf("bfs: write refused: run (%" B_PRId32 ",%u,%u) is not inside "
+			"an allocation group\n", run.AllocationGroup(), run.Start(),
+			run.Length());
+		return B_BAD_DATA;
+	}
+
+	off_t block = ToBlock(run);
+	off_t end = block + run.Length();
+	if (end > NumBlocks()
+		|| (NumBlocks() << BlockShift()) > fPartitionSize) {
+		dprintf("bfs: write refused: blocks %" B_PRIdOFF "-%" B_PRIdOFF
+			" are outside the volume or the partition\n", block, end - 1);
+		return B_BAD_DATA;
+	}
+
+	// The block bitmap starts at block 1 and has one bit per block; the log
+	// follows it. Data blocks come after both.
+	off_t bitmapBlocks = (NumBlocks() + (BlockSize() * 8) - 1)
+		/ (BlockSize() * 8);
+	off_t firstData = 1 + bitmapBlocks;
+	off_t logEnd = ToBlock(fSuperBlock.log_blocks)
+		+ fSuperBlock.log_blocks.Length();
+	if (logEnd > firstData)
+		firstData = logEnd;
+	if (block < firstData) {
+		dprintf("bfs: write refused: block %" B_PRIdOFF " is in the file "
+			"system's own area (data starts at %" B_PRIdOFF ")\n", block,
+			firstData);
+		return B_BAD_DATA;
+	}
+	if (inodeBlock >= block && inodeBlock < end) {
+		dprintf("bfs: write refused: run contains the inode\n");
+		return B_BAD_DATA;
+	}
+
+	return CheckBlocksAllocated(block, run.Length());
+}
+
+
+//!	Renga: whether \a count blocks from \a block are all used in the bitmap.
+status_t
+Volume::CheckBlocksAllocated(off_t block, off_t count)
+{
+	uint32 bitsPerBlock = BlockSize() * 8;
+	uint8* bitmap = (uint8*)malloc(BlockSize());
+	if (bitmap == NULL)
+		return B_NO_MEMORY;
+
+	off_t loaded = -1;
+	status_t status = B_OK;
+	for (off_t i = block; i < block + count; i++) {
+		off_t bitmapBlock = 1 + i / bitsPerBlock;
+		if (bitmapBlock != loaded) {
+			if (read_pos(fDevice, ToOffset(bitmapBlock), bitmap, BlockSize())
+					!= (ssize_t)BlockSize()) {
+				status = B_IO_ERROR;
+				break;
+			}
+			loaded = bitmapBlock;
+		}
+		uint32 bit = i % bitsPerBlock;
+		// BFS's bitmap is an array of little-endian 32-bit words
+		uint32 word = ((uint32*)bitmap)[bit / 32];
+		word = B_LENDIAN_TO_HOST_INT32(word);
+		if ((word & (1UL << (bit % 32))) == 0) {
+			dprintf("bfs: write refused: block %" B_PRIdOFF " is free in "
+				"the bitmap\n", i);
+			status = B_BAD_DATA;
+			break;
+		}
+	}
+	free(bitmap);
+	return status;
 }
 
 

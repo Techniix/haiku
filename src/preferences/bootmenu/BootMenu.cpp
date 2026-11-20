@@ -38,8 +38,16 @@
 	one-shot choice (headers/private/shared/boot_state.h), then a restart.
 
 	  BootMenu --set-auto-recovery on|off
+	  BootMenu --set-boot-state on|off  (batch 6, "Count starts...")
 	  BootMenu --restart-into menu|system <name>|state <directory>
 	                                   (sets the choice, does not restart)
+
+	Batch 6: "Count starts and keep restore choices in the boot loader"
+	("boot_state false" when off; on by default) is the switch for every
+	write the boot loader makes. Off, the loader writes nothing and also
+	ignores the recovery count and "Restart into", which it could not
+	clear (src/system/boot/loader/loader_state.cpp); the controls that
+	depend on it are disabled then.
 
 	The window applies every change at once, as Haiku's preferences do.
 	The same messages the controls send (kMsgSetTimeout, kMsgSetDefault)
@@ -111,6 +119,8 @@ static const uint32 kMsgVolumeSystem = 'vsys';
 static const uint32 kMsgDefaults = 'rdfl';
 static const uint32 kMsgAutoRecovery = 'arcv';
 	// also from other programs with a bool "on"
+static const uint32 kMsgBootState = 'bsta';
+	// batch 6; also from other programs with a bool "on"
 static const uint32 kMsgRestartChoice = 'rsch';
 static const uint32 kMsgRestart = 'rstr';
 
@@ -127,6 +137,7 @@ struct BootMenuSettings {
 	BString	defaultName;	// empty: this system
 	bool	volumeSystem;	// F-59: "Haiku - Renga" in the volume menu
 	bool	autoRecovery;	// batch A: recovery menu after failed starts
+	bool	bootState;		// batch 6: the boot loader may write its state
 };
 
 
@@ -143,7 +154,7 @@ settings_path(BPath& path)
 static BootMenuSettings
 read_settings()
 {
-	BootMenuSettings settings = { 0, "", true, true };
+	BootMenuSettings settings = { 0, "", true, true, true };
 	BPath path;
 	if (settings_path(path) != B_OK)
 		return settings;
@@ -167,6 +178,8 @@ read_settings()
 		"boot_menu_volume_system", true, true);
 	settings.autoRecovery = get_driver_boolean_parameter(handle,
 		"boot_auto_recovery", true, true);
+	settings.bootState = get_driver_boolean_parameter(handle,
+		"boot_state", true, true);
 	unload_driver_settings(handle);
 	return settings;
 }
@@ -219,7 +232,8 @@ write_settings(const BootMenuSettings& settings)
 		if (is_setting_line(line, "boot_menu_timeout")
 			|| is_setting_line(line, "boot_menu_default")
 			|| is_setting_line(line, "boot_menu_volume_system")
-			|| is_setting_line(line, "boot_auto_recovery"))
+			|| is_setting_line(line, "boot_auto_recovery")
+			|| is_setting_line(line, "boot_state"))
 			continue;
 		if (i == lines.CountStrings() - 1 && line.IsEmpty())
 			break;
@@ -247,6 +261,12 @@ write_settings(const BootMenuSettings& settings)
 		if (!output.IsEmpty() && !output.EndsWith("\n"))
 			output << "\n";
 		output << "boot_auto_recovery false\n";
+	}
+	if (!settings.bootState) {
+		// batch 6: the default (on) is not written
+		if (!output.IsEmpty() && !output.EndsWith("\n"))
+			output << "\n";
+		output << "boot_state false\n";
 	}
 
 	BString temporary(path.Path());
@@ -529,6 +549,14 @@ public:
 		fDefaults = new BButton("defaults", B_TRANSLATE("Restore defaults"),
 			new BMessage(kMsgDefaults));
 
+		// batch 6
+		fBootState = new BCheckBox("bootState", B_TRANSLATE(
+			"Count starts and keep restore choices in the boot loader"),
+			new BMessage(kMsgBootState));
+		fBootState->SetToolTip(B_TRANSLATE("The boot loader writes only "
+			"its own small state file on the Renga volume, after checking "
+			"where it is. Off, it writes nothing to any disk."));
+
 		// batch A
 		fAutoRecovery = new BCheckBox("autoRecovery", B_TRANSLATE(
 			"After two failed starts, open the boot menu with the last "
@@ -559,7 +587,11 @@ public:
 				.Add(fDefaultField->CreateMenuBarLayoutItem(), 1, 1)
 			.End()
 			.Add(fVolumeSystem)
-			.Add(fAutoRecovery)
+			.Add(fBootState)
+			.AddGroup(B_VERTICAL)
+				.SetInsets(B_USE_DEFAULT_SPACING, 0, 0, 0)
+				.Add(fAutoRecovery)
+			.End()
 			.AddGroup(B_HORIZONTAL)
 				.Add(fRestartField)
 				.Add(fRestart)
@@ -633,6 +665,15 @@ public:
 				_Apply();
 				break;
 			}
+			case kMsgBootState:
+			{
+				bool on;
+				if (message->FindBool("on", &on) == B_OK)
+					fBootState->SetValue(on);
+				fSettings.bootState = fBootState->Value() == B_CONTROL_ON;
+				_Apply();
+				break;
+			}
 			case kMsgRestartChoice:
 				fRestartChoice = message->GetString("next", "menu");
 				break;
@@ -644,6 +685,7 @@ public:
 				fSettings.defaultName = "";
 				fSettings.volumeSystem = true;
 				fSettings.autoRecovery = true;
+				fSettings.bootState = true;
 				_FillDefaultMenu();
 				_Apply();
 				break;
@@ -784,9 +826,14 @@ private:
 			: B_CONTROL_OFF);
 		fAutoRecovery->SetValue(fSettings.autoRecovery ? B_CONTROL_ON
 			: B_CONTROL_OFF);
+		fBootState->SetValue(fSettings.bootState ? B_CONTROL_ON
+			: B_CONTROL_OFF);
+		fAutoRecovery->SetEnabled(fSettings.bootState);
+		fRestartField->SetEnabled(fSettings.bootState);
+		fRestart->SetEnabled(fSettings.bootState);
 		fDefaults->SetEnabled(fSettings.timeout != 0
 			|| !fSettings.defaultName.IsEmpty() || !fSettings.volumeSystem
-			|| !fSettings.autoRecovery);
+			|| !fSettings.autoRecovery || !fSettings.bootState);
 
 		for (int32 i = 0; i < fDefaultMenu->CountItems(); i++) {
 			BMenuItem* item = fDefaultMenu->ItemAt(i);
@@ -812,16 +859,18 @@ private:
 			alert->Go(NULL);
 		} else {
 			printf("BootMenu: saved timeout %" B_PRId32 ", default \"%s\", "
-				"volume system %s, auto recovery %s\n", fSettings.timeout,
-				fSettings.defaultName.String(),
+				"volume system %s, auto recovery %s, boot state %s\n",
+				fSettings.timeout, fSettings.defaultName.String(),
 				fSettings.volumeSystem ? "on" : "off",
-				fSettings.autoRecovery ? "on" : "off");
+				fSettings.autoRecovery ? "on" : "off",
+				fSettings.bootState ? "on" : "off");
 		}
 	}
 
 	BCheckBox*			fShowMenu;
 	BCheckBox*			fVolumeSystem;
 	BCheckBox*			fAutoRecovery;
+	BCheckBox*			fBootState;
 	BPopUpMenu*			fRestartMenu;
 	BMenuField*			fRestartField;
 	BButton*			fRestart;
@@ -858,6 +907,7 @@ public:
 			case kMsgSetDefault:
 			case kMsgVolumeSystem:
 			case kMsgAutoRecovery:
+			case kMsgBootState:
 			case kMsgDefaults:
 				if (fWindow != NULL)
 					fWindow->PostMessage(message);
@@ -877,7 +927,7 @@ usage()
 {
 	fprintf(stderr, "usage: BootMenu [--list | --show | --set-timeout "
 		"<seconds> | --set-default <name> | --set-volume-system on|off\n"
-		"        | --set-auto-recovery on|off\n"
+		"        | --set-auto-recovery on|off | --set-boot-state on|off\n"
 		"        | --restart-into menu|system <name>|state <directory>]\n");
 	return 1;
 }
@@ -899,11 +949,12 @@ main(int argc, char** argv)
 		}
 		if (strcmp(argv[1], "--show") == 0 && argc == 2) {
 			printf("timeout %" B_PRId32 "\ndefault %s\nvolume_system %s\n"
-				"auto_recovery %s\n",
+				"auto_recovery %s\nboot_state %s\n",
 				settings.timeout, settings.defaultName.IsEmpty() ? "renga"
 					: settings.defaultName.String(),
 				settings.volumeSystem ? "on" : "off",
-				settings.autoRecovery ? "on" : "off");
+				settings.autoRecovery ? "on" : "off",
+				settings.bootState ? "on" : "off");
 			return 0;
 		}
 		if (strcmp(argv[1], "--set-timeout") == 0 && argc == 3) {
@@ -912,7 +963,15 @@ main(int argc, char** argv)
 				: seconds > kMaxTimeout ? kMaxTimeout : seconds;
 		} else if (strcmp(argv[1], "--set-auto-recovery") == 0 && argc == 3) {
 			settings.autoRecovery = strcmp(argv[2], "off") != 0;
+		} else if (strcmp(argv[1], "--set-boot-state") == 0 && argc == 3) {
+			settings.bootState = strcmp(argv[2], "off") != 0;
 		} else if (strcmp(argv[1], "--restart-into") == 0 && argc >= 3) {
+			if (!settings.bootState) {
+				fprintf(stderr, "BootMenu: boot counting is off "
+					"(--set-boot-state on), the boot loader would ignore "
+					"the choice\n");
+				return 1;
+			}
 			BString next(argv[2]);
 			if ((next == "system" || next == "state") && argc == 4)
 				next << ":" << argv[3];

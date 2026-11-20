@@ -44,6 +44,10 @@ class Volume {
 		uint32				AllocationGroups() const { return fSuperBlock.AllocationGroups(); }
 		uint32				AllocationGroupShift() const { return fSuperBlock.AllocationGroupShift(); }
 		disk_super_block	&SuperBlock() { return fSuperBlock; }
+		off_t				PartitionSize() const { return fPartitionSize; }
+			// Renga: bytes of the partition the volume is on (write checks)
+		status_t			CheckWritableRun(block_run run, off_t inodeBlock);
+		status_t			CheckBlocksAllocated(off_t block, off_t count);
 
 		off_t				ToOffset(block_run run) const { return ToBlock(run) << BlockShift(); }
 		off_t				ToOffset(off_t block) const { return block << BlockShift(); }
@@ -57,6 +61,7 @@ class Volume {
 	protected:
 		int					fDevice;
 		disk_super_block	fSuperBlock;
+		off_t				fPartitionSize;
 
 		BFS::Directory		*fRootNode;
 };

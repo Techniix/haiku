@@ -116,12 +116,24 @@ EfiDevice::WriteAt(void *cookie, off_t pos, const void *buffer,
 		return 0;
 	if (pos < 0 || bufferSize > kMaxWrite)
 		return B_BAD_VALUE;
-	if (fBlockIo->Media->ReadOnly)
+	if (fBlockIo->Media->ReadOnly || !fBlockIo->Media->MediaPresent)
 		return B_READ_ONLY_DEVICE;
 
 	off_t offset = pos % BlockSize();
 	off_t block = pos / BlockSize();
 	uint32 numBlocks = (offset + bufferSize + BlockSize() - 1) / BlockSize();
+
+	// Renga (batch 6): never past the medium's last block, and every write
+	// logged, so that the harness can show the loader wrote nothing outside
+	// the boot state file (ce-test.py --loader-writes).
+	if ((uint64)block + numBlocks - 1 > fBlockIo->Media->LastBlock) {
+		dprintf("%s: %" B_PRIuSIZE " bytes at %" B_PRIdOFF " are past the "
+			"medium's end\n", __func__, bufferSize, pos);
+		return B_BAD_VALUE;
+	}
+	dprintf("loader write: efi media %" B_PRIu32 " offset %" B_PRIdOFF
+		" size %" B_PRIuSIZE "%s\n", (uint32)fBlockIo->Media->MediaId, pos,
+		bufferSize, fBlockIo->Media->RemovableMedia ? " (removable)" : "");
 
 	char writeBuffer[numBlocks * BlockSize()]
 		__attribute__((aligned(2048)));
