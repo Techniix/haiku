@@ -1,0 +1,20 @@
+SubDir HAIKU_TOP 3rdparty ce tests storage ;
+
+# DriveSetup's verified image writer (roadmap a04ee0f6), built from its
+# source, see image_writer_test.cpp.
+UsePrivateHeaders storage ;
+local driveSetupDir = [ FDirName $(HAIKU_TOP) src apps drivesetup ] ;
+ObjectHdrs [ FGristFiles image_writer_test$(SUFOBJ) ImageWriter$(SUFOBJ) ]
+	: $(driveSetupDir) ;
+SEARCH_SOURCE += $(driveSetupDir) ;
+
+Application image_writer_test :
+	image_writer_test.cpp
+	ImageWriter.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: image_writer_test ;
+}

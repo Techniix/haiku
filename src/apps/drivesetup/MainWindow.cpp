@@ -52,6 +52,7 @@
 #include "ColumnListView.h"
 #include "CreateParametersPanel.h"
 #include "DiskView.h"
+#include "ImageWriter.h"
 #include "InitParametersPanel.h"
 #include "PartitionList.h"
 #include "Support.h"
@@ -1002,11 +1003,47 @@ MainWindow::WriteDiskImage(void* data)
 		return -1;
 	}
 
-	_WriteDiskImage(messenger, source, target, targetpath,
-		BString(B_TRANSLATE("Writing image to disk")),
-		BString(B_TRANSLATE("Disk image successfully written to the target.")));
+	// Renga (roadmap a04ee0f6): ImageWriter unmounts every volume on the
+	// target first, checks every write, syncs, and reads the result back,
+	// so "successfully written" means the target holds the image.
+	source.Unset();
+	target.Unset();
+	struct ProgressState {
+		BNotification	notification;
+		const char*		target;
+		ProgressState() : notification(B_PROGRESS_NOTIFICATION) {}
+	} state;
+	state.target = targetpath;
+	state.notification.SetGroup(BString(B_TRANSLATE_SYSTEM_NAME("DriveSetup")));
+	state.notification.SetMessageID(BString(targetpath));
+	BString error;
+	status_t status = write_disk_image(sourcepath, targetpath, true,
+		[](void* cookie, bool verifying, off_t done, off_t total) {
+			ProgressState* state = (ProgressState*)cookie;
+			char current[16], maximum[16];
+			BString text;
+			text.SetToFormat("%s: %s / %s", state->target,
+				string_for_size(done, current, sizeof(current)),
+				string_for_size(total, maximum, sizeof(maximum)));
+			state->notification.SetTitle(verifying
+				? B_TRANSLATE("Checking the written image")
+				: B_TRANSLATE("Writing image to disk"));
+			state->notification.SetContent(text);
+			state->notification.SetProgress(total > 0
+				? (float)done / total : 1.0f);
+			state->notification.Send();
+		}, &state, error);
 
-	return 0;
+	BMessage message(MSG_COMPLETE);
+	message.AddString("status", status == B_OK
+		? B_TRANSLATE("Disk image written to the target and checked.")
+		: error.String());
+	message.AddString("jobid", targetpath);
+	messenger.SendMessage(&message);
+	if (status != B_OK)
+		FileErrorAlert(error.String(), NULL, B_STOP_ALERT);
+
+	return status == B_OK ? 0 : -1;
 }
 
 
