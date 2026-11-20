@@ -431,6 +431,15 @@ TabMenuEnabled()
 }
 
 
+int32
+TabDoubleClickAction()
+{
+	BAutolock _(sLock);
+	reload_if_changed();
+	return sSettings.tabDoubleClick;
+}
+
+
 void
 ShowWindowMenu(Desktop* desktop, Window* window, BPoint where)
 {

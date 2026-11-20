@@ -63,6 +63,8 @@ void			WindowShown(Desktop* desktop, Window* window);
 void			WindowRemoved(Window* window);
 
 bool			TabMenuEnabled();
+//!	What a double-click on a tab does (WindowLayouts::kTabDoubleClick*).
+int32			TabDoubleClickAction();
 //!	Sends the window menu request to the window's application.
 void			ShowWindowMenu(Desktop* desktop, Window* window,
 					BPoint where);

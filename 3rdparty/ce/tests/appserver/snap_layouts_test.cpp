@@ -39,7 +39,9 @@
 	control_panel_ui_test, in the renga-* images that have it).
 	Edge snapping without a key (batch 8): model_edge_zone,
 	model_edge_default, edge_snap (the tab dragged to the left edge fills
-	the left half; screenshot snap_edge), edge_snap_off.
+	the left half; screenshot snap_edge), edge_snap_off;
+	model_tab_double_click and tab_double_click (minimize by default, zoom
+	or nothing as set).
 	Screenshots: snap_grid (the grid while choosing), snap_span,
 	snap_window_menu, snap_switcher, snap_overview.
 
@@ -282,6 +284,21 @@ model_checks()
 			text(rightLower), gotBottom, gotMiddle);
 		result("model_edge_default", settings.edgeSnap, "edge_snap %d",
 			settings.edgeSnap);
+
+		FILE* file = tmpfile();
+		fputs("tab_double_click zoom\nedge_snap false\n", file);
+		rewind(file);
+		Settings parsed;
+		defaults(parsed);
+		bool defaultMinimize
+			= parsed.tabDoubleClick == kTabDoubleClickMinimize;
+		load_from(file, parsed);
+		fclose(file);
+		result("model_tab_double_click", defaultMinimize
+				&& parsed.tabDoubleClick == kTabDoubleClickZoom
+				&& !parsed.edgeSnap,
+			"default minimize %d, parsed %d, edge_snap %d", defaultMinimize,
+			(int)parsed.tabDoubleClick, parsed.edgeSnap);
 	}
 	result("model_nearest", zone_at(frames, count, BPoint(600, 100)) == 1
 		&& zone_at(frames, count, BPoint(-50, 900)) == 2,
@@ -347,7 +364,9 @@ public:
 	TestWindow(BRect frame, const char* title)
 		:
 		BWindow(frame, title, B_TITLED_WINDOW, B_ASYNCHRONOUS_CONTROLS),
-		fMenuRequests(0)
+		fMenuRequests(0),
+		fZooms(0),
+		fMinimizes(0)
 	{
 		BView* view = new BView(Bounds(), "content", B_FOLLOW_ALL, 0);
 		view->SetViewColor(200, 220, 200);
@@ -359,6 +378,15 @@ public:
 		if (message->what == WindowLayouts::kMsgWindowMenu) {
 			fMenuRequests++;
 			fLastMenu = *message;
+		}
+		// counted and not acted on, so the window stays as it is
+		if (message->what == B_ZOOM) {
+			fZooms++;
+			return;
+		}
+		if (message->what == B_MINIMIZE) {
+			fMinimizes++;
+			return;
 		}
 		BWindow::DispatchMessage(message, target);
 	}
@@ -397,7 +425,26 @@ public:
 
 	int32		fMenuRequests;
 	BMessage	fLastMenu;
+	int32		fZooms;
+	int32		fMinimizes;
 };
+
+
+//!	A double-click on the window's tab.
+static void
+double_click_tab(TestWindow* window)
+{
+	BPoint where = window->TabPoint();
+	move_pointer(where);
+	snooze(300000);
+	for (int i = 0; i < 2; i++) {
+		host("pointer_button usb down");
+		snooze(60000);
+		host("pointer_button usb up");
+		snooze(60000);
+	}
+	snooze(600000);
+}
 
 
 static BRect
@@ -652,6 +699,34 @@ live_checks()
 			window->Unlock();
 		}
 		snooze(400000);
+	}
+
+	// Double-click on the tab (batch 8): minimize by default, zoom or
+	// nothing as set. B_MINIMIZE and B_ZOOM are counted, not acted on.
+	{
+		int32 minimizes = window->fMinimizes;
+		int32 zooms = window->fZooms;
+		double_click_tab(window);
+		bool minimized = window->fMinimizes == minimizes + 1
+			&& window->fZooms == zooms;
+		settings.tabDoubleClick = WindowLayouts::kTabDoubleClickZoom;
+		apply(settings);
+		minimizes = window->fMinimizes;
+		double_click_tab(window);
+		bool zoomed = window->fZooms == zooms + 1
+			&& window->fMinimizes == minimizes;
+		settings.tabDoubleClick = WindowLayouts::kTabDoubleClickNone;
+		apply(settings);
+		zooms = window->fZooms;
+		double_click_tab(window);
+		bool nothing = window->fZooms == zooms
+			&& window->fMinimizes == minimizes;
+		settings.tabDoubleClick = WindowLayouts::kTabDoubleClickMinimize;
+		apply(settings);
+		result("tab_double_click", minimized && zoomed && nothing,
+			"minimize %d, zoom %d, nothing %d (B_MINIMIZE %d, B_ZOOM %d)",
+			minimized, zoomed, nothing, (int)window->fMinimizes,
+			(int)window->fZooms);
 	}
 
 	// S6: the master switch off acts without a restart

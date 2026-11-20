@@ -121,10 +121,17 @@ struct DefaultWindowBehaviour::MouseTrackingState : State {
 			// If the modifiers haven't changed in the meantime and not too
 			// much time has elapsed, we're supposed to minimize the window.
 			fMinimizeCheckOnMouseUp = false;
+			// Renga (batch 8): the action is a setting (Control Panel ->
+			// Windows and workspaces); minimize stays the default.
+			int32 action = SnapLayouts::TabDoubleClickAction();
 			if (message->FindInt32("modifiers") == fBehavior.fLastModifiers
-				&& (fWindow->Flags() & B_NOT_MINIMIZABLE) == 0
 				&& system_time() - fLastMoveTime < kWindowActivationTimeout) {
-				fWindow->ServerWindow()->NotifyMinimize(true);
+				if (action == WindowLayouts::kTabDoubleClickMinimize
+					&& (fWindow->Flags() & B_NOT_MINIMIZABLE) == 0)
+					fWindow->ServerWindow()->NotifyMinimize(true);
+				else if (action == WindowLayouts::kTabDoubleClickZoom
+					&& (fWindow->Flags() & B_NOT_ZOOMABLE) == 0)
+					fWindow->ServerWindow()->NotifyZoom();
 			}
 		}
 

@@ -298,6 +298,19 @@ public:
 		fLayoutName = new BTextControl("layoutName",
 			B_TRANSLATE("Name:"), "", NULL);
 
+		fDoubleClick = _Menu("tabDoubleClick",
+			B_TRANSLATE("Double-click on a window's tab:"), NULL, 0);
+		{
+			const char* labels[] = { B_TRANSLATE("Minimize"),
+				B_TRANSLATE("Zoom"), B_TRANSLATE("Nothing") };
+			for (int32 i = 0; i < 3; i++) {
+				BMessage* message = new BMessage(kMsgChanged);
+				message->AddInt32("doubleClick", i);
+				fDoubleClick->Menu()->AddItem(new BMenuItem(labels[i],
+					message));
+			}
+		}
+
 		fShortcuts = _Check("zoneShortcuts", B_TRANSLATE(
 			"Command+Control+1 to 9 put the active window into a zone, +0 "
 			"restores it; Command+Control+Up shows the overview"));
@@ -374,6 +387,7 @@ public:
 			.End()
 			.Add(fShortcuts)
 			.Add(fTabMenu)
+			.Add(fDoubleClick)
 			.Add(fRules)
 			.AddGroup(B_VERTICAL)
 				.SetInsets(B_USE_DEFAULT_SPACING, 0, 0, 0)
@@ -461,6 +475,9 @@ public:
 				settings.gap = fGap->Value();
 				settings.zoneShortcuts = fShortcuts->Value() != 0;
 				settings.tabMenu = fTabMenu->Value() != 0;
+				int32 doubleClick;
+				if (message->FindInt32("doubleClick", &doubleClick) == B_OK)
+					settings.tabDoubleClick = doubleClick;
 				settings.rules = fRules->Value() != 0;
 				bool plus = fPlus->Value() != 0;
 				bool plusChanged = plus != settings.switcherPlus;
@@ -754,6 +771,7 @@ private:
 			_SetTargets(child);
 		}
 		fModifier->Menu()->SetTargetForItems(this);
+		fDoubleClick->Menu()->SetTargetForItems(this);
 		fEditorGrid->Menu()->SetTargetForItems(this);
 	}
 
@@ -805,6 +823,9 @@ private:
 		fModifier->SetEnabled(settings.snap);
 		fShortcuts->SetValue(settings.zoneShortcuts);
 		fTabMenu->SetValue(settings.tabMenu);
+		if (BMenuItem* item = fDoubleClick->Menu()->ItemAt(
+				settings.tabDoubleClick))
+			item->SetMarked(true);
 		fRules->SetValue(settings.rules);
 		fRuleList->MakeEmpty();
 		for (int32 i = 0; i < settings.ruleCount; i++) {
@@ -840,6 +861,7 @@ private:
 	BTextControl*	fLayoutName;
 	BCheckBox*		fShortcuts;
 	BCheckBox*		fTabMenu;
+	BMenuField*		fDoubleClick;
 	BCheckBox*		fRules;
 	BListView*		fRuleList;
 	BTextControl*	fRuleSignature;

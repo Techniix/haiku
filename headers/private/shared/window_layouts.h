@@ -39,6 +39,9 @@
 	                              without the modifier: left or right half,
 	                              the whole work area at the top, a quarter
 	                              in a corner (on; batch 8)
+	  tab_double_click minimize|zoom|none
+	                              what a double-click on a window's tab
+	                              does (minimize, as in Haiku; batch 8)
 	  default <spec>              layout of every screen and workspace
 	                              without its own (1x2)
 	  display <index> <spec>      layout of one screen (0 = first)
@@ -117,6 +120,16 @@ struct Rule {
 };
 
 
+enum {
+	kTabDoubleClickMinimize = 0,
+	kTabDoubleClickZoom,
+	kTabDoubleClickNone
+};
+
+static const char* const kTabDoubleClickNames[] = { "minimize", "zoom",
+	"none" };
+
+
 struct Settings {
 	bool	snap;
 	uint32	modifier;
@@ -128,6 +141,8 @@ struct Settings {
 	bool	rules;
 	bool	switcherPlus;
 	bool	edgeSnap;
+	int32	tabDoubleClick;
+		// kTabDoubleClick*
 	char	defaultSpec[kSpecLength];
 	char	displaySpec[kMaxDisplays][kSpecLength];
 	char	workspaceSpec[kMaxWorkspaces][kSpecLength];
@@ -153,6 +168,7 @@ defaults(Settings& settings)
 	settings.rules = true;
 	settings.switcherPlus = true;
 	settings.edgeSnap = true;
+	settings.tabDoubleClick = 0;
 	strcpy(settings.defaultSpec, "1x2");
 }
 
@@ -471,6 +487,12 @@ load_from(FILE* in, Settings& settings)
 			settings.switcherPlus = parse_bool(value, settings.switcherPlus);
 		else if (strcmp(line, "edge_snap") == 0)
 			settings.edgeSnap = parse_bool(value, settings.edgeSnap);
+		else if (strcmp(line, "tab_double_click") == 0) {
+			for (int32 i = 0; i < 3; i++) {
+				if (strcmp(value, kTabDoubleClickNames[i]) == 0)
+					settings.tabDoubleClick = i;
+			}
+		}
 		else if (strcmp(line, "default") == 0) {
 			copy_word(settings.defaultSpec, sizeof(settings.defaultSpec),
 				value);
@@ -580,7 +602,7 @@ write_file(const char* file, const Settings& settings, bool workspacesOnly,
 	else {
 		fprintf(out, "snap %s\nmodifier %s\nspan %s\nshow_grid %s\ngap %d\n"
 			"zone_shortcuts %s\ntab_menu %s\nrules %s\nswitcher_plus %s\n"
-			"edge_snap %s\ndefault %s\n",
+			"edge_snap %s\ntab_double_click %s\ndefault %s\n",
 			settings.snap ? "true" : "false",
 			modifier_name(settings.modifier),
 			settings.span ? "true" : "false",
@@ -589,7 +611,10 @@ write_file(const char* file, const Settings& settings, bool workspacesOnly,
 			settings.tabMenu ? "true" : "false",
 			settings.rules ? "true" : "false",
 			settings.switcherPlus ? "true" : "false",
-			settings.edgeSnap ? "true" : "false", settings.defaultSpec);
+			settings.edgeSnap ? "true" : "false",
+			kTabDoubleClickNames[settings.tabDoubleClick >= 0
+				&& settings.tabDoubleClick < 3 ? settings.tabDoubleClick : 0],
+			settings.defaultSpec);
 		for (int32 i = 0; i < kMaxDisplays; i++) {
 			if (settings.displaySpec[i][0] != '\0')
 				fprintf(out, "display %d %s\n", (int)i, settings.displaySpec[i]);
