@@ -45,6 +45,7 @@ static const uint32 kMsgSetTimeout = 'stmo';
 static const uint32 kMsgVolumeSystem = 'vsys';
 static const uint32 kMsgDefaults = 'rdfl';
 static const uint32 kMsgSetDefault = 'sdfl';
+static const uint32 kMsgAutoRecovery = 'arcv';
 
 static int sFailures = 0;
 
@@ -209,6 +210,41 @@ main()
 	report("cli_list", status == 0, "exit %d, %s", status,
 		list.IsEmpty() ? "no other systems" : list.String());
 
+	// boot loader batch A: the automatic recovery switch (on by default,
+	// only "off" is written) and "Restart into" (the boot state's one-shot
+	// choice; set and cleared again, the restart itself is not tested)
+	command = "";
+	command << kApp << " --set-auto-recovery off";
+	run(command.String(), &status);
+	text = read_file(kSettings);
+	command = "";
+	command << kApp << " --show";
+	shown = run(command.String());
+	bool recoveryOff = status == 0
+		&& text.FindFirst("\nboot_auto_recovery false\n") >= 0
+		&& shown.FindFirst("auto_recovery off") >= 0;
+	command = "";
+	command << kApp << " --set-auto-recovery on";
+	run(command.String(), &status);
+	text = read_file(kSettings);
+	report("cli_auto_recovery", recoveryOff && status == 0
+			&& text.FindFirst("boot_auto_recovery") < 0
+			&& other_lines_kept(original, text),
+		"off writes the line, on removes it: %s", recoveryOff ? "yes" : "no");
+
+	command = "";
+	command << kApp << " --restart-into system 'Windows Boot Manager'";
+	run(command.String(), &status);
+	BString state = run("/bin/bootstate show");
+	int clearStatus;
+	run("/bin/bootstate next clear", &clearStatus);
+	BString cleared = run("/bin/bootstate show");
+	report("cli_restart_into", status == 0
+			&& state.FindFirst("next start: system:Windows Boot Manager") >= 0
+			&& clearStatus == 0 && cleared.FindFirst("next start: normal") >= 0,
+		"exit %d, %s", status, state.FindFirst("next start: system:") >= 0
+			? "the one-shot choice was set" : "no one-shot choice");
+
 	// the window
 	team_id team = -1;
 	be_roster->Launch(kSignature, (BMessage*)NULL, &team);
@@ -246,6 +282,19 @@ main()
 		"checkbox %" B_PRId32 ", spinner %" B_PRId32 " (want 1, 4)", show,
 		seconds);
 
+	// batch A: the automatic recovery switch from the window's message
+	BMessage autoRecovery(kMsgAutoRecovery);
+	autoRecovery.AddBool("on", false);
+	messenger.SendMessage(&autoRecovery);
+	snooze(1000000);
+	text = read_file(kSettings);
+	int32 recoveryBox = control_value(messenger, "autoRecovery");
+	report("window_auto_recovery", recoveryBox == 0
+			&& text.FindFirst("\nboot_auto_recovery false\n") >= 0,
+		"checkbox %" B_PRId32 ", file %s \"boot_auto_recovery false\"",
+		recoveryBox, text.FindFirst("boot_auto_recovery false") >= 0
+			? "has" : "lacks");
+
 	// F-59: "Show the system on each volume", off and on
 	BMessage volumeSystem(kMsgVolumeSystem);
 	volumeSystem.AddBool("show", false);
@@ -269,7 +318,9 @@ main()
 	text = read_file(kSettings);
 	report("window_defaults", control_value(messenger, "volumeSystem") == 1
 			&& control_value(messenger, "show") == 0
+			&& control_value(messenger, "autoRecovery") == 1
 			&& text.FindFirst("\nboot_menu_") < 0
+			&& text.FindFirst("boot_auto_recovery") < 0
 			&& other_lines_kept(original, text),
 		"after Restore defaults: %s", text.FindFirst("\nboot_menu_") < 0
 			? "no boot menu lines" : "boot menu lines left");

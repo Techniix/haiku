@@ -39,6 +39,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --boot-menu-timeout 2   # boot menu countdown
 3rdparty/ce/harness/ce-test.py --other-systems  # boot other systems from the menu
 3rdparty/ce/harness/ce-test.py --installer-upgrade  # upgrade an old install in place
+3rdparty/ce/harness/ce-test.py --restore-points --only bootstate_test,restore_point_test
 3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
 3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
 3rdparty/ce/harness/ce-test.py --only epoll,signalfd  # quick, PARTIAL run
@@ -153,6 +154,36 @@ got DL and DS:SI, the removable media were found in the background and
 started, the empty CD drive answered within 3 s, every key was answered
 within 1.5 s and no search step took over a second, and Renga booted
 afterwards. They replace `boot.menu` in such a run.
+
+### Restore points and automatic recovery
+
+`--restore-points` (hard disk, BIOS or UEFI) tests boot loader batch A:
+boot counting, restore points and the recovery menu. A copy of the test
+image is booted five times with its writes kept (no `-snapshot`), with
+`restore_point_test` enabled by a flag file
+(`data/ce-harness/restore-points`); pass `--only
+bootstate_test,restore_point_test`:
+
+1. `update`: the start is confirmed; the test drops a small package into
+   `/boot/system/packages`, and package_daemon's restore point (a new
+   `state_<date>` directory with its `restore-point` note) becomes the
+   boot state's last working state.
+2. `stopped1`, `stopped2`: QEMU is stopped as soon as the boot loader
+   logs `boot state: start N ... recorded`, like a power cut before the
+   desktop.
+3. `recovery`: the boot loader opens the menu by itself ("The last 2
+   starts did not reach the desktop") and its countdown starts "Start the
+   last working system (Before the update of ...)"; the test checks that
+   the package is not active and sets `bootstate next menu`.
+4. `picked`: the one-shot choice shows the menu without a countdown; the
+   harness picks the restore point under "System restore points".
+
+Host checks `restore_points.*` read each boot's `boot state:` and `boot
+menu:` lines: the counts (1, 1, 2 unconfirmed), alternating slots, the
+recovery menu and its choice, the plain-date labels, and the pick.
+`bootstate_test` (every run) covers the file format, torn writes and the
+labels, and that the boot loader counted and `bootstate boot` confirmed the
+start of the run itself.
 
 ### Installing over an existing installation
 

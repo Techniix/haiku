@@ -675,6 +675,9 @@ KERNEL_SETTINGS_FILE = "/myfs/home/config/settings/kernel/drivers/kernel"
 # runs that count boot loader starts or boot other disks themselves
 # (--other-systems, --installer-upgrade) must not get the crashlog reboots.
 NO_FINAL_TESTS_FILE = "/myfs/system/non-packaged/data/ce-harness/no-final-tests"
+# --restore-points: restore_point_test runs only with this file
+RESTORE_POINTS_FLAG_FILE = \
+	"/myfs/system/non-packaged/data/ce-harness/restore-points"
 
 
 def make_patched_image(args, image, copy):
@@ -713,10 +716,13 @@ def make_patched_image(args, image, copy):
 				% OTHER_SYSTEMS_EFI_DEFAULT
 		files.append((copy + ".kernel-settings", KERNEL_SETTINGS_FILE,
 			settings, "boot_menu_timeout %d" % timeout))
-	if args.other_systems or args.installer_upgrade:
+	if args.other_systems or args.installer_upgrade or args.restore_points:
 		files.append((copy + ".no-final", NO_FINAL_TESTS_FILE,
 			"skip the tests that end the boot\n",
 			"skip the tests that end the boot"))
+	if args.restore_points:
+		files.append((copy + ".restore", RESTORE_POINTS_FLAG_FILE,
+			"restore point run\n", "restore point run"))
 	if args.only:
 		files.append((copy + ".only", SELECTION_FILE,
 			"\n".join(args.only) + "\n", "\n".join(args.only)))
@@ -1113,10 +1119,25 @@ class BootMenuDriver(threading.Thread):
 				self._run_uefi()
 			elif self.firmware == "old_state":
 				self._run_old_state()
+			elif self.firmware == "restore_pick":
+				self._run_restore_pick()
 			else:
 				self._run_bios()
 		finally:
 			self.done = True
+
+	def _run_restore_pick(self):
+		"""--restore-points, boot E: the one-shot choice shows the menu
+		(no countdown); open "System restore points" (the second entry),
+		pick the second point (the restore point after "Latest state"),
+		back in the main menu continue booting."""
+		if self._wait_for(r'boot menu: restore point "', 0,
+				timeout=180)[0] is None:
+			return self._press("b")
+		time.sleep(2)
+		for key in ("home", "down", "ret", "home", "down", "ret", "b"):
+			self._press(key)
+			time.sleep(0.5)
 
 	def _run_old_state(self):
 		"""--installer-upgrade, phase C: choose the newest older package
@@ -1582,6 +1603,141 @@ def run_installer_boots(args, results_dir, report, disks):
 				whole.write(data)
 	for path in disks.values():
 		os.remove(path)
+
+
+RESTORE_POINT_BOOTS = ("update", "stopped1", "stopped2", "recovery",
+	"picked")
+
+
+def run_restore_point_boots(args, results_dir, report):
+	"""--restore-points: five starts of one disk, whose writes persist
+	between them (a copy of the test image, made like the patched image).
+
+	update     restore_point_test installs a package: a restore point
+	stopped1   stopped right after the boot loader counted the start
+	stopped2   the same: two starts in a row that never reached the desktop
+	recovery   the recovery menu's countdown starts the last working state
+	picked     "bootstate next menu" (set in the recovery boot) shows the
+	           menu; the harness picks the restore point in it
+
+	Each boot's serial log is appended to serial.log (its CE-TEST lines
+	count like the others) and kept in its own directory."""
+	disk = os.path.join(results_dir, "restore.img")
+	error = make_patched_image(args, image_path(args), disk)
+	if error is not None:
+		report["restore_points_setup"] = error
+		log(error)
+		return
+	report["restore_points_setup"] = "ok"
+	stop = r"boot state: start \d+ of .* recorded"
+	for tag in RESTORE_POINT_BOOTS:
+		boot(args, results_dir, report, image=disk, tag=tag, persist=True,
+			kill_on=stop if tag.startswith("stopped") else None,
+			menu_script="restore_pick" if tag == "picked" else None)
+	for tag in RESTORE_POINT_BOOTS:
+		for name in ("serial.log", "serial.timed.log"):
+			try:
+				with open(os.path.join(results_dir, tag, name), "rb") as part:
+					data = part.read()
+			except OSError:
+				continue
+			with open(os.path.join(results_dir, name), "ab") as whole:
+				whole.write(("\n[ce-test] --- boot %s ---\n" % tag).encode())
+				whole.write(data)
+	os.remove(disk)
+
+
+def check_restore_point_boots(args, results_dir, report):
+	"""The boot loader's side of a --restore-points run, from each boot's
+	serial log ("boot state:" and "boot menu:" lines)."""
+	if not args.restore_points:
+		return
+	checks = report.setdefault("host_checks", [])
+	checks.append({"name": "restore_points.setup",
+		"pass": report.get("restore_points_setup") == "ok",
+		"detail": report.get("restore_points_setup", "not prepared")})
+	texts = {}
+	for tag in RESTORE_POINT_BOOTS:
+		try:
+			with open(os.path.join(results_dir, tag, "serial.log"),
+					errors="replace") as serial:
+				texts[tag] = serial.read()
+		except OSError:
+			texts[tag] = ""
+
+	def recorded(tag):
+		match = re.findall(r'boot state: start (\d+) of "([^"]*)" recorded '
+			r'\(slot (\d), sequence \d+, (\d+) unconfirmed\)', texts[tag])
+		return match[-1] if match else None
+
+	for tag, unconfirmed in (("update", "1"), ("stopped1", "1"),
+			("stopped2", "2")):
+		got = recorded(tag)
+		checks.append({"name": "restore_points.counted_" + tag,
+			"pass": got is not None and got[3] == unconfirmed
+				and got[1] == "latest",
+			"detail": "start %s of \"%s\" in slot %s, %s unconfirmed (want "
+				"%s)" % (got + (unconfirmed,)) if got is not None
+				else "no start recorded"})
+	slots = [recorded(tag)[2] for tag in RESTORE_POINT_BOOTS[:3]
+		if recorded(tag) is not None]
+	checks.append({"name": "restore_points.slots_alternate",
+		"pass": len(slots) == 3 and slots[0] != slots[1]
+			and slots[1] != slots[2],
+		"detail": "slots " + ", ".join(slots)})
+	stoppedBoot = report.get("boots", {}).get("stopped2", {})
+	checks.append({"name": "restore_points.stopped",
+		"pass": stoppedBoot.get("status") == "stopped"
+			and report.get("boots", {}).get("stopped1", {}).get("status")
+				== "stopped",
+		"detail": "the two starts: %s, %s" % (
+			report.get("boots", {}).get("stopped1", {}).get("status"),
+			stoppedBoot.get("status"))})
+
+	recovery = texts["recovery"]
+	offered = re.search(r'boot menu: recovery: 2 failed starts, offering '
+		r'"Start the last working system \((Before the update of [^)]*)\)"',
+		recovery)
+	chosen = re.search(r'boot menu: (?:timeout|no timed key input on this '
+		r'platform), choosing "Start the last working system', recovery)
+	checks.append({"name": "restore_points.recovery_menu",
+		"pass": offered is not None and chosen is not None,
+		"detail": "offered: %s; countdown chose it: %s" % (
+			offered.group(1) if offered else "no",
+			"yes" if chosen else "no")})
+	started = re.search(r'boot state: start \d+ of "(state_[^"]*)" recorded',
+		recovery)
+	checks.append({"name": "restore_points.recovery_started",
+		"pass": started is not None,
+		"detail": "started %s" % (started.group(1) if started
+			else "no older state")})
+	listed = re.findall(r'boot menu: restore point "([^"]*)"', recovery)
+	checks.append({"name": "restore_points.listed_by_date",
+		"pass": any(re.match(r"Before the update of \d+ \w+ \d{4}, "
+			r"\d\d:\d\d - last working$", label) for label in listed),
+		"detail": "; ".join(listed) or "none listed"})
+
+	picked = texts["picked"]
+	shown = "boot state: one-shot choice taken" in picked \
+		and "in 1 s unless" not in picked
+	choice = re.search(r'boot menu: package state "([^"]*)" chosen', picked)
+	started = re.search(r'boot state: start \d+ of "(state_[^"]*)" recorded',
+		picked)
+	checks.append({"name": "restore_points.picked",
+		"pass": shown and choice is not None and started is not None
+			and choice.group(1).startswith("Before the update of"),
+		"detail": "menu for the one-shot choice: %s; chosen: %s; started: "
+			"%s" % ("yes" if shown else "no",
+			choice.group(1) if choice else "nothing",
+			started.group(1) if started else "no older state")})
+	for tag in ("update", "recovery", "picked"):
+		bootReport = report.get("boots", {}).get(tag, {})
+		checks.append({"name": "restore_points.boot_" + tag,
+			"pass": bootReport.get("status") == "exited"
+				and bootReport.get("runner_finished", False),
+			"detail": "%s, runner finished: %s" % (
+				bootReport.get("status", "not booted"),
+				bootReport.get("runner_finished"))})
 
 
 def check_installer_boots(args, results_dir, report):
@@ -2307,13 +2463,16 @@ class HostLoadSampler(threading.Thread):
 
 
 def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
-		menu_script=None):
+		menu_script=None, persist=False, kill_on=None):
 	"""Boots the test image (or \a image: another disk, booted as it is)
 	and collects its serial output. A \a tag names a further boot of the
 	same run (--installer-upgrade): its logs are serial-<tag>.log, its
 	report is report["boots"][tag]. \a extra_drives are QEMU options for
 	more drives; \a menu_script makes a BootMenuDriver play the boot
-	menu."""
+	menu. With \a persist the guest's writes go to \a image (no
+	-snapshot), so that a later boot of it sees them; \a kill_on (a regular
+	expression) stops QEMU as soon as a serial line matches, like a power
+	cut (--restore-points)."""
 	bootReport = {}
 	if tag:
 		report.setdefault("boots", {})[tag] = bootReport
@@ -2381,8 +2540,8 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		# QMP sends the pointer positions the pointer suite asks for.
 		"-qmp", "unix:%s,server=on,wait=off" % qmp_path,
 		"-no-reboot",
-		"-snapshot",
-	] + boot_drive(args, image, decoy) + [
+	] + ([] if persist else ["-snapshot"]) + boot_drive(args, image,
+		decoy) + [
 		"-audiodev", "wav,id=snd0,path=%s,out.frequency=48000,"
 			"out.channels=2,out.format=s16" % audio,
 		"-device", "virtio-sound-pci,audiodev=snd0",
@@ -2538,6 +2697,16 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		if elapsed > args.timeout:
 			status = "timeout"
 			break
+		if kill_on is not None:
+			try:
+				with open(serial_log, errors="replace") as serial:
+					killed = re.search(kill_on, serial.read()) is not None
+			except OSError:
+				killed = False
+			if killed:
+				time.sleep(1)
+				status = "stopped"
+				break
 		if reader.finished.is_set() and elapsed > 5:
 			# The guest is shutting down; give it a little time.
 			try:
@@ -4070,6 +4239,12 @@ def main():
 			"(3 s timeout; on UEFI with Windows Boot Manager as the default), "
 			"start each system from it with the keyboard and check what "
 			"they report on the serial port (see README)")
+	parser.add_argument("--restore-points", action="store_true",
+		help="boot one disk five times with its writes kept: an update "
+			"makes a restore point, two starts are stopped right after the "
+			"boot loader counted them, the recovery menu starts the last "
+			"working state, then the boot menu (a one-shot choice) picks "
+			"the restore point (hard disk, BIOS or UEFI; see README)")
 	parser.add_argument("--installer-upgrade", action="store_true",
 		help="build a %d MB image, attach two copies of it made to look like "
 			"an older Haiku installation (older system package, a user "
@@ -4133,7 +4308,8 @@ def main():
 	if args.timeout is None:
 		args.timeout = 2700 if args.profile.startswith("renga-") else 1800
 	available = installed_tests(args.profile,
-		final=not (args.other_systems or args.installer_upgrade))
+		final=not (args.other_systems or args.installer_upgrade
+			or args.restore_points))
 	if args.list_tests:
 		print("\n".join(available))
 		return 0
@@ -4146,6 +4322,10 @@ def main():
 			or args.firmware != "uefi"):
 		parser.error("--two-installs tests the EFI boot loader's choice "
 			"between hard disks; it needs --firmware uefi and --media disk")
+	if args.restore_points and (args.media != "disk"
+			or args.installer_upgrade or args.other_systems
+			or args.two_installs or args.boot_menu_timeout):
+		parser.error("--restore-points boots one hard disk several times")
 	if args.installer_upgrade and (args.media != "disk"
 			or args.disk_bus != "ide" or args.other_systems
 			or args.two_installs):
@@ -4179,6 +4359,7 @@ def main():
 		"two_installs": args.two_installs,
 		"other_systems": args.other_systems,
 		"installer_upgrade": args.installer_upgrade,
+		"restore_points": args.restore_points,
 		"boot_menu_timeout": args.boot_menu_timeout,
 		"pointer_devices": args.pointer_devices,
 		"usb_controller": args.usb_controller,
@@ -4202,7 +4383,10 @@ def main():
 				extra += ["-drive", "file=%s,format=raw,if=none,id=cetarget"
 					% target, "-device", "ide-hd,drive=cetarget,bus=ide.1,"
 					"unit=0"]
-		boot(args, results_dir, report, extra_drives=extra)
+		if args.restore_points:
+			run_restore_point_boots(args, results_dir, report)
+		else:
+			boot(args, results_dir, report, extra_drives=extra)
 		if disks:
 			run_installer_boots(args, results_dir, report, disks)
 		parse_serial(results_dir, report)
@@ -4214,6 +4398,7 @@ def main():
 		check_branding(args, results_dir, report)
 		check_two_installs(args, results_dir, report)
 		check_installer_boots(args, results_dir, report)
+		check_restore_point_boots(args, results_dir, report)
 		if "linuxkpi_test" in (args.only or available):
 			check_linuxkpi(results_dir, report)
 		if "crashlog_test" in (args.only or available) \

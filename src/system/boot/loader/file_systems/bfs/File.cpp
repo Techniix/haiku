@@ -57,7 +57,14 @@ File::ReadAt(void *cookie, off_t pos, void *buffer, size_t bufferSize)
 ssize_t
 File::WriteAt(void *cookie, off_t pos, const void *buffer, size_t bufferSize)
 {
-	return EROFS;
+	// Renga: in place only, inside the file's size (see
+	// Stream::WriteInPlace()); used for the boot state file.
+	status_t status = fStream.WriteInPlace(pos, (const uint8 *)buffer,
+		&bufferSize);
+	if (status < B_OK)
+		return status;
+
+	return bufferSize;
 }
 
 

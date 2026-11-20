@@ -23,6 +23,9 @@
 #include <package/CommitTransactionResult.h>
 #include <package/DaemonDefs.h>
 #include <RemoveEngine.h>
+#include <boot_state_file.h>
+
+#include <time.h>
 
 #include "Constants.h"
 #include "DebugSupport.h"
@@ -429,6 +432,9 @@ CommitTransactionHandler::_ApplyChanges()
 
 		// activate/deactivate packages and create users, groups, settings files.
 		_ChangePackageActivation(fAddedPackages, fRemovedPackages);
+
+		// Renga: the old state is a restore point now
+		_RecordRestorePoint();
 	} else // FirstBootProcessing, skip several steps and just do package setup.
 		_PrepareFirstBootPackages();
 
@@ -530,6 +536,62 @@ CommitTransactionHandler::_CreateOldStateDirectory()
 		kActivationFileName, PackageSet(), PackageSet(), activationFile);
 
 	fResult.SetOldStateDirectory(fOldStateDirectoryName);
+}
+
+
+/*!	Renga (boot loader batch A): the state this update replaced is a
+	restore point the boot menu lists by date. Once the change is active:
+	- a note in the old state directory (BootState::kRestorePointFile):
+	  when it was replaced and how many packages changed, for its label
+	  ("Before the update of 20 November 2026, 15:30");
+	- on the system volume, the boot state's names for "the latest state"
+	  (the last working one, the one being started) are turned into the old
+	  state directory's name, since that is what they meant: after the
+	  update the latest state is a new, unconfirmed one.
+	Failures are logged and do not fail the transaction.
+*/
+void
+CommitTransactionHandler::_RecordRestorePoint()
+{
+	if (fOldStateDirectoryName.IsEmpty())
+		return;
+
+	time_t now = time(NULL);
+	struct tm local;
+	BString note;
+	if (localtime_r(&now, &local) != NULL) {
+		note.SetToFormat("replaced %d-%02d-%02d_%02d:%02d:%02d\n"
+			"changes %" B_PRId32 "\n", 1900 + local.tm_year,
+			local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min,
+			local.tm_sec, (int32)(fAddedPackages.size()
+				+ fRemovedPackages.size()));
+	}
+	BFile noteFile(&fOldStateDirectory, BootState::kRestorePointFile,
+		B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+	if (noteFile.InitCheck() != B_OK
+		|| noteFile.Write(note.String(), note.Length()) != note.Length()) {
+		ERROR("Failed to write the restore point note of %s\n",
+			fOldStateDirectoryName.String());
+	}
+
+	if (fVolume->MountType() != PACKAGE_FS_MOUNT_TYPE_SYSTEM)
+		return;
+
+	char path[B_PATH_NAME_LENGTH];
+	BootState::file_path(path, sizeof(path));
+	BootState::Record record;
+	int slot = BootState::read_file(path, record);
+	if (slot == -2)
+		return;
+	if (BootState::latest_became(record, fOldStateDirectoryName.String())) {
+		status_t error = BootState::write_file(path, record, slot);
+		if (error != B_OK) {
+			ERROR("Failed to update the boot state: %s\n", strerror(error));
+		} else {
+			INFORM("boot state: the latest state is now %s\n",
+				fOldStateDirectoryName.String());
+		}
+	}
 }
 
 

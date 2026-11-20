@@ -30,6 +30,7 @@ public:
 			const char*			SystemPackage() const
 									{ return fSystemPackage; }
 			status_t			SetSystemPackage(const char* package);
+			void				SetRestorePointNote(const char* note);
 
 			void				GetPackagePath(const char* name, char* path,
 									size_t pathSize);
@@ -64,6 +65,9 @@ public:
 
 private:
 			PackageVolumeState*	_AddState(const char* stateName);
+			void				_ReadRestorePointNote(
+									Directory* packagesDirectory,
+									PackageVolumeState* state);
 			status_t			_InitState(Directory* packagesDirectory,
 									DIR* dir, PackageVolumeState* state);
 			status_t			_ParseActivatedPackagesFile(
@@ -74,6 +78,7 @@ private:
 private:
 			StateList			fStates;
 			DIR*				fPackagesDir;
+			bool				fOldStatesLoaded;
 };
 
 

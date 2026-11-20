@@ -49,7 +49,7 @@ class EfiDevice : public Node
 		virtual ssize_t ReadAt(void *cookie, off_t pos, void *buffer,
 			size_t bufferSize);
 		virtual ssize_t WriteAt(void *cookie, off_t pos, const void *buffer,
-			size_t bufferSize) { return B_UNSUPPORTED; }
+			size_t bufferSize);
 		virtual off_t Size() const {
 			return (fBlockIo->Media->LastBlock + 1) * BlockSize(); }
 
@@ -95,6 +95,52 @@ EfiDevice::ReadAt(void *cookie, off_t pos, void *buffer, size_t bufferSize)
 	}
 
 	memcpy(buffer, readBuffer + offset, bufferSize);
+
+	return bufferSize;
+}
+
+
+/*!	Renga (boot loader batch A): writes through the firmware's block I/O
+	protocol, for the boot state file (Stream::WriteInPlace() in the BFS
+	loader). Small writes only (the boot state writes one 4 KiB copy): the
+	blocks touched are read, patched and written back whole, so the
+	request need not be block-aligned. Read-only media are refused, and
+	the write is flushed before returning.
+*/
+ssize_t
+EfiDevice::WriteAt(void *cookie, off_t pos, const void *buffer,
+	size_t bufferSize)
+{
+	static const size_t kMaxWrite = 64 * 1024;
+	if (bufferSize == 0)
+		return 0;
+	if (pos < 0 || bufferSize > kMaxWrite)
+		return B_BAD_VALUE;
+	if (fBlockIo->Media->ReadOnly)
+		return B_READ_ONLY_DEVICE;
+
+	off_t offset = pos % BlockSize();
+	off_t block = pos / BlockSize();
+	uint32 numBlocks = (offset + bufferSize + BlockSize() - 1) / BlockSize();
+
+	char writeBuffer[numBlocks * BlockSize()]
+		__attribute__((aligned(2048)));
+
+	if ((offset != 0 || bufferSize % BlockSize() != 0)
+		&& fBlockIo->ReadBlocks(fBlockIo, fBlockIo->Media->MediaId, block,
+			sizeof(writeBuffer), writeBuffer) != EFI_SUCCESS) {
+		dprintf("%s: blockIo error reading before a write!\n", __func__);
+		return B_IO_ERROR;
+	}
+
+	memcpy(writeBuffer + offset, buffer, bufferSize);
+
+	if (fBlockIo->WriteBlocks(fBlockIo, fBlockIo->Media->MediaId, block,
+			sizeof(writeBuffer), writeBuffer) != EFI_SUCCESS) {
+		dprintf("%s: blockIo error writing to device!\n", __func__);
+		return B_IO_ERROR;
+	}
+	fBlockIo->FlushBlocks(fBlockIo);
 
 	return bufferSize;
 }

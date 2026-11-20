@@ -1,0 +1,12 @@
+# Renga (boot loader batch A): boot counting. The boot loader counts every
+# start; "bootstate boot" confirms it once the desktop is up (Deskbar has
+# been running for a few seconds; at once on a system without a desktop),
+# which tells the boot loader that this system state works. After two
+# starts in a row that were not confirmed, the boot menu opens by itself
+# and offers the last working state. Not in safe mode: a start that only
+# works in safe mode does not count as working.
+job x-vnd.Renga-bootstate {
+	launch /bin/bootstate boot
+	on initial_volumes_mounted
+	no_safemode
+}

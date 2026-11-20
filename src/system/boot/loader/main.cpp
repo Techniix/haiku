@@ -12,6 +12,9 @@
 #include <boot/vfs.h>
 #include <boot/platform.h>
 #include <boot/heap.h>
+#include <boot/loader_state.h>
+
+#include <algorithm>
 #include <boot/PathBlocklist.h>
 #include <boot/stdio.h>
 #include <distro_name.h>
@@ -75,9 +78,39 @@ main(stage2_args *args)
 	bool showMenu = get_boot_file_system(args, bootVolume) != B_OK
 		|| (platform_boot_options() & BOOT_OPTION_MENU) != 0;
 	int32 menuTimeout = 0;
+
+	// Renga (boot loader batch A): the boot state may ask for the menu:
+	// after two starts that never reached the desktop (the recovery menu,
+	// which counts down to the last working system state), or because
+	// "Restart into..." left a one-shot choice for this start.
+	loader_state_request stateRequest = loader_state_load(bootVolume);
+
 	if (!showMenu) {
 		menuTimeout = boot_menu_timeout(bootVolume);
 		showMenu = menuTimeout > 0;
+
+		switch (stateRequest) {
+			case LOADER_STATE_RECOVERY:
+				showMenu = true;
+				menuTimeout = std::max(menuTimeout, kRecoveryMenuTimeout);
+				break;
+			case LOADER_STATE_MENU:
+				// shown until the user picks something
+				showMenu = true;
+				menuTimeout = 0;
+				break;
+			case LOADER_STATE_SYSTEM:
+				// the menu finds the other systems; its default is the
+				// chosen one, started after a short countdown
+				showMenu = true;
+				menuTimeout = 1;
+				break;
+			case LOADER_STATE_STATE:
+				loader_state_apply_next_state(bootVolume);
+				break;
+			case LOADER_STATE_NOTHING:
+				break;
+		}
 	}
 
 	if (showMenu) {
@@ -132,6 +165,10 @@ main(stage2_args *args)
 		// is already loaded at this point and we definitely
 		// know our boot volume, too
 		if (status == B_OK) {
+			// Renga: count this start (boot state, see loader_state.cpp);
+			// the desktop confirms it ("bootstate boot")
+			loader_state_record_start(bootVolume);
+
 			if (bootVolume.IsPackaged()) {
 				packagefs_apply_path_blocklist(bootVolume.SystemDirectory(),
 					pathBlocklist);

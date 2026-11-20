@@ -14,6 +14,7 @@ SYSTEM_BIN = [ FFilterByBuildFeatures
 	clear
 	collectcatkeys
 	copyattr
+	bootstate
 	crash_collector
 	desklink
 	df
@@ -442,6 +443,13 @@ local networkSettingsFiles = <network-settings>services
 SEARCH on $(networkSettingsFiles)
 	= [ FDirName $(HAIKU_TOP) data settings network ] ;
 AddFilesToHaikuImage system settings network : $(networkSettingsFiles) ;
+
+# Renga (boot loader batch A): the boot state, empty, at its full size, so
+# that the boot loader can count starts from the very first one (it writes
+# in place and cannot create files; bootstate creates it on older systems).
+local bootStateFile = <boot-settings>state ;
+SEARCH on $(bootStateFile) = [ FDirName $(HAIKU_TOP) data settings boot ] ;
+AddFilesToHaikuImage system settings boot : $(bootStateFile) ;
 
 # repository config and cache files
 local repository ;

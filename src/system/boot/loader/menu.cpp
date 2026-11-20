@@ -20,6 +20,7 @@
 #include <drivers/driver_settings.h>
 
 #include <AutoDeleter.h>
+#include <boot/loader_state.h>
 #include <boot/menu.h>
 #include <boot/other_systems.h>
 #include <boot/PathBlocklist.h>
@@ -1815,6 +1816,175 @@ boot_menu_default(BootVolume& volume, char* name, size_t size)
 }
 
 
+// #pragma mark - restore points and recovery (Renga, boot loader batch A)
+
+
+static Menu* sRecoverySafeModeMenu = NULL;
+
+
+/*!	A restore point was chosen: start that package state of the boot
+	volume. Logged like a choice in "Select boot volume/state", which the
+	harness follows.
+*/
+static bool
+user_menu_restore_point(Menu* menu, MenuItem* _item)
+{
+	PackageVolumeStateMenuItem* item
+		= static_cast<PackageVolumeStateMenuItem*>(_item);
+	dprintf("boot menu: package state \"%s\" chosen\n", item->Label());
+
+	sPathBlocklist->MakeEmpty();
+	status_t status = loader_state_select(*sBootVolume, item->VolumeState());
+	update_continue_booting_menu_item(status);
+
+	gBootParams.SetBool(BOOT_VOLUME_USER_SELECTED, true);
+	return true;
+}
+
+
+/*!	"System restore points": every package state of the boot volume, the
+	newest first, by plain date ("Before the update of 20 November 2026,
+	15:30", see package_support.cpp), the last working one marked. NULL if
+	the boot volume has only its latest state.
+*/
+static Menu*
+add_restore_points_menu(BootVolume& volume)
+{
+	if (!volume.IsValid() || volume.GetPackageVolumeInfo() == NULL)
+		return NULL;
+	PackageVolumeInfo* info = volume.GetPackageVolumeInfo();
+	if (info->LoadOldStates() != B_OK)
+		return NULL;
+
+	int32 count = 0;
+	for (PackageVolumeStateList::ConstIterator it = info->States().GetIterator();
+			it.Next() != NULL;)
+		count++;
+	if (count < 2)
+		return NULL;
+
+	PackageVolumeState* lastGood = loader_state_last_good(volume);
+	Menu* menu = new(std::nothrow) Menu(CHOICE_MENU,
+		"Start the system as it was at a restore point");
+	if (menu == NULL)
+		return NULL;
+
+	for (PackageVolumeStateList::ConstIterator it = info->States().GetIterator();
+			PackageVolumeState* state = it.Next();) {
+		char label[160];
+		snprintf(label, sizeof(label), "%s%s", state->DisplayName(),
+			state == lastGood ? " - last working" : "");
+		PackageVolumeStateMenuItem* item = new(std::nothrow)
+			PackageVolumeStateMenuItem(label, info, state);
+		if (item == NULL)
+			break;
+		menu->AddItem(item);
+		item->SetTarget(user_menu_restore_point);
+		item->SetData(volume.RootDirectory());
+		item->SetHelpText(state->Name() == NULL
+			? "The system as it is now."
+			: "The system as it was then. Files and settings stay as they "
+				"are; packages installed since are not used.");
+		dprintf("boot menu: restore point \"%s\" (%s)\n", label,
+			state->Name() != NULL ? state->Name() : "latest");
+		if (state == volume.GetPackageVolumeState()) {
+			item->SetMarked(true);
+			item->Select(true);
+		}
+	}
+	return menu;
+}
+
+
+//!	Recovery: start the last working package state.
+static bool
+user_menu_recovery_last_good(Menu* menu, MenuItem* item)
+{
+	PackageVolumeState* state = loader_state_last_good(*sBootVolume);
+	dprintf("boot menu: recovery: starting the last working state \"%s\"\n",
+		state != NULL ? state->DisplayName() : "latest");
+	if (state != NULL) {
+		sPathBlocklist->MakeEmpty();
+		status_t status = loader_state_select(*sBootVolume, state);
+		update_continue_booting_menu_item(status);
+		gBootParams.SetBool(BOOT_VOLUME_USER_SELECTED, true);
+	}
+	return true;
+}
+
+
+//!	Recovery when the latest state was the last working one: safe mode.
+static bool
+user_menu_recovery_safe_mode(Menu* menu, MenuItem* item)
+{
+	dprintf("boot menu: recovery: starting in safe mode\n");
+	if (sRecoverySafeModeMenu != NULL) {
+		for (int32 i = 0; MenuItem* option = sRecoverySafeModeMenu->ItemAt(i);
+				i++) {
+			if (option->Data() != NULL
+				&& strcmp((const char*)option->Data(), B_SAFEMODE_SAFE_MODE)
+					== 0) {
+				option->SetMarked(true);
+				break;
+			}
+		}
+	}
+	return true;
+}
+
+
+/*!	The recovery entries at the top of the main menu, after two starts that
+	never reached the desktop: a line saying so, then "Start the last
+	working system (<date>)" if that is an older state than the latest,
+	which is returned as the entry the countdown starts. If the latest
+	state was the last working one (the failures did not come with an
+	update), "Start in safe mode" is offered instead and NULL returned:
+	the countdown then continues booting normally, since an automatic
+	start in safe mode would surprise more than it helps.
+*/
+static MenuItem*
+add_recovery_items(Menu* menu, BootVolume& volume, Menu* safeModeMenu)
+{
+	sRecoverySafeModeMenu = safeModeMenu;
+
+	char text[160];
+	snprintf(text, sizeof(text), "The last %" B_PRIu32 " starts did not reach "
+		"the desktop.", loader_state_failed_starts());
+	MenuItem* item = new(std::nothrow) MenuItem(text);
+	if (item == NULL)
+		return NULL;
+	item->SetEnabled(false);
+		// a line of text, skipped by the cursor
+	menu->AddItem(item);
+
+	PackageVolumeState* lastGood = loader_state_last_good(volume);
+	if (lastGood != NULL) {
+		snprintf(text, sizeof(text), "Start the last working system (%s)",
+			lastGood->DisplayName());
+		item = new(std::nothrow) MenuItem(text);
+		if (item == NULL)
+			return NULL;
+		item->SetTarget(user_menu_recovery_last_good);
+		item->SetHelpText("Starts the system state that last reached the "
+			"desktop. Your files and settings stay as they are.");
+	} else {
+		item = new(std::nothrow) MenuItem("Start in safe mode");
+		if (item == NULL)
+			return NULL;
+		item->SetTarget(user_menu_recovery_safe_mode);
+		item->SetHelpText("Starts without the drivers and add-ons that are "
+			"not needed to reach the desktop.");
+	}
+	item->SetShortcut('l');
+	menu->AddItem(item);
+	menu->AddSeparatorItem();
+
+	dprintf("boot menu: recovery: %" B_PRIu32 " failed starts, offering "
+		"\"%s\"\n", loader_state_failed_starts(), item->Label());
+	return lastGood != NULL ? item : NULL;
+}
+
+
 /*!	Shows the boot menu. With a \a timeout (in seconds, see
 	boot_menu_timeout()) the menu counts down and then continues booting
 	\a _bootVolume, unless a key is pressed first; without one it waits for
@@ -1837,13 +2007,29 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
 
 	TRACE(("user_menu: enter\n"));
 
+	// Renga (boot loader batch A): after two starts that never reached the
+	// desktop, the recovery entries come first. The safe mode menu is
+	// made before them, since one of them may mark its "Safe mode".
+	safeModeMenu = add_safe_mode_menu();
+	MenuItem* recoveryItem = NULL;
+	if (loader_state_needs_recovery() && _bootVolume.IsValid())
+		recoveryItem = add_recovery_items(menu, _bootVolume, safeModeMenu);
+
 	// Add boot volume
 	menu->AddItem(item = new(std::nothrow) MenuItem("Select boot volume/state",
 		add_boot_volume_menu()));
 
+	// Renga: the boot volume's package states by date, one level down
+	if (Menu* restorePoints = add_restore_points_menu(_bootVolume)) {
+		menu->AddItem(item = new(std::nothrow) MenuItem(
+			"System restore points", restorePoints));
+		item->SetHelpText("A restore point is saved before every update. "
+			"Enter to start the system as it was at one of them.");
+	}
+
 	// Add safe mode
 	menu->AddItem(item = new(std::nothrow) MenuItem("Select safe mode options",
-		safeModeMenu = add_safe_mode_menu()));
+		safeModeMenu));
 
 	// add debug menu
 	menu->AddItem(item = new(std::nothrow) MenuItem("Select debug options",
@@ -1858,8 +2044,10 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
 	// Other operating systems (Renga, F-22), between the loader's own
 	// entries and "Reboot"; the countdown may start one of them.
 	char defaultName[BootOtherSystems::kMaxNameLength];
-	bool hasDefault = boot_menu_default(_bootVolume, defaultName,
-		sizeof(defaultName));
+	// "Restart into..." another system comes before the configured default
+	bool hasDefault = loader_state_next_system(defaultName,
+			sizeof(defaultName))
+		|| boot_menu_default(_bootVolume, defaultName, sizeof(defaultName));
 	MenuItem* otherDefault = NULL;
 	other_systems_add_to_menu(menu, separator,
 		hasDefault ? defaultName : NULL, &otherDefault);
@@ -1876,7 +2064,12 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
 	} else {
 		item->SetShortcut('b');
 
-		if (timeout > 0) {
+		if (recoveryItem != NULL) {
+			// the recovery entry is the default, with or without a timeout
+			recoveryItem->Select(true);
+			if (timeout > 0)
+				menu->SetTimeout(timeout * 1000000LL, recoveryItem);
+		} else if (timeout > 0) {
 			// Start on the default entry, so that the countdown shows what
 			// it will do and Return does the same right away.
 			MenuItem* defaultItem = otherDefault != NULL ? otherDefault : item;
@@ -1892,6 +2085,7 @@ user_menu(BootVolume& _bootVolume, PathBlocklist& _pathBlocklist,
 	apply_safe_mode_path_blocklist();
 	add_safe_mode_settings(sSafeModeOptionsBuffer.String());
 	other_systems_cleanup();
+	sRecoverySafeModeMenu = NULL;
 	delete menu;
 
 

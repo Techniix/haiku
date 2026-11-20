@@ -415,6 +415,60 @@ Stream::ReadAt(off_t pos, uint8* buffer, size_t* _length)
 }
 
 
+/*!	Renga (boot loader batch A): writes \a buffer over the file's data at
+	\a pos, into the blocks the file already has. The boot loader cannot
+	allocate blocks or change the inode, so nothing beyond the file's size
+	is written (\a _length is cut to it) and no metadata changes; this is
+	enough for the boot state file (headers/private/shared/boot_state.h),
+	which its writers keep at a fixed size. File data is not journalled by
+	BFS, so a later log replay by the kernel cannot bring back old data.
+	Writes go straight to the device in pieces that each stay inside one
+	block run; the device (BIOS: whole sectors only) decides whether it
+	accepts them.
+*/
+status_t
+Stream::WriteInPlace(off_t pos, const uint8* buffer, size_t* _length)
+{
+	if (pos < 0 || pos >= data.Size()) {
+		*_length = 0;
+		return B_BAD_VALUE;
+	}
+
+	size_t length = *_length;
+	if (pos + (off_t)length > data.Size())
+		length = data.Size() - pos;
+
+	size_t written = 0;
+	while (written < length) {
+		block_run run;
+		off_t runOffset;
+		off_t position = pos + written;
+		if (FindBlockRun(position, run, runOffset) < B_OK)
+			break;
+
+		off_t runEnd = runOffset
+			+ ((off_t)run.Length() << fVolume.BlockShift());
+		size_t chunk = length - written;
+		if (position + (off_t)chunk > runEnd)
+			chunk = runEnd - position;
+		if (chunk == 0)
+			break;
+
+		off_t diskOffset = fVolume.ToOffset(run) + (position - runOffset);
+		ssize_t result = write_pos(fVolume.Device(), diskOffset,
+			buffer + written, chunk);
+		if (result < 0 || (size_t)result != chunk) {
+			*_length = written;
+			return result < 0 ? (status_t)result : B_IO_ERROR;
+		}
+		written += chunk;
+	}
+
+	*_length = written;
+	return written == length ? B_OK : B_BAD_VALUE;
+}
+
+
 Node*
 Stream::NodeFactory(Volume& volume, off_t id)
 {

@@ -73,6 +73,7 @@ private:
 									const BActivationTransaction& transaction);
 			void				_ApplyChanges();
 			void				_CreateOldStateDirectory();
+			void				_RecordRestorePoint();
 			void				_RemovePackagesToDeactivate();
 			void				_AddPackagesToActivate();
 

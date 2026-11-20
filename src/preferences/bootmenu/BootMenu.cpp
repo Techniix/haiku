@@ -31,6 +31,16 @@
 	  BootMenu --set-timeout <seconds> 0 turns the menu off
 	  BootMenu --set-default <name>    "renga" for this system
 
+	Renga, boot loader batch A: "After two failed starts, open the boot
+	menu..." ("boot_auto_recovery false" in the same file when off; on by
+	default), and "Restart into": the boot menu, another system or a
+	restore point for the next start only, through the boot state's
+	one-shot choice (headers/private/shared/boot_state.h), then a restart.
+
+	  BootMenu --set-auto-recovery on|off
+	  BootMenu --restart-into menu|system <name>|state <directory>
+	                                   (sets the choice, does not restart)
+
 	The window applies every change at once, as Haiku's preferences do.
 	The same messages the controls send (kMsgSetTimeout, kMsgSetDefault)
 	are accepted by the application from other programs, which the GUI test
@@ -74,7 +84,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <RosterPrivate.h>
 #include <boot_other_systems.h>
+#include <boot_state_file.h>
 #include <distro_name.h>
 
 
@@ -97,6 +109,10 @@ static const uint32 kMsgVolumeSystem = 'vsys';
 	// F-59: "Show the system on each volume"; also from other programs
 	// with a bool "show"
 static const uint32 kMsgDefaults = 'rdfl';
+static const uint32 kMsgAutoRecovery = 'arcv';
+	// also from other programs with a bool "on"
+static const uint32 kMsgRestartChoice = 'rsch';
+static const uint32 kMsgRestart = 'rstr';
 
 static const int32 kDefaultTimeout = 5;
 static const int32 kMaxTimeout = 600;
@@ -110,6 +126,7 @@ struct BootMenuSettings {
 	int32	timeout;	// 0: no menu unless a key is held
 	BString	defaultName;	// empty: this system
 	bool	volumeSystem;	// F-59: "Haiku - Renga" in the volume menu
+	bool	autoRecovery;	// batch A: recovery menu after failed starts
 };
 
 
@@ -126,7 +143,7 @@ settings_path(BPath& path)
 static BootMenuSettings
 read_settings()
 {
-	BootMenuSettings settings = { 0, "", true };
+	BootMenuSettings settings = { 0, "", true, true };
 	BPath path;
 	if (settings_path(path) != B_OK)
 		return settings;
@@ -148,6 +165,8 @@ read_settings()
 		settings.defaultName = name;
 	settings.volumeSystem = get_driver_boolean_parameter(handle,
 		"boot_menu_volume_system", true, true);
+	settings.autoRecovery = get_driver_boolean_parameter(handle,
+		"boot_auto_recovery", true, true);
 	unload_driver_settings(handle);
 	return settings;
 }
@@ -199,7 +218,8 @@ write_settings(const BootMenuSettings& settings)
 		BString line = lines.StringAt(i);
 		if (is_setting_line(line, "boot_menu_timeout")
 			|| is_setting_line(line, "boot_menu_default")
-			|| is_setting_line(line, "boot_menu_volume_system"))
+			|| is_setting_line(line, "boot_menu_volume_system")
+			|| is_setting_line(line, "boot_auto_recovery"))
 			continue;
 		if (i == lines.CountStrings() - 1 && line.IsEmpty())
 			break;
@@ -221,6 +241,12 @@ write_settings(const BootMenuSettings& settings)
 		if (!output.IsEmpty() && !output.EndsWith("\n"))
 			output << "\n";
 		output << "boot_menu_volume_system false\n";
+	}
+	if (!settings.autoRecovery) {
+		// batch A: the default (on) is not written
+		if (!output.IsEmpty() && !output.EndsWith("\n"))
+			output << "\n";
+		output << "boot_auto_recovery false\n";
 	}
 
 	BString temporary(path.Path());
@@ -452,6 +478,28 @@ find_systems(BObjectList<FoundSystem, true>& systems)
 }
 
 
+// #pragma mark - restart into
+
+
+/*!	Sets the boot state's one-shot choice for the next start: "menu",
+	"system:<name>", "state:<directory>" or "" (none). The boot state file
+	is created by the bootstate launch job at every start; without it (a
+	read-only boot volume) there is no choice to set.
+*/
+static status_t
+set_next_start(const char* value)
+{
+	char path[B_PATH_NAME_LENGTH];
+	BootState::file_path(path, sizeof(path));
+	BootState::Record record;
+	int slot = BootState::read_file(path, record);
+	if (slot == -2)
+		return B_ENTRY_NOT_FOUND;
+	BootState::set_name(record.nextOnce, sizeof(record.nextOnce), value);
+	return BootState::write_file(path, record, slot);
+}
+
+
 // #pragma mark - window
 
 
@@ -481,6 +529,19 @@ public:
 		fDefaults = new BButton("defaults", B_TRANSLATE("Restore defaults"),
 			new BMessage(kMsgDefaults));
 
+		// batch A
+		fAutoRecovery = new BCheckBox("autoRecovery", B_TRANSLATE(
+			"After two failed starts, open the boot menu with the last "
+			"working system selected"), new BMessage(kMsgAutoRecovery));
+		fRestartMenu = new BPopUpMenu("restartInto");
+		fRestartField = new BMenuField("restartInto",
+			B_TRANSLATE("Restart into:"), fRestartMenu);
+		fRestart = new BButton("restart", B_TRANSLATE("Restart" B_UTF8_ELLIPSIS),
+			new BMessage(kMsgRestart));
+		BStringView* restoreNote = new BStringView("restoreNote", B_TRANSLATE(
+			"A restore point is saved before every update; the boot menu "
+			"lists them under \"System restore points\"."));
+
 		BStringView* note = new BStringView("note", B_TRANSLATE(
 			"Without this, hold Shift or Space while the computer starts."));
 		BStringView* note2 = new BStringView("note2", B_TRANSLATE(
@@ -498,6 +559,13 @@ public:
 				.Add(fDefaultField->CreateMenuBarLayoutItem(), 1, 1)
 			.End()
 			.Add(fVolumeSystem)
+			.Add(fAutoRecovery)
+			.AddGroup(B_HORIZONTAL)
+				.Add(fRestartField)
+				.Add(fRestart)
+				.AddGlue()
+			.End()
+			.Add(restoreNote)
 			.Add(new BSeparatorView(B_HORIZONTAL))
 			.Add(fFound)
 			.Add(note)
@@ -510,6 +578,7 @@ public:
 
 		fSettings = read_settings();
 		_FillDefaultMenu();
+		_FillRestartMenu();
 		_UpdateControls();
 		CenterOnScreen();
 	}
@@ -554,10 +623,27 @@ public:
 				_Apply();
 				break;
 			}
+			case kMsgAutoRecovery:
+			{
+				bool on;
+				if (message->FindBool("on", &on) == B_OK)
+					fAutoRecovery->SetValue(on);
+				fSettings.autoRecovery
+					= fAutoRecovery->Value() == B_CONTROL_ON;
+				_Apply();
+				break;
+			}
+			case kMsgRestartChoice:
+				fRestartChoice = message->GetString("next", "menu");
+				break;
+			case kMsgRestart:
+				_RestartInto();
+				break;
 			case kMsgDefaults:
 				fSettings.timeout = 0;
 				fSettings.defaultName = "";
 				fSettings.volumeSystem = true;
+				fSettings.autoRecovery = true;
 				_FillDefaultMenu();
 				_Apply();
 				break;
@@ -619,6 +705,74 @@ private:
 		fFound->SetText(found);
 	}
 
+	void _FillRestartMenu()
+	{
+		while (BMenuItem* item = fRestartMenu->RemoveItem((int32)0))
+			delete item;
+
+		BMessage* message = new BMessage(kMsgRestartChoice);
+		message->AddString("next", "menu");
+		BMenuItem* item = new BMenuItem(B_TRANSLATE("Show the boot menu"),
+			message);
+		item->SetMarked(true);
+		fRestartMenu->AddItem(item);
+		fRestartChoice = "menu";
+
+		if (fSystems.IsEmpty())
+			find_systems(fSystems);
+		for (int32 i = 0; i < fSystems.CountItems(); i++) {
+			message = new BMessage(kMsgRestartChoice);
+			BString next("system:");
+			next << fSystems.ItemAt(i)->name;
+			message->AddString("next", next);
+			fRestartMenu->AddItem(new BMenuItem(fSystems.ItemAt(i)->name,
+				message));
+		}
+
+		static char names[64][BootState::kNameLength];
+		int count = BootState::list_restore_points(names, 64);
+		if (count > 0)
+			fRestartMenu->AddSeparatorItem();
+		for (int i = 0; i < count; i++) {
+			char label[160];
+			BootState::restore_point_label(names[i], label, sizeof(label));
+			message = new BMessage(kMsgRestartChoice);
+			BString next("state:");
+			next << names[i];
+			message->AddString("next", next);
+			fRestartMenu->AddItem(new BMenuItem(label, message));
+		}
+	}
+
+	void _RestartInto()
+	{
+		BMenuItem* marked = fRestartMenu->FindMarked();
+		BString text;
+		text.SetToFormat(B_TRANSLATE("Restart now into \"%s\"? This "
+			"applies to the next start only."),
+			marked != NULL ? marked->Label() : "");
+		BAlert* alert = new BAlert(B_TRANSLATE("Boot menu"), text,
+			B_TRANSLATE("Cancel"), B_TRANSLATE("Restart"), NULL,
+			B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+		alert->SetShortcut(0, B_ESCAPE);
+		if (alert->Go() != 1)
+			return;
+
+		status_t status = set_next_start(fRestartChoice.String());
+		if (status != B_OK) {
+			BString error;
+			error.SetToFormat(B_TRANSLATE("The choice could not be saved: "
+				"%s"), strerror(status));
+			(new BAlert(B_TRANSLATE("Boot menu"), error, B_TRANSLATE("OK"),
+				NULL, NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go(NULL);
+			return;
+		}
+		printf("BootMenu: next start \"%s\", restarting\n",
+			fRestartChoice.String());
+		BRoster roster;
+		BRoster::Private(roster).ShutDown(true, true, false);
+	}
+
 	void _UpdateControls()
 	{
 		bool show = fSettings.timeout > 0;
@@ -628,8 +782,11 @@ private:
 		fDefaultField->SetEnabled(show);
 		fVolumeSystem->SetValue(fSettings.volumeSystem ? B_CONTROL_ON
 			: B_CONTROL_OFF);
+		fAutoRecovery->SetValue(fSettings.autoRecovery ? B_CONTROL_ON
+			: B_CONTROL_OFF);
 		fDefaults->SetEnabled(fSettings.timeout != 0
-			|| !fSettings.defaultName.IsEmpty() || !fSettings.volumeSystem);
+			|| !fSettings.defaultName.IsEmpty() || !fSettings.volumeSystem
+			|| !fSettings.autoRecovery);
 
 		for (int32 i = 0; i < fDefaultMenu->CountItems(); i++) {
 			BMenuItem* item = fDefaultMenu->ItemAt(i);
@@ -655,14 +812,20 @@ private:
 			alert->Go(NULL);
 		} else {
 			printf("BootMenu: saved timeout %" B_PRId32 ", default \"%s\", "
-				"volume system %s\n", fSettings.timeout,
+				"volume system %s, auto recovery %s\n", fSettings.timeout,
 				fSettings.defaultName.String(),
-				fSettings.volumeSystem ? "on" : "off");
+				fSettings.volumeSystem ? "on" : "off",
+				fSettings.autoRecovery ? "on" : "off");
 		}
 	}
 
 	BCheckBox*			fShowMenu;
 	BCheckBox*			fVolumeSystem;
+	BCheckBox*			fAutoRecovery;
+	BPopUpMenu*			fRestartMenu;
+	BMenuField*			fRestartField;
+	BButton*			fRestart;
+	BString				fRestartChoice;
 	BButton*			fDefaults;
 	BSpinner*			fTimeout;
 	BPopUpMenu*			fDefaultMenu;
@@ -694,6 +857,7 @@ public:
 			case kMsgSetTimeout:
 			case kMsgSetDefault:
 			case kMsgVolumeSystem:
+			case kMsgAutoRecovery:
 			case kMsgDefaults:
 				if (fWindow != NULL)
 					fWindow->PostMessage(message);
@@ -712,7 +876,9 @@ static int
 usage()
 {
 	fprintf(stderr, "usage: BootMenu [--list | --show | --set-timeout "
-		"<seconds> | --set-default <name> | --set-volume-system on|off]\n");
+		"<seconds> | --set-default <name> | --set-volume-system on|off\n"
+		"        | --set-auto-recovery on|off\n"
+		"        | --restart-into menu|system <name>|state <directory>]\n");
 	return 1;
 }
 
@@ -732,16 +898,32 @@ main(int argc, char** argv)
 			return 0;
 		}
 		if (strcmp(argv[1], "--show") == 0 && argc == 2) {
-			printf("timeout %" B_PRId32 "\ndefault %s\nvolume_system %s\n",
+			printf("timeout %" B_PRId32 "\ndefault %s\nvolume_system %s\n"
+				"auto_recovery %s\n",
 				settings.timeout, settings.defaultName.IsEmpty() ? "renga"
 					: settings.defaultName.String(),
-				settings.volumeSystem ? "on" : "off");
+				settings.volumeSystem ? "on" : "off",
+				settings.autoRecovery ? "on" : "off");
 			return 0;
 		}
 		if (strcmp(argv[1], "--set-timeout") == 0 && argc == 3) {
 			int32 seconds = strtol(argv[2], NULL, 10);
 			settings.timeout = seconds < 0 ? 0
 				: seconds > kMaxTimeout ? kMaxTimeout : seconds;
+		} else if (strcmp(argv[1], "--set-auto-recovery") == 0 && argc == 3) {
+			settings.autoRecovery = strcmp(argv[2], "off") != 0;
+		} else if (strcmp(argv[1], "--restart-into") == 0 && argc >= 3) {
+			BString next(argv[2]);
+			if ((next == "system" || next == "state") && argc == 4)
+				next << ":" << argv[3];
+			else if (next != "menu" || argc != 3)
+				return usage();
+			status_t status = set_next_start(next.String());
+			if (status != B_OK) {
+				fprintf(stderr, "BootMenu: %s\n", strerror(status));
+				return 1;
+			}
+			return 0;
 		} else if (strcmp(argv[1], "--set-volume-system") == 0 && argc == 3) {
 			settings.volumeSystem = strcmp(argv[2], "off") != 0;
 		} else if (strcmp(argv[1], "--set-default") == 0 && argc == 3) {

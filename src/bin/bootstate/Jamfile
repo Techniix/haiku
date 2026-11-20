@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP src bin bootstate ;
+
+UsePrivateHeaders shared ;
+
+# Renga (boot loader batch A): boot counting and the last working system
+# state for the boot loader (headers/private/shared/boot_state.h). Started
+# once per boot by data/launch/bootstate.
+Application bootstate :
+	bootstate.cpp
+	: [ TargetLibstdc++ ]
+;

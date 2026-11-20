@@ -1,0 +1,30 @@
+SubDir HAIKU_TOP 3rdparty ce tests bootstate ;
+
+UsePrivateHeaders shared ;
+
+# Boot loader batch A: the boot state format and this boot's count
+# (bootstate_test), and the boots of a --restore-points run
+# (restore_point_test: an update makes a restore point, two failed starts,
+# the recovery menu starts the last working state, the boot menu picks an
+# older state). restore_point_test does nothing in other runs.
+Application bootstate_test :
+	bootstate_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+Application bootstate_desktop_test :
+	bootstate_desktop_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+Application restore_point_test :
+	restore_point_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: bootstate_test restore_point_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: bootstate_desktop_test ;
+}

@@ -27,6 +27,7 @@ class Stream : public bfs_inode {
 
 		status_t FindBlockRun(off_t pos, block_run &run, off_t &offset);
 		status_t ReadAt(off_t pos, uint8 *buffer, size_t *length);
+		status_t WriteInPlace(off_t pos, const uint8 *buffer, size_t *length);
 
 		status_t GetName(char *name, size_t size) const;
 		off_t Size() const { return data.Size(); }

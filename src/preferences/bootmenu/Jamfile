@@ -1,6 +1,6 @@
 SubDir HAIKU_TOP src preferences bootmenu ;
 
-UsePrivateHeaders interface shared storage ;
+UsePrivateHeaders app interface shared storage ;
 
 Application BootMenu :
 	BootMenu.cpp

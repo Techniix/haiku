@@ -14,6 +14,11 @@
 #include <boot/vfs.h>
 #include <package/PackagesDirectoryDefs.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <boot_state.h>
+
 
 #define TRACE_PACKAGE_SUPPORT
 #ifdef TRACE_PACKAGE_SUPPORT
@@ -69,8 +74,20 @@ PackageVolumeState::SetTo(const char* stateName)
 		if (fName == NULL)
 			return B_NO_MEMORY;
 
-		// Derive the display name from the directory name: Chop off the leading
-		// "state_" and replace underscores by spaces.
+		// Renga (boot loader batch A): a plain date, "System of 20 November
+		// 2026, 14:05" (SetRestorePointNote() turns it into "Before the
+		// update of ..." when package_daemon left a note). Otherwise, as
+		// before, the directory name without the leading "state_" and with
+		// spaces for underscores.
+		char label[128];
+		if (BootState::format_state_label(stateName, NULL, label,
+				sizeof(label))) {
+			fDisplayName = strdup(label);
+			if (fDisplayName == NULL)
+				return B_NO_MEMORY;
+			return B_OK;
+		}
+
 		fDisplayName = strncmp(stateName, "state_", 6) == 0
 			? strdup(stateName + 6) : strdup(stateName);
 		if (fDisplayName == NULL)
@@ -84,6 +101,25 @@ PackageVolumeState::SetTo(const char* stateName)
 	}
 
 	return B_OK;
+}
+
+
+/*!	Renga (boot loader batch A): the label from the restore point note
+	\a note (the text of administrative/<state>/restore-point) package_daemon
+	wrote when an update replaced this state.
+*/
+void
+PackageVolumeState::SetRestorePointNote(const char* note)
+{
+	char label[128];
+	if (fName == NULL || !BootState::format_state_label(fName, note, label,
+			sizeof(label)))
+		return;
+	char* displayName = strdup(label);
+	if (displayName == NULL)
+		return;
+	free(fDisplayName);
+	fDisplayName = displayName;
 }
 
 
@@ -180,7 +216,8 @@ PackageVolumeInfo::PackageVolumeInfo()
 	:
 	BReferenceable(),
 	fStates(),
-	fPackagesDir(NULL)
+	fPackagesDir(NULL),
+	fOldStatesLoaded(false)
 {
 }
 
@@ -237,6 +274,12 @@ PackageVolumeInfo::LoadOldStates()
 		return B_ERROR;
 	}
 
+	// Renga: the boot menu and the boot state (automatic recovery) may
+	// both ask; the states are only added once.
+	if (fOldStatesLoaded)
+		return B_OK;
+	fOldStatesLoaded = true;
+
 	Directory* packagesDirectory = directory_from(fPackagesDir);
 	packagesDirectory->Acquire();
 
@@ -266,7 +309,8 @@ PackageVolumeInfo::LoadOldStates()
 						strerror(error));
 					fStates.Remove(state);
 					delete state;
-				}
+				} else
+					_ReadRestorePointNote(packagesDirectory, state);
 			}
 			state = nextState;
 		}
@@ -276,6 +320,29 @@ PackageVolumeInfo::LoadOldStates()
 	}
 
 	return B_OK;
+}
+
+
+/*!	Renga (boot loader batch A): reads the restore point note of the old
+	\a state, if it has one, for its label.
+*/
+void
+PackageVolumeInfo::_ReadRestorePointNote(Directory* packagesDirectory,
+	PackageVolumeState* state)
+{
+	char path[B_PATH_NAME_LENGTH];
+	snprintf(path, sizeof(path), "%s/%s/%s", kAdministrativeDirectory,
+		state->Name(), BootState::kRestorePointFile);
+	int fd = open_from(packagesDirectory, path, O_RDONLY);
+	if (fd < 0)
+		return;
+	char note[512];
+	ssize_t bytesRead = read(fd, note, sizeof(note) - 1);
+	close(fd);
+	if (bytesRead <= 0)
+		return;
+	note[bytesRead] = '\0';
+	state->SetRestorePointNote(note);
 }
 
 
