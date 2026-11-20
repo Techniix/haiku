@@ -6,6 +6,15 @@ Application tracker_menu_test :
 	: be [ TargetLibstdc++ ]
 ;
 
+# Tracker's defaults for new installs (batch 7), see the source.
+UsePrivateHeaders tracker shared ;
+SubDirHdrs $(HAIKU_TOP) src kits tracker ;
+Application tracker_defaults_test :
+	tracker_defaults_test.cpp
+	: be tracker [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
-	AddFilesToHaikuImage system non-packaged bin ce-tests : tracker_menu_test ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests : tracker_menu_test
+		tracker_defaults_test ;
 }

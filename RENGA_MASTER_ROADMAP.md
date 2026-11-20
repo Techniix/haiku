@@ -1209,6 +1209,8 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Recommended next action | Do the design step together with the Lumina phase (after S1-S8) |
 | Links | [Concepts](https://claude.ai/artifact/CMRPzCHhP5nVLYtL7BkcCq) (concept A shows the starting point) |
 
+**Additions (maintainer, 2026-11-20), each a switchable feature:** a calculator and unit conversion in the menu search; right-click an application's entry for its recent files (jump list); hover previews of windows once the compositor exists (`F-33`).
+
 **Start button (maintainer, 2026-11-11):** replace the Deskbar's leaf "start" button with one that fits Renga: a Renga emblem drawn as a vector icon (leaf and light motif from the boot splash, without the wordmark), in light and dark variants, scaling to the panel size and HiDPI; with a subtle hover and press animation in the Renga style. Lumina's panel launcher uses the same emblem. Designs to be shown to the maintainer for choice before implementation.
 
 **Menu editing (maintainer request, 2026-11-11; decided: a Deskbar change now, shared with Lumina later).** Today the Applications menu merges the packaged entries (`data/deskbar/menu` in each package, read-only on packagefs) with the user's `~/config/settings/deskbar/menu` folder, so items that come from packages cannot be removed, renamed or moved, and editing means knowing that folder. Add: (1) a right-click menu on any entry in the Deskbar menu: Hide, Rename, Move to... (category or top level), Pin to top, Open file location; (2) a "Customize menu..." window (Deskbar preferences, later a Control Panel page `F-28`) with the merged tree, drag and drop to reorder and regroup, hide/show check boxes, new folders and separators, and Restore defaults; (3) a small overlay settings file (hidden entries by signature or path, renames, order, extra folders) applied over the merged directories, so package updates keep the user's changes and new packages still appear; (4) the same model used by Lumina's panel launcher and the start menu search (`F-25`), per the hybrid approach below. Existing `deskbar/menu` folders and symlinks keep working. Scheduled with bundled apps batch 1 (`F-44`), as the first piece of `F-41`; harness checks with screenshots.
@@ -1746,6 +1748,8 @@ Order (most used first, adjustable after the report): Tracker, Deskbar, Terminal
 | Next milestone | After the `F-60` review report, Tracker first |
 | Recommended next action | Split into small commits by area, each with harness checks and screenshots |
 | Links | Maintainer, 2026-11-11 |
+
+**Additions (maintainer, 2026-11-20), each a switchable feature:** folder sizes computed in the background and shown as a column (setting; off for network volumes). Done the same day for new installs: single-window navigation and the navigator (path bar) on by default (`TrackerDefaults.h`); saved settings keep their values, both stay switchable in the Tracker preferences.
 
 ### Bundled applications
 

@@ -750,7 +750,21 @@ live_checks()
 	result("overview", running && closed, "running %d, closed after losing "
 		"the focus %d", running, closed);
 
-	// the Deskbar switcher with its "+"
+	// the Deskbar switcher with its "+" (the Deskbar may still be starting
+	// on the renga-* images)
+	for (int i = 0; i < 300 && !be_roster->IsRunning(
+			"application/x-vnd.Be-TSKB"); i++)
+		snooze(100000);
+	snooze(1000000);
+	if (!be_roster->IsRunning("application/x-vnd.Be-TSKB")) {
+		// renga-* images show the first-boot prompt in this phase, without
+		// a Deskbar; the minimum-* images check the switcher
+		printf("CE-INFO snap.deskbar_switcher not checked: no Deskbar "
+			"running in this phase\n");
+		window->PostMessage(B_QUIT_REQUESTED);
+		set_workspace_count(workspaces);
+		return;
+	}
 	BDeskbar deskbar;
 	bool had = deskbar.HasItem("workspaces");
 	BEntry entry("/boot/system/apps/Workspaces");

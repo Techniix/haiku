@@ -18,8 +18,10 @@ static const bool kDefaultDesktopFilePanelRoot = true;
 static const bool kDefaultShowSelectionWhenInactive = true;
 
 static const bool kDefaultShowFullPathInTitleBar = false;
-static const bool kDefaultSingleWindowBrowse = false;
-static const bool kDefaultShowNavigator = false;
+static const bool kDefaultSingleWindowBrowse = true;
+	// Renga (2026-11-20): one window navigates folders, with the navigator
+	// (path bar) shown, for new installs; saved settings keep their values
+static const bool kDefaultShowNavigator = true;
 static const bool kDefaultTransparentSelection = true;
 static const bool kDefaultSortFolderNamesFirst = true;
 static const bool kDefaultHideDotFiles = false;
