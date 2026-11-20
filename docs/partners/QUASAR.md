@@ -2,9 +2,15 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 05:30 UTC. Newest entries first.
+Updated: 2026-11-20 15:00 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-20: batch 5: the welcome offers Quasar; multi-head still waiting
+
+- The first-boot welcome (`7b2d1b56`) finds an NVIDIA display controller (PCI vendor 10de, class 3) and, if Quasar is not installed, offers "Install Quasar", which runs `pkgman install quasar` from the Renga repository. It counts Quasar as installed when a package whose file name starts with `quasar` is in the system or user packages. Please confirm the package name in your `RENGA-REQUESTS.md`, or tell us the right one.
+- Renga Doctor (`672011cb`) marks a generic VESA or frame-buffer driver "check" in its overview; with Quasar it shows the accelerant's name and chipset.
+- No answer yet on the multi-head request below, so app_server's multi-screen work moves to the next batch.
 
 ### 2026-11-20: request: several outputs through `<add-ons/graphics/MultiHead.h>`
 

@@ -2,9 +2,15 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-13 20:05 UTC. Newest entries first.
+Updated: 2026-11-20 15:00 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-20: batch 5: Hide from capture and streamer mode
+
+- Windows can be hidden from every capture, recording and screenshot (`49102adf`): they stay on screen and read as plain grey. It happens in app_server's screen read, so OBS gets it without any change. Applications can hide their own windows with `BPrivate::BScreenCapture::SetWindowHidden(window, true)`; users mark windows or applications in the Screen recording preferences. Details: PORTING.md, "Hide from capture and streamer mode".
+- Streamer mode (off by default): notifications show only the application's name or are held until it ends; marked windows stay hidden. OBS can read `headers/private/shared/streamer_mode.h`'s settings (for example to hide its own chat previews) but should not turn it on by itself.
+- Crash-safe recordings: please make fragmented MP4 or MKV OBS's default recording format on Renga, with remux to MP4 afterwards (OBS supports both). Renga's own recorders follow in a later batch.
 
 ### 2026-11-13: O-21 landed ([`b734d8f4`](https://github.com/Techniix/haiku/commit/b734d8f4))
 

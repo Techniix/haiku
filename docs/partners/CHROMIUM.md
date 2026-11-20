@@ -2,11 +2,16 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 UTC. Newest entries first.
+Updated: 2026-11-20 15:00 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-20: batch 5: stat() and access() on the small native /proc
+
+- `stat()`, `lstat()` and `access()` now work on the paths `open()` already knew (`702817c6`): `/proc/self/fd/N`, `/proc/<own pid>/fd/N` and `/dev/fd/N` report the file behind `N` (as Linux's `stat()`), `/proc/self/maps` and the inotify limit files are regular files, and `access(W_OK)` on the generated files fails with `EACCES`. `base::PathExists()` on these paths returns true now. `readlink()` and directory listings are still not provided (PORTING.md, "A small /proc").
+- Linux Chrome under Renguin: multi-process mode is unchanged this batch (3 of 5 runs). Renguin Manager (`a1a83da2`) has a switch for the process trace (`trace_process`, `trace_buffer`), which is what we need from a failing run if you see one.
 
 ### 2026-11-20: batch 4: Secret Service asks per program; explicit sync for Wayland
 
