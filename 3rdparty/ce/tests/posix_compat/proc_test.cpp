@@ -309,6 +309,66 @@ test_sys()
 }
 
 
+/*!	Renga, batch 5: stat(), lstat() and access() of the same paths. Before,
+	they failed with ENOENT (no /proc directory); the regression check is
+	that a stat of /proc/self/fd/N names the file behind N.
+*/
+static void
+test_stat()
+{
+	int fd = open("/boot/system/lib/libroot.so", O_RDONLY);
+	struct stat direct, viaProc, viaLink, viaDev;
+	char path[64];
+	snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+	int result = fd >= 0 ? stat(path, &viaProc) : -1;
+	int error = result != 0 ? errno : 0;
+	fstat(fd, &direct);
+	report("stat_self_fd", result == 0 && viaProc.st_dev == direct.st_dev
+			&& viaProc.st_ino == direct.st_ino
+			&& viaProc.st_size == direct.st_size,
+		"%s: %s", path, strerror(error));
+
+	result = lstat(path, &viaLink);
+	error = result != 0 ? errno : 0;
+	report("lstat_self_fd", result == 0 && viaLink.st_ino == direct.st_ino,
+		"%s: %s", path, strerror(error));
+
+	snprintf(path, sizeof(path), "/dev/fd/%d", fd);
+	result = stat(path, &viaDev);
+	error = result != 0 ? errno : 0;
+	report("stat_dev_fd", result == 0 && viaDev.st_ino == direct.st_ino,
+		"%s: %s", path, strerror(error));
+
+	struct stat maps;
+	result = stat("/proc/self/maps", &maps);
+	error = result != 0 ? errno : 0;
+	report("stat_maps", result == 0 && S_ISREG(maps.st_mode), "%s, mode %o",
+		strerror(error), result == 0 ? (unsigned)maps.st_mode : 0);
+
+	result = access("/proc/self/maps", R_OK);
+	error = result != 0 ? errno : 0;
+	report("access_maps_read", result == 0, "%s", strerror(error));
+	result = access("/proc/self/maps", W_OK);
+	error = result != 0 ? errno : 0;
+	report("access_maps_write_refused", result != 0 && error == EACCES,
+		"%s", strerror(error));
+	snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+	result = access(path, R_OK);
+	error = result != 0 ? errno : 0;
+	report("access_self_fd", result == 0, "%s: %s", path, strerror(error));
+
+	close(fd);
+	result = stat(path, &viaProc);
+	error = result != 0 ? errno : 0;
+	report("stat_closed_fd_enoent", result != 0 && error == ENOENT,
+		"%s: %s", path, strerror(error));
+	result = stat("/proc/cpuinfo", &viaProc);
+	error = result != 0 ? errno : 0;
+	report("stat_linux_only_absent", result != 0 && error == ENOENT,
+		"/proc/cpuinfo: %s", strerror(error));
+}
+
+
 int
 main()
 {
@@ -318,6 +378,7 @@ main()
 	test_reopen();
 	test_maps();
 	test_sys();
+	test_stat();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

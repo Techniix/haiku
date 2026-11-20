@@ -612,10 +612,15 @@ Renguin have Renguin's full `/proc`).
   Linux's per user; with one instance per process the numbers agree.
 - Read-only: writing fails with `EACCES`. Other `/proc` paths give
   `ENOENT` for native programs.
-- **Not provided:** `stat()`, `access()`, `readlink()` and directory
-  listings of these paths (`/proc/self/fd` cannot be listed; use
-  `close_range()` or `getrlimit()` to close descriptors), relative paths
-  from `/`.
+- `stat()`, `lstat()` and `access()` of these paths (since batch 5): the
+  stat of `/proc/self/fd/N` and `/dev/fd/N` is that of the file behind
+  `N` (as Linux's `stat()`, which follows the fd link; `lstat()` gives the
+  same, there being no link to report); `/proc/self/maps` and the inotify
+  files are regular files; `access(W_OK)` on the generated files fails
+  with `EACCES`.
+- **Not provided:** `readlink()` and directory listings of these paths
+  (`/proc/self/fd` cannot be listed; use `close_range()` or `getrlimit()`
+  to close descriptors), relative paths from `/`.
 - Linux programs under Renguin: `/proc/self/fd/N` now also reopens the
   file (before, a duplicate sharing position and mode); descriptors that
   cannot be reopened are still duplicated. Renguin's `/proc/<pid>/maps`

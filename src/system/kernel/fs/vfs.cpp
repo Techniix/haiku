@@ -9874,6 +9874,40 @@ vfs_native_proc_open(const char* path, int openMode, int* _fd)
 }
 
 
+/*!	Renga (batch 5): stat() and access() of the /proc and /dev/fd paths
+	vfs_native_proc_open() answers for native teams: the path is opened
+	read-only as open() would, the new descriptor's stat is read and the
+	descriptor closed again. So stat("/proc/self/fd/N") is the stat of the
+	file behind N (as Linux's stat(), which follows the fd link), and
+	stat("/proc/self/maps") that of the generated file. Returns
+	B_ENTRY_NOT_FOUND for other paths, so that the normal lookup goes on;
+	otherwise the open's or the stat's status.
+*/
+static status_t
+native_proc_stat(const char* path, struct stat* stat)
+{
+	int fd;
+	if (path[0] != '/' || vfs_native_proc_open(path, O_RDONLY, &fd) != B_OK)
+		return B_ENTRY_NOT_FOUND;
+	if (fd < 0)
+		return fd;
+
+	io_context* context = get_current_io_context(false);
+	status_t status;
+	{
+		FileDescriptorPutter descriptor(get_fd(context, fd));
+		if (!descriptor.IsSet())
+			status = B_FILE_ERROR;
+		else if (descriptor->ops->fd_read_stat != NULL)
+			status = descriptor->ops->fd_read_stat(descriptor.Get(), stat);
+		else
+			status = B_UNSUPPORTED;
+	}
+	close_fd_index(context, fd);
+	return status;
+}
+
+
 int
 _user_open(int fd, const char* userPath, int openMode, int perms)
 {
@@ -10414,6 +10448,20 @@ _user_access(int fd, const char* userPath, int mode, bool effectiveUserGroup)
 	if (status != B_OK)
 		return status;
 
+	// Renga: the native /proc paths open() knows; they are read-only
+	// (a reopened descriptor's own file decides when it is opened)
+	if (path[0] == '/') {
+		struct stat stat;
+		status = native_proc_stat(path, &stat);
+		if (status != B_ENTRY_NOT_FOUND) {
+			if (status == B_OK && (mode & W_OK) != 0
+				&& strncmp(path, "/dev/fd/", 8) != 0
+				&& strstr(path, "/fd/") == NULL)
+				return B_PERMISSION_DENIED;
+			return status;
+		}
+	}
+
 	return common_access(fd, path, mode, effectiveUserGroup, false);
 }
 
@@ -10446,7 +10494,13 @@ _user_read_stat(int fd, const char* userPath, bool traverseLink,
 		if (status != B_OK)
 			return status;
 
-		status = common_path_read_stat(fd, path, traverseLink, &stat, false);
+		// Renga: the native /proc paths open() knows (lstat() as stat():
+		// there are no links to report)
+		status = path[0] == '/' ? native_proc_stat(path, &stat)
+			: B_ENTRY_NOT_FOUND;
+		if (status == B_ENTRY_NOT_FOUND)
+			status = common_path_read_stat(fd, path, traverseLink, &stat,
+				false);
 	} else {
 		// no path given: get the FD and use the FD operation
 		FileDescriptorPutter descriptor
