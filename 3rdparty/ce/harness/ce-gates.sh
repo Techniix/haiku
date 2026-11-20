@@ -42,7 +42,11 @@ set -u
 #  media_routing.loopback_only_cleared    the same, right after a route change
 #  media_routing.transient_in_own_team    the same, in a team's own loopback
 #  media_usb.unplug_fallback              open: media_addon_server's node release (F-31)
-KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|media\.click_free_mute|sound_settings\.test_sound|media_routing\.loopback_only_cleared|media_routing\.transient_in_own_team|media_usb\.unplug_fallback|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared|media_latency\.low_latency_mix_continuous|media_latency\.device_continuous|media_usb_audio\.back_on_usb'
+#  sound_audio.default_output_second     the host-paced SDL card records short under
+#  sound_audio.mirror_second              the full renga-raw load (passes alone)
+#  media_latency.clock_steady             a >20 ms clock step when the loaded guest
+#                                         misses its low-latency ticks
+KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|media\.click_free_mute|sound_settings\.test_sound|media_routing\.loopback_only_cleared|media_routing\.transient_in_own_team|media_usb\.unplug_fallback|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared|media_latency\.low_latency_mix_continuous|media_latency\.device_continuous|media_usb_audio\.back_on_usb|sound_audio\.default_output_second|sound_audio\.mirror_second|media_latency\.clock_steady'
 
 [ $# -ge 2 ] || { sed -n '2,12p' "$0" >&2; exit 2; }
 label=$1; shift

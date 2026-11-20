@@ -762,7 +762,9 @@ check_output(FILE* music, FILE* browser, const BString& first,
 	// The output device menu.
 	status = choose("outputDevice", second.String());
 	bool moved = status == B_OK && wait_default_output(second.String(),
-		20000000);
+		45000000);
+		// as long as the way back (output_device_back): under the full
+		// renga-raw load the move took longer than 20 s (batch 3 sweep)
 	snooze(1500000);
 	phase("default_output_second");
 	tone(music, 4400, 0);
