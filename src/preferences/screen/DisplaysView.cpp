@@ -6,6 +6,7 @@
 
 #include "DisplaysView.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -25,6 +26,10 @@
 #include <Spinner.h>
 #include <StringView.h>
 
+#include <File.h>
+#include <Screen.h>
+#include <ScreenOutputs.h>
+
 #include "WaylandSwitch.h"
 
 
@@ -38,6 +43,21 @@ static const uint32 kMsgRefresh = 'dref';
 static const uint32 kMsgWayland = 'dwln';
 static const uint32 kMsgWorkspaces = 'dwks';
 static const uint32 kMsgApply = 'dapl';
+static const uint32 kMsgPrimary = 'dpri';
+static const uint32 kMsgMirror = 'dmir';
+static const uint32 kMsgPosition = 'dpos';
+static const uint32 kMsgEnabled = 'denb';
+
+// where a display is, next to the primary one (batch 6)
+enum {
+	kPositionRight = 0,
+	kPositionLeft,
+	kPositionAbove,
+	kPositionBelow
+};
+
+static const char* const kDisplaySettings
+	= "/boot/home/config/settings/system/app_server/displays";
 
 
 static float
@@ -155,9 +175,24 @@ DisplaysView::DisplaysView()
 		rotationMenu);
 
 	fPrimaryBox = new BCheckBox("primary", B_TRANSLATE("Primary display"),
-		NULL);
-	fMirrorBox = new BCheckBox("mirror", B_TRANSLATE("Mirror displays"),
-		NULL);
+		new BMessage(kMsgPrimary));
+	fMirrorBox = new BCheckBox("mirror", B_TRANSLATE("Mirror the primary "
+		"display"), new BMessage(kMsgMirror));
+	fEnabledBox = new BCheckBox("enabled", B_TRANSLATE("Use this display"),
+		new BMessage(kMsgEnabled));
+	fPositionMenu = new BPopUpMenu("position");
+	const char* positions[] = { B_TRANSLATE("Right of the primary display"),
+		B_TRANSLATE("Left of the primary display"),
+		B_TRANSLATE("Above the primary display"),
+		B_TRANSLATE("Below the primary display") };
+	for (int32 i = 0; i < 4; i++) {
+		BMessage* message = new BMessage(kMsgPosition);
+		message->AddInt32("position", i);
+		fPositionMenu->AddItem(new BMenuItem(positions[i], message));
+	}
+	fPositionMenu->ItemAt(0)->SetMarked(true);
+	fPositionField = new BMenuField("position", B_TRANSLATE("Position:"),
+		fPositionMenu);
 	fVrrBox = new BCheckBox("vrr", B_TRANSLATE("Variable refresh rate"),
 		NULL);
 	fHdrBox = new BCheckBox("hdr", B_TRANSLATE("HDR"), NULL);
@@ -205,7 +240,9 @@ DisplaysView::DisplaysView()
 			.AddMenuField(fColorField, 0, 5)
 			.Add(new BStringView("color_note", B_TRANSLATE(
 				"Colour management is not available yet")), 2, 5)
+			.AddMenuField(fPositionField, 0, 6)
 		.End()
+		.Add(_Feature("enabled", fEnabledBox, oneDisplay))
 		.Add(_Feature("primary", fPrimaryBox, oneDisplay))
 		.Add(_Feature("mirror", fMirrorBox, oneDisplay))
 		.Add(_Feature("vrr", fVrrBox, gpuStage))
@@ -259,6 +296,10 @@ DisplaysView::AttachedToWindow()
 	fWaylandBox->SetTarget(this);
 	fWorkspaces->SetTarget(this);
 	fApplyButton->SetTarget(this);
+	fPrimaryBox->SetTarget(this);
+	fMirrorBox->SetTarget(this);
+	fEnabledBox->SetTarget(this);
+	fPositionMenu->SetTargetForItems(this);
 
 	fWaylandBox->SetValue(wayland_compositor_enabled()
 		? B_CONTROL_ON : B_CONTROL_OFF);
@@ -269,31 +310,63 @@ DisplaysView::AttachedToWindow()
 }
 
 
+/*!	Renga (batch 6): the displays are the screen's outputs
+	(BPrivate::get_screen_outputs()): one per connected output of a
+	<MultiHead.h> card, or the one screen.
+*/
 void
 DisplaysView::_ScanDisplays()
 {
 	fDisplays.clear();
 	BScreen screen(Window());
-	screen_id first = screen.ID();
-	screen_id id = first;
-	for (int32 guard = 0; guard < 16; guard++) {
-		BScreen current(id);
-		if (!current.IsValid())
-			break;
+	screen_output_info outputs[16];
+	int32 count = 0;
+	if (BPrivate::get_screen_outputs(outputs, 16, &count) != B_OK
+		|| count < 1) {
+		count = 1;
+		outputs[0] = screen_output_info();
+		outputs[0].frame = screen.Frame();
+		outputs[0].mirror_of = 0xffffffff;
+		outputs[0].enabled = outputs[0].primary = outputs[0].connected
+			= true;
+	}
+	if (count > 16)
+		count = 16;
+	for (int32 i = 0; i < count; i++) {
+		const screen_output_info& output = outputs[i];
+		if (!output.connected)
+			continue;
 		Display display;
-		display.id = id;
-		display.frame = current.Frame();
+		display.id = screen.ID();
+		display.frame = output.frame;
+		display.output = output.index;
+		display.primary = output.primary;
+		display.enabled = output.enabled;
+		display.mirrorOf = -1;
+		display.width = output.width;
+		display.height = output.height;
+		display.name = output.name;
 		monitor_info monitor;
-		if (current.GetMonitorInfo(&monitor) == B_OK
-			&& monitor.name[0] != '\0') {
+		if (count == 1 && screen.GetMonitorInfo(&monitor) == B_OK
+			&& monitor.name[0] != '\0')
 			display.name = monitor.name;
-		} else
+		if (display.name.IsEmpty())
 			display.name = B_TRANSLATE("Display");
 		fDisplays.push_back(display);
-		if (current.SetToNext() != B_OK || current.ID().id == first.id)
-			break;
-		id = current.ID();
 	}
+	for (size_t i = 0; i < fDisplays.size(); i++) {
+		for (int32 j = 0; j < count; j++) {
+			if (outputs[j].index != fDisplays[i].output
+				|| outputs[j].mirror_of == 0xffffffff)
+				continue;
+			for (size_t k = 0; k < fDisplays.size(); k++) {
+				if (fDisplays[k].output == outputs[j].mirror_of)
+					fDisplays[i].mirrorOf = k;
+			}
+		}
+	}
+	if (fCurrent >= (int32)fDisplays.size())
+		fCurrent = 0;
 
 	while (fDisplayMenu->CountItems() > 0)
 		delete fDisplayMenu->RemoveItem((int32)0);
@@ -311,11 +384,42 @@ DisplaysView::_ScanDisplays()
 		names.push_back(fDisplays[i].name);
 	}
 	fArrangement->SetDisplays(frames, names, fCurrent);
+	_UpdateControls();
+}
 
+
+void
+DisplaysView::_UpdateControls()
+{
 	bool several = fDisplays.size() > 1;
-	fPrimaryBox->SetEnabled(several);
-	fMirrorBox->SetEnabled(several);
-	fPrimaryBox->SetValue(B_CONTROL_ON);
+	if (fCurrent < 0 || fCurrent >= (int32)fDisplays.size())
+		return;
+	const Display& display = fDisplays[fCurrent];
+	fPrimaryBox->SetEnabled(several && display.enabled);
+	fMirrorBox->SetEnabled(several && !display.primary && display.enabled);
+	fEnabledBox->SetEnabled(several && !display.primary);
+	fPositionField->SetEnabled(several && !display.primary
+		&& display.mirrorOf < 0 && display.enabled);
+	fPrimaryBox->SetValue(display.primary ? B_CONTROL_ON : B_CONTROL_OFF);
+	fMirrorBox->SetValue(display.mirrorOf >= 0 ? B_CONTROL_ON
+		: B_CONTROL_OFF);
+	fEnabledBox->SetValue(display.enabled ? B_CONTROL_ON : B_CONTROL_OFF);
+
+	// where it is now, next to the primary display
+	for (size_t i = 0; i < fDisplays.size(); i++) {
+		if (!fDisplays[i].primary || (int32)i == fCurrent)
+			continue;
+		BRect primary = fDisplays[i].frame;
+		int32 position = kPositionRight;
+		if (display.frame.right < primary.left)
+			position = kPositionLeft;
+		else if (display.frame.bottom < primary.top)
+			position = kPositionAbove;
+		else if (display.frame.top > primary.bottom)
+			position = kPositionBelow;
+		if (BMenuItem* item = fPositionMenu->ItemAt(position))
+			item->SetMarked(true);
+	}
 }
 
 
@@ -327,6 +431,7 @@ DisplaysView::_SelectDisplay(int32 index)
 	fCurrent = index;
 	if (BMenuItem* item = fDisplayMenu->ItemAt(index))
 		item->SetMarked(true);
+	_UpdateControls();
 	_FillModes();
 	_UpdateGpuInfo();
 	std::vector<BRect> frames;
@@ -351,10 +456,20 @@ DisplaysView::_FillModes()
 	uint32 count = 0;
 	display_mode current;
 	screen.GetMode(&current);
-	if (screen.GetModeList(&modes, &count) == B_OK) {
+	if (fDisplays.size() > 1 && !fDisplays[fCurrent].primary) {
+		// Renga (batch 6): mode lists are the primary output's for now;
+		// the others show the mode they have
+		current.virtual_width = fDisplays[fCurrent].width;
+		current.virtual_height = fDisplays[fCurrent].height;
+		fModes.push_back(current);
+	} else if (screen.GetModeList(&modes, &count) == B_OK) {
 		for (uint32 i = 0; i < count; i++)
 			fModes.push_back(modes[i]);
 		free(modes);
+	}
+	if (fDisplays.size() > 1 && fDisplays[fCurrent].primary) {
+		current.virtual_width = fDisplays[fCurrent].width;
+		current.virtual_height = fDisplays[fCurrent].height;
 	}
 
 	// one entry per size (refresh rates have their own menu)
@@ -460,9 +575,150 @@ DisplaysView::_Apply()
 	int32 index = refresh->Message()->GetInt32("mode", -1);
 	if (index < 0 || index >= (int32)fModes.size())
 		return;
+	if (fDisplays.size() > 1) {
+		// several outputs: the arrangement and the primary output's mode
+		// go through the displays settings
+		if (fDisplays[fCurrent].primary) {
+			fDisplays[fCurrent].width = fModes[index].virtual_width;
+			fDisplays[fCurrent].height = fModes[index].virtual_height;
+		}
+		if (_WriteSettings() == B_OK)
+			BPrivate::reload_display_settings();
+		_ScanDisplays();
+		_SelectDisplay(fCurrent);
+		return;
+	}
 	BScreen screen(fDisplays[fCurrent].id);
 	screen.SetMode(&fModes[index], false);
 	_ScanDisplays();
+}
+
+
+/*!	Writes the arrangement as app_server reads it (MultiOutput.cpp):
+	"output <n> { enabled; primary; position x y; mode w h; mirror m }".
+*/
+status_t
+DisplaysView::_WriteSettings()
+{
+	BString text("multi_screen true\n");
+	for (size_t i = 0; i < fDisplays.size(); i++) {
+		const Display& display = fDisplays[i];
+		text << "output " << display.output << " {\n";
+		text << "\tenabled " << (display.enabled ? "true" : "false") << "\n";
+		text << "\tprimary " << (display.primary ? "true" : "false") << "\n";
+		if (display.mirrorOf >= 0) {
+			text << "\tmirror " << fDisplays[display.mirrorOf].output
+				<< "\n";
+		} else {
+			text << "\tposition " << (int32)display.frame.left << " "
+				<< (int32)display.frame.top << "\n";
+		}
+		if (display.width > 0 && display.height > 0) {
+			text << "\tmode " << display.width << " " << display.height
+				<< "\n";
+		}
+		text << "}\n";
+	}
+	return WriteDisplaySettings(text.String());
+}
+
+
+status_t
+DisplaysView::WriteDisplaySettings(const char* text)
+{
+	BString temporary(kDisplaySettings);
+	temporary << ".new";
+	BFile file(temporary.String(), B_WRITE_ONLY | B_CREATE_FILE
+		| B_ERASE_FILE);
+	status_t status = file.InitCheck();
+	if (status != B_OK)
+		return status;
+	ssize_t length = strlen(text);
+	if (file.Write(text, length) != length)
+		return B_IO_ERROR;
+	file.Sync();
+	file.Unset();
+	if (rename(temporary.String(), kDisplaySettings) != 0)
+		return errno;
+	return B_OK;
+}
+
+
+/*!	Makes \a primary the primary display, the selected display a mirror
+	of \a mirrorOf (-1: none), or places it at \a position next to the
+	primary display; then applies it. Also what the controls do.
+*/
+status_t
+DisplaysView::ApplyArrangement(int32 primary, int32 mirrorOf, int32 position)
+{
+	int32 count = fDisplays.size();
+	if (count < 2)
+		return B_NOT_ALLOWED;
+	if (primary >= 0 && primary < count) {
+		for (int32 i = 0; i < count; i++)
+			fDisplays[i].primary = i == primary;
+		fDisplays[primary].mirrorOf = -1;
+		fDisplays[primary].enabled = true;
+	}
+	Display& display = fDisplays[fCurrent];
+	if (!display.primary) {
+		display.mirrorOf = mirrorOf >= 0 && mirrorOf < count
+			&& mirrorOf != fCurrent ? mirrorOf : -1;
+		if (display.mirrorOf < 0 && position >= 0) {
+			for (int32 i = 0; i < count; i++) {
+				if (!fDisplays[i].primary)
+					continue;
+				BRect base = fDisplays[i].frame;
+				float width = display.width;
+				float height = display.height;
+				BPoint at;
+				switch (position) {
+					case kPositionLeft:
+						at.Set(base.left - width, base.top);
+						break;
+					case kPositionAbove:
+						at.Set(base.left, base.top - height);
+						break;
+					case kPositionBelow:
+						at.Set(base.left, base.bottom + 1);
+						break;
+					default:
+						at.Set(base.right + 1, base.top);
+				}
+				display.frame.OffsetTo(at);
+			}
+		}
+	}
+	status_t status = _WriteSettings();
+	if (status == B_OK)
+		status = BPrivate::reload_display_settings();
+	_ScanDisplays();
+	_SelectDisplay(fCurrent);
+	return status;
+}
+
+
+bool
+DisplaysView::IsPrimary(int32 index) const
+{
+	return index >= 0 && index < (int32)fDisplays.size()
+		&& fDisplays[index].primary;
+}
+
+
+int32
+DisplaysView::MirrorOf(int32 index) const
+{
+	return index >= 0 && index < (int32)fDisplays.size()
+		? fDisplays[index].mirrorOf : -1;
+}
+
+
+BRect
+DisplaysView::DisplayFrame(int32 index) const
+{
+	return index >= 0 && index < (int32)fDisplays.size()
+		? fDisplays[index].frame : BRect();
 }
 
 
@@ -487,6 +743,35 @@ DisplaysView::MessageReceived(BMessage* message)
 			break;
 		case kMsgApply:
 			_Apply();
+			break;
+		case kMsgPrimary:
+			if (fPrimaryBox->Value() == B_CONTROL_ON)
+				ApplyArrangement(fCurrent, -1, -1);
+			else
+				_UpdateControls();
+			break;
+		case kMsgMirror:
+		{
+			int32 primary = -1;
+			for (size_t i = 0; i < fDisplays.size(); i++) {
+				if (fDisplays[i].primary)
+					primary = i;
+			}
+			ApplyArrangement(-1, fMirrorBox->Value() == B_CONTROL_ON
+				? primary : -1, fPositionMenu->IndexOf(
+					fPositionMenu->FindMarked()));
+			break;
+		}
+		case kMsgPosition:
+			ApplyArrangement(-1, -1, message->GetInt32("position", 0));
+			break;
+		case kMsgEnabled:
+			if (fCurrent >= 0 && fCurrent < (int32)fDisplays.size()) {
+				fDisplays[fCurrent].enabled
+					= fEnabledBox->Value() == B_CONTROL_ON;
+				ApplyArrangement(-1, fDisplays[fCurrent].mirrorOf,
+					-1);
+			}
 			break;
 		default:
 			BView::MessageReceived(message);

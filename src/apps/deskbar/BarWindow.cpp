@@ -35,6 +35,7 @@ All rights reserved.
 
 
 #include "BarWindow.h"
+#include "DeskbarScreen.h"
 
 #include <stdio.h>
 
@@ -301,7 +302,7 @@ TBarWindow::WorkspaceActivated(int32 workspace, bool active)
 	if (active && !(fBarView->ExpandoState() && fBarView->Vertical()))
 		fBarView->UpdatePlacement();
 	else {
-		BRect screenFrame = (BScreen(fBarView->Window())).Frame();
+		BRect screenFrame = deskbar_screen_frame(fBarView->Window());
 		fBarView->SizeWindow(screenFrame);
 		fBarView->PositionWindow(screenFrame);
 		fBarView->Invalidate();
@@ -676,7 +677,7 @@ TBarWindow::IsShowingMenu() const
 void
 TBarWindow::SetSizeLimits()
 {
-	BRect screenFrame = (BScreen(this)).Frame();
+	BRect screenFrame = deskbar_screen_frame(this);
 	bool setToHiddenSize = fBarApp->Settings()->autoHide
 		&& fBarView->IsHidden() && !fBarView->DragRegion()->IsDragging();
 

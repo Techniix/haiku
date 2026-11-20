@@ -49,6 +49,7 @@
 #include <PrivateScreen.h>
 #include <RosterPrivate.h>
 #include <ServerProtocol.h>
+#include <ScreenOutputs.h>
 #include <WindowPrivate.h>
 
 #include "AppFontManager.h"
@@ -3158,6 +3159,44 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			} else
 				fLink.StartMessage(status);
 
+			fLink.Flush();
+			break;
+		}
+
+		case AS_GET_SCREEN_OUTPUTS:
+		{
+			// Renga (batch 6): the outputs the desktop is spread over; with
+			// one screen, one output that is the whole screen
+			HWInterface* interface = fDesktop->HWInterface();
+			int32 count = interface->CountOutputs();
+			fLink.StartMessage(B_OK);
+			if (count <= 0) {
+				screen_output_info info;
+				info = screen_output_info();
+				fDesktop->GetScreenFrame(B_CURRENT_WORKSPACE_INDEX,
+					B_MAIN_SCREEN_ID.id, info.frame);
+				info.mirror_of = 0xffffffff;
+				info.enabled = info.primary = info.connected = true;
+				info.width = info.frame.IntegerWidth() + 1;
+				info.height = info.frame.IntegerHeight() + 1;
+				fLink.Attach<int32>(1);
+				fLink.Attach(&info, sizeof(info));
+			} else {
+				fLink.Attach<int32>(count);
+				for (int32 i = 0; i < count; i++) {
+					screen_output_info info;
+					if (!interface->GetOutputInfo(i, info))
+						info = screen_output_info();
+					fLink.Attach(&info, sizeof(info));
+				}
+			}
+			fLink.Flush();
+			break;
+		}
+
+		case AS_RELOAD_DISPLAYS:
+		{
+			fLink.StartMessage(fDesktop->ReloadDisplays());
 			fLink.Flush();
 			break;
 		}

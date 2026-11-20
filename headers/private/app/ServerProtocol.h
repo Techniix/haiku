@@ -414,6 +414,12 @@ enum {
 	// (src/servers/app/CapturePrivacy.h). Only for the caller's windows.
 	AS_SCREEN_CAPTURE_SET_WINDOW_HIDDEN,
 
+	// Renga (batch 6, several screens): reply int32 count, then per output
+	// a screen_output_info (headers/private/interface/ScreenOutputs.h)
+	AS_GET_SCREEN_OUTPUTS,
+	// Renga (batch 6): read the displays settings again and apply them
+	AS_RELOAD_DISPLAYS,
+
 	AS_LAST_CODE
 };
 

@@ -35,6 +35,7 @@ All rights reserved.
 
 
 #include "ExpandoMenuBar.h"
+#include "DeskbarScreen.h"
 
 #include <strings.h>
 
@@ -872,7 +873,7 @@ TExpandoMenuBar::CheckForSizeOverrunVertical()
 	if (Window() == NULL || !Vertical())
 		return false;
 
-	return Window()->Frame().bottom > (BScreen(Window())).Frame().bottom;
+	return Window()->Frame().bottom > deskbar_screen_frame(Window()).bottom;
 
 }
 
@@ -898,7 +899,7 @@ TExpandoMenuBar::CheckForSizeOverrunHorizontal()
 float
 TExpandoMenuBar::MaxHorizontalWidth()
 {
-	return (BScreen(Window())).Frame().Width()
+	return deskbar_screen_frame(Window()).Width()
 		- fBarView->DragRegion()->Frame().Width() - 1
 		- fBarView->BarMenuBar()->Frame().Width();
 }
@@ -914,7 +915,7 @@ TExpandoMenuBar::SizeWindow(int32 delta)
 	if (fBarView == NULL || Window() == NULL)
 		return;
 
-	BRect screenFrame = (BScreen(Window())).Frame();
+	BRect screenFrame = deskbar_screen_frame(Window());
 	fBarView->SizeWindow(screenFrame);
 	fBarView->PositionWindow(screenFrame);
 

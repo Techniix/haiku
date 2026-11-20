@@ -167,6 +167,14 @@ public:
 	virtual void				ConfigureOverlay(Overlay* overlay);
 	virtual void				HideOverlay(Overlay* overlay);
 
+	// Renga (batch 6): the outputs one desktop is spread over
+	// (ScreenOutputs.h); 0: one screen, the whole frame
+	virtual	int32				CountOutputs() const { return 0; }
+	virtual	bool				GetOutputInfo(int32 index,
+									struct screen_output_info& info) const
+									{ return false; }
+	virtual	status_t			ReloadOutputs() { return B_UNSUPPORTED; }
+
 	// frame buffer access (you need to ReadLock!)
 			RenderingBuffer*	DrawingBuffer() const;
 	virtual	RenderingBuffer*	FrontBuffer() const = 0;

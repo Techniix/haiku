@@ -35,6 +35,7 @@ All rights reserved.
 
 
 #include "Switcher.h"
+#include "DeskbarScreen.h"
 
 #include <float.h>
 #include <stdlib.h>
@@ -752,7 +753,7 @@ TSwitchManager::Process(bool forward, bool byWindow)
 		fBlock = true;
 
 		if (fWindow->Lock()) {
-			BRect screenFrame = BScreen(B_MAIN_SCREEN_ID).Frame();
+			BRect screenFrame = deskbar_screen_frame();
 			BRect windowFrame = fWindow->Frame();
 
 			if (!screenFrame.Contains(windowFrame)) {
@@ -1657,7 +1658,7 @@ TSwitcherWindow::TSwitcherWindow(BRect frame, TSwitchManager* manager)
 		ResizeBy(0, sizeDelta);
 	}
 
-	CenterWindow(BScreen(B_MAIN_SCREEN_ID).Frame(), frame.Size());
+	CenterWindow(deskbar_screen_frame(), frame.Size());
 }
 
 
@@ -1698,7 +1699,7 @@ TSwitcherWindow::MessageReceived(BMessage* message)
 void
 TSwitcherWindow::ScreenChanged(BRect screenFrame, color_space)
 {
-	CenterWindow(screenFrame | BScreen(B_MAIN_SCREEN_ID).Frame(),
+	CenterWindow(screenFrame | deskbar_screen_frame(),
 		Frame().Size());
 }
 
@@ -1707,7 +1708,7 @@ void
 TSwitcherWindow::WorkspaceActivated(int32, bool active)
 {
 	if (active)
-		CenterWindow(BScreen(B_MAIN_SCREEN_ID).Frame(), Frame().Size());
+		CenterWindow(deskbar_screen_frame(), Frame().Size());
 }
 
 

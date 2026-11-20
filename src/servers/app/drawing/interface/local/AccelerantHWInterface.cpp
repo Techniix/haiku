@@ -43,6 +43,8 @@
 #include <StringList.h>
 
 #include "AccelerantBuffer.h"
+#include "MultiOutput.h"
+#include "ScreenOutputs.h"
 #include "MallocBuffer.h"
 #include "Overlay.h"
 #include "RGBColor.h"
@@ -167,7 +169,8 @@ AccelerantHWInterface::AccelerantHWInterface()
 	fRectParams(new (nothrow) fill_rect_params[kDefaultParamsCount]),
 	fRectParamsCount(kDefaultParamsCount),
 	fBlitParams(new (nothrow) blit_params[kDefaultParamsCount]),
-	fBlitParamsCount(kDefaultParamsCount)
+	fBlitParamsCount(kDefaultParamsCount),
+	fMultiOutput(NULL)
 {
 	fDisplayMode.virtual_width = 0;
 	fDisplayMode.virtual_height = 0;
@@ -366,6 +369,19 @@ AccelerantHWInterface::_OpenAccelerant(int device)
 
 		unload_add_on(fAccelerantImage);
 		return B_ERROR;
+	}
+
+	// Renga (batch 6): several outputs through <MultiHead.h> version 2
+	fMultiOutput = MultiOutput::Create(fAccelerantHook);
+	if (fMultiOutput != NULL) {
+		syslog(LOG_INFO, "app_server: %" B_PRId32 " outputs, one desktop "
+			"across them\n", fMultiOutput->CountOutputs());
+		// the cursor is drawn into the desktop: one hardware cursor image
+		// on output 0 would be in the wrong place on the others
+		fAccSetCursorShape = NULL;
+		fAccSetCursorBitmap = NULL;
+		fAccMoveCursor = NULL;
+		fAccShowCursor = NULL;
 	}
 
 	return B_OK;
@@ -569,6 +585,22 @@ AccelerantHWInterface::SetMode(const display_mode& mode)
 	// maybe it needs to roll back changes in case of an
 	// error.
 
+	if (fMultiOutput != NULL) {
+		// workspaces switch to their stored mode, which is the desktop's:
+		// nothing to do then
+		if (!fInitialModeSwitch && fDisplayMode == mode)
+			return B_OK;
+		status_t status = _SetMultiOutputMode(mode);
+		if (status == B_OK)
+			return B_OK;
+		// the arrangement did not work: one screen from now on
+		syslog(LOG_ERR, "app_server: back to one screen\n");
+		delete fMultiOutput;
+		fMultiOutput = NULL;
+		_SetupDefaultHooks();
+		fInitialModeSwitch = true;
+	}
+
 	// prevent from doing the unnecessary
 	if (fModeCount > 0 && fFrontBuffer.IsSet() && fDisplayMode == mode) {
 		// TODO: better comparison of display modes
@@ -685,6 +717,104 @@ AccelerantHWInterface::SetMode(const display_mode& mode)
 	_NotifyFrameBufferChanged();
 
 	return status;
+}
+
+
+/*!	Renga (batch 6): the mode of the whole desktop over several outputs.
+	\a mode is the primary output's wish (Screen preferences); the others
+	come from the displays settings (MultiOutput). The front buffer is the
+	desktop in memory; _CopyBackToFront() and _DrawCursor() copy what
+	changed to the outputs.
+*/
+status_t
+AccelerantHWInterface::_SetMultiOutputMode(const display_mode& mode)
+{
+	if (!fFrontBuffer.IsSet())
+		return B_NO_INIT;
+
+	display_mode desktopMode;
+	frame_buffer_config desktopBuffer;
+	status_t status = fMultiOutput->Apply(fInitialModeSwitch ? NULL : &mode,
+		desktopMode, desktopBuffer);
+	if (status != B_OK)
+		return status;
+
+	fDisplayMode = desktopMode;
+	fInitialModeSwitch = false;
+	fFrameBufferConfig = desktopBuffer;
+	fFrontBuffer->SetDisplayMode(fDisplayMode);
+	fFrontBuffer->SetFrameBufferConfig(fFrameBufferConfig);
+
+#ifndef HAIKU_TARGET_PLATFORM_LIBBE_TEST
+	// the on-screen KDL uses the primary output's own frame buffer
+	for (int32 i = 0; i < fMultiOutput->CountOutputs(); i++) {
+		const MultiOutput::Output& output = fMultiOutput->OutputAt(i);
+		if (!output.primary)
+			continue;
+		_kern_frame_buffer_update((addr_t)output.buffer.frame_buffer,
+			output.mode.virtual_width, output.mode.virtual_height, 32,
+			output.buffer.bytes_per_row);
+	}
+#endif
+
+	_UpdateHooksAfterModeChange();
+
+	fBackBuffer.Unset();
+	fBackBuffer.SetTo(new(nothrow) MallocBuffer(fFrontBuffer->Width(),
+		fFrontBuffer->Height()));
+	status = fBackBuffer.IsSet() ? fBackBuffer->InitCheck() : B_NO_MEMORY;
+	if (status < B_OK) {
+		fBackBuffer.Unset();
+		return status;
+	}
+	memset(fBackBuffer->Bits(), 255, fBackBuffer->BitsLength());
+
+	_NotifyFrameBufferChanged();
+	return B_OK;
+}
+
+
+int32
+AccelerantHWInterface::CountOutputs() const
+{
+	return fMultiOutput != NULL ? fMultiOutput->CountOutputs() : 0;
+}
+
+
+bool
+AccelerantHWInterface::GetOutputInfo(int32 index,
+	screen_output_info& info) const
+{
+	if (fMultiOutput == NULL || index < 0
+		|| index >= fMultiOutput->CountOutputs())
+		return false;
+	const MultiOutput::Output& output = fMultiOutput->OutputAt(index);
+	info = screen_output_info();
+	info.frame = output.frame;
+	info.index = output.index;
+	info.mirror_of = output.mirrorOf;
+	info.enabled = output.enabled;
+	info.primary = output.primary;
+	info.connected = (output.info.flags & B_OUTPUT_CONNECTED) != 0;
+	info.width = output.mode.virtual_width;
+	info.height = output.mode.virtual_height;
+	uint64 total = (uint64)output.mode.timing.h_total
+		* output.mode.timing.v_total;
+	info.refresh_millihz = total != 0 ? (uint32)((uint64)
+		output.mode.timing.pixel_clock * 1000000 / total) : 0;
+	strlcpy(info.name, output.info.name, sizeof(info.name));
+	return true;
+}
+
+
+//!	Applies the displays settings again (the Displays page saved them).
+status_t
+AccelerantHWInterface::ReloadOutputs()
+{
+	if (fMultiOutput == NULL)
+		return B_UNSUPPORTED;
+	AutoWriteLocker _(this);
+	return _SetMultiOutputMode(fDisplayMode);
 }
 
 
@@ -1822,7 +1952,9 @@ AccelerantHWInterface::IsDoubleBuffered() const
 void
 AccelerantHWInterface::_CopyBackToFront(/*const*/ BRegion& region)
 {
-	return HWInterface::_CopyBackToFront(region);
+	HWInterface::_CopyBackToFront(region);
+	if (fMultiOutput != NULL)
+		fMultiOutput->Push(region);
 }
 
 
@@ -1834,6 +1966,8 @@ AccelerantHWInterface::_DrawCursor(IntRect area) const
 {
 	if (!fHardwareCursorEnabled)
 		HWInterface::_DrawCursor(area);
+	if (fMultiOutput != NULL)
+		fMultiOutput->Push((BRect)area);
 }
 
 

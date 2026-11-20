@@ -9,5 +9,6 @@ Addon virtio_gpu.accelerant :
 	accelerant.cpp
 	hooks.cpp
 	mode.cpp
+	multihead.cpp
 	: libaccelerantscommon.a
 ;

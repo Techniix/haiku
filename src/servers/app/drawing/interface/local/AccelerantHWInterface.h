@@ -20,6 +20,7 @@
 
 
 class AccelerantBuffer;
+class MultiOutput;
 class RenderingBuffer;
 
 
@@ -99,6 +100,16 @@ public:
 	virtual	RenderingBuffer*	BackBuffer() const;
 	virtual	bool				IsDoubleBuffered() const;
 
+	virtual	int32				CountOutputs() const;
+	virtual	bool				GetOutputInfo(int32 index,
+									struct screen_output_info& info) const;
+	virtual	status_t			ReloadOutputs();
+
+	// Renga (batch 6): several outputs as one desktop (MultiOutput.h);
+	// NULL with one screen
+			const MultiOutput*	GetMultiOutput() const
+									{ return fMultiOutput; }
+
 protected:
 	virtual	void				_CopyBackToFront(/*const*/ BRegion& region);
 
@@ -110,6 +121,7 @@ private:
 									int& count, char* _path);
 			status_t			_OpenAccelerant(int device);
 			status_t			_SetupDefaultHooks();
+			status_t			_SetMultiOutputMode(const display_mode& mode);
 			void				_UpdateHooksAfterModeChange();
 			status_t			_UpdateModeList();
 			status_t			_UpdateFrameBufferConfig();
@@ -215,6 +227,8 @@ private:
 	mutable	uint32				fRectParamsCount;
 	mutable	blit_params*		fBlitParams;
 	mutable	uint32				fBlitParamsCount;
+
+			MultiOutput*		fMultiOutput;
 };
 
 #endif // ACCELERANT_HW_INTERFACE_H

@@ -789,6 +789,43 @@ Desktop::GetLastMouseState(BPoint* position, int32* buttons) const
 //	#pragma mark - Screen methods
 
 
+/*!	Renga (batch 6): the displays settings changed (the Displays page):
+	the screen's outputs are arranged again, and everything that depends on
+	the screen's size is updated as after a mode change.
+*/
+status_t
+Desktop::ReloadDisplays()
+{
+	AutoWriteLocker _(fWindowLock);
+
+	Screen* screen = fVirtualScreen.ScreenAt(0);
+	if (screen == NULL)
+		return B_NAME_NOT_FOUND;
+
+	_SuspendDirectFrameBufferAccess();
+	status_t status;
+	{
+		AutoWriteLocker locker(fScreenLock);
+		status = screen->HWInterface()->ReloadOutputs();
+	}
+	if (status != B_OK) {
+		_ResumeDirectFrameBufferAccess();
+		return status;
+	}
+
+	display_mode mode;
+	screen->GetMode(mode);
+	monitor_info info;
+	bool hasInfo = screen->GetMonitorInfo(info) == B_OK;
+	fWorkspaces[fCurrentWorkspace].CurrentScreenConfiguration().Set(
+		screen->ID(), hasInfo ? &info : NULL, screen->Frame(), mode);
+
+	_ScreenChanged(screen);
+	_ResumeDirectFrameBufferAccess();
+	return B_OK;
+}
+
+
 status_t
 Desktop::SetScreenMode(int32 workspace, int32 id, const display_mode& mode,
 	bool makeDefault)

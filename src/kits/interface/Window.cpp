@@ -44,6 +44,7 @@
 #include <RosterPrivate.h>
 #include <Screen.h>
 #include <ServerProtocol.h>
+#include <ScreenOutputs.h>
 #include <String.h>
 #include <TextView.h>
 #include <TokenSpace.h>
@@ -1610,8 +1611,16 @@ BWindow::Zoom()
 	float maxZoomWidth = std::min(fMaxZoomWidth, fMaxWidth);
 	float maxZoomHeight = std::min(fMaxZoomHeight, fMaxHeight);
 
-	// 3) the screen rectangle
+	// 3) the screen rectangle; Renga (batch 6): with several outputs, the
+	// one the window's centre is on
 	BRect screenFrame = (BScreen(this)).Frame();
+	BRect outputFrame;
+	BRect windowFrame = Frame();
+	BPoint center((windowFrame.left + windowFrame.right) / 2,
+		(windowFrame.top + windowFrame.bottom) / 2);
+	if (BPrivate::get_output_frame_at(center, &outputFrame) == B_OK
+		&& outputFrame.IsValid())
+		screenFrame = outputFrame & screenFrame;
 	maxZoomWidth = std::min(maxZoomWidth, screenFrame.Width());
 	maxZoomHeight = std::min(maxZoomHeight, screenFrame.Height());
 
@@ -1620,7 +1629,8 @@ BWindow::Zoom()
 	BDeskbar deskbar;
 	BRect deskbarFrame = deskbar.Frame();
 	bool isShiftDown = (modifiers() & B_SHIFT_KEY) != 0;
-	if (!isShiftDown && !deskbar.IsAutoHide()) {
+	if (!isShiftDown && !deskbar.IsAutoHide()
+		&& deskbarFrame.Intersects(screenFrame)) {
 		// remove area taken up by Deskbar unless hidden or shift is held down
 		switch (deskbar.Location()) {
 			case B_DESKBAR_TOP:
@@ -2544,7 +2554,17 @@ BWindow::CenterIn(const BRect& rect)
 void
 BWindow::CenterOnScreen()
 {
-	CenterIn(BScreen(this).Frame());
+	// Renga (batch 6): with several outputs, the one the window is on (the
+	// primary output for a window that is on none yet)
+	BRect frame = BScreen(this).Frame();
+	BRect outputFrame;
+	BRect windowFrame = Frame();
+	BPoint center((windowFrame.left + windowFrame.right) / 2,
+		(windowFrame.top + windowFrame.bottom) / 2);
+	if (BPrivate::get_output_frame_at(center, &outputFrame) == B_OK
+		&& outputFrame.IsValid())
+		frame = outputFrame & frame;
+	CenterIn(frame);
 }
 
 

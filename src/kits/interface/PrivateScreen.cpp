@@ -32,6 +32,7 @@
 #include <AppServerLink.h>
 #include <ApplicationPrivate.h>
 #include <ServerProtocol.h>
+#include <ScreenOutputs.h>
 #include <ServerReadOnlyMemory.h>
 
 
@@ -746,3 +747,76 @@ BPrivateScreen::BPrivateScreen(int32 id)
 BPrivateScreen::~BPrivateScreen()
 {
 }
+
+
+//	#pragma mark - Renga (batch 6): outputs of the screen
+
+
+namespace BPrivate {
+
+
+status_t
+get_screen_outputs(screen_output_info* outputs, int32 maxCount, int32* _count)
+{
+	BPrivate::AppServerLink link;
+	link.StartMessage(AS_GET_SCREEN_OUTPUTS);
+	status_t status = B_ERROR;
+	if (link.FlushWithReply(status) != B_OK || status != B_OK)
+		return status == B_OK ? B_ERROR : status;
+
+	int32 count = 0;
+	link.Read<int32>(&count);
+	for (int32 i = 0; i < count; i++) {
+		screen_output_info info;
+		link.Read(&info, sizeof(info));
+		if (i < maxCount && outputs != NULL)
+			outputs[i] = info;
+	}
+	if (_count != NULL)
+		*_count = count;
+	return B_OK;
+}
+
+
+status_t
+get_output_frame_at(BPoint where, BRect* _frame)
+{
+	screen_output_info outputs[16];
+	int32 count = 0;
+	status_t status = get_screen_outputs(outputs, 16, &count);
+	if (status != B_OK)
+		return status;
+	if (count > 16)
+		count = 16;
+	int32 primary = -1;
+	for (int32 i = 0; i < count; i++) {
+		if (!outputs[i].enabled || outputs[i].mirror_of != 0xffffffff)
+			continue;
+		if (outputs[i].frame.Contains(where)) {
+			*_frame = outputs[i].frame;
+			return B_OK;
+		}
+		if (outputs[i].primary || primary < 0)
+			primary = i;
+	}
+	if (primary < 0)
+		return B_ENTRY_NOT_FOUND;
+	*_frame = outputs[primary].frame;
+	return B_OK;
+}
+
+
+status_t
+reload_display_settings()
+{
+	BPrivate::AppServerLink link;
+	link.StartMessage(AS_RELOAD_DISPLAYS);
+	status_t status = B_ERROR;
+	if (link.FlushWithReply(status) != B_OK)
+		return B_ERROR;
+	return status;
+}
+
+
+}	// namespace BPrivate
+

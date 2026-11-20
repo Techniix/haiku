@@ -15,4 +15,5 @@ UseHeaders [ FDirName $(HAIKU_TOP) src servers app drawing Painter font_support 
 StaticLibrary libaslocal.a :
 	AccelerantBuffer.cpp
 	AccelerantHWInterface.cpp
+	MultiOutput.cpp
 ;

@@ -35,6 +35,7 @@ All rights reserved.
 
 
 #include "BarView.h"
+#include "DeskbarScreen.h"
 
 #include <AppFileInfo.h>
 #include <Bitmap.h>
@@ -407,7 +408,7 @@ TBarView::MouseMoved(BPoint where, uint32 transit, const BMessage* dragMessage)
 
 	BPoint whereScreen = currentMessage->GetPoint("screen_where",
 		ConvertToScreen(where));
-	BRect screenFrame = (BScreen(Window())).Frame();
+	BRect screenFrame = deskbar_screen_frame(Window());
 	bool onScreenEdge = whereScreen.x == screenFrame.left
 		|| whereScreen.x == screenFrame.right
 		|| whereScreen.y == screenFrame.top
@@ -551,7 +552,7 @@ TBarView::PlaceTray(bool vertSwap, bool leftSwap)
 			// move tray right and down to not cover border, resize by same
 			fReplicantTray->MoveTo(2, 0);
 			fReplicantTray->ResizeBy(-2, 0);
-			BRect screenFrame = (BScreen(Window())).Frame();
+			BRect screenFrame = deskbar_screen_frame(Window());
 			statusLoc.x = screenFrame.right - fDragRegion->Bounds().Width();
 			statusLoc.y = 0;
 		}
@@ -581,7 +582,7 @@ TBarView::PlaceTray(bool vertSwap, bool leftSwap)
 void
 TBarView::PlaceApplicationBar()
 {
-	BRect screenFrame = (BScreen(Window())).Frame();
+	BRect screenFrame = deskbar_screen_frame(Window());
 	if (State() == kMiniState) {
 		if (!fInlineScrollView->IsHidden())
 			fInlineScrollView->Hide();
@@ -823,7 +824,7 @@ TBarView::RaiseDeskbar(bool raise)
 void
 TBarView::HideDeskbar(bool hide)
 {
-	BRect screenFrame = (BScreen(Window())).Frame();
+	BRect screenFrame = deskbar_screen_frame(Window());
 
 	if (hide) {
 		Hide();

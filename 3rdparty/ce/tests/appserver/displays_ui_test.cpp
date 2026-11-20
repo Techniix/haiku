@@ -24,6 +24,8 @@
 #include <GroupLayout.h>
 #include <Spinner.h>
 
+#include <ScreenOutputs.h>
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -67,8 +69,15 @@ main()
 	snooze(1500000);
 
 	if (window->Lock()) {
-		report("found", page->CountDisplays() == 1, "%d display(s)",
-			(int)page->CountDisplays());
+		// batch 6: as many displays as the screen has outputs (two with
+		// ce-test.py --displays 2)
+		screen_output_info outputs[8];
+		int32 outputCount = 0;
+		BPrivate::get_screen_outputs(outputs, 8, &outputCount);
+		bool several = outputCount > 1;
+		report("found", page->CountDisplays() == (several ? outputCount : 1),
+			"%d display(s), %d output(s)", (int)page->CountDisplays(),
+			(int)outputCount);
 		report("modes", page->CountModes() > 0, "%d modes",
 			(int)page->CountModes());
 		report("gpu_info", strstr(page->GpuName(), "Name:") != NULL,
@@ -76,8 +85,9 @@ main()
 		bool greyed = !page->FeatureEnabled("rotation")
 			&& !page->FeatureEnabled("vrr") && !page->FeatureEnabled("hdr")
 			&& !page->FeatureEnabled("color")
-			&& !page->FeatureEnabled("primary")
+			&& page->FeatureEnabled("primary") == several
 			&& !page->FeatureEnabled("mirror");
+			// (mirroring is for the other displays; the primary is shown)
 		bool usable = page->FeatureEnabled("wayland")
 			&& page->FeatureEnabled("workspaces")
 			&& page->FeatureEnabled("resolution");

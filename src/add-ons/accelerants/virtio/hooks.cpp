@@ -5,6 +5,8 @@
  */
 
 
+#include <add-ons/graphics/MultiHead.h>
+
 #include "accelerant_protos.h"
 #include "accelerant.h"
 
@@ -48,6 +50,10 @@ get_accelerant_hook(uint32 feature, void* data)
 			return (void*)virtio_gpu_get_frame_buffer_config;
 		case B_GET_PIXEL_CLOCK_LIMITS:
 			return (void*)virtio_gpu_get_pixel_clock_limits;
+
+		// Renga (batch 6): several outputs, <add-ons/graphics/MultiHead.h>
+		case B_MULTI_HEAD_HOOKS:
+			return virtio_gpu_multi_head_hooks();
 	}
 
 	return NULL;

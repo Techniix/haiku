@@ -683,6 +683,8 @@ def selected_tests(text, available):
 
 SELECTION_FILE = "/myfs/system/non-packaged/data/ce-harness/only"
 KERNEL_SETTINGS_FILE = "/myfs/home/config/settings/kernel/drivers/kernel"
+VIRTIO_GPU_SETTINGS_FILE = \
+	"/myfs/home/config/settings/kernel/drivers/virtio_gpu"
 # With it, the runner skips the tests that end a boot (ce-tests-final):
 # runs that count boot loader starts or boot other disks themselves
 # (--other-systems, --installer-upgrade) must not get the crashlog reboots.
@@ -735,6 +737,11 @@ def make_patched_image(args, image, copy):
 	if args.restore_points:
 		files.append((copy + ".restore", RESTORE_POINTS_FLAG_FILE,
 			"restore point run\n", "restore point run"))
+	if args.displays > 1:
+		# the virtio-gpu driver counts every output (QEMU enables only the
+		# first one without a window)
+		files.append((copy + ".virtio", VIRTIO_GPU_SETTINGS_FILE,
+			"all_outputs true\n", "all_outputs true"))
 	if args.only:
 		files.append((copy + ".only", SELECTION_FILE,
 			"\n".join(args.only) + "\n", "\n".join(args.only)))
@@ -2874,7 +2881,8 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 
 	patched = None
 	if not plainImage and (args.boot_menu_timeout or args.only
-			or args.other_systems or args.installer_upgrade):
+			or args.other_systems or args.installer_upgrade
+			or args.displays > 1):
 		patched = os.path.join(results_dir, "patched.img")
 		error = make_patched_image(args, image, patched)
 		if error is not None:

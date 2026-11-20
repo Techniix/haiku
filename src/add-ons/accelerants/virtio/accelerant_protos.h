@@ -38,6 +38,9 @@ status_t virtio_gpu_get_pixel_clock_limits(display_mode *dm, uint32 *low,
 status_t virtio_gpu_set_current_scanout(int scanout);
 status_t virtio_gpu_get_display_count(uint32* count);
 
+// Renga: <add-ons/graphics/MultiHead.h> (multihead.cpp)
+void* virtio_gpu_multi_head_hooks(void);
+
 #ifdef __cplusplus
 }
 #endif

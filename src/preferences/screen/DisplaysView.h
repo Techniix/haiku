@@ -47,6 +47,17 @@ public:
 			int32				CountModes() const;
 			bool				FeatureEnabled(const char* name) const;
 			const char*			GpuName() const;
+			// Renga (batch 6, several outputs)
+			bool				IsPrimary(int32 index) const;
+			int32				MirrorOf(int32 index) const;
+			BRect				DisplayFrame(int32 index) const;
+			void				SelectDisplay(int32 index)
+									{ _SelectDisplay(index); }
+			status_t			ApplyArrangement(int32 primary,
+									int32 mirrorOf, int32 position);
+									// position: kPosition* of the selected
+									// display relative to the primary
+			static status_t		WriteDisplaySettings(const char* text);
 
 private:
 			void				_ScanDisplays();
@@ -55,6 +66,8 @@ private:
 			void				_FillRefreshRates();
 			void				_UpdateGpuInfo();
 			void				_Apply();
+			status_t			_WriteSettings();
+			void				_UpdateControls();
 			BView*				_Feature(const char* name, BView* control,
 									const char* note);
 
@@ -62,6 +75,12 @@ private:
 				screen_id		id;
 				BRect			frame;
 				BString			name;
+				uint32			output;		// the accelerant's number
+				bool			primary;
+				bool			enabled;
+				int32			mirrorOf;	// index in fDisplays, or -1
+				uint32			width;
+				uint32			height;
 			};
 
 			std::vector<Display> fDisplays;
@@ -79,6 +98,9 @@ private:
 			BMenuField*			fRotationField;
 			BCheckBox*			fPrimaryBox;
 			BCheckBox*			fMirrorBox;
+			BMenuField*			fPositionField;
+			BPopUpMenu*			fPositionMenu;
+			BCheckBox*			fEnabledBox;
 			BCheckBox*			fVrrBox;
 			BCheckBox*			fHdrBox;
 			BMenuField*			fColorField;

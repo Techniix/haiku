@@ -43,6 +43,18 @@ enum {
 	VIRTIO_GPU_GET_DEVICE_NAME,
 	VIRTIO_GPU_SET_DISPLAY_MODE,
 	VIRTIO_GPU_GET_ENABLED_SCANOUTS,
+	VIRTIO_GPU_SET_SCANOUT_SOURCE,
+		// Renga (batch 6, <MultiHead.h> version 2): turn a scanout off, or
+		// show another scanout's frame buffer on it (mirroring)
+};
+
+
+#define VIRTIO_GPU_NO_SOURCE	0xffffffff
+
+struct virtio_gpu_set_scanout_source_params {
+	uint32 scanout;
+	uint32 source;
+		// VIRTIO_GPU_NO_SOURCE: off; the scanout itself: its own buffer
 };
 
 

@@ -125,6 +125,8 @@ public:
 
 	// Screen and drawing related methods
 
+			status_t			ReloadDisplays();
+									// Renga (batch 6, several screens)
 			status_t			SetScreenMode(int32 workspace, int32 id,
 									const display_mode& mode, bool makeDefault);
 			status_t			GetScreenMode(int32 workspace, int32 id,

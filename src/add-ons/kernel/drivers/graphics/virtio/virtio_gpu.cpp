@@ -5,7 +5,9 @@
 
 
 #include <new>
+#include <stddef.h>
 
+#include <driver_settings.h>
 #include <graphic_driver.h>
 
 #include <lock.h>
@@ -179,6 +181,37 @@ virtio_gpu_get_display_info(virtio_gpu_driver_info* info)
 	}
 
 	bool anyPmodeEnabled = false;
+
+	// Renga (batch 6): "all_outputs true" in the virtio_gpu driver settings
+	// counts every scanout the device has as a display, also those the
+	// host has not enabled (QEMU without a window enables only the first
+	// one). For several-screen tests in a headless virtual machine; off by
+	// default, as before.
+	uint32 scanouts = 0;
+	void* settings = load_driver_settings("virtio_gpu");
+	bool allOutputs = settings != NULL && get_driver_boolean_parameter(
+		settings, "all_outputs", false, true);
+	unload_driver_settings(settings);
+	if (allOutputs) {
+		info->virtio->read_device_config(info->virtio_device,
+			offsetof(struct virtio_gpu_config, num_scanouts), &scanouts,
+			sizeof(scanouts));
+		if (scanouts > VIRTIO_GPU_MAX_SCANOUTS)
+			scanouts = VIRTIO_GPU_MAX_SCANOUTS;
+		for (uint32 i = 1; i < scanouts; i++) {
+			if (displayInfo.pmodes[i].enabled)
+				continue;
+			displayInfo.pmodes[i].enabled = 1;
+			if (displayInfo.pmodes[i].r.width == 0
+				|| displayInfo.pmodes[i].r.height == 0) {
+				displayInfo.pmodes[i].r.width = displayInfo.pmodes[0].r.width;
+				displayInfo.pmodes[i].r.height
+					= displayInfo.pmodes[0].r.height;
+			}
+			dprintf(DEVICE_NAME ": scanout %" B_PRIu32 " counted as a "
+				"display (all_outputs)\n", i);
+		}
+	}
 
 	for(int i = 0; i < VIRTIO_GPU_MAX_SCANOUTS; i++) {
 		if (anyPmodeEnabled == false)
@@ -510,6 +543,34 @@ virtio_gpu_set_display_mode(virtio_gpu_driver_info* info, int scanout, display_m
 }
 
 
+/*!	Renga (batch 6, <MultiHead.h> version 2): \a scanout off
+	(VIRTIO_GPU_NO_SOURCE), back on its own frame buffer (\a source ==
+	\a scanout), or showing the frame buffer of \a source (mirroring:
+	the host scans out the same resource, so nothing is copied). The
+	resource keeps its size; a mirror shows its top left part if its own
+	display is smaller. Called with the command lock held.
+*/
+static status_t
+virtio_gpu_set_scanout_source(virtio_gpu_driver_info* info, uint32 scanout,
+	uint32 source)
+{
+	if (scanout >= VIRTIO_GPU_MAX_SCANOUTS || info->displayInfo[scanout] == NULL)
+		return B_BAD_INDEX;
+	if (source == VIRTIO_GPU_NO_SOURCE)
+		return virtio_gpu_set_scanout(info, scanout, 0, 0, 0);
+	if (source >= VIRTIO_GPU_MAX_SCANOUTS || info->displayInfo[source] == NULL)
+		return B_BAD_INDEX;
+
+	virtio_gpu_display_info& from = *info->displayInfo[source];
+	status_t status = virtio_gpu_set_scanout(info, scanout, from.resourceId,
+		from.width, from.height);
+	if (status != B_OK)
+		return status;
+	return virtio_gpu_flush_resource(info, from.resourceId, from.width,
+		from.height);
+}
+
+
 //	#pragma mark - device module API
 
 
@@ -698,6 +759,9 @@ virtio_gpu_open(void* _info, const char* path, int openMode, void** _cookie)
 
 error:
 	for (int i = 0; i < VIRTIO_GPU_MAX_SCANOUTS; i++) {
+		// Renga: only the scanouts that have one
+		if (info->displayInfo[i] == NULL)
+			continue;
 		delete_area(info->displayInfo[i]->framebufferArea);
 		info->displayInfo[i]->framebufferArea = -1;
 	}
@@ -737,6 +801,9 @@ virtio_gpu_free(void* cookie)
 	info->updateThread = -1;
 	virtio_gpu_drain_queues(info);
 	for (int i = 0; i < VIRTIO_GPU_MAX_SCANOUTS; i++) {
+		// Renga: only the scanouts that have one
+		if (info->displayInfo[i] == NULL)
+			continue;
 		delete_area(info->displayInfo[i]->framebufferArea);
 		info->displayInfo[i]->framebufferArea = -1;
 	}
@@ -821,6 +888,18 @@ virtio_gpu_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 			MutexLocker commandLocker(&info->commandLock);
 
 			return virtio_gpu_set_display_mode(info, params.scanout, &params.mode);
+		}
+		case VIRTIO_GPU_SET_SCANOUT_SOURCE:
+		{
+			virtio_gpu_set_scanout_source_params params;
+			if (length != sizeof(params))
+				return B_BAD_VALUE;
+			if (user_memcpy(&params, buffer, sizeof(params)) != B_OK)
+				return B_BAD_ADDRESS;
+
+			MutexLocker commandLocker(&info->commandLock);
+			return virtio_gpu_set_scanout_source(info, params.scanout,
+				params.source);
 		}
 		default:
 			ERROR("ioctl: unknown message %" B_PRIx32 "\n", op);

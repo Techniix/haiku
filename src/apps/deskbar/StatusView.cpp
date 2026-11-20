@@ -35,6 +35,7 @@ All rights reserved.
 
 
 #include "StatusView.h"
+#include "DeskbarScreen.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -1617,7 +1618,7 @@ TDragRegion::SwitchModeForRegion(BPoint where, BRegion region,
 void
 TDragRegion::CalculateRegions()
 {
-	const BRect screenFrame((BScreen(Window())).Frame());
+	const BRect screenFrame(deskbar_screen_frame(Window()));
 
 	float menuBarHeight = fBarView->BarMenuBar()->Frame().Height();
 	float hDivider = floorf(screenFrame.Width() / 4);
