@@ -3367,10 +3367,20 @@ BMediaRoster::GetInstancesFor(media_addon_id addon, int32 flavor,
 		return rv;
 	}
 
+	// Renga (batch 3): never copy more than the caller has room for, or
+	// than the reply can hold, whatever the reply says.
+	int32 count = reply.count;
+	if (count < 0)
+		count = 0;
+	if (count > request.max_count)
+		count = request.max_count;
+	if (count > MAX_NODE_ID)
+		count = MAX_NODE_ID;
+
 	if (_count)
-		*_count = reply.count;
-	if (reply.count > 0)
-		memcpy(_id, reply.node_id, sizeof(media_node_id) * reply.count);
+		*_count = count;
+	if (count > 0)
+		memcpy(_id, reply.node_id, sizeof(media_node_id) * count);
 
 	return B_OK;
 }

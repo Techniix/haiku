@@ -181,6 +181,31 @@ SendToPort(port_id sendPort, int32 msgCode, command_data* msg, size_t size)
 }
 
 
+/*!	Renga (batch 3, Audio preferences crash in the renga-raw sweep): a
+	query whose reply did not come within TIMEOUT leaves its reply port
+	behind with the late reply still to come. The port went back to the
+	pool, the next query of the team took it, and read the late answer to
+	the earlier request as its own: a server_get_instances_for_reply made
+	from a CONTROLLABLE_GET_PARAMETER_WEB reply gave GetInstancesFor() a
+	count from unrelated bytes, and its memcpy() ran off the caller's
+	array (segment violation in AudioDeviceList::Update()). After a failed
+	read the port is retired: the late reply then finds no port (its
+	sender gets B_BAD_PORT_ID, which it already handles), and the request
+	gets a fresh port, which its destructor gives back to the pool.
+*/
+static void
+_ReplaceReplyPort(request_data* request)
+{
+	port_id fresh = create_port(1, "media reply port");
+	if (fresh < B_OK)
+		return;
+		// keep the old one; better a possible stale reply than none
+
+	delete_port(request->reply_port);
+	request->reply_port = fresh;
+}
+
+
 status_t
 QueryPort(port_id requestPort, int32 msgCode, request_data* request,
 	size_t requestSize, reply_data* reply, size_t replySize)
@@ -217,9 +242,25 @@ QueryPort(port_id requestPort, int32 msgCode, request_data* request,
 	if (status < B_OK) {
 		ERROR("QueryPort: read_port failed, msgcode 0x%" B_PRIx32 ", port %"
 			B_PRId32 ": %s\n", msgCode, request->reply_port, strerror(status));
+		_ReplaceReplyPort(request);
+		return status;
 	}
 
-	return status < B_OK ? status : reply->result;
+	if ((size_t)status < sizeof(reply_data)) {
+		// Not a reply at all; never hand out what the caller's buffer
+		// held before as the answer.
+		ERROR("QueryPort: short reply (%" B_PRId32 " bytes), msgcode 0x%"
+			B_PRIx32 "\n", (int32)status, msgCode);
+		return B_ERROR;
+	}
+	if ((size_t)status < replySize) {
+		// A shorter reply than the caller expects: the rest is zero
+		// rather than stack contents (a count read from there was the
+		// Audio preferences' crash, see _ReplaceReplyPort()).
+		memset((uint8*)reply + status, 0, replySize - status);
+	}
+
+	return reply->result;
 }
 
 

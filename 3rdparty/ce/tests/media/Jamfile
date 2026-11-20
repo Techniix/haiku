@@ -94,6 +94,13 @@ Application media_drift_test :
 	: be media [ TargetLibstdc++ ]
 ;
 
+# Media Kit teardown and reply-port regressions (batch 3): exit() with
+# plug-in readers running, a late reply on a pooled reply port.
+Application media_teardown_test :
+	media_teardown_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
 # HTML5 audio and video in WebPositive through the Media Kit (F-57). It
 # moves the MP4 clip's index to the front with libavformat ("faststart", as
 # MP4 files on the web are), hence FFmpeg.
@@ -135,5 +142,5 @@ if $(CE_HARNESS) {
 		screen_capture_test sound_latency_test media_codec_test
 		media_stream_test media_hwvideo_test media_resample_test
 		media_drift_test media_html5_test media_routing_test media_vcam_test
-		media_devnotify_test ;
+		media_devnotify_test media_teardown_test ;
 }

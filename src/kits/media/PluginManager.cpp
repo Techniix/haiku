@@ -678,8 +678,25 @@ PluginManager::~PluginManager()
 	for (int i = fPluginList.CountItems() - 1; i >= 0; i--) {
 		plugin_info* info = NULL;
 		fPluginList.Get(i, &info);
-		TRACE("PluginManager: Error, unloading PlugIn %s with usecount "
-			"%d\n", info->name, info->usecount);
+		if (info->usecount > 0) {
+			/*	Renga (batch 3, html5_media in the renga-raw sweep): this
+				destructor runs from exit() (static objects), while other
+				threads of the team still run. A plug-in that is still in
+				use can have a thread inside its code at that moment: a
+				MediaExtractor thread reading ahead, or a browser's media
+				thread in BMediaTrack::ReadFrames() whose source waits for
+				data in BAdapterIO::WaitForData(). Unloading the image then
+				pulls the code out from under that thread, which crashes
+				with a segment violation on return (WebPositive quitting
+				during an HTML5 clip: the frame between avio_read() and
+				BPositionIO::Read() had no image left). The team is going
+				away and the kernel frees the image with it, so an add-on
+				in use is left loaded; only unused ones are unloaded.
+			*/
+			TRACE("PluginManager: PlugIn %s still in use (usecount %d), "
+				"left loaded\n", info->name, info->usecount);
+			continue;
+		}
 		delete info->plugin;
 		unload_add_on(info->image);
 	}
