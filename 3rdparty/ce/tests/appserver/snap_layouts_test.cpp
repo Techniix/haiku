@@ -432,6 +432,24 @@ public:
 };
 
 
+/*!	After the button went up in a drag with a key held: waits (up to 3 s)
+	for the drop to move the window away from \a atDrop before the key is
+	released. The tablet's button and the keyboard reach app_server by
+	different paths, and on a loaded host the key's release could arrive
+	first, which ends the zone choice before the drop (the stock drag then,
+	by design); s3_snap_drop failed that way in some runs.
+*/
+static void
+wait_for_drop(TestWindow* window, BRect atDrop)
+{
+	for (int i = 0; i < 30; i++) {
+		snooze(100000);
+		if (window->CurrentFrame() != atDrop)
+			return;
+	}
+}
+
+
 //!	A double-click on the window's tab.
 static void
 double_click_tab(TestWindow* window)
@@ -494,8 +512,11 @@ drag(TestWindow* window, BPoint to, const char* keys = NULL,
 		host("screenshot %s", screenshot);
 		snooze(300000);
 	}
+	BRect atDrop = window->CurrentFrame();
 	host("pointer_button usb up");
 	snooze(200000);
+	if (keys != NULL)
+		wait_for_drop(window, atDrop);
 	if (moreKeys != NULL)
 		host("key_hold %s up", moreKeys);
 	if (keys != NULL)
@@ -591,8 +612,10 @@ live_checks()
 		result("s3_overlay_shown", read && same_color(edge, highlight),
 			"pixel %d,%d,%d highlight %d,%d,%d", edge.red, edge.green,
 			edge.blue, highlight.red, highlight.green, highlight.blue);
+		BRect atDrop = window->CurrentFrame();
 		host("pointer_button usb up");
 		snooze(200000);
+		wait_for_drop(window, atDrop);
 		host("key_hold shift up");
 		snooze(600000);
 		after = window->CurrentFrame();
