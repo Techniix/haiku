@@ -55,6 +55,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -822,8 +823,21 @@ main(int argc, char** argv)
 	}
 	snooze(200000);
 
+	// batch 5 (hardware: about 35 s with an 8BitDo Ultimate 2C, the
+	// HIDAPI Xbox and 8BitDo drivers probing its HID interface, every
+	// HID request waiting up to 5 s): with a pad plugged in,
+	// SDL_Init(GAMEPAD) must be quick. QEMU has no USB HID game controller,
+	// so the hidraw side (report requests now give up after 250 ms, the
+	// device's strings are read once) is not exercised here.
+	struct timespec before, after;
+	clock_gettime(CLOCK_MONOTONIC, &before);
 	bool init = sdl.Init(SDL_INIT_GAMEPAD);
+	clock_gettime(CLOCK_MONOTONIC, &after);
+	double seconds = (after.tv_sec - before.tv_sec)
+		+ (after.tv_nsec - before.tv_nsec) / 1e9;
 	report("init", init, "%s", init ? "SDL_INIT_GAMEPAD" : sdl.GetError());
+	report("init_time", init && seconds < 1.0, "SDL_Init(GAMEPAD) took "
+		"%.3f s with a pad plugged in (want under 1 s)", seconds);
 	if (!init) {
 		close(xbox.fd);
 		printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);

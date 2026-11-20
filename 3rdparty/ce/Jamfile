@@ -201,9 +201,11 @@ if $(HAIKU_RENGA_IMAGE) {
 	# (Revision 100: Renga builds of HaikuPorts packages use revisions from
 	# 100 up, so pkgman replaces an installed HaikuPorts build.)
 	# 103: SDL's BApplication only quits when SDL says so (OpenCE crashed
-	# in BWindow with 100 to 102); 104: logs who sends it a quit request.
-	RengaPortsPackage libsdl3 : libsdl3-3.4.16-104-x86_64.hpkg
-		: f4b44d9e41a73ec2d90ac8f2718d29a95868caca43f1e159438fac7af6dd0a0c ;
+	# in BWindow with 100 to 102); 104: logs who sends it a quit request;
+	# 105: Xbox and 8BitDo pads stay on evdev (SDL_Init took 35 s while
+	# SDL's HIDAPI drivers probed an 8BitDo pad's hidraw node).
+	RengaPortsPackage libsdl3 : libsdl3-3.4.16-105-x86_64.hpkg
+		: 61135b70c88e4493233c16d6db12cf9539988e3406bb82ffd7daa8adbb5c5b19 ;
 
 	# libsdl2 (2026-11-15): sdl2-compat 2.32.74 (SDL2's ABI, every call run
 	# on the libsdl3 above), so SDL2 programs see the same evdev gamepads

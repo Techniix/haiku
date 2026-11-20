@@ -73,6 +73,8 @@ HidrawProtocolHandler::HidrawProtocolHandler(HIDDevice& device,
 	}
 	memcpy(fDescriptor, descriptor, descriptorLength);
 	fDescriptorLength = descriptorLength;
+	memset(&fIdentity, 0, sizeof(fIdentity));
+	gamepad_hid_get_identity(&device, fIdentity);
 	fStatus = B_OK;
 }
 
@@ -259,6 +261,62 @@ HidrawProtocolHandler::Read(uint32* cookie, off_t position, void* buffer,
 }
 
 
+struct ReportRequest {
+	sem_id	done;
+	status_t status;
+	size_t	actual;
+};
+
+
+static void
+report_request_done(void* cookie, status_t status, void* data,
+	size_t actualLength)
+{
+	ReportRequest* request = (ReportRequest*)cookie;
+	request->status = status;
+	request->actual = actualLength;
+	release_sem(request->done);
+}
+
+
+/*!	Renga (batch 5): a HID class request (GET_REPORT/SET_REPORT) on the
+	control pipe that gives up after kReportTimeout. send_request() waits
+	up to 5 seconds, and SDL's HIDAPI drivers probe several feature reports
+	of every hidraw node at SDL_Init(): a pad interface that never answers
+	made SDL_Init() take about 35 seconds on the maintainer's machine. An
+	answer that does not come in time is B_TIMED_OUT, as Linux's hidraw
+	gives an error, and the request is cancelled.
+*/
+static status_t
+report_request(usb_device device, uint8 requestType, uint8 request,
+	uint16 value, uint16 index, uint16 length, void* data, size_t* _actual)
+{
+	static const bigtime_t kReportTimeout = 250000;
+	ReportRequest call;
+	call.done = create_sem(0, "hidraw report");
+	if (call.done < 0)
+		return call.done;
+	call.status = B_ERROR;
+	call.actual = 0;
+	status_t status = gUSBModule->queue_request(device, requestType, request,
+		value, index, length, data, report_request_done, &call);
+	if (status == B_OK) {
+		status = acquire_sem_etc(call.done, 1, B_RELATIVE_TIMEOUT,
+			kReportTimeout);
+		if (status == B_TIMED_OUT) {
+			gUSBModule->cancel_queued_requests(device);
+			// the callback runs once the request is cancelled
+			acquire_sem(call.done);
+		} else if (status == B_OK)
+			status = call.status;
+	}
+	delete_sem(call.done);
+	if (_actual != NULL)
+		*_actual = call.actual;
+	return status;
+}
+
+
 status_t
 HidrawProtocolHandler::_SetReport(uint8 type, const uint8* data,
 	size_t length)
@@ -276,7 +334,7 @@ HidrawProtocolHandler::_SetReport(uint8 type, const uint8* data,
 		return fHIDDevice.SendRawOutput(report, reportLength);
 
 	size_t actual;
-	return gUSBModule->send_request(fHIDDevice.USBDevice(),
+	return report_request(fHIDDevice.USBDevice(),
 		USB_REQTYPE_INTERFACE_OUT | USB_REQTYPE_CLASS,
 		B_USB_REQUEST_HID_SET_REPORT, (type << 8) | id,
 		fHIDDevice.InterfaceIndex(), reportLength, (void*)report, &actual);
@@ -290,7 +348,7 @@ HidrawProtocolHandler::_GetReport(uint8 type, uint8* data, size_t length,
 	uint8 id = data[0];
 	uint8* report = id == 0 ? data + 1 : data;
 	size_t reportLength = id == 0 ? length - 1 : length;
-	status_t status = gUSBModule->send_request(fHIDDevice.USBDevice(),
+	status_t status = report_request(fHIDDevice.USBDevice(),
 		USB_REQTYPE_INTERFACE_IN | USB_REQTYPE_CLASS,
 		B_USB_REQUEST_HID_GET_REPORT, (type << 8) | id,
 		fHIDDevice.InterfaceIndex(), reportLength, report, &actual);
@@ -363,8 +421,7 @@ HidrawProtocolHandler::Control(uint32* cookie, uint32 op, void* buffer,
 	if (fHIDDevice.IsRemoved())
 		return ENODEV;
 
-	gamepad_hid_identity identity;
-	memset(&identity, 0, sizeof(identity));
+	const gamepad_hid_identity& identity = fIdentity;
 
 	uint32 size = _LINUX_IOC_SIZE(op);
 	switch (_LINUX_IOC_NR(op)) {
@@ -389,7 +446,6 @@ HidrawProtocolHandler::Control(uint32* cookie, uint32 op, void* buffer,
 
 		case 0x03:	// HIDIOCGRAWINFO
 		{
-			gamepad_hid_get_identity(&fHIDDevice, identity);
 			struct hidraw_devinfo info;
 			info.bustype = identity.bus;
 			info.vendor = (int16)identity.vendor;
@@ -398,13 +454,10 @@ HidrawProtocolHandler::Control(uint32* cookie, uint32 op, void* buffer,
 		}
 
 		case 0x04:	// HIDIOCGRAWNAME(len)
-			gamepad_hid_get_identity(&fHIDDevice, identity);
 			return copy_string(buffer, size, identity.name);
 		case 0x05:	// HIDIOCGRAWPHYS(len)
-			gamepad_hid_get_identity(&fHIDDevice, identity);
 			return copy_string(buffer, size, identity.phys);
 		case 0x08:	// HIDIOCGRAWUNIQ(len)
-			gamepad_hid_get_identity(&fHIDDevice, identity);
 			return copy_string(buffer, size, identity.uniq);
 
 		case 0x06:	// HIDIOCSFEATURE(len)

@@ -16,6 +16,7 @@
 #include <condition_variable.h>
 #include <lock.h>
 
+#include "GamepadEvdevBridge.h"
 #include "ProtocolHandler.h"
 
 
@@ -76,6 +77,11 @@ private:
 			mutex				fLock;
 			ConditionVariable	fReadable;
 			selectsync*			fReadSync;
+			gamepad_hid_identity fIdentity;
+				// read once when the node is made (batch 5): the
+				// HIDIOCGRAW* ioctls asked the device for its strings
+				// every time, and a device that does not answer string
+				// requests made each take up to 5 s
 };
 
 
