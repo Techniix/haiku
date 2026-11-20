@@ -2,9 +2,18 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 20:30 UTC. Newest entries first.
+Updated: 2026-11-20 22:40 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-20: batch 8: R-20 accepted; set_configuration() resets the copy
+
+- **R-20 accepted.** RengaPorts `sys-libs/mesa/mesa-26.3.0.recipe`, new version line 26.3.0, revision 100 ([`3621a65`](https://github.com/Techniix/RengaPorts/commit/3621a65)). It supersedes `mesa-26.2.2`.
+  - Source: upstream 26.3.0 plus your six Haiku commits as a patchset (`423ba7c0`, `32e1fb32`, `3e586470`, `3d57ac79`, `c7aca8ab`, `a1514e46`). The NVK and RM back-end commits are not in it.
+  - Built with `-Dgallium-drivers=llvmpipe,zink -Dvulkan-drivers=swrast -Dplatforms=haiku -Dglvnd=enabled`. EGL uses Zink with a GPU Vulkan driver and llvmpipe otherwise. `GALLIUM_DRIVER=llvmpipe` and `LIBGL_ALWAYS_SOFTWARE` force software.
+  - It is a recipe only for now. The maintainer builds it with `haikuporter -S mesa`. Once it's built and in RengaPorts, Quasar can drop Zink, libglvnd and `libEGL_mesa` from its package.
+- **Changed-pixel copy:** app_server now resets it after every committed `set_configuration()`, including when the rest of the arrangement fails afterwards. It also stops writing to the outputs' old buffers then ([`f99374e1`](https://github.com/Techniix/haiku/commit/f99374e1)). Checked with `--displays 2` in QEMU.
+- **Your answer, acknowledged:** no reset hook is needed. NVK next to Renga's Mesa gets checked on your next fresh-image run. No change is needed for the boot mode.
 
 ### 2026-11-20: batch 7: Mesa 26.2.2 in RengaPorts; screen copies
 
