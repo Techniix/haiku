@@ -91,3 +91,14 @@ Batch 5 ended 2026-11-20 with image `2026.11.20-batch5`; the roadmap's batch-5 s
 - **Boot loader A leftovers:** menu shown by default when another system is found, several Renga installs pinned by device path, "Restart into..." in the Deskbar, "Native drivers only" and "Collect diagnostics" recovery entries, boot progress recording.
 - **Hardware results pending:** boot counting and recovery on the maintainer's PC (BIOS writes and UEFI BlockIo writes are QEMU Tested only), the Windows entry, SDL_Init time with the 8BitDo Ultimate 2C (libsdl3 -105 and the hidraw timeouts), the audio rows after quitting OpenCE, the welcome on a fresh install, Hide from capture with OBS.
 - **Harness:** the full renga-raw run blanked the screen before screen_capture_test once (capture.* failed, passed on the retry); pointer_rate failed on a stale ce_vmouse object (now logs why a plug is refused). A stray `/boot` directory on the build host came from a `cmake --install` without DESTDIR while building libsdl3 -105; the safety check blocked removing it, so the maintainer may want to delete it.
+
+## Batch 6: continue from here
+
+Batch 6 ended 2026-11-20 with image `2026.11.20-batch6`; the roadmap's batch-6 status lists what landed. Continue with:
+
+- **Lumina (item 3), not started:** snap layouts (rows x columns, zone editor, spanning, modifier-drag grid, per-display and per-workspace layouts, gaps, zone shortcuts, snap assist, saved arrangements, per-app rules, edge sensitivity) and visible workspaces (Deskbar switcher, overview, per-workspace name/wallpaper/layout, saved sets, "Move to workspace", Workspaces page, welcome tip). Lumina lives in `Techniix/Lumina_HaikuOS` and is not in the Renga tree yet. Its S1-S8 acceptance (`F-25`) still comes first.
+- **Batch 5 carry-overs (item 4), not started:** Bluetooth through LinuxKPI, HaikuDepot with every source, Open with / Renguin badge / AppImage / Flatpak, the replay buffer and the rest of streaming, Devices and drivers leftovers, boot loader A leftovers, multi-process Linux Chrome.
+- **Several screens, next steps:** read `event_fd()` for hot-plug (a thread in AccelerantHWInterface that calls Desktop::ReloadDisplays()), Deskbar and workspaces per output, `move_output_cursor()` for hardware cursors, per-output mode lists for programs, and direct windows (BDirectWindow, BWindowScreen) with several screens. Test with `ce-test.py --displays 2`.
+- **Hardware results pending:** boot counting on the maintainer's PC with the new checks (BIOS and UEFI BlockIo writes are QEMU Tested only), the Windows entry, and several screens with Quasar once it offers `MultiHead.h` version 2.
+- **Harness:** `sound_audio.mirror_second` failed in renga-raw and on its retry, as in batch 5 (known-flaky). `ce-test-results` holds three runs from before batch 6 (100816, 101445, 102244) that the batch-6 helper did not delete.
+
