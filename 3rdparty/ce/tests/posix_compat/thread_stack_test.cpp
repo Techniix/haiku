@@ -23,6 +23,8 @@
 
 
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -95,6 +97,126 @@ thread_body(void* _data)
 	if ((data->index & 1) != 0)
 		pthread_exit((void*)(addr_t)(data->index + 1));
 	return (void*)(addr_t)(data->index + 1 + (buffer[17] & 0));
+}
+
+
+// #pragma mark - deep use of a supplied stack, and bad user pointers
+
+
+static off_t
+syslog_size()
+{
+	struct stat st;
+	return stat("/boot/system/var/log/syslog", &st) == 0 ? st.st_size : 0;
+}
+
+
+//!	Lines of the syslog written since \a offset that contain \a text.
+static int
+syslog_count(off_t offset, const char* text)
+{
+	FILE* file = fopen("/boot/system/var/log/syslog", "r");
+	if (file == NULL)
+		return -1;
+	fseeko(file, offset, SEEK_SET);
+	char line[1024];
+	int count = 0;
+	while (fgets(line, sizeof(line), file) != NULL) {
+		if (strstr(line, text) != NULL)
+			count++;
+	}
+	fclose(file);
+	return count;
+}
+
+
+static volatile size_t sDeepest;
+
+/*!	Recurses until the frame is within 12 KiB of the stack's lowest
+	address, then read()s a file (BFS) into a buffer on that frame.
+*/
+static ssize_t
+deep_read(uint8_t* bottom, int depth)
+{
+	uint8_t frame[2048];
+	frame[0] = depth;
+	if ((size_t)(frame - bottom) > 12 * 1024 && depth < 1000)
+		return deep_read(bottom, depth + 1) + (frame[0] - depth);
+	sDeepest = frame - bottom;
+	int fd = open("/boot/system/lib/libroot.so", O_RDONLY);
+	if (fd < 0)
+		return -1;
+	ssize_t bytes = read(fd, frame, sizeof(frame));
+	close(fd);
+	return bytes;
+}
+
+
+static void*
+deep_thread(void* data)
+{
+	return (void*)(intptr_t)deep_read((uint8_t*)data, 0);
+}
+
+
+/*!	Batch 3 (a hardware syslog flooded with "write access attempted on
+	write-protected area" during a BFS read, suspected to come from the
+	supplied-stack fix d8e7fe69): a thread on a stack of its own uses it
+	almost to its lowest address and reads a file into a buffer there;
+	nothing may fault. Then a read() into a read-only page: EFAULT for the
+	program, and the kernel's log of it says which program and area, at
+	most 16 times for the team.
+*/
+static void
+check_deep_stack_and_bad_pointer()
+{
+	off_t before = syslog_size();
+	size_t size = 128 * 1024;
+	uint8_t* stack = (uint8_t*)mmap(NULL, size, PROT_READ | PROT_WRITE,
+		MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	pthread_attr_t attributes;
+	pthread_attr_init(&attributes);
+	pthread_attr_setstack(&attributes, stack, size);
+	pthread_t thread;
+	void* result = (void*)-1;
+	bool started = pthread_create(&thread, &attributes, deep_thread, stack)
+		== 0;
+	if (started)
+		pthread_join(thread, &result);
+	pthread_attr_destroy(&attributes);
+	munmap(stack, size);
+	snooze(300000);
+	int faults = syslog_count(before, "vm_page_fault");
+	report("supplied_stack_deep_read", started && (intptr_t)result == 2048
+			&& faults == 0,
+		"read %d bytes at %zu bytes above the stack's end; kernel faults "
+		"logged: %d", (int)(intptr_t)result, (size_t)sDeepest, faults);
+
+	before = syslog_size();
+	uint8_t* page = (uint8_t*)mmap(NULL, B_PAGE_SIZE, PROT_READ,
+		MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	int fd = open("/boot/system/lib/libroot.so", O_RDONLY);
+	int efaults = 0;
+	ssize_t lastResult = 0;
+	int lastError = 0;
+	for (int i = 0; i < 40; i++) {
+		lastResult = pread(fd, page, 512, 0);
+		lastError = lastResult < 0 ? errno : 0;
+		if (lastResult < 0 && lastError == EFAULT)
+			efaults++;
+	}
+	close(fd);
+	munmap(page, B_PAGE_SIZE);
+	snooze(300000);
+	int lines = syslog_count(before, "vm_page_fault: system call wrote to");
+	int named = syslog_count(before, "thread_stack_test");
+	int raw = syslog_count(before, "write access attempted");
+	report("bad_pointer_logged", efaults == 40 && lines >= 1 && lines <= 16
+			&& named >= 1 && raw == 0,
+		"40 reads into a read-only page: %d EFAULT (last: %d, %s); %d log "
+		"lines naming the program (want 1-16; the syslog folds repeats), %d "
+		"of the old unattributed ones", efaults, (int)lastResult,
+		strerror(lastError), lines, raw);
 }
 
 
@@ -171,6 +293,8 @@ main()
 		sSignals);
 	report("base", baseMismatch == 0, "%d of %d threads reported a stack "
 		"outside the one given", baseMismatch, runs);
+
+	check_deep_stack_and_bad_pointer();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	return sFailures == 0 ? 0 : 1;

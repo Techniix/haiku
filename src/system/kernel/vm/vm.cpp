@@ -3894,6 +3894,57 @@ forbid_page_faults()
 }
 
 
+
+/*!	Renga (batch 3): logs a kernel copy to or from a bad user address (the
+	program gets EFAULT): team, thread, the area at the address and its
+	protection. At most 16 lines per team, then one line that further ones
+	are left out; the count starts again for a new team.
+*/
+static void
+log_user_copy_fault(Thread* thread, VMAddressSpace* addressSpace,
+	addr_t address, addr_t ip, bool isWrite, status_t status)
+{
+	static spinlock sLock = B_SPINLOCK_INITIALIZER;
+	static team_id sTeam = -1;
+	static int32 sCount = 0;
+
+	team_id team = thread->team->id;
+	int32 count;
+	cpu_status state = disable_interrupts();
+	acquire_spinlock(&sLock);
+	if (sTeam != team) {
+		sTeam = team;
+		sCount = 0;
+	}
+	count = ++sCount;
+	release_spinlock(&sLock);
+	restore_interrupts(state);
+	if (count > 17)
+		return;
+	if (count == 17) {
+		dprintf("vm_page_fault: further bad user addresses of team %" B_PRId32
+			" left out\n", team);
+		return;
+	}
+
+	char areaName[B_OS_NAME_LENGTH] = "none";
+	uint32 protection = 0;
+	if (addressSpace != NULL && addressSpace->ReadLock() == B_OK) {
+		VMArea* area = addressSpace->LookupArea(address);
+		if (area != NULL) {
+			strlcpy(areaName, area->name, sizeof(areaName));
+			protection = area->protection;
+		}
+		addressSpace->ReadUnlock();
+	}
+	dprintf("vm_page_fault: system call %s user address %#lx (%s) by "
+		"thread %" B_PRId32 " \"%s\" of team %" B_PRId32 " \"%s\", ip %#lx: "
+		"area \"%s\", protection %#" B_PRIx32 "; EFAULT to the program\n",
+		isWrite ? "wrote to" : "read from", address, strerror(status),
+		thread->id, thread->name, team, thread->team->Name(), ip, areaName,
+		protection);
+}
+
 status_t
 vm_page_fault(addr_t address, addr_t faultAddress, bool isWrite, bool isExecute,
 	bool isUser, addr_t* newIP)
@@ -3945,12 +3996,24 @@ vm_page_fault(addr_t address, addr_t faultAddress, bool isWrite, bool isExecute,
 
 	if (status < B_OK) {
 		if (!isUser) {
-			dprintf("vm_page_fault: vm_soft_fault returned error '%s' on fault at "
-				"0x%lx, ip 0x%lx, write %d, kernel, exec %d, thread %" B_PRId32 "\n",
-				strerror(status), address, faultAddress, isWrite, isExecute,
-				thread_get_current_thread_id());
-
 			Thread* thread = thread_get_current_thread();
+			if (thread != NULL && thread->fault_handler != 0
+				&& IS_USER_ADDRESS(address)) {
+				// Renga (batch 3): a system call copying to or from a bad
+				// user pointer (EFAULT for the program). Said with the
+				// program, thread and area, so a program that retries
+				// forever can be found, and at most 16 times per team
+				// (a hardware syslog was flooded with these lines).
+				log_user_copy_fault(thread, addressSpace, address,
+					faultAddress, isWrite, status);
+			} else {
+				dprintf("vm_page_fault: vm_soft_fault returned error '%s' on "
+					"fault at 0x%lx, ip 0x%lx, write %d, kernel, exec %d, "
+					"thread %" B_PRId32 "\n", strerror(status), address,
+					faultAddress, isWrite, isExecute,
+					thread_get_current_thread_id());
+			}
+
 			if (thread != NULL && thread->fault_handler != 0) {
 				// this will cause the arch dependant page fault handler to
 				// modify the IP on the interrupt frame or whatever to return
@@ -4249,7 +4312,15 @@ vm_soft_fault(VMAddressSpace* addressSpace, addr_t originalAddress,
 #ifdef TRACE_FAULTS
 	const bool logFaults = true;
 #else
-	const bool logFaults = !isUser;
+	// Renga (batch 3): a kernel access to a user address with a fault
+	// handler set (user_memcpy() and friends) is a system call meeting a
+	// bad user pointer, which becomes EFAULT; vm_page_fault() logs it,
+	// once per thread name and with the area, rate-limited. Only other
+	// kernel faults are logged here.
+	Thread* faultingThread = thread_get_current_thread();
+	const bool logFaults = !isUser && !(faultingThread != NULL
+		&& faultingThread->fault_handler != 0
+		&& IS_USER_ADDRESS(originalAddress));
 #endif
 	while (true) {
 		context.addressSpaceLocker.Lock();

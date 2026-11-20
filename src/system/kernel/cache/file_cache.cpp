@@ -1018,6 +1018,14 @@ cache_io(void* ref, off_t offset, addr_t buffer,
 		const uint32 lockFlags = doWrite ? 0 : B_READ_DEVICE;
 		const size_t lockSize = retrySize;
 		status = lock_memory((void*)retryBuffer, lockSize, lockFlags);
+		if (status != B_OK && IS_USER_ADDRESS(retryBuffer)) {
+			// Renga (batch 3): a user buffer that cannot be written (a read
+			// into a read-only page) or is not mapped is a bad address:
+			// EFAULT, as POSIX and Linux have it. lock_memory() says
+			// B_PERMISSION_DENIED for a read-only page, which reached the
+			// program as EACCES (thread_stack.bad_pointer_logged).
+			status = B_BAD_ADDRESS;
+		}
 
 		if (status == B_OK) {
 			thread_get_current_thread()->page_fault_waits_allowed--;

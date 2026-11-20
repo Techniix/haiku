@@ -2638,8 +2638,12 @@ def parse_serial(results_dir, report):
 		# it, and only a fault without one panics, which the panic pattern
 		# catches. Linux programs probe their own read-only pages that way
 		# (Linux Chrome under Renguin, batch 3), and so on hardware the
-		# line means nothing; user-mode faults stay problems.
-		handled_fault = "vm_page_fault" in line and ", kernel," in line
+		# line means nothing; user-mode faults stay problems. Since batch 3
+		# the kernel logs these as "vm_page_fault: system call wrote to user
+		# address ... EFAULT to the program" (rate-limited per team).
+		handled_fault = "vm_page_fault" in line and (", kernel," in line
+			or "vm_page_fault: system call " in line
+			or "further bad user addresses" in line)
 		if PANIC_PATTERN.search(line) or ("vm_page_fault" in line
 					and not handled_fault) \
 				or "Welcome to Kernel Debugging Land" in line:
@@ -4088,8 +4092,10 @@ def main():
 			"pass: commits still need full runs")
 	parser.add_argument("--list-tests", action="store_true",
 		help="list the test programs harness images carry and exit")
-	parser.add_argument("--timeout", type=int, default=1800,
-		help="seconds before the guest is considered hung")
+	parser.add_argument("--timeout", type=int, default=None,
+		help="seconds before the guest is considered hung (default 1800; "
+			"2700 for the renga-* profiles, whose media checks and three "
+			"boots outgrew 1800 s: crashlog_test's last boot was cut off)")
 	parser.add_argument("--memory", type=int, default=1024)
 	parser.add_argument("--smp", type=int, default=1,
 		help="number of virtual CPUs (2 or more to exercise SMP code)")
@@ -4121,6 +4127,8 @@ def main():
 		args.profile = "minimum-anyboot" \
 			if args.firmware == "uefi" or args.media == "cdrom" \
 			else "minimum-raw"
+	if args.timeout is None:
+		args.timeout = 2700 if args.profile.startswith("renga-") else 1800
 	available = installed_tests(args.profile,
 		final=not (args.other_systems or args.installer_upgrade))
 	if args.list_tests:
