@@ -118,7 +118,9 @@ private:
 		kMixSink,			// streams on one sink
 		kMixAll,			// every stream (loopback "what you hear"),
 							// less a loopback's exclusions
-		kMixApplication		// the streams of one application
+		kMixApplication,	// the streams of one application
+		kMixSinkMirror		// streams on one sink and on the default
+							// output (a sink that mirrors it)
 	};
 
 			bool				_InputFade(MixerInput* input, int mode,

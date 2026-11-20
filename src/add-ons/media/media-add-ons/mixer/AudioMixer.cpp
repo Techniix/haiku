@@ -10,6 +10,11 @@
 #include "AudioMixer.h"
 
 #include <math.h>
+
+#include <Directory.h>
+#include <Entry.h>
+#include <File.h>
+#include <StringList.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,6 +120,17 @@
 // in a stream's "Output" menu (or a route set by name) wins over it for
 // that stream.
 #define PARAM_ETC_LOOPBACK_ONLY_TEAMS		111
+// Renga (audio routing, F-31): output devices that also play what the
+// default output plays ("several outputs at once"), each at its own volume
+// and delay, as one hidden text parameter of the mixer, kind
+// "renga:mirror_outputs". Read and write: the whole list, a line
+// "<device name>\t<volume in dB, -60 to +6>\t<delay in ms, 0 to 500>"
+// per device (written as given, normalized). The default output itself
+// and devices that are not there are kept in the list and skipped. Saved
+// in ~/config/settings/Media/mirror_outputs.
+#define PARAM_ETC_MIRRORS					112
+#define RENGA_MIRROR_OUTPUTS_KIND			"renga:mirror_outputs"
+static BString normalize_mirrors(const BString& text);
 #define RENGA_LOOPBACK_ONLY_TEAMS_KIND		"renga:loopback_only_teams"
 // How long the default output keeps short periods after the last
 // low-latency stream went (a program that closes and opens its player again
@@ -206,6 +222,10 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 
 		// enable auto-stop on the auto started (system) mixer
 		SetAutoStop(true);
+
+		// Renga (audio routing): the devices that also play the default
+		// output
+		_LoadMirrors();
 
 		BAutolock locker(sSystemMixerLock);
 		sSystemMixer = this;
@@ -1591,6 +1611,14 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 				*ioSize = sizeof(int32);
 				static_cast<int32 *>(value)[0] = fCore->Settings()->RefuseInputFormatChange();
 				break;
+			case PARAM_ETC_MIRRORS:
+			{
+				if (*ioSize < (size_t)fMirrors.Length() + 1)
+					goto err;
+				memcpy(value, fMirrors.String(), fMirrors.Length() + 1);
+				*ioSize = fMirrors.Length() + 1;
+				break;
+			}
 			case PARAM_ETC_ROUTES:
 			{
 				BString list;
@@ -1874,6 +1902,16 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 					goto err;
 				fCore->Settings()->SetRefuseInputFormatChange(static_cast<const int32 *>(value)[0]);
 				break;
+			case PARAM_ETC_MIRRORS:
+			{
+				BString list((const char*)value,
+					strnlen((const char*)value, min_c(size, (size_t)4096)));
+				fMirrors = normalize_mirrors(list);
+				_SaveMirrors();
+				wakeRouter = true;
+				update = true;
+				break;
+			}
 			case PARAM_ETC_ROUTES:
 			{
 				// "<input id> <device name>" (F-58, O-4)
@@ -2416,6 +2454,9 @@ AudioMixer::UpdateParameterWeb()
 	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_LOOPBACK_ONLY_TEAMS),
 		B_MEDIA_RAW_AUDIO, "Loopback-only teams",
 		RENGA_LOOPBACK_ONLY_TEAMS_KIND, 1024)->SetFlags(B_HIDDEN_PARAMETER);
+	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_MIRRORS),
+		B_MEDIA_RAW_AUDIO, "Also play on", RENGA_MIRROR_OUTPUTS_KIND,
+		4096)->SetFlags(B_HIDDEN_PARAMETER);
 
 	dp = group->MakeDiscreteParameter(PARAM_ETC(70), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Resampling algorithm:"), B_INPUT_MUX);
@@ -2616,6 +2657,91 @@ AudioMixer::_ScanOutputDevices(BStringList& names)
 }
 
 
+/*!	Renga (audio routing): the mirror list in its normal form, one line
+	"<name>\t<dB>\t<ms>" per device, values clamped, duplicates and empty
+	names dropped.
+*/
+static BString
+normalize_mirrors(const BString& text)
+{
+	BString result;
+	BStringList seen;
+	int32 start = 0;
+	while (start < text.Length()) {
+		int32 end = text.FindFirst('\n', start);
+		if (end < 0)
+			end = text.Length();
+		BString line(text.String() + start, end - start);
+		start = end + 1;
+		BStringList fields;
+		line.Split("\t", false, fields);
+		if (fields.CountStrings() < 1)
+			continue;
+		BString name = fields.StringAt(0);
+		name.Trim();
+		if (name.IsEmpty() || seen.HasString(name))
+			continue;
+		seen.Add(name);
+		float volume = fields.CountStrings() > 1
+			? atof(fields.StringAt(1).String()) : 0;
+		int32 delay = fields.CountStrings() > 2
+			? atoi(fields.StringAt(2).String()) : 0;
+		volume = max_c(-60.0f, min_c(6.0f, volume));
+		delay = max_c(0, min_c(500, delay));
+		result << name << "\t" << BString().SetToFormat("%.1f", volume)
+			<< "\t" << delay << "\n";
+	}
+	return result;
+}
+
+
+static status_t
+mirrors_path(BPath& path)
+{
+	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &path);
+	if (status == B_OK)
+		status = path.Append("Media/mirror_outputs");
+	return status;
+}
+
+
+void
+AudioMixer::_LoadMirrors()
+{
+	BPath path;
+	BFile file;
+	off_t size;
+	if (mirrors_path(path) != B_OK
+		|| file.SetTo(path.Path(), B_READ_ONLY) != B_OK
+		|| file.GetSize(&size) != B_OK || size <= 0 || size > 4096)
+		return;
+	BString text;
+	char* buffer = text.LockBuffer(size + 1);
+	ssize_t bytes = file.Read(buffer, size);
+	text.UnlockBuffer(bytes > 0 ? bytes : 0);
+	fMirrors = normalize_mirrors(text);
+}
+
+
+void
+AudioMixer::_SaveMirrors()
+{
+	BPath path;
+	if (mirrors_path(path) != B_OK)
+		return;
+	if (fMirrors.IsEmpty()) {
+		BEntry(path.Path()).Remove();
+		return;
+	}
+	BPath parent;
+	path.GetParent(&parent);
+	create_directory(parent.Path(), 0755);
+	BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+	if (file.InitCheck() == B_OK)
+		file.Write(fMirrors.String(), fMirrors.Length());
+}
+
+
 void
 AudioMixer::_RouteOnce()
 {
@@ -2674,6 +2800,17 @@ AudioMixer::_RouteOnce()
 			wanted.Add(route);
 		}
 	}
+	// Renga (audio routing): devices that also play the default output
+	// keep a sink while they are listed
+	BStringList mirrorLines;
+	fMirrors.Split("\n", true, mirrorLines);
+	for (int32 i = 0; i < mirrorLines.CountStrings(); i++) {
+		BStringList fields;
+		mirrorLines.StringAt(i).Split("\t", false, fields);
+		BString name = fields.StringAt(0);
+		if (!name.IsEmpty() && primaryName != name && !wanted.HasString(name))
+			wanted.Add(name);
+	}
 	for (int32 i = fCore->CountTaps() - 1; i >= 0; i--) {
 		MixerTap* tap = fCore->TapAt(i);
 		if (tap->Kind() != MixerTap::kSink)
@@ -2696,6 +2833,24 @@ AudioMixer::_RouteOnce()
 			remove.AddItem(tap);
 		} else
 			have.Add(tap->DeviceName());
+	}
+	for (int32 i = 0; i < fCore->CountTaps(); i++) {
+		MixerTap* tap = fCore->TapAt(i);
+		if (tap->Kind() != MixerTap::kSink)
+			continue;
+		bool mirror = false;
+		float gain = 1.0f;
+		bigtime_t delay = 0;
+		for (int32 m = 0; m < mirrorLines.CountStrings(); m++) {
+			BStringList fields;
+			mirrorLines.StringAt(m).Split("\t", false, fields);
+			if (fields.StringAt(0) == tap->DeviceName()) {
+				mirror = true;
+				gain = powf(10.0f, atof(fields.StringAt(1).String()) / 20.0f);
+				delay = (bigtime_t)atoi(fields.StringAt(2).String()) * 1000;
+			}
+		}
+		tap->SetMirror(mirror, gain, delay);
 	}
 	fCore->UpdateRouting();
 	fCore->Unlock();

@@ -131,6 +131,16 @@ public:
 									{ return fUnwantedSince; }
 			void				SetUnwantedSince(bigtime_t when)
 									{ fUnwantedSince = when; }
+	// Sinks (Renga, audio routing): also play what the default output
+	// plays, at its own volume (a factor) and delay. Set by the router and
+	// read by the mix thread, both with the core locked.
+			void				SetMirror(bool mirror, float gain,
+									bigtime_t delay)
+									{ fMirror = mirror; fMirrorGain = gain;
+									  fMirrorDelay = delay; }
+			bool				Mirrors() const { return fMirror; }
+			float				MirrorGain() const { return fMirrorGain; }
+			bigtime_t			MirrorDelay() const { return fMirrorDelay; }
 	// Blocking versions for the router (not for the mix thread).
 			bool				IsConnected();
 			bool				GetConnection(media_output& output);
@@ -246,6 +256,9 @@ private:
 			media_node_id		fPushTimeSource;
 			volatile bigtime_t	fActiveAt;
 			bigtime_t			fUnwantedSince;
+			bool				fMirror = false;
+			float				fMirrorGain = 1.0f;
+			bigtime_t			fMirrorDelay = 0;
 
 			// clock drift correction (sinks): the device's clock against
 			// the mixer's, the latter's frames resampled to the former's

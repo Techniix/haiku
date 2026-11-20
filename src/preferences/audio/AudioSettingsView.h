@@ -80,9 +80,16 @@ private:
 			void				_ConnectVolume();
 			void				_PlayTestSound();
 			void				_UpdateResampling();
+			void				_UpdateMirrors();
+			void				_ApplyMirrors();
 
 			AudioDeviceList&	fDevices;
 			OutputMenuField*	fDevice;
+			BView*				fMirrorGroup;
+			BStringList			fMirrorDevices;
+				// the devices the rows are for, in order
+			BString				fMirrorState;
+				// what the mixer said last (renga:mirror_outputs)
 			BStringView*		fDeviceInfo;
 			BSlider*			fVolume;
 			BCheckBox*			fMute;

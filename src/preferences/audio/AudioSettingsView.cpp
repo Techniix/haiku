@@ -66,6 +66,7 @@ enum {
 	kMsgTestSoundDone		= 'auTd',
 	kMsgOutputBuffer		= 'auOB',
 	kMsgResampling			= 'auRq',
+	kMsgMirror				= 'auMi',
 
 	kMsgInputDevice			= 'auIn',
 	kMsgGain				= 'auGn',
@@ -176,6 +177,45 @@ mixer_resampling(int32* value, bool set, BMenuField* field, BHandler* target)
 				item->SetTarget(target);
 				field->Menu()->AddItem(item);
 			}
+		}
+		break;
+	}
+	delete web;
+	return status;
+}
+
+
+/*!	Renga (audio routing): reads or writes the mixer's list of devices that
+	also play the default output (hidden text parameter
+	"renga:mirror_outputs", see the mixer's AudioMixer.cpp).
+*/
+static status_t
+mixer_mirrors(BString& text, bool set)
+{
+	BMediaRoster* roster = BMediaRoster::CurrentRoster();
+	media_node mixer;
+	if (roster == NULL || roster->GetAudioMixer(&mixer) != B_OK)
+		return B_NO_INIT;
+	BParameterWeb* web = NULL;
+	status_t status = roster->GetParameterWebFor(mixer, &web);
+	roster->ReleaseNode(mixer);
+	if (status != B_OK)
+		return status;
+	status = B_ENTRY_NOT_FOUND;
+	for (int32 i = 0; i < web->CountParameters(); i++) {
+		BParameter* parameter = web->ParameterAt(i);
+		if (strcmp(parameter->Kind(), "renga:mirror_outputs") != 0)
+			continue;
+		if (set) {
+			status = parameter->SetValue(text.String(), text.Length() + 1,
+				system_time());
+		} else {
+			char buffer[4096];
+			size_t size = sizeof(buffer);
+			bigtime_t when;
+			status = parameter->GetValue(buffer, &size, &when);
+			if (status == B_OK)
+				text.SetTo(buffer, strnlen(buffer, size));
 		}
 		break;
 	}
@@ -505,6 +545,19 @@ OutputPage::OutputPage(AudioDeviceList& devices)
 		.End();
 	volumeBox->AddChild(volumeGroup);
 
+	// Renga (audio routing): several outputs at once
+	BBox* mirrorBox = new BBox("mirrorBox");
+	mirrorBox->SetLabel(B_TRANSLATE("Also play on"));
+	fMirrorGroup = new BGroupView("mirrorGroup", B_VERTICAL,
+		B_USE_SMALL_SPACING);
+	((BGroupView*)fMirrorGroup)->GroupLayout()->SetInsets(
+		B_USE_DEFAULT_SPACING, B_USE_SMALL_SPACING, B_USE_DEFAULT_SPACING,
+		B_USE_DEFAULT_SPACING);
+	mirrorBox->AddChild(fMirrorGroup);
+	AddKeywords(B_TRANSLATE_COMMENT("several outputs, two devices, mirror, "
+		"also play on, delay, sync",
+		"Search words for playing on several outputs at once"), false);
+
 	BBox* advancedBox = new BBox("outputAdvanced");
 	advancedBox->SetLabel(B_TRANSLATE("Advanced"));
 	BGroupView* advancedGroup = new BGroupView(B_VERTICAL,
@@ -521,6 +574,7 @@ OutputPage::OutputPage(AudioDeviceList& devices)
 	BLayoutBuilder::Group<>(this)
 		.Add(deviceBox)
 		.Add(volumeBox)
+		.Add(mirrorBox)
 		.Add(advancedBox)
 		.AddGlue();
 	fAdvancedBox->Hide();
@@ -624,6 +678,10 @@ OutputPage::MessageReceived(BMessage* message)
 			break;
 		}
 
+		case kMsgMirror:
+			_ApplyMirrors();
+			break;
+
 		case kMsgOutputBuffer:
 		{
 			const char* device;
@@ -677,6 +735,146 @@ OutputPage::_PlayTestSound()
 }
 
 
+/*!	Renga (audio routing): one row per output device other than the default
+	one: "Also play on <device>", its volume (dB) and its delay (ms, to line
+	up a device with more latency). Rebuilt when the devices change; the
+	values come from the mixer.
+*/
+void
+OutputPage::_UpdateMirrors()
+{
+	BStringList devices = fDevices.OutputNames();
+	devices.Remove(fDevices.DefaultOutputName());
+	BString state;
+	mixer_mirrors(state, false);
+
+	if (!(devices == fMirrorDevices)) {
+		while (BView* child = fMirrorGroup->ChildAt(0)) {
+			child->RemoveSelf();
+			delete child;
+		}
+		fMirrorDevices = devices;
+		for (int32 i = 0; i < devices.CountStrings(); i++) {
+			BString label;
+			label.SetToFormat(B_TRANSLATE("Also play on %s"),
+				devices.StringAt(i).String());
+			// unique names, for scripts and the harness ("mirror:<device>")
+			BString device = devices.StringAt(i);
+			BCheckBox* box = new BCheckBox(BString("mirror:") << device, label,
+				new BMessage(kMsgMirror));
+			BSlider* volume = new BSlider(BString("mirrorVolume:") << device,
+				B_TRANSLATE("Volume:"), new BMessage(kMsgMirror), -300, 60,
+				B_HORIZONTAL);
+			volume->SetLimitLabels(B_TRANSLATE("-30 dB"),
+				B_TRANSLATE("+6 dB"));
+			BSlider* delay = new BSlider(BString("mirrorDelay:") << device,
+				B_TRANSLATE("Delay:"), new BMessage(kMsgMirror), 0, 500,
+				B_HORIZONTAL);
+			delay->SetLimitLabels(B_TRANSLATE("0 ms"), B_TRANSLATE("500 ms"));
+			delay->SetToolTip(B_TRANSLATE("Plays this device later, to line "
+				"it up with a slower one (Bluetooth or HDMI)"));
+			BGroupView* row = new BGroupView(B_VERTICAL, 0);
+			BLayoutBuilder::Group<>(row)
+				.Add(box)
+				.AddGroup(B_HORIZONTAL)
+					.SetInsets(B_USE_BIG_SPACING, 0, 0, 0)
+					.Add(volume)
+					.Add(delay)
+				.End();
+			fMirrorGroup->AddChild(row);
+			box->SetTarget(this);
+			volume->SetTarget(this);
+			delay->SetTarget(this);
+		}
+		if (devices.IsEmpty()) {
+			BStringView* none = new BStringView("noMirror",
+				B_TRANSLATE("No other output device."));
+			fMirrorGroup->AddChild(none);
+		}
+		fMirrorState = "";
+	}
+	if (state == fMirrorState)
+		return;
+	fMirrorState = state;
+
+	BStringList lines;
+	state.Split("\n", true, lines);
+	for (int32 i = 0; i < fMirrorDevices.CountStrings(); i++) {
+		BView* row = fMirrorGroup->ChildAt(i);
+		if (row == NULL)
+			break;
+		const BString& device = fMirrorDevices.StringAt(i);
+		BCheckBox* box = (BCheckBox*)row->FindView(
+			BString("mirror:") << device);
+		BSlider* volume = (BSlider*)row->FindView(
+			BString("mirrorVolume:") << device);
+		BSlider* delay = (BSlider*)row->FindView(
+			BString("mirrorDelay:") << device);
+		if (box == NULL || volume == NULL || delay == NULL)
+			continue;
+		bool on = false;
+		float decibels = 0;
+		int32 milliseconds = 0;
+		for (int32 l = 0; l < lines.CountStrings(); l++) {
+			BStringList fields;
+			lines.StringAt(l).Split("\t", false, fields);
+			if (fields.StringAt(0) == fMirrorDevices.StringAt(i)) {
+				on = true;
+				decibels = atof(fields.StringAt(1).String());
+				milliseconds = atoi(fields.StringAt(2).String());
+			}
+		}
+		box->SetValue(on ? B_CONTROL_ON : B_CONTROL_OFF);
+		volume->SetValue((int32)(decibels * 10));
+		delay->SetValue(milliseconds);
+		volume->SetEnabled(on);
+		delay->SetEnabled(on);
+	}
+}
+
+
+void
+OutputPage::_ApplyMirrors()
+{
+	BString text;
+	for (int32 i = 0; i < fMirrorDevices.CountStrings(); i++) {
+		BView* row = fMirrorGroup->ChildAt(i);
+		if (row == NULL)
+			break;
+		const BString& device = fMirrorDevices.StringAt(i);
+		BCheckBox* box = (BCheckBox*)row->FindView(
+			BString("mirror:") << device);
+		BSlider* volume = (BSlider*)row->FindView(
+			BString("mirrorVolume:") << device);
+		BSlider* delay = (BSlider*)row->FindView(
+			BString("mirrorDelay:") << device);
+		if (box == NULL || volume == NULL || delay == NULL)
+			continue;
+		bool on = box->Value() == B_CONTROL_ON;
+		volume->SetEnabled(on);
+		delay->SetEnabled(on);
+		if (!on)
+			continue;
+		text << fMirrorDevices.StringAt(i) << "\t"
+			<< BString().SetToFormat("%.1f", volume->Value() / 10.0f) << "\t"
+			<< delay->Value() << "\n";
+	}
+	// devices listed before that are not here now stay in the list
+	BString state;
+	mixer_mirrors(state, false);
+	BStringList lines;
+	state.Split("\n", true, lines);
+	for (int32 l = 0; l < lines.CountStrings(); l++) {
+		BStringList fields;
+		lines.StringAt(l).Split("\t", false, fields);
+		if (!fMirrorDevices.HasString(fields.StringAt(0)))
+			text << lines.StringAt(l) << "\n";
+	}
+	mixer_mirrors(text, true);
+	fMirrorState = "";
+}
+
+
 void
 OutputPage::SetAdvanced(bool advanced)
 {
@@ -691,6 +889,7 @@ void
 OutputPage::Refresh()
 {
 	fDevice->Refresh(fDevices);
+	_UpdateMirrors();
 
 	const AudioDevice* device = fDevices.FindDevice(
 		fDevices.DefaultOutputName());

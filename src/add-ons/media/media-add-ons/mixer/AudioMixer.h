@@ -154,6 +154,8 @@ private:
 	static	status_t			_RouterThreadEntry(void* data);
 			void				_RouterThread();
 			void				_RouteOnce();
+			void				_LoadMirrors();
+			void				_SaveMirrors();
 			status_t			_CreateSink(const char* deviceName,
 									media_node_id primaryNode);
 			void				_RemoveSink(MixerTap* tap);
@@ -187,6 +189,10 @@ private:
 			// when: not reclaimed for a while (the default output may be
 			// switching to it).
 			BMessage			fLostDevices;	// name: int64 time
+			BString				fMirrors;
+				// Renga (audio routing): devices that also play the default
+				// output, "<name>\t<volume dB>\t<delay ms>" per line
+				// (renga:mirror_outputs, saved in Media/mirror_outputs)
 			// Low-latency mode: the device asked for short periods, the
 			// period asked for, and when a low-latency stream was last
 			// connected (router thread only).

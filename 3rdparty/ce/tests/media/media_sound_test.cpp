@@ -940,6 +940,74 @@ check_applications(FILE* music, FILE* browser, const BString& second)
 }
 
 
+/*!	Renga (audio routing): "Also play on <second card>" on the Output page
+	plays everything on the default output on the second card too (host
+	phases mirror_on and mirror_off: the tones in both recordings, then
+	only in the first), through the mixer's renga:mirror_outputs list,
+	which the page reads back.
+*/
+static BString
+mixer_mirror_list()
+{
+	BString text;
+	BMediaRoster* roster = BMediaRoster::Roster();
+	media_node mixer;
+	BParameterWeb* web = NULL;
+	if (roster->GetAudioMixer(&mixer) != B_OK)
+		return text;
+	if (roster->GetParameterWebFor(mixer, &web) == B_OK) {
+		for (int32 i = 0; i < web->CountParameters(); i++) {
+			BParameter* parameter = web->ParameterAt(i);
+			if (strcmp(parameter->Kind(), "renga:mirror_outputs") != 0)
+				continue;
+			char buffer[4096];
+			size_t size = sizeof(buffer);
+			bigtime_t when;
+			if (parameter->GetValue(buffer, &size, &when) == B_OK)
+				text.SetTo(buffer, strnlen(buffer, size));
+		}
+		delete web;
+	}
+	roster->ReleaseNode(mixer);
+	return text;
+}
+
+
+static void
+check_mirror(FILE* music, FILE* browser, const BString& second)
+{
+	show_page("output");
+	BString name("mirror:");
+	name << second;
+	status_t status = control(name.String(), 1);
+	snooze(3000000);
+	BString list = mixer_mirror_list();
+	BString expected;
+	expected << second << "\t0.0\t0\n";
+	report("mirror_on", status == B_OK && list == expected,
+		"\"Also play on %s\" checked: %s; the mixer's list [%s]",
+		second.String(), strerror(status), list.String());
+	screenshot("sound_output_mirror");
+	phase("mirror_on");
+	tone(music, 4920, 4970);
+	snooze(2500000);
+	tone(music, 0, 0);
+	snooze(500000);
+
+	status = control(name.String(), 0);
+	snooze(2500000);
+	list = mixer_mirror_list();
+	report("mirror_off", status == B_OK && list.IsEmpty(),
+		"unchecked: %s; the mixer's list [%s]", strerror(status),
+		list.String());
+	phase("mirror_off");
+	tone(music, 5020, 5070);
+	snooze(2500000);
+	tone(music, 0, 0);
+	tone(browser, 0, 0);
+}
+
+
 static void
 check_input(const BString& original)
 {
@@ -1174,6 +1242,7 @@ main()
 		check_pages();
 		check_output(music, browser, first, second);
 		check_applications(music, browser, second);
+		check_mirror(music, browser, second);
 		check_input(originalInput);
 		check_devices(first, second);
 		check_search();

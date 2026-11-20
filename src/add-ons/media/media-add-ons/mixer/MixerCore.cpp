@@ -801,6 +801,14 @@ MixerCore::_InputFade(MixerInput* input, int mode, MixerTap* tap,
 {
 	fadeStart = fadeEnd = 1.0f;
 	switch (mode) {
+		case kMixSinkMirror:
+			// Renga (audio routing): the sink's own streams and the
+			// default output's, each with its own fades
+			if (_InputFade(input, kMixSink, tap, selection, fadeStart,
+					fadeEnd))
+				return true;
+			return _InputFade(input, kMixPrimary, NULL, selection, fadeStart,
+				fadeEnd);
 		case kMixAll:
 			// F-58 (O-2): a loopback-only stream is left out of the
 			// loopbacks of every stream
@@ -1033,11 +1041,17 @@ MixerCore::_FeedTaps(int64 framePos, bigtime_t eventTime,
 		}
 
 		if (tap->Kind() == MixerTap::kSink) {
-			_Mix(fTapBuffer, kMixSink, tap, NULL, framePos, eventTime,
-				inputChanInfos, mixChanInfos);
+			// Renga (audio routing): a sink that also plays the default
+			// output's streams, at its own volume and delay
+			bool mirror = tap->Mirrors();
+			_Mix(fTapBuffer, mirror ? kMixSinkMirror : kMixSink, tap, NULL,
+				framePos, eventTime, inputChanInfos, mixChanInfos);
 			tap->Push(fTapBuffer, fMixBufferChannelCount,
-				fMixBufferFrameCount, fMixBufferFrameRate, eventTime,
-				fTimeSource->ID(), masterGain, fTimeSource);
+				fMixBufferFrameCount, fMixBufferFrameRate,
+				eventTime + (mirror ? tap->MirrorDelay() : 0),
+				fTimeSource->ID(),
+				masterGain * (mirror ? tap->MirrorGain() : 1.0f),
+				fTimeSource);
 			continue;
 		}
 
