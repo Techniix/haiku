@@ -2,11 +2,24 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-15 06:12 UTC. Newest entries first.
+Updated: 2026-11-20 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-20: landed: R-9 (compositor stopped on pointer motion over a Chromium window)
+
+- Fixed in Renga's Wayland compositor: pointer motion converted to screen coordinates with the surface's view while its window was not locked ("Looper must be locked"). A motion with no lock or confinement on the surface and no relative pointer of the client now does nothing in the constraints code; where a conversion is needed it is done with the view's looper locked. The other seat paths (keyboard focus, cursor shape, drag and drop, idle inhibit, xdg_output) use window-level calls that lock themselves and were not affected.
+- Harness check: a client with `zwp_pointer_constraints_v1`, `zwp_relative_pointer_manager_v1`, an unused `wl_surface` and a toplevel with a viewport and a larger buffer, the pointer moved over its window, also with a lock and a confinement (`wayland_protocols.pointer_motion_*`). It stopped the compositor before the fix, as on your machine.
+- How to get it: the compositor is part of the system package, not of `renga_wayland`, so it comes with the batch-3 image (`2026.11.20-batch3`); there is no separate `pkgman update` for it yet.
+
+### 2026-11-20: phase D: a D-Bus session bus, and Linux Chrome's process model
+
+- Renga now runs a D-Bus session bus at login: `DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/xdg-runtime/bus` (set for native programs and, by the `linux` command, for Linux programs). Inside it: `org.freedesktop.Notifications` (native notifications; a click is the "default" action), `org.freedesktop.UPower` (ACPI batteries, display device, `OnBattery`), `org.freedesktop.portal.Desktop` (Settings: `org.freedesktop.appearance` color-scheme, accent-color, contrast; OpenURI), and `org.freedesktop.secrets` (the Secret Service on Haiku's key store, "plain" sessions). Switches in the Notifications preferences. Not yet: FileChooser, Screenshot and ScreenCast portals. Details: `3rdparty/ce/PORTING.md`, "D-Bus session bus".
+- For your port: Chromium's Linux D-Bus code (`dbus/`, libsecret, UPower battery, notifications) can be enabled against it; Renga ships no libdbus, so link HaikuPorts' `dbus` or keep it off for now.
+- Linux Chrome under Renguin without `--single-process`: worked in 3 of 5 harness runs in this batch; the other children still sometimes report "no connection" after 15 s. Still under investigation (an in-memory syscall trace, `trace_buffer true`, now shows such races without slowing the program).
+- Linux programs get `LANG`/`LANGUAGE` from the Locale preferences now (`en_US.UTF-8` instead of `C.UTF-8`); libroot accepts `C.UTF-8`.
 
 ### 2026-11-19: Linux Chrome under Renguin shows a window (image `2026.11.19-batch2`)
 

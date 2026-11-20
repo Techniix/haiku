@@ -45,6 +45,11 @@
 	                      from the source; the system clipboard gets only
 	                      the mapped text; the source is not cancelled by
 	                      its own commit
+	  pointer_motion_plain, pointer_motion_constrained (Chromium R-9): the
+	                      pointer moved over a window of a client with
+	                      pointer constraints, a relative pointer manager
+	                      and an unused surface keeps the compositor up,
+	                      also with a lock and a confinement
 	  constraints         a locked pointer and a relative pointer are created
 	                      without error (activation needs real motion)
 	  toplevel_icon       icon sizes are announced; an icon is accepted
@@ -93,6 +98,10 @@
 #include "cursor-shape-v1-client-protocol.h"
 #include "xdg-toplevel-icon-v1-client-protocol.h"
 #include "xdg-activation-v1-client-protocol.h"
+#include "viewporter-client-protocol.h"
+
+#include <InputServerTypes.h>
+#include <input_globals.h>
 
 
 #define SUITE "wayland_protocols"
@@ -861,6 +870,192 @@ test_seat(Connection& connection)
 }
 
 
+// #pragma mark - pointer motion over a constrained client (R-9)
+
+
+static void
+move_mouse(float x, float y)
+{
+	BMessage command(IS_SET_MOUSE_POSITION);
+	BMessage reply;
+	command.AddPoint("where", BPoint(x, y));
+	_control_input_server_(&command, &reply);
+}
+
+
+//!	The frame of our window on screen, or an invalid rect.
+static BRect
+window_frame(const char* title)
+{
+	team_id team = be_roster->TeamFor(kCompositorSignature);
+	int32 count = 0;
+	int32* tokens = get_token_list(team, &count);
+	BRect frame;
+	for (int32 i = 0; tokens != NULL && i < count; i++) {
+		client_window_info* info = get_window_info(tokens[i]);
+		if (info == NULL)
+			continue;
+		if (strcmp(info->name, title) == 0 && !info->is_mini)
+			frame.Set(info->window_left, info->window_top,
+				info->window_right, info->window_bottom);
+		free(info);
+	}
+	free(tokens);
+	return frame;
+}
+
+
+//!	Moves the pointer over \a frame on a grid, with pauses for the events.
+static void
+sweep_pointer(Connection& connection, BRect frame)
+{
+	for (int row = 0; row < 5; row++) {
+		for (int column = 0; column < 6; column++) {
+			move_mouse(frame.left + frame.Width() * (column + 0.5f) / 6,
+				frame.top + frame.Height() * (row + 0.5f) / 5);
+			snooze(30000);
+			dispatch_until(connection.display, 10000, NULL);
+		}
+	}
+}
+
+
+/*!	Chromium R-9 (2026-11-19): the compositor stopped with "Looper must be
+	locked" as soon as the pointer moved over a window of a client that had
+	bound zwp_pointer_constraints_v1 and zwp_relative_pointer_manager_v1,
+	with an unused role-less wl_surface next to its toplevel (fractional
+	scale, a viewport, a larger buffer). The motion path converted to
+	screen coordinates with the surface's view while its window was not
+	locked. Here: the same set-up, pointer motion over the window, then
+	again with a relative pointer, a lock and a confinement; the compositor
+	must stay up and the connection healthy each time.
+*/
+static void
+test_pointer_motion()
+{
+	team_id compositorTeam = be_roster->TeamFor(kCompositorSignature);
+	Connection connection;
+	if (!connect(connection)) {
+		report("pointer_motion_plain", false, "no connection");
+		return;
+	}
+	wl_compositor* compositor = (wl_compositor*)connection.Bind(
+		"wl_compositor", &wl_compositor_interface, 4);
+	wl_shm* shm = (wl_shm*)connection.Bind("wl_shm", &wl_shm_interface, 1);
+	xdg_wm_base* wmBase = (xdg_wm_base*)connection.Bind("xdg_wm_base",
+		&xdg_wm_base_interface, 6);
+	wl_seat* seat = (wl_seat*)connection.Bind("wl_seat", &wl_seat_interface,
+		9);
+	zwp_pointer_constraints_v1* constraints = (zwp_pointer_constraints_v1*)
+		connection.Bind("zwp_pointer_constraints_v1",
+			&zwp_pointer_constraints_v1_interface, 1);
+	zwp_relative_pointer_manager_v1* relatives
+		= (zwp_relative_pointer_manager_v1*)connection.Bind(
+			"zwp_relative_pointer_manager_v1",
+			&zwp_relative_pointer_manager_v1_interface, 1);
+	wp_fractional_scale_manager_v1* scales = (wp_fractional_scale_manager_v1*)
+		connection.Bind("wp_fractional_scale_manager_v1",
+			&wp_fractional_scale_manager_v1_interface, 1);
+	wp_viewporter* viewporter = (wp_viewporter*)connection.Bind(
+		"wp_viewporter", &wp_viewporter_interface, 1);
+	if (compositor == NULL || shm == NULL || wmBase == NULL || seat == NULL
+		|| constraints == NULL || relatives == NULL) {
+		report("pointer_motion_plain", false, "missing globals");
+		wl_display_disconnect(connection.display);
+		return;
+	}
+	xdg_wm_base_add_listener(wmBase, &kWmBaseListener, NULL);
+	wl_pointer* pointer = wl_seat_get_pointer(seat);
+
+	// Chromium's set-up: an unused surface first, then the toplevel
+	wl_surface* unused = wl_compositor_create_surface(compositor);
+	static const char* kMotionTitle = "Renga Wayland pointer test";
+	WindowState state;
+	wl_surface* surface = wl_compositor_create_surface(compositor);
+	xdg_surface* xdgSurface = xdg_wm_base_get_xdg_surface(wmBase, surface);
+	xdg_surface_add_listener(xdgSurface, &kXdgSurfaceListener, &state);
+	xdg_toplevel* toplevel = xdg_surface_get_toplevel(xdgSurface);
+	xdg_toplevel_add_listener(toplevel, &kToplevelListener, &state);
+	xdg_toplevel_set_title(toplevel, kMotionTitle);
+	wp_fractional_scale_v1* scale = scales != NULL
+		? wp_fractional_scale_manager_v1_get_fractional_scale(scales, surface)
+		: NULL;
+	if (scale != NULL)
+		wp_fractional_scale_v1_add_listener(scale, &kScaleListener, &state);
+	wp_viewport* viewport = viewporter != NULL
+		? wp_viewporter_get_viewport(viewporter, surface) : NULL;
+	wl_surface_commit(surface);
+	dispatch_until(connection.display, 10000000, &state.configured);
+	wl_buffer* buffer = create_buffer(shm);
+	xdg_surface_ack_configure(xdgSurface, state.serial);
+	if (viewport != NULL) {
+		// a buffer at 1.5 times the size shown, as at scale 180/120
+		wp_viewport_set_destination(viewport, kWidth * 2 / 3,
+			kHeight * 2 / 3);
+	}
+	wl_surface_attach(surface, buffer, 0, 0);
+	wl_surface_damage(surface, 0, 0, kWidth, kHeight);
+	wl_surface_commit(surface);
+	BRect frame;
+	for (int i = 0; i < 40 && !frame.IsValid(); i++) {
+		dispatch_until(connection.display, 100000, NULL);
+		frame = window_frame(kMotionTitle);
+	}
+
+	sweep_pointer(connection, frame);
+	bool alive = be_roster->TeamFor(kCompositorSignature) == compositorTeam
+		&& connection_ok(connection);
+	report("pointer_motion_plain", frame.IsValid() && alive,
+		"window %s, pointer moved over it 30 times: compositor %s, "
+		"connection %s", frame.IsValid() ? "found" : "not found",
+		be_roster->TeamFor(kCompositorSignature) == compositorTeam
+			? "still running" : "gone",
+		wl_display_get_error(connection.display) == 0 ? "healthy" : "failed");
+
+	zwp_relative_pointer_v1* relative
+		= zwp_relative_pointer_manager_v1_get_relative_pointer(relatives,
+			pointer);
+	zwp_locked_pointer_v1* locked = zwp_pointer_constraints_v1_lock_pointer(
+		constraints, surface, pointer, NULL,
+		ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT);
+	wl_display_roundtrip(connection.display);
+	sweep_pointer(connection, frame);
+	bool lockAlive = be_roster->TeamFor(kCompositorSignature)
+			== compositorTeam && connection_ok(connection);
+	zwp_locked_pointer_v1_destroy(locked);
+	wl_display_roundtrip(connection.display);
+
+	zwp_confined_pointer_v1* confined
+		= zwp_pointer_constraints_v1_confine_pointer(constraints, surface,
+			pointer, NULL, ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+	wl_display_roundtrip(connection.display);
+	sweep_pointer(connection, frame);
+	bool confineAlive = be_roster->TeamFor(kCompositorSignature)
+			== compositorTeam && connection_ok(connection);
+	zwp_confined_pointer_v1_destroy(confined);
+	zwp_relative_pointer_v1_destroy(relative);
+	wl_display_roundtrip(connection.display);
+	report("pointer_motion_constrained", lockAlive && confineAlive,
+		"with a relative pointer and a lock: %s; with a confinement: %s",
+		lockAlive ? "compositor up" : "compositor gone or error",
+		confineAlive ? "compositor up" : "compositor gone or error");
+
+	// leave the pointer outside, where the other tests expect it
+	move_mouse(5, 5);
+	if (viewport != NULL)
+		wp_viewport_destroy(viewport);
+	if (scale != NULL)
+		wp_fractional_scale_v1_destroy(scale);
+	xdg_toplevel_destroy(toplevel);
+	xdg_surface_destroy(xdgSurface);
+	wl_surface_destroy(surface);
+	wl_surface_destroy(unused);
+	wl_buffer_destroy(buffer);
+	wl_display_roundtrip(connection.display);
+	wl_display_disconnect(connection.display);
+}
+
+
 // #pragma mark - selections
 
 
@@ -1337,6 +1532,7 @@ main()
 	test_fixes_v2(a, b);
 	test_window(a);
 	test_seat(a);
+	test_pointer_motion();
 	test_activation(a);
 	test_primary(a, b);
 	test_clipboard(a, b);

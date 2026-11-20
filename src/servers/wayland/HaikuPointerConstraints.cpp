@@ -22,6 +22,7 @@
 #include "HaikuCompositor.h"
 #include "PointerConstraintsUnstableV1.h"
 #include "RelativePointerUnstableV1.h"
+#include "AppKitPtrs.h"
 
 #include <AutoDeleter.h>
 #include <InterfaceDefs.h>
@@ -148,21 +149,54 @@ constraint_for(HaikuSurface *surface)
 }
 
 
-/*!	Called for every pointer motion over a surface (window thread, window
-	locked). Returns true if the motion is consumed (pointer locked).
+/*!	Called for every pointer motion over a surface, on the surface's window
+	thread inside a WaylandEnv: the window's looper is NOT locked there (the
+	server handler is), so the view is locked for the one conversion it
+	needs. Returns true if the motion is consumed (pointer locked).
+
+	R-9 (Chromium, 2026-11-19): this used to call ConvertToScreen() on the
+	unlocked view for every motion, also for clients with no constraint and
+	no relative pointer; BView's lock check stopped the compositor
+	("Looper must be locked") as soon as the mouse moved over Chromium's
+	first window. Now a motion with no constraint on the surface and no
+	relative pointer of its client returns at once, and the screen point
+	comes from the view with its looper locked.
 */
 bool
 HaikuPointerConstraintsMotion(HaikuSurface *surface, bigtime_t when,
 	BPoint viewWhere)
 {
+	if (surface == NULL)
+		return false;
+	HaikuConstraint *constraint = constraint_for(surface);
+	bool relative = false;
+	for (HaikuRelativePointer *pointer : sRelativePointers) {
+		if (pointer->Client() == surface->Client()) {
+			relative = true;
+			break;
+		}
+	}
+	if (constraint == NULL && !relative) {
+		sHaveLast = false;
+		return false;
+	}
+
 	BView *view = surface->View();
 	if (view == NULL)
 		return false;
-	BPoint screen = view->ConvertToScreen(viewWhere);
+	BPoint screen;
+	BRect windowFrame;
+	bool windowActive = false;
+	{
+		AppKitPtrs::LockedPtr<BView> locked(view);
+		if (view->Window() == NULL)
+			return false;
+		screen = view->ConvertToScreen(viewWhere);
+		windowFrame = view->Window()->Frame();
+		windowActive = view->Window()->IsActive();
+	}
 
-	HaikuConstraint *constraint = constraint_for(surface);
-	if (constraint != NULL && !constraint->fActive && view->Window() != NULL
-		&& view->Window()->IsActive()) {
+	if (constraint != NULL && !constraint->fActive && windowActive) {
 		constraint->Activate(screen);
 		sLastScreen = screen;
 		sHaveLast = true;
@@ -201,7 +235,7 @@ HaikuPointerConstraintsMotion(HaikuSurface *surface, bigtime_t when,
 	}
 
 	// confined: keep it inside the window's content
-	BRect frame = view->Window()->Frame();
+	BRect frame = windowFrame;
 	BPoint clamped(std::clamp(screen.x, frame.left, frame.right),
 		std::clamp(screen.y, frame.top, frame.bottom));
 	if (clamped != screen) {
