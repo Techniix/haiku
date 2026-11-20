@@ -152,6 +152,9 @@ private:
 			void				_PruneLoopbackOnlyTeams();
 			void				_WakeRouter();
 	static	status_t			_RouterThreadEntry(void* data);
+	static	status_t			_TeamWatcherEntry(void* data);
+			void				_WatchTeams();
+			bool				_DropInputsOfGoneTeams();
 			void				_RouterThread();
 			void				_RouteOnce();
 			void				_LoadMirrors();
@@ -185,6 +188,8 @@ private:
 			thread_id			fRouterThread;
 			sem_id				fRouterSem;
 			volatile bool		fRouterQuit;
+			thread_id			fTeamWatcher;
+			sem_id				fTeamWatcherSem;
 			// Devices whose sink was disconnected by someone else, and
 			// when: not reclaimed for a while (the default output may be
 			// switching to it).

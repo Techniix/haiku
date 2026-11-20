@@ -50,6 +50,8 @@ private:
 			void				_Refresh();
 			void				_Rebuild();
 			void				_UpdateValues();
+	static	bool				_IsRunning(
+									const BPrivate::AudioStream* stream);
 			Row*				_FindRow(int32 id) const;
 
 			BPrivate::AudioStreamControl fControl;

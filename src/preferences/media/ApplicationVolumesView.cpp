@@ -6,6 +6,8 @@
 
 #include "ApplicationVolumesView.h"
 
+#include <vector>
+
 #include <stdio.h>
 
 #include <Catalog.h>
@@ -64,6 +66,12 @@ private:
 
 struct ApplicationVolumesView::Row {
 	int32			id;
+		// the first stream's mixer input id, which the controls' messages
+		// carry
+	std::vector<int32> ids;
+		// Renga (batch 5): every stream of the program (one row per
+		// running program, not per stream)
+	team_id			team;
 	BString			signature;
 	BStringView*	name;
 	BSlider*		volume;
@@ -104,7 +112,9 @@ ApplicationVolumesView::AttachedToWindow()
 	BGroupView::AttachedToWindow();
 	_Refresh();
 	BMessage refresh(kMsgRefresh);
-	fRunner = new BMessageRunner(BMessenger(this), &refresh, 1000000);
+	fRunner = new BMessageRunner(BMessenger(this), &refresh, 500000);
+		// twice a second: a program that quits leaves the list within
+		// about a second (batch 5)
 }
 
 
@@ -162,7 +172,8 @@ ApplicationVolumesView::MessageReceived(BMessage* message)
 			if (row == NULL)
 				break;
 			row->changed = system_time();
-			fControl.SetGain(row->id, row->volume->Value() / 10.0f);
+			for (size_t i = 0; i < row->ids.size(); i++)
+				fControl.SetGain(row->ids[i], row->volume->Value() / 10.0f);
 			break;
 		}
 
@@ -172,7 +183,8 @@ ApplicationVolumesView::MessageReceived(BMessage* message)
 			if (row == NULL)
 				break;
 			row->changed = system_time();
-			fControl.SetMuted(row->id, row->mute->Value() == B_CONTROL_ON);
+			for (size_t i = 0; i < row->ids.size(); i++)
+				fControl.SetMuted(row->ids[i], row->mute->Value() == B_CONTROL_ON);
 			break;
 		}
 
@@ -182,7 +194,8 @@ ApplicationVolumesView::MessageReceived(BMessage* message)
 			if (row == NULL)
 				break;
 			row->changed = system_time();
-			fControl.SetOutput(row->id, message->GetInt32("index", 0));
+			for (size_t i = 0; i < row->ids.size(); i++)
+				fControl.SetOutput(row->ids[i], message->GetInt32("index", 0));
 			break;
 		}
 
@@ -192,8 +205,10 @@ ApplicationVolumesView::MessageReceived(BMessage* message)
 			if (row == NULL || row->lowLatency == NULL)
 				break;
 			row->changed = system_time();
-			fControl.SetLowLatency(row->id,
-				row->lowLatency->Value() == B_CONTROL_ON);
+			for (size_t i = 0; i < row->ids.size(); i++) {
+				fControl.SetLowLatency(row->ids[i],
+					row->lowLatency->Value() == B_CONTROL_ON);
+			}
 			break;
 		}
 
@@ -208,8 +223,11 @@ ApplicationVolumesView::Row*
 ApplicationVolumesView::_FindRow(int32 id) const
 {
 	for (int32 i = 0; i < fRows.CountItems(); i++) {
-		if (fRows.ItemAt(i)->id == id)
-			return fRows.ItemAt(i);
+		Row* row = fRows.ItemAt(i);
+		for (size_t j = 0; j < row->ids.size(); j++) {
+			if (row->ids[j] == id)
+				return row;
+		}
 	}
 	return NULL;
 }
@@ -233,7 +251,10 @@ ApplicationVolumesView::_Refresh()
 	BString key;
 	for (int32 i = 0; i < fControl.CountStreams(); i++) {
 		const BPrivate::AudioStream* stream = fControl.StreamAt(i);
-		key << stream->id << ":" << stream->name << ";";
+		if (!_IsRunning(stream))
+			continue;
+		key << stream->id << ":" << stream->team << ":" << stream->name
+			<< ";";
 	}
 	key << "|";
 	for (int32 i = 0; i < fControl.Outputs().CountStrings(); i++)
@@ -267,8 +288,25 @@ ApplicationVolumesView::_Rebuild()
 
 	for (int32 i = 0; i < fControl.CountStreams(); i++) {
 		const BPrivate::AudioStream* stream = fControl.StreamAt(i);
+		if (!_IsRunning(stream))
+			continue;
+		// one row per running program: a program's further streams join
+		// the row of its first one
+		if (stream->team >= 0) {
+			Row* existing = NULL;
+			for (int32 j = 0; j < fRows.CountItems(); j++) {
+				if (fRows.ItemAt(j)->team == stream->team)
+					existing = fRows.ItemAt(j);
+			}
+			if (existing != NULL) {
+				existing->ids.push_back(stream->id);
+				continue;
+			}
+		}
 		Row* row = new Row;
 		row->id = stream->id;
+		row->ids.push_back(stream->id);
+		row->team = stream->team;
 		row->signature = stream->signature;
 		row->changed = 0;
 
@@ -348,6 +386,19 @@ ApplicationVolumesView::_Rebuild()
 }
 
 
+/*!	Renga (batch 5): whether \a stream's program still runs. The mixer
+	drops the inputs of programs that are gone within a quarter of a
+	second; this keeps a gone program from showing up in between, and
+	with an older mixer.
+*/
+bool
+ApplicationVolumesView::_IsRunning(const BPrivate::AudioStream* stream)
+{
+	team_info info;
+	return stream->team < 0 || get_team_info(stream->team, &info) == B_OK;
+}
+
+
 void
 ApplicationVolumesView::_UpdateValues()
 {
@@ -355,7 +406,9 @@ ApplicationVolumesView::_UpdateValues()
 	for (int32 i = 0; i < fControl.CountStreams(); i++) {
 		const BPrivate::AudioStream* stream = fControl.StreamAt(i);
 		Row* row = _FindRow(stream->id);
-		if (row == NULL || now - row->changed < kUserChangeGrace)
+		// a row shows its program's first stream's values
+		if (row == NULL || row->id != stream->id
+			|| now - row->changed < kUserChangeGrace)
 			continue;
 		int32 value = (int32)(stream->gain * 10 + (stream->gain < 0 ? -0.5
 			: 0.5));

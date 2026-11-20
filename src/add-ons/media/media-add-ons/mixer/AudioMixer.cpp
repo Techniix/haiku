@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 
 #include <Autolock.h>
 #include <Buffer.h>
@@ -195,6 +196,8 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 	fRouterThread(-1),
 	fRouterSem(-1),
 	fRouterQuit(false),
+	fTeamWatcher(-1),
+	fTeamWatcherSem(-1),
 	fPeriodNode(-1),
 	fPeriodRequested(0),
 	fLowLatencySeen(0)
@@ -239,6 +242,14 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 			resume_thread(fRouterThread);
 	}
 
+	// Renga (batch 5): inputs of programs that quit or crashed without
+	// disconnecting are dropped within a quarter of a second.
+	fTeamWatcherSem = create_sem(0, "mixer team watcher");
+	fTeamWatcher = spawn_thread(_TeamWatcherEntry, "mixer team watcher",
+		B_LOW_PRIORITY, this);
+	if (fTeamWatcher >= 0)
+		resume_thread(fTeamWatcher);
+
 	ApplySettings();
 }
 
@@ -262,6 +273,14 @@ AudioMixer::~AudioMixer()
 	}
 	if (fRouterSem >= 0)
 		delete_sem(fRouterSem);
+	if (fTeamWatcher >= 0) {
+		fRouterQuit = true;
+		release_sem(fTeamWatcherSem);
+		status_t result;
+		wait_for_thread(fTeamWatcher, &result);
+	}
+	if (fTeamWatcherSem >= 0)
+		delete_sem(fTeamWatcherSem);
 
 	// Give the devices back that sinks were playing on.
 	BList sinks;
@@ -2635,6 +2654,59 @@ AudioMixer::_RouterThread()
 			acquire_sem_etc(fRouterSem, count, B_RELATIVE_TIMEOUT, 0);
 		_RouteOnce();
 	}
+}
+
+
+status_t
+AudioMixer::_TeamWatcherEntry(void* data)
+{
+	((AudioMixer*)data)->_WatchTeams();
+	return B_OK;
+}
+
+
+/*!	Renga (batch 5): a program that quits or crashes without disconnecting
+	its sound (kill -9, a crash, an SDL program that never closes its
+	device) used to leave its mixer input behind, with the media_server's
+	connection to a node that no longer exists: the Audio and Media
+	preferences went on listing the program, once per run. Every 250 ms
+	this drops the inputs whose team is gone, as Disconnected() would.
+*/
+void
+AudioMixer::_WatchTeams()
+{
+	while (!fRouterQuit) {
+		acquire_sem_etc(fTeamWatcherSem, 1, B_RELATIVE_TIMEOUT, 250000);
+		if (fRouterQuit)
+			break;
+		if (_DropInputsOfGoneTeams()) {
+			UpdateParameterWeb();
+			_WakeRouter();
+		}
+	}
+}
+
+
+bool
+AudioMixer::_DropInputsOfGoneTeams()
+{
+	BList gone;
+	fCore->Lock();
+	for (int32 i = 0; MixerInput* input = fCore->Input(i); i++) {
+		team_info info;
+		if (input->Team() >= 0 && get_team_info(input->Team(), &info) != B_OK)
+			gone.AddItem((void*)(addr_t)input->ID());
+	}
+	for (int32 i = 0; i < gone.CountItems(); i++) {
+		int32 id = (int32)(addr_t)gone.ItemAt(i);
+		syslog(LOG_INFO, "mixer: dropped input %" B_PRId32 " of a program "
+			"that is gone\n", id);
+		fCore->RemoveInput(id);
+	}
+	if (!gone.IsEmpty() && fAutoStop && fCore->CountInputs() == 0)
+		_AutoStop();
+	fCore->Unlock();
+	return !gone.IsEmpty();
 }
 
 

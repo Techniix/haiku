@@ -144,3 +144,15 @@ if $(CE_HARNESS) {
 		media_drift_test media_html5_test media_routing_test media_vcam_test
 		media_devnotify_test media_teardown_test ;
 }
+
+# Programs that stopped playing leave the per-application controls
+# (batch 5): kill -9, quit and crash of a BSoundPlayer program.
+Application media_app_rows_test :
+	media_app_rows_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: media_app_rows_test ;
+}
