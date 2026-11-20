@@ -8,6 +8,13 @@ Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. E
 
 ## Latest
 
+### 2026-11-20: batch 4: Secret Service asks per program; explicit sync for Wayland
+
+- **Secret Service now asks the user** ([`0734bedb`](https://github.com/Techniix/haiku/commit/0734bedb)): the first time a program uses saved passwords, a prompt names it (Deny / Allow this time / Always allow). Until answered your call gets no reply; Deny gives `org.freedesktop.DBus.Error.AccessDenied`. libsecret's async API copes; don't treat the delay as a failure. `OpenSession` needs no approval.
+- **Wayland:** the compositor offers `zwp_linux_dmabuf_v1` version 4 (memfd/CPU-mappable buffers, ARGB8888/XRGB8888, LINEAR) and `wp_linux_drm_syncobj_manager_v1` ([`11591601`](https://github.com/Techniix/haiku/commit/11591601)); feedback's `main_device` is 0 until Quasar has a render node, so keep software rendering for now. DRM syncobj ioctls work on `/dev/syncobj` (PORTING.md "GPU sync objects").
+- **Renguin:** `waitid()` and `close_range()` ([`30c66719`](https://github.com/Techniix/haiku/commit/30c66719)), used by posix_spawn. Multi-process Linux Chrome is unchanged (3 of 5 runs).
+- QEMU Tested only; in image `2026.11.20-batch4`.
+
 ### 2026-11-20: landed: R-9 (compositor stopped on pointer motion over a Chromium window)
 
 - Fixed in Renga's Wayland compositor: pointer motion converted to screen coordinates with the surface's view while its window was not locked ("Looper must be locked"). A motion with no lock or confinement on the surface and no relative pointer of the client now does nothing in the constraints code; where a conversion is needed it is done with the view's looper locked. The other seat paths (keyboard focus, cursor shape, drag and drop, idle inhibit, xdg_output) use window-level calls that lock themselves and were not affected.

@@ -70,3 +70,13 @@ Batch 3 ended 2026-11-20 with image `2026.11.20-batch3`; the roadmap's batch-3 s
 - **Wi-Fi:** waiting for the maintainer's `lkpictl wifi-stats` numbers (now with chip-reset reasons); the two receive copies per frame are unchanged.
 - **Harness:** the renga-raw profile's default timeout is now 2700 s (crashlog_test's last boot was cut off at 1800 s); media_latency low-latency checks fail in QEMU under the full renga-raw load (timing; pre-existing class).
 - Node crash attempt under build load: still not tried.
+
+## Batch 4: continue from here
+
+Batch 4 ended 2026-11-20 with image `2026.11.20-batch4`; the roadmap's batch-4 status lists what landed. Continue with:
+
+- **Not started in batch 4:** boot loader A with restore points before every package update (item 4) and streaming (item 10).
+- **Multi-monitor in app_server:** the accelerant table (`MultiHead.h`) and the Displays page exist; app_server itself still drives one screen. Wait for Quasar's answer in its `RENGA-REQUESTS.md` before building on the table.
+- **Renguin:** Renguin Manager, /proc stat/readdir, netlink notifications, the rest of COVERAGE.md's "next" list, multi-process Chrome (3 of 5 runs).
+- **Hardware results pending:** KDL USB keyboard (if still no input, look at `XHCI::StartDebugTransfer()` giving up on held locks), DriveSetup Write image on a USB stick, the Secret Service prompt with Linux Chrome.
+- **Harness:** selftest.py fails one check on a clean tree ("sound settings: clean recordings pass", the synthetic mirror phases); media_usb.unplug_fallback fails in renga-raw (open since F-31).
