@@ -1,0 +1,160 @@
+/*
+ * Copyright 2026, Renga contributors.
+ * Distributed under the terms of the MIT License.
+ */
+
+/*!	Renguin Manager (batch 5).
+
+	  renguin_manager.status        --status: the layer is there, the Linux
+	                                root (the harness's), its Alpine release
+	                                and how many packages it has
+	  renguin_manager.window        the window opens with its controls
+	  renguin_manager.control_panel the Control Panel's Renguin page is the
+	                                same view (its "Open the Linux shell"
+	                                button is there)
+	  renguin_manager.screenshots   the window
+*/
+
+
+#include <Application.h>
+#include <Messenger.h>
+#include <OS.h>
+#include <Roster.h>
+#include <String.h>
+
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+
+#define SUITE "renguin_manager"
+
+static const char* kApp = "/boot/system/apps/RenguinManager";
+static const char* kSignature = "application/x-vnd.Renga-RenguinManager";
+static int sFailures = 0;
+
+
+static void
+report(const char* name, bool pass, const char* format, ...)
+{
+	char detail[500];
+	va_list args;
+	va_start(args, format);
+	vsnprintf(detail, sizeof(detail), format, args);
+	va_end(args);
+	printf("CE-TEST %s.%s %s %s\n", SUITE, name, pass ? "PASS" : "FAIL",
+		detail);
+	fflush(stdout);
+	if (!pass)
+		sFailures++;
+}
+
+
+static BString
+run(const char* command, int* _status = NULL)
+{
+	BString output;
+	FILE* pipe = popen(command, "r");
+	if (pipe == NULL)
+		return output;
+	char buffer[1024];
+	size_t bytes;
+	while ((bytes = fread(buffer, 1, sizeof(buffer), pipe)) > 0)
+		output.Append(buffer, bytes);
+	int status = pclose(pipe);
+	if (_status != NULL)
+		*_status = status;
+	return output;
+}
+
+
+static bool
+has_view(BMessenger& app, const char* view)
+{
+	BMessage request(B_GET_PROPERTY);
+	request.AddSpecifier("Frame");
+	request.AddSpecifier("View", view);
+	request.AddSpecifier("Window", (int32)0);
+	BMessage reply;
+	BRect frame;
+	return app.SendMessage(&request, &reply, 2000000, 2000000) == B_OK
+		&& reply.FindRect("result", &frame) == B_OK;
+}
+
+
+static BMessenger
+launch(const char* signature, team_id* _team)
+{
+	be_roster->Launch(signature, (BMessage*)NULL, _team);
+	BMessenger messenger;
+	for (int i = 0; i < 100 && !messenger.IsValid(); i++) {
+		snooze(100000);
+		messenger = BMessenger(signature);
+	}
+	snooze(2000000);
+	return messenger;
+}
+
+
+int
+main()
+{
+	BApplication app("application/x-vnd.Renga-renguin-manager-test");
+	printf("CE-SUITE %s START\n", SUITE);
+	if (access(kApp, X_OK) != 0) {
+		printf("CE-INFO no %s on this image, nothing to test\n", kApp);
+		printf("CE-SUITE %s DONE failures=0\n", SUITE);
+		return 0;
+	}
+
+	int status;
+	BString output = run("/boot/system/apps/RenguinManager --status "
+		"2>/dev/null", &status);
+	bool rootThere = access("/boot/system/non-packaged/compat/linux/bin/sh",
+		F_OK) == 0;
+	BString shown(output);
+	shown.ReplaceAll("\n", "; ");
+	report("status", status == 0
+			&& output.FindFirst("layer\tLinux programs: available") >= 0
+			&& (!rootThere || (output.FindFirst("release\tLinux system: "
+					"Alpine Linux ") >= 0
+				&& output.FindFirst("packages\tLinux packages installed: 0")
+					< 0)),
+		"%s", shown.String());
+
+	team_id team = -1;
+	BMessenger messenger = launch(kSignature, &team);
+	report("window", messenger.IsValid() && has_view(messenger, "openShell")
+			&& has_view(messenger, "trace"),
+		"team %" B_PRId32, team);
+	printf("CE-HOST screenshot renguin_manager\n");
+	fflush(stdout);
+	snooze(1500000);
+	messenger.SendMessage(B_QUIT_REQUESTED);
+	snooze(500000);
+	if (team >= 0)
+		kill(team, SIGKILL);
+
+	if (access("/boot/system/apps/ControlPanel", X_OK) == 0) {
+		team_id panel = -1;
+		BMessenger controlPanel = launch(
+			"application/x-vnd.Renga-ControlPanel", &panel);
+		BMessage request('cpPg');
+		request.AddString("id", "renguin");
+		BMessage reply;
+		controlPanel.SendMessage(&request, &reply, 5000000, 5000000);
+		snooze(500000);
+		report("control_panel", BString(reply.GetString("page", ""))
+				== "renguin" && has_view(controlPanel, "openShell"),
+			"page \"%s\"", reply.GetString("page", ""));
+		controlPanel.SendMessage(B_QUIT_REQUESTED);
+		snooze(500000);
+		if (panel >= 0)
+			kill(panel, SIGKILL);
+	}
+
+	printf("CE-SUITE %s DONE failures=%d\n", SUITE, sFailures);
+	return sFailures == 0 ? 0 : 1;
+}

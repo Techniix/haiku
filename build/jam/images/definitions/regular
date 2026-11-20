@@ -53,6 +53,7 @@ SYSTEM_APPS += [ FFilterByBuildFeatures
 	PowerStatus
 	RemoteDesktop
 	RengaDoctor
+	RenguinManager@x86_64
 	Screenshot
 	SerialConnect
 	SoftwareUpdater
@@ -76,6 +77,7 @@ DESKBAR_APPLICATIONS +=
 	People
 	PoorMan
 	RengaDoctor
+	RenguinManager
 	SerialConnect
 	SoftwareUpdater
 	SoundRecorder

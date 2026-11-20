@@ -1,0 +1,12 @@
+SubDir HAIKU_TOP 3rdparty ce tests renguinmanager ;
+
+# Renguin Manager (batch 5); the renga-* images (second phase).
+Application renguin_manager_test :
+	renguin_manager_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: renguin_manager_test ;
+}

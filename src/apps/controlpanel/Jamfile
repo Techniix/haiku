@@ -11,7 +11,10 @@ local screenDir = [ FDirName $(HAIKU_TOP) src preferences screen ] ;
 local audioDir = [ FDirName $(HAIKU_TOP) src preferences audio ] ;
 local mediaDir = [ FDirName $(HAIKU_TOP) src preferences media ] ;
 local desklinkDir = [ FDirName $(HAIKU_TOP) src bin desklink ] ;
-SEARCH_SOURCE += $(screenDir) $(audioDir) $(mediaDir) $(desklinkDir) ;
+local renguinDir = [ FDirName $(HAIKU_TOP) src apps renguinmanager ] ;
+SEARCH_SOURCE += $(screenDir) $(audioDir) $(mediaDir) $(desklinkDir)
+	$(renguinDir) ;
+SubDirHdrs $(renguinDir) ;
 SubDirHdrs $(screenDir) ;
 SubDirHdrs $(audioDir) ;
 SubDirHdrs $(mediaDir) ;
@@ -27,6 +30,7 @@ Application ControlPanel :
 	OutputMenuField.cpp
 	ApplicationVolumesView.cpp
 	MixerControl.cpp
+	RenguinView.cpp
 	: be media localestub [ TargetLibstdc++ ] [ TargetLibsupc++ ]
 	: ControlPanel.rdef ControlPanelIcon.rdef
 ;

@@ -221,6 +221,7 @@ HTML5_SCREENSHOTS = ["html5_webm", "html5_mp4"]
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
 RENGA_DOCTOR_SCREENSHOTS = ["renga_doctor"]
 WELCOME_SCREENSHOTS = ["welcome_graphics", "welcome_setup"]
+RENGUIN_MANAGER_SCREENSHOTS = ["renguin_manager"]
 CONTROL_PANEL_SCREENSHOTS = ["control_panel_search",
 	"control_panel_streaming", "control_panel_displays"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
@@ -4469,6 +4470,9 @@ def main():
 		if "bootmenu_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
 				"bootmenu.screenshots")
+		if "renguin_manager_test" in (args.only or available):
+			check_screenshots(results_dir, report,
+				RENGUIN_MANAGER_SCREENSHOTS, "renguin_manager.screenshots")
 		if "welcome_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, WELCOME_SCREENSHOTS,
 				"welcome.screenshots")

@@ -69,6 +69,7 @@
 
 #include "AudioSettingsView.h"
 #include "DisplaysView.h"
+#include "RenguinView.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -149,8 +150,9 @@ static const PageInfo kPages[] = {
 		"/boot/system/preferences/Repositories",
 		"packages update repository haikudepot" },
 	{ "renguin", "System", "Linux programs (Renguin)",
-		"Linux programs and their settings.",
-		"/boot/system/apps/RenguinManager", "linux renguin chrome alpine" },
+		"The Linux compatibility layer, the Linux root and its packages, "
+		"diagnostics.", "/boot/system/apps/RenguinManager",
+		"linux renguin chrome alpine apk trace" },
 	{ "doctor", "System", "Hardware report",
 		"Renga Doctor: one report with the hardware, drivers, logs and "
 		"crash reports, for a bug report.",
@@ -253,6 +255,9 @@ static const SettingInfo kSettings[] = {
 	{ "shortcuts", "Keyboard shortcuts", "hotkeys" },
 	{ "memory", "Swap file", "virtual memory" },
 	{ "renguin", "Linux programs", "linux compatibility" },
+	{ "renguin", "Linux root", "alpine download setup" },
+	{ "renguin", "Update Linux packages", "apk upgrade" },
+	{ "renguin", "Trace a Linux program", "diagnostics strace debug" },
 	{ "bluetooth", "Bluetooth devices", "pairing" },
 };
 
@@ -828,6 +833,14 @@ private:
 				.SetInsets(B_USE_WINDOW_SPACING)
 				.Add(page_heading(page))
 				.Add(new AudioSettingsView());
+			return group;
+		}
+		if (strcmp(page->id, "renguin") == 0) {
+			BGroupView* group = new BGroupView("renguin", B_VERTICAL);
+			BLayoutBuilder::Group<>(group)
+				.SetInsets(B_USE_WINDOW_SPACING)
+				.Add(page_heading(page))
+				.Add(new RenguinView());
 			return group;
 		}
 		if (strcmp(page->id, "streaming") == 0)

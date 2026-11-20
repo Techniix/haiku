@@ -49,6 +49,7 @@ HaikuSubInclude processcontroller ;
 HaikuSubInclude pulse ;
 HaikuSubInclude remotedesktop ;
 HaikuSubInclude rengadoctor ;
+HaikuSubInclude renguinmanager ;
 HaikuSubInclude resedit ;
 HaikuSubInclude screenshot ;
 HaikuSubInclude serialconnect ;

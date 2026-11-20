@@ -29,6 +29,9 @@ Icons and where they go:
                          (batch 5) a report page with a green cross
     Welcome              src/apps/welcome/WelcomeIcon.rdef
                          (batch 5) a screen with a gold star
+    RenguinManager       src/apps/renguinmanager/RenguinManagerIcon.rdef
+                         (batch 5) a terminal window with a green prompt
+                         and a gold gear
 """
 
 import os
@@ -184,6 +187,28 @@ def welcome():
 	return icon
 
 
+def renguin_manager():
+	import math
+	icon = hvif.Icon()
+	icon.polygon(skew(rect(4, 8, 52, 50, 3)), fill(((70, 74, 82, 255),
+		(30, 32, 38, 255)), (4, 8), (52, 50)), outline=(OUTLINE, 2))
+	icon.polygon(skew(rect(4, 8, 52, 15, 3)), fill(GREY))
+	icon.polygon(skew([(10, 22), (18, 27), (10, 32), (10, 29), (14, 27),
+		(10, 25)]), fill(GREEN))
+	icon.polygon(skew(rect(20, 31, 30, 33, 0)), fill(GREEN))
+	teeth = []
+	for i in range(16):
+		radius = 12 if i % 2 == 0 else 9
+		angle = math.radians(i * 22.5)
+		teeth.append((46 + radius * math.cos(angle), 46 + radius
+			* math.sin(angle)))
+	icon.polygon(skew(teeth), fill(GOLD, (34, 34), (58, 58)),
+		outline=(OUTLINE, 2))
+	icon.polygon(skew(hvif.circle(46, 46, 4)), fill(PAPER),
+		outline=(OUTLINE, 1))
+	return icon
+
+
 ICONS = [
 	("SystemLogs", system_logs,
 		"src/apps/systemlogs/SystemLogsIcon.rdef"),
@@ -199,6 +224,8 @@ ICONS = [
 	("RengaDoctor", renga_doctor,
 		"src/apps/rengadoctor/RengaDoctorIcon.rdef"),
 	("Welcome", welcome, "src/apps/welcome/WelcomeIcon.rdef"),
+	("RenguinManager", renguin_manager,
+		"src/apps/renguinmanager/RenguinManagerIcon.rdef"),
 ]
 
 

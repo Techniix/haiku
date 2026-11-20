@@ -1,0 +1,18 @@
+SubDir HAIKU_TOP src apps renguinmanager ;
+
+# Renga (batch 5): Renguin Manager. RenguinView is also the Control Panel's
+# "Linux programs (Renguin)" page.
+
+Application RenguinManager :
+	RenguinManager.cpp
+	RenguinView.cpp
+	: be localestub [ TargetLibstdc++ ]
+	: RenguinManager.rdef RenguinManagerIcon.rdef
+;
+
+DoCatalogs RenguinManager :
+	x-vnd.Renga-RenguinManager
+	:
+	RenguinManager.cpp
+	RenguinView.cpp
+;
