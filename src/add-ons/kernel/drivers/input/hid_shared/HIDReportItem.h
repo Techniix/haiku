@@ -43,6 +43,12 @@ public:
 
 		bool					Valid() { return fValid; };
 
+		// Renga: where the item is in the report (bytes after a report ID),
+		// for the kernel debugger's keyboard layout (KeyboardDebugLayout)
+		uint32					ByteOffset() { return fByteOffset; };
+		uint8					Shift() { return fShift; };
+		uint8					BitCount() { return fBitCount; };
+
 		void					PrintToStream(uint32 indentLevel = 0);
 private:
 		HIDReport *				fReport;

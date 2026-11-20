@@ -1,6 +1,6 @@
 SubDir HAIKU_TOP src add-ons kernel debugger usb_keyboard ;
 
-UsePrivateHeaders kernel ;
+UsePrivateHeaders kernel drivers ;
 
 KernelAddon <kdebug>usb_keyboard :
 	usb_keyboard.cpp

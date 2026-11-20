@@ -10,6 +10,8 @@
 
 #include <lock.h>
 
+#include <usb_kdl_keyboard.h>
+
 
 class HIDReportItem;
 class HIDCollection;
@@ -42,6 +44,7 @@ private:
 			status_t			_ReadReport(bigtime_t timeout, uint32 *cookie);
 
 private:
+			void				_MakeDebugKeyboard();
 			mutex				fLock;
 
 			HIDReport &			fInputReport;
@@ -65,6 +68,8 @@ private:
 
 			int32				fHasReader;
 			bool				fHasDebugReader;
+			usb_kdl_keyboard_layout	fDebugLayout;
+				// Renga: this keyboard for the kernel debugger
 };
 
 

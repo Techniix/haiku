@@ -1,0 +1,32 @@
+SubDir HAIKU_TOP 3rdparty ce tests kdl ;
+
+# The kernel debugger's USB keyboard layout (batch 4), see the source:
+# usb_hid's HID parser and KeyboardDebugLayout built with USERLAND_HID.
+
+local hidSharedDir = [ FDirName $(HAIKU_TOP) src add-ons kernel drivers
+	input hid_shared ] ;
+local hidDecodeDir = [ FDirName $(HAIKU_TOP) src bin hid_decode ] ;
+UsePrivateHeaders device drivers shared ;
+UseHeaders [ FDirName $(HAIKU_TOP) headers private kernel ] : true ;
+local objects = kdl_keyboard_test HIDCollection HIDParser HIDReport
+	HIDReportItem KeyboardDebugLayout ;
+ObjectC++Flags [ FGristFiles $(objects:S=$(SUFOBJ)) ]
+	: [ FDefines USERLAND_HID ] ;
+ObjectHdrs [ FGristFiles $(objects:S=$(SUFOBJ)) ] : $(hidSharedDir) $(hidDecodeDir)
+	[ FDirName $(HAIKU_TOP) src add-ons kernel drivers input usb_hid ] ;
+SEARCH_SOURCE += $(hidSharedDir) ;
+
+Application kdl_keyboard_test :
+	kdl_keyboard_test.cpp
+	KeyboardDebugLayout.cpp
+	HIDCollection.cpp
+	HIDParser.cpp
+	HIDReport.cpp
+	HIDReportItem.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: kdl_keyboard_test ;
+}

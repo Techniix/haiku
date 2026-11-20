@@ -13,6 +13,8 @@
 #include <util/AutoLock.h>
 
 #include <debug.h>
+
+#include "KeyboardDebugLayout.h"
 #include <kernel.h>
 
 #include "Driver.h"
@@ -35,9 +37,14 @@
 
 
 #ifdef KEYBOARD_SUPPORTS_KDL
-static bool sDebugKeyboardFound = false;
 static size_t sDebugKeyboardReportSize = 0;
 static int32 sDebuggerCommandAdded = 0;
+// Renga (batch 4): the debugger keyboard is the most keyboard-like one
+// (KeyboardDebugLayout), not the first interface with keyboard usages (a
+// gaming mouse's keyboard interface came first on real hardware), and the
+// debugger is told its report layout.
+static usb_kdl_keyboard_layout sDebugLayout;
+static const void* sDebugHandler = NULL;
 
 #ifdef USB_KDL
 static usb_id sDebugKeyboardPipe = 0;
@@ -47,6 +54,16 @@ debug_get_keyboard_config(int argc, char **argv)
 {
 	set_debug_variable("_usbPipeID", (uint64)sDebugKeyboardPipe);
 	set_debug_variable("_usbReportSize", (uint64)sDebugKeyboardReportSize);
+	set_debug_variable("_usbReportID", sDebugLayout.report_id);
+	set_debug_variable("_usbModifierOffset",
+		(uint64)(int64)sDebugLayout.modifier_offset);
+	set_debug_variable("_usbKeyOffset",
+		(uint64)(int64)sDebugLayout.key_offset);
+	set_debug_variable("_usbKeyCount", sDebugLayout.key_count);
+	set_debug_variable("_usbKeyBitmap", sDebugLayout.bitmap);
+	set_debug_variable("_usbBitmapFirstUsage",
+		sDebugLayout.bitmap_first_usage);
+	set_debug_variable("_usbBitmapBits", sDebugLayout.bitmap_bits);
 	return 0;
 }
 #endif
@@ -103,19 +120,12 @@ KeyboardProtocolHandler::KeyboardProtocolHandler(HIDReport &inputReport,
 	}
 
 #ifdef KEYBOARD_SUPPORTS_KDL
-	if (!sDebugKeyboardFound && debugUsable) {
-		// It's a keyboard, not just some additional buttons, set up the kernel
-		// debugger info here so that it is ready on panics or crashes that
-		// don't go through the emergency keys. If we also found LEDs we assume
-		// it is a full sized keyboard and discourage further setting the info.
-#ifdef USB_KDL
-		sDebugKeyboardPipe = fInputReport.Device()->InterruptPipe();
-#endif
-		sDebugKeyboardReportSize =
-			fInputReport.Parser()->MaxReportSize(HID_REPORT_TYPE_INPUT);
-		if (outputReport != NULL)
-			sDebugKeyboardFound = true;
-	}
+	// Set up the kernel debugger's keyboard here, so that it is ready on
+	// panics or crashes that don't go through the emergency keys: the most
+	// keyboard-like report wins (a later, better one replaces an earlier).
+	compute_keyboard_debug_layout(inputReport, outputReport, fDebugLayout);
+	if (debugUsable && fDebugLayout.score > sDebugLayout.score)
+		_MakeDebugKeyboard();
 #endif
 
 	TRACE("keyboard device with %" B_PRIu32 " keys and %" B_PRIu32
@@ -172,9 +182,35 @@ KeyboardProtocolHandler::KeyboardProtocolHandler(HIDReport &inputReport,
 }
 
 
+#ifdef KEYBOARD_SUPPORTS_KDL
+void
+KeyboardProtocolHandler::_MakeDebugKeyboard()
+{
+#ifdef USB_KDL
+	sDebugKeyboardPipe = fInputReport.Device()->InterruptPipe();
+#endif
+	sDebugKeyboardReportSize
+		= fInputReport.Parser()->MaxReportSize(HID_REPORT_TYPE_INPUT);
+	sDebugLayout = fDebugLayout;
+	sDebugHandler = this;
+}
+#endif
+
+
 KeyboardProtocolHandler::~KeyboardProtocolHandler()
 {
 	free(fLastKeys);
+
+#ifdef KEYBOARD_SUPPORTS_KDL
+	if (sDebugHandler == this) {
+		// unplugged: the next keyboard to appear takes over
+		memset(&sDebugLayout, 0, sizeof(sDebugLayout));
+		sDebugHandler = NULL;
+#ifdef USB_KDL
+		sDebugKeyboardPipe = 0;
+#endif
+	}
+#endif
 
 #ifdef KEYBOARD_SUPPORTS_KDL
 	if (atomic_add(&sDebuggerCommandAdded, -1) == 1) {
@@ -791,12 +827,8 @@ KeyboardProtocolHandler::_ReadReport(bigtime_t timeout, uint32 *cookie)
 					&& (fLastModifiers & ALT_KEYS) != 0) {
 					// Alt-SysReq+letter was pressed
 #ifdef KEYBOARD_SUPPORTS_KDL
-#ifdef USB_KDL
-					sDebugKeyboardPipe
-						= fInputReport.Device()->InterruptPipe();
-#endif
-					sDebugKeyboardReportSize
-						= fInputReport.Parser()->MaxReportSize(HID_REPORT_TYPE_INPUT);
+					// the keyboard the user pressed it on
+					_MakeDebugKeyboard();
 #endif
 
 					char letter = current[i] - 4 + 'a';

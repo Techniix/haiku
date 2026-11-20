@@ -29,6 +29,7 @@ KernelAddon usb_hid :
 
 	JoystickProtocolHandler.cpp
 	KeyboardProtocolHandler.cpp
+	KeyboardDebugLayout.cpp
 	MouseProtocolHandler.cpp
 	TabletProtocolHandler.cpp
 
