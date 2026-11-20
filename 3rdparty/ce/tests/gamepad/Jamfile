@@ -45,7 +45,7 @@ Application gamepad_protocol_test :
 
 Application gamepad_ui_test :
 	gamepad_ui_test.cpp
-	: be tracker [ TargetLibstdc++ ]
+	: be tracker device [ TargetLibstdc++ ]
 ;
 
 # Loads libSDL3 with dlopen(), so it needs no SDL headers or package to
