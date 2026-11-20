@@ -16,6 +16,12 @@
 */
 status_t save_report_archive(const char* path, BString* _summary);
 
+/*!	The same, with \a firstText stored first as \a firstName (Renga Doctor's
+	overview).
+*/
+status_t save_report_archive(const char* path, const char* firstName,
+	const char* firstText, BString* _summary);
+
 /*!	The default place: ~/Desktop/system-report-<date>.zip. */
 BString default_report_path();
 

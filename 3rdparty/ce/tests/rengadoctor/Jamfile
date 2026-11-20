@@ -1,0 +1,13 @@
+SubDir HAIKU_TOP 3rdparty ce tests rengadoctor ;
+
+# Renga Doctor (batch 5): overview, archive and window; the renga-* images
+# only (second phase, with the desktop).
+Application renga_doctor_test :
+	renga_doctor_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: renga_doctor_test ;
+}

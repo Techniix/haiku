@@ -254,10 +254,22 @@ default_report_path()
 status_t
 save_report_archive(const char* path, BString* _summary)
 {
+	return save_report_archive(path, NULL, NULL, _summary);
+}
+
+
+status_t
+save_report_archive(const char* path, const char* firstName,
+	const char* firstText, BString* _summary)
+{
 	ZipWriter zip;
 	status_t status = zip.Open(path);
 	if (status != B_OK)
 		return status;
+
+	// Renga Doctor's overview goes first, so it is what one sees first
+	if (firstName != NULL && firstText != NULL)
+		zip.Add(firstName, std::string(firstText));
 
 	BString summary;
 	BPath logDirectory;
@@ -303,6 +315,18 @@ save_report_archive(const char* path, BString* _summary)
 		// LinuxKPI drivers (F-26): installed and running drivers, matching
 		// hardware, status of the running ones, settings, log diagnosis
 		{ "hardware/linuxkpi.txt", "/bin/lkpictl report 2>&1" },
+		// Renga, batch 5 (Renga Doctor): what else a hardware report needs
+		{ "hardware/screen.txt", "/bin/screenmode 2>&1" },
+		{ "hardware/audio-devices.txt", "/bin/ls -lR /dev/audio 2>&1" },
+		{ "hardware/input-devices.txt", "/bin/ls -lR /dev/input 2>&1" },
+		{ "network/ifconfig.txt", "/bin/ifconfig 2>&1" },
+		{ "system/boot-state.txt", "/bin/bootstate show 2>&1" },
+		{ "system/restore-points.txt", "/bin/bootstate list 2>&1" },
+		{ "system/packages.txt",
+			"/bin/ls -l /boot/system/packages /boot/home/config/packages "
+			"2>&1" },
+		{ "system/boot-menu.txt",
+			"/boot/system/preferences/BootMenu --show 2>&1" },
 		{ NULL, NULL }
 	};
 	for (int32 i = 0; kCommands[i].name != NULL; i++) {
@@ -315,8 +339,12 @@ save_report_archive(const char* path, BString* _summary)
 		"           kernel's log of the previous session (previous_syslog)\n"
 		"crash/     kernel crash reports (kernel-*.txt) and application crash\n"
 		"           reports (app-*.txt) from /boot/system/var/log/crash\n"
-		"hardware/  the output of listdev, listusb -v, sysinfo, uname -a, df\n"
-		"           and lkpictl report (LinuxKPI drivers)\n";
+		"hardware/  the output of listdev, listusb -v, sysinfo, uname -a, df,\n"
+		"           lkpictl report (LinuxKPI drivers), screenmode and the audio\n"
+		"           and input devices\n"
+		"network/   ifconfig\n"
+		"system/    the boot state and restore points (bootstate), the\n"
+		"           installed packages and the boot menu settings\n";
 	zip.Add("README.txt", readme);
 
 	status = zip.Close();

@@ -1,0 +1,22 @@
+/*
+ * Copyright 2026, Renga contributors.
+ * Distributed under the terms of the MIT License.
+ */
+
+resource app_signature "application/x-vnd.Renga-Doctor";
+
+resource app_flags B_SINGLE_LAUNCH;
+
+resource app_version {
+	major  = 1,
+	middle = 0,
+	minor  = 0,
+	variety = B_APPV_FINAL,
+	internal = 0,
+	short_info = "Renga Doctor",
+	long_info = "Renga Doctor: one click collects hardware, driver status, logs and crash reports into one report"
+};
+
+resource file_types message {
+	"types" = "application/x-vnd.Be-elfexecutable"
+};

@@ -52,6 +52,7 @@ SYSTEM_APPS += [ FFilterByBuildFeatures
 	PoorMan
 	PowerStatus
 	RemoteDesktop
+	RengaDoctor
 	Screenshot
 	SerialConnect
 	SoftwareUpdater
@@ -73,6 +74,7 @@ DESKBAR_APPLICATIONS +=
 	MidiPlayer
 	People
 	PoorMan
+	RengaDoctor
 	SerialConnect
 	SoftwareUpdater
 	SoundRecorder

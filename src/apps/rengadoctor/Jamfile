@@ -1,0 +1,28 @@
+SubDir HAIKU_TOP src apps rengadoctor ;
+
+# Renga (batch 5): Renga Doctor, the one-click hardware report. The archive
+# is System logs' report (ReportArchive.cpp) with an overview first.
+
+UsePrivateHeaders shared ;
+UseBuildFeatureHeaders zlib ;
+
+local systemLogsDir = [ FDirName $(HAIKU_TOP) src apps systemlogs ] ;
+SEARCH_SOURCE += $(systemLogsDir) ;
+SubDirHdrs $(systemLogsDir) ;
+
+Includes [ FGristFiles ReportArchive.cpp ]
+	: [ BuildFeatureAttribute zlib : headers ] ;
+
+Application RengaDoctor :
+	RengaDoctor.cpp
+	ReportArchive.cpp
+	: be localestub [ TargetLibstdc++ ]
+		[ BuildFeatureAttribute zlib : library ]
+	: RengaDoctor.rdef RengaDoctorIcon.rdef
+;
+
+DoCatalogs RengaDoctor :
+	x-vnd.Renga-Doctor
+	:
+	RengaDoctor.cpp
+;

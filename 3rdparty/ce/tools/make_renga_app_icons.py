@@ -25,6 +25,8 @@ Icons and where they go:
     ControlPanel         src/apps/controlpanel/ControlPanelIcon.rdef
                          (batch 5) a window with a sidebar and two
                          switches, one on (green), one off
+    RengaDoctor          src/apps/rengadoctor/RengaDoctorIcon.rdef
+                         (batch 5) a report page with a green cross
 """
 
 import os
@@ -155,6 +157,16 @@ def control_panel():
 	return icon
 
 
+def renga_doctor():
+	icon = hvif.Icon()
+	page(icon)
+	icon.polygon(skew(hvif.circle(42, 44, 13)), fill(GREEN, (29, 31),
+		(55, 57)), outline=(OUTLINE, 2))
+	icon.polygon(skew(rect(39, 36, 45, 52, 1)), fill(PAPER))
+	icon.polygon(skew(rect(34, 41, 50, 47, 1)), fill(PAPER))
+	return icon
+
+
 ICONS = [
 	("SystemLogs", system_logs,
 		"src/apps/systemlogs/SystemLogsIcon.rdef"),
@@ -167,6 +179,8 @@ ICONS = [
 		"src/servers/wayland/WaylandCompositorIcon.rdef"),
 	("ControlPanel", control_panel,
 		"src/apps/controlpanel/ControlPanelIcon.rdef"),
+	("RengaDoctor", renga_doctor,
+		"src/apps/rengadoctor/RengaDoctorIcon.rdef"),
 ]
 
 
