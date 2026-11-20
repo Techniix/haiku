@@ -16,6 +16,7 @@
 
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +35,12 @@
 #include <Roster.h>
 #include <String.h>
 
+#include <Gamepad.h>
+#include <GamepadMapping.h>
+
 #include <linux/uinput.h>
+
+#include <string>
 
 
 #define SUITE "gamepad_ui"
@@ -173,8 +179,33 @@ test_window()
 }
 
 
+static off_t
+syslog_size()
+{
+	struct stat st;
+	return stat("/boot/system/var/log/syslog", &st) == 0 ? st.st_size : 0;
+}
+
+
+static std::string
+syslog_since(off_t offset)
+{
+	std::string text;
+	FILE* file = fopen("/boot/system/var/log/syslog", "r");
+	if (file == NULL)
+		return text;
+	fseeko(file, offset, SEEK_SET);
+	char buffer[4096];
+	size_t bytes;
+	while ((bytes = fread(buffer, 1, sizeof(buffer), file)) > 0)
+		text.append(buffer, bytes);
+	fclose(file);
+	return text;
+}
+
+
 static int
-create_pad()
+create_pad(const char* name = "Overlay test pad")
 {
 	int fd = open("/dev/input/uinput", O_RDWR | O_NONBLOCK);
 	if (fd < 0)
@@ -189,7 +220,7 @@ create_pad()
 	setup.id.bustype = BUS_USB;
 	setup.id.vendor = 0x2dc8;
 	setup.id.product = 0x310a;
-	strlcpy(setup.name, "Overlay test pad", sizeof(setup.name));
+	strlcpy(setup.name, name, sizeof(setup.name));
 	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
 		close(fd);
 		return -1;
@@ -293,10 +324,233 @@ test_overlay()
 	report("overlay_switch", whenOff == 0, "held with the overlay off: %d",
 		whenOff);
 
+	// connect notification: a second pad while the agent watches
+	off_t before = syslog_size();
+	int second = create_pad("Notice test pad");
+	snooze(2500000);
+	bool noticed = syslog_since(before).find(
+		"notification \"Notice test pad connected\"") != std::string::npos;
+	if (second >= 0)
+		close(second);
+	snooze(1500000);
+	run("--set connect_notice off");
+	before = syslog_size();
+	second = create_pad("Quiet test pad");
+	snooze(2500000);
+	bool quiet = syslog_since(before).find("Quiet test pad connected")
+		== std::string::npos;
+	if (second >= 0)
+		close(second);
+	run("--set connect_notice on");
+	report("connect_notice", second >= 0 && noticed && quiet,
+		"notification on plug-in: %s; with the switch off: %s",
+		noticed ? "shown" : "missing", quiet ? "none" : "shown anyway");
+
 	if (team >= 0)
 		kill_team(team);
 	if (pad >= 0)
 		close(pad);
+}
+
+
+// #pragma mark - mapping wizard and tuning
+
+
+static int
+create_full_pad(uint16 product)
+{
+	int fd = open("/dev/input/uinput", O_RDWR | O_NONBLOCK);
+	if (fd < 0)
+		return -1;
+	ioctl(fd, UI_SET_EVBIT, (void*)(addr_t)EV_KEY);
+	ioctl(fd, UI_SET_EVBIT, (void*)(addr_t)EV_ABS);
+	static const int kKeys[] = { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_TL, BTN_TR,
+		BTN_SELECT, BTN_START, BTN_MODE, BTN_THUMBL, BTN_THUMBR };
+	for (size_t i = 0; i < sizeof(kKeys) / sizeof(kKeys[0]); i++)
+		ioctl(fd, UI_SET_KEYBIT, (void*)(addr_t)kKeys[i]);
+	struct { int code, min, max; } kAxes[] = {
+		{ ABS_X, -32768, 32767 }, { ABS_Y, -32768, 32767 },
+		{ ABS_Z, 0, 255 }, { ABS_RX, -32768, 32767 },
+		{ ABS_RY, -32768, 32767 }, { ABS_RZ, 0, 255 },
+		{ ABS_HAT0X, -1, 1 }, { ABS_HAT0Y, -1, 1 } };
+	for (size_t i = 0; i < sizeof(kAxes) / sizeof(kAxes[0]); i++) {
+		ioctl(fd, UI_SET_ABSBIT, (void*)(addr_t)kAxes[i].code);
+		struct uinput_abs_setup abs;
+		memset(&abs, 0, sizeof(abs));
+		abs.code = kAxes[i].code;
+		abs.absinfo.minimum = kAxes[i].min;
+		abs.absinfo.maximum = kAxes[i].max;
+		ioctl(fd, UI_ABS_SETUP, &abs);
+	}
+	struct uinput_setup setup;
+	memset(&setup, 0, sizeof(setup));
+	setup.id.bustype = BUS_USB;
+	setup.id.vendor = 0x1209;
+	setup.id.product = product;
+		// an ID no database line knows
+	strlcpy(setup.name, "Mapping test pad", sizeof(setup.name));
+	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+
+static BString
+find_pad_path(const char* name)
+{
+	for (int attempt = 0; attempt < 40; attempt++) {
+		int32 count = BGamepad::CountGamepads();
+		for (int32 i = 0; i < count; i++) {
+			BString path;
+			BGamepad pad;
+			if (BGamepad::GetGamepadPath(i, &path) == B_OK
+				&& pad.Open(path.String()) == B_OK
+				&& strcmp(pad.Name(), name) == 0)
+				return path;
+		}
+		snooze(100000);
+	}
+	return "";
+}
+
+
+static void
+press(int fd, uint16 type, uint16 code, int32 value, int32 rest)
+{
+	emit(fd, type, code, value);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(60000);
+	emit(fd, type, code, rest);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(60000);
+}
+
+
+static void
+test_learn()
+{
+	int fd = create_full_pad(0x0b03);
+	BString path = find_pad_path("Mapping test pad");
+	if (fd < 0 || path.IsEmpty()) {
+		report("learn_mapping", false, "virtual pad %s, device %s",
+			fd >= 0 ? "made" : "missing", path.String());
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+	// the answer to each step, in MappingLearner's order
+	struct { uint16 type, code; int32 value, rest; } kAnswers[] = {
+		{ EV_KEY, BTN_A, 1, 0 }, { EV_KEY, BTN_B, 1, 0 },
+		{ EV_KEY, BTN_X, 1, 0 }, { EV_KEY, BTN_Y, 1, 0 },
+		{ EV_ABS, ABS_HAT0Y, -1, 0 }, { EV_ABS, ABS_HAT0Y, 1, 0 },
+		{ EV_ABS, ABS_HAT0X, -1, 0 }, { EV_ABS, ABS_HAT0X, 1, 0 },
+		{ EV_KEY, BTN_TL, 1, 0 }, { EV_KEY, BTN_TR, 1, 0 },
+		{ EV_ABS, ABS_Z, 255, 0 }, { EV_ABS, ABS_RZ, 255, 0 },
+		{ EV_KEY, BTN_SELECT, 1, 0 }, { EV_KEY, BTN_START, 1, 0 },
+		{ EV_KEY, BTN_MODE, 1, 0 }, { EV_KEY, BTN_THUMBL, 1, 0 },
+		{ EV_KEY, BTN_THUMBR, 1, 0 },
+		{ EV_ABS, ABS_X, 32767, 0 }, { EV_ABS, ABS_Y, 32767, 0 },
+		{ EV_ABS, ABS_RX, -32768, 0 },	// a stick wired the other way
+		{ EV_ABS, ABS_RY, 32767, 0 } };
+	const int kAnswerCount = sizeof(kAnswers) / sizeof(kAnswers[0]);
+
+	BString command;
+	command.SetToFormat("%s --learn %s 2>&1", kApp, path.String());
+	FILE* pipe = popen(command.String(), "r");
+	BString line;
+	int steps = 0;
+	bool saved = false;
+	char buffer[512];
+	while (pipe != NULL && fgets(buffer, sizeof(buffer), pipe) != NULL) {
+		int step;
+		if (sscanf(buffer, "step %d:", &step) == 1) {
+			steps++;
+			snooze(150000);
+			if (step >= 1 && step <= kAnswerCount) {
+				press(fd, kAnswers[step - 1].type, kAnswers[step - 1].code,
+					kAnswers[step - 1].value, kAnswers[step - 1].rest);
+			}
+		} else if (strncmp(buffer, "line: ", 6) == 0) {
+			line = buffer + 6;
+			line.Trim();
+		} else if (strncmp(buffer, "saved", 5) == 0)
+			saved = true;
+	}
+	if (pipe != NULL)
+		pclose(pipe);
+
+	static const char* kExpected[] = { "a:b0,", "b:b1,", "x:b2,", "y:b3,",
+		"dpup:h0.1,", "dpdown:h0.4,", "dpleft:h0.8,", "dpright:h0.2,",
+		"leftshoulder:b4,", "rightshoulder:b5,", "lefttrigger:a2,",
+		"righttrigger:a5,", "back:b6,", "start:b7,", "guide:b8,",
+		"leftstick:b9,", "rightstick:b10,", "leftx:a0,", "lefty:a1,",
+		"rightx:a3~,", "righty:a4,", "platform:Linux," };
+	BString missing;
+	for (size_t i = 0; i < sizeof(kExpected) / sizeof(kExpected[0]); i++) {
+		if (line.FindFirst(kExpected[i]) < 0)
+			missing << kExpected[i];
+	}
+
+	BPrivate::gamepad_reload_mappings();
+	BGamepad pad;
+	bool used = pad.Open(path.String()) == B_OK && pad.Mapping() != NULL
+		&& line == pad.Mapping();
+	report("learn_mapping", steps == kAnswerCount && saved
+			&& missing.IsEmpty() && used,
+		"%d steps, %s; missing [%s]; BGamepad %s the line", steps,
+		saved ? "saved" : "not saved", missing.String(),
+		used ? "uses" : "does not use");
+
+	// the face button swap and the dead zone with the learned mapping
+	BString tune;
+	tune.SetToFormat("--tune %s 20 1.0 10 1", path.String());
+	run(tune.String());
+	pad.Close();
+	pad.Open(path.String());
+	emit(fd, EV_ABS, ABS_X, 32767 * 15 / 100);
+	emit(fd, EV_ABS, ABS_Z, 255 * 5 / 100);
+	emit(fd, EV_KEY, BTN_A, 1);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(150000);
+	pad.Update();
+	int16 smallX = pad.AxisValue(B_GAMEPAD_AXIS_LEFT_X);
+	int16 lightTrigger = pad.AxisValue(B_GAMEPAD_AXIS_LEFT_TRIGGER);
+	bool aAsB = pad.IsPressed(B_GAMEPAD_BUTTON_B)
+		&& !pad.IsPressed(B_GAMEPAD_BUTTON_A);
+	emit(fd, EV_ABS, ABS_X, 32767);
+	emit(fd, EV_ABS, ABS_Z, 255);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(150000);
+	pad.Update();
+	int16 fullX = pad.AxisValue(B_GAMEPAD_AXIS_LEFT_X);
+	int16 fullTrigger = pad.AxisValue(B_GAMEPAD_AXIS_LEFT_TRIGGER);
+	report("tuning_applied", smallX == 0 && lightTrigger == 0 && aAsB
+			&& fullX > 32000 && fullTrigger > 32000,
+		"dead zone 20 %%: stick at 15 %% reads %d, at 100 %% %d; threshold "
+		"10 %%: trigger at 5 %% reads %d, full %d; A pressed reads as %s",
+		smallX, fullX, lightTrigger, fullTrigger, aAsB ? "B" : "A");
+
+	tune.SetToFormat("--tune %s 0 1.0 0 0", path.String());
+	run(tune.String());
+	pad.Close();
+	pad.Open(path.String());
+	emit(fd, EV_ABS, ABS_X, 32767 * 15 / 100);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(150000);
+	pad.Update();
+	int16 untuned = pad.AxisValue(B_GAMEPAD_AXIS_LEFT_X);
+	bool aIsA = pad.IsPressed(B_GAMEPAD_BUTTON_A);
+	BString got;
+	got.SetToFormat("--get-tuning %s", path.String());
+	BString values = run(got.String());
+	report("tuning_off", untuned > 4000 && aIsA && values == "0 1.0 0 0",
+		"without tuning: stick at 15 %% reads %d, A reads as %s; settings "
+		"[%s]", untuned, aIsA ? "A" : "B", values.String());
+
+	pad.Close();
+	close(fd);
 }
 
 
@@ -317,6 +571,7 @@ main()
 	test_settings();
 	test_window();
 	test_overlay();
+	test_learn();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	return sFailures == 0 ? 0 : 1;

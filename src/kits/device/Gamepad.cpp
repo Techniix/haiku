@@ -27,6 +27,7 @@
 #include <ObjectList.h>
 
 #include <GamepadMapping.h>
+#include <GamepadTuning.h>
 
 
 using namespace BPrivate;
@@ -45,6 +46,9 @@ struct BGamepad::Data {
 	gamepad_state		state;
 	int16				effectID;
 	bool				canRumble;
+	GamepadTuning		tuning;
+		// the Gamepads preferences' dead zone, curve, trigger threshold
+		// and face button swap for this pad, read at Open()
 };
 
 
@@ -286,6 +290,8 @@ BGamepad::Open(const char* devicePath)
 	if (!fData->hasMapping)
 		fData->hasMapping = fData->mapping.SetDefault(device);
 
+	GamepadTuning::Load(guid, fData->tuning);
+
 	fData->fd = fd;
 	fData->path = devicePath;
 	fData->effectID = -1;
@@ -492,8 +498,10 @@ BGamepad::Update()
 
 	memset(&fData->state, 0, sizeof(fData->state));
 	fData->state.time = system_time();
-	if (fData->hasMapping)
+	if (fData->hasMapping) {
 		fData->mapping.Apply(device, fData->state);
+		fData->tuning.Apply(fData->state);
+	}
 	return B_OK;
 }
 

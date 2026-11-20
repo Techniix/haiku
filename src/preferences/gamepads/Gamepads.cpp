@@ -19,15 +19,34 @@
  *    for gyro, HD rumble, lightbar and adaptive triggers; only game
  *    controllers ever get raw nodes. On by default; takes effect for pads
  *    connected after the change.
+ *  - Connect notification (gamepad_agent): a pad's name, player number,
+ *    battery and whether its layout is known when it is plugged in, and a
+ *    short notice when it goes. On by default.
+ *
+ * Per pad (configurator polish, roadmap F-42; stored by the pad's GUID):
+ *  - Tuning, applied by BGamepad for native programs (<GamepadTuning.h>):
+ *    stick dead zone, response curve, trigger threshold, A/B and X/Y swap.
+ *    All off by default; the tester shows the dead zone as a ring.
+ *  - "Map buttons…": a wizard that asks for each control in turn and
+ *    saves an SDL mapping line in ~/config/settings/Gamepads/mappings
+ *    (MappingLearner.h); "Reset mapping" removes it again.
  *
  * For scripts and the harness: Gamepads --get <setting>,
  * Gamepads --set <setting> on|off (settings: overlay, low_battery,
- * raw_access).
+ * raw_access, connect_notice); Gamepads --learn <device> (the wizard on
+ * the command line: prompts on standard output, the line saved at the
+ * end); Gamepads --tune <device> <dead zone %> <curve> <trigger %>
+ * <swap 0|1> and --get-tuning <device>.
  */
 
 #include "GamepadsCommon.h"
+#include "MappingLearner.h"
 
 #include <Roster.h>
+
+#include <GamepadTuning.h>
+
+using BPrivate::GamepadTuning;
 
 
 static const char* kAppSignature = "application/x-vnd.Renga-Gamepads";
@@ -46,6 +65,14 @@ public:
 	{
 		memset(&fState, 0, sizeof(fState));
 		SetExplicitMinSize(BSize(360, 220));
+	}
+
+	void SetDeadZone(int32 percent)
+	{
+		if (percent != fDeadZone) {
+			fDeadZone = percent;
+			Invalidate();
+		}
 	}
 
 	void SetState(const gamepad_state& state, bool valid)
@@ -174,6 +201,12 @@ private:
 	{
 		SetHighColor(tint_color(off, B_DARKEN_1_TINT));
 		FillEllipse(center, radius, radius);
+		if (fDeadZone > 0) {
+			// the dead zone, at the knob's travel scale
+			float zone = radius * 0.6f * fDeadZone / 100.0f;
+			SetHighColor(tint_color(off, B_DARKEN_3_TINT));
+			StrokeEllipse(center, zone, zone);
+		}
 		BPoint knob(center.x + x / 32768.0f * radius * 0.6f,
 			center.y + y / 32768.0f * radius * 0.6f);
 		SetHighColor(_Pressed(button) ? on : off);
@@ -182,7 +215,163 @@ private:
 
 	gamepad_state	fState;
 	bool			fValid = false;
+	int32			fDeadZone = 0;
 };
+
+
+// #pragma mark - mapping wizard
+
+
+class MapWindow : public BWindow {
+public:
+	MapWindow(BWindow* owner, const char* path)
+		:
+		BWindow(BRect(0, 0, 420, 160), "Map buttons", B_TITLED_WINDOW_LOOK,
+			B_FLOATING_APP_WINDOW_FEEL, B_ASYNCHRONOUS_CONTROLS
+				| B_AUTO_UPDATE_SIZE_LIMITS | B_NOT_ZOOMABLE
+				| B_NOT_RESIZABLE),
+		fOwner(owner),
+		fRunner(NULL)
+	{
+		fStatus = new BStringView("step", "");
+		fPrompt = new BStringView("prompt", "");
+		BFont font(be_bold_font);
+		fPrompt->SetFont(&font);
+		fSkip = new BButton("skip", "Skip", new BMessage(MSG_MAP_SKIP));
+		fBack = new BButton("back", "Back", new BMessage(MSG_MAP_BACK));
+		fSave = new BButton("save", "Save", new BMessage(MSG_MAP_SAVE));
+		BButton* cancel = new BButton("cancel", "Cancel",
+			new BMessage(B_QUIT_REQUESTED));
+		BLayoutBuilder::Group<>(this, B_VERTICAL)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(fStatus)
+			.Add(fPrompt)
+			.AddGlue()
+			.AddGroup(B_HORIZONTAL)
+				.Add(fBack)
+				.Add(fSkip)
+				.AddGlue()
+				.Add(cancel)
+				.Add(fSave)
+			.End();
+		AddToSubset(owner);
+
+		status_t status = fLearner.Open(path);
+		if (status != B_OK) {
+			BString text;
+			text.SetToFormat("Cannot read the gamepad: %s", strerror(status));
+			fPrompt->SetText(text);
+			fSkip->SetEnabled(false);
+			fBack->SetEnabled(false);
+			fSave->SetEnabled(false);
+		} else {
+			BMessage tick(MSG_MAP_TICK);
+			fRunner = new BMessageRunner(BMessenger(this), &tick, 30000);
+			_Update();
+		}
+		CenterIn(owner->Frame());
+	}
+
+	virtual ~MapWindow()
+	{
+		delete fRunner;
+	}
+
+	virtual void MessageReceived(BMessage* message)
+	{
+		switch (message->what) {
+			case MSG_MAP_TICK:
+				if (fLearner.Poll())
+					_Update();
+				break;
+			case MSG_MAP_SKIP:
+				fLearner.Skip();
+				_Update();
+				break;
+			case MSG_MAP_BACK:
+				fLearner.Back();
+				_Update();
+				break;
+			case MSG_MAP_SAVE:
+			{
+				status_t status = MappingLearner::Save(fLearner.Line());
+				if (status != B_OK) {
+					BString text;
+					text.SetToFormat("Could not save: %s", strerror(status));
+					fPrompt->SetText(text);
+					break;
+				}
+				fOwner->PostMessage(MSG_MAP_DONE);
+				Quit();
+				break;
+			}
+			default:
+				BWindow::MessageReceived(message);
+		}
+	}
+
+private:
+	void _Update()
+	{
+		BString status;
+		status.SetToFormat("%s — step %d of %d", fLearner.Name(),
+			(int)(fLearner.Done() ? kLearnStepCount : fLearner.Step() + 1),
+			(int)kLearnStepCount);
+		fStatus->SetText(status);
+		fPrompt->SetText(fLearner.Done()
+			? "Done. Save the mapping, or go back to change a step."
+			: fLearner.Prompt());
+		fSkip->SetEnabled(!fLearner.Done());
+		fBack->SetEnabled(fLearner.Step() > 0);
+		fSave->SetEnabled(fLearner.Step() > 0);
+	}
+
+	BWindow*			fOwner;
+	MappingLearner		fLearner;
+	BMessageRunner*		fRunner;
+	BStringView*		fStatus;
+	BStringView*		fPrompt;
+	BButton*			fSkip;
+	BButton*			fBack;
+	BButton*			fSave;
+};
+
+
+//!	Removes the user's mapping line for \a guid, if there is one.
+static status_t
+remove_user_mapping(const char* guid)
+{
+	BPath path;
+	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &path);
+	if (status != B_OK || (status = path.Append("Gamepads/mappings")) != B_OK)
+		return status;
+	BFile in(path.Path(), B_READ_ONLY);
+	off_t size;
+	if (in.InitCheck() != B_OK || in.GetSize(&size) != B_OK || size <= 0)
+		return B_OK;
+	BString contents;
+	char* buffer = contents.LockBuffer(size + 1);
+	ssize_t bytes = in.Read(buffer, size);
+	contents.UnlockBuffer(bytes > 0 ? bytes : 0);
+	in.Unset();
+
+	BString kept;
+	int32 start = 0;
+	while (start < contents.Length()) {
+		int32 end = contents.FindFirst('\n', start);
+		if (end < 0)
+			end = contents.Length();
+		BString line(contents.String() + start, end - start);
+		if (!line.IsEmpty() && strncasecmp(line.String(), guid, 32) != 0)
+			kept << line << "\n";
+		start = end + 1;
+	}
+	BFile out(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+	if ((status = out.InitCheck()) != B_OK)
+		return status;
+	return out.Write(kept.String(), kept.Length()) == kept.Length()
+		? B_OK : B_IO_ERROR;
+}
 
 
 // #pragma mark - preferences window
@@ -243,6 +432,50 @@ public:
 			"Notify when a gamepad's battery is low");
 		fRawAccess = _CheckBox("raw_access",
 			"Raw controller access for games (gyro, HD rumble, lightbar)");
+		fConnectNotice = _CheckBox("connect_notice",
+			"Notify when a gamepad is connected or disconnected");
+
+		// per-pad tuning
+		fDeadZone = _Slider("dead_zone", "Stick dead zone", 0, 30, "%");
+		fTrigger = _Slider("trigger", "Trigger threshold", 0, 50, "%");
+		BPopUpMenu* curves = new BPopUpMenu("curve");
+		static const struct { const char* label; float value; } kCurves[] = {
+			{ "Linear", 1.0f }, { "Gentle (1.5)", 1.5f },
+			{ "Strong (2.0)", 2.0f }, { "Very strong (3.0)", 3.0f } };
+		for (size_t i = 0; i < sizeof(kCurves) / sizeof(kCurves[0]); i++) {
+			BMessage* message = new BMessage(MSG_TUNING);
+			message->AddFloat("curve", kCurves[i].value);
+			curves->AddItem(new BMenuItem(kCurves[i].label, message));
+		}
+		fCurve = new BMenuField("curve", "Response curve:", curves);
+		fSwap = new BCheckBox("swap", "Swap A/B and X/Y (Nintendo layout)",
+			new BMessage(MSG_TUNING));
+		fMap = new BButton("map", "Map buttons" B_UTF8_ELLIPSIS,
+			new BMessage(MSG_MAP));
+		fMapReset = new BButton("map_reset", "Reset mapping",
+			new BMessage(MSG_MAP_RESET));
+		BBox* tuning = new BBox("tuning");
+		tuning->SetLabel("This gamepad");
+		BGroupView* tuningGroup = new BGroupView(B_VERTICAL,
+			B_USE_SMALL_SPACING);
+		BLayoutBuilder::Group<>(tuningGroup)
+			.SetInsets(B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING * 1.5,
+				B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING)
+			.Add(fDeadZone)
+			.Add(fTrigger)
+			.AddGroup(B_HORIZONTAL)
+				.Add(fCurve)
+				.AddGlue()
+			.End()
+			.Add(fSwap)
+			.Add(new BStringView("tuning_note", "Applies to native programs "
+				"(BGamepad); the mapping also to SDL games."))
+			.AddGroup(B_HORIZONTAL)
+				.Add(fMap)
+				.Add(fMapReset)
+				.AddGlue()
+			.End();
+		tuning->AddChild(tuningGroup);
 		fDefaults = new BButton("defaults", "Defaults",
 			new BMessage(MSG_DEFAULTS));
 
@@ -262,9 +495,11 @@ public:
 					.End()
 				.End()
 			.End()
+			.Add(tuning)
 			.Add(new BSeparatorView(B_HORIZONTAL))
 			.Add(fOverlay)
 			.Add(fLowBattery)
+			.Add(fConnectNotice)
 			.Add(fRawAccess)
 			.AddGroup(B_HORIZONTAL)
 				.Add(fDefaults)
@@ -336,12 +571,93 @@ public:
 				_UpdateCheckBoxes();
 				break;
 
+			case MSG_TUNING:
+			{
+				if (fGamepad.InitCheck() != B_OK)
+					break;
+				float curve;
+				if (message->FindFloat("curve", &curve) == B_OK)
+					fTuning.curve = curve;
+				fTuning.deadZone = fDeadZone->Value();
+				fTuning.triggerThreshold = fTrigger->Value();
+				fTuning.swapFaceButtons = fSwap->Value() == B_CONTROL_ON;
+				fTuning.Clamp();
+				GamepadTuning::Save(fGamepad.GUID(), fTuning);
+				_Reopen();
+				break;
+			}
+
+			case MSG_MAP:
+				if (fGamepad.InitCheck() == B_OK)
+					(new MapWindow(this, fGamepad.Path()))->Show();
+				break;
+
+			case MSG_MAP_RESET:
+				if (fGamepad.InitCheck() == B_OK) {
+					remove_user_mapping(fGamepad.GUID());
+					_Reopen();
+				}
+				break;
+
+			case MSG_MAP_DONE:
+				_Reopen();
+				break;
+
 			default:
 				BWindow::MessageReceived(message);
 		}
 	}
 
 private:
+	BSlider* _Slider(const char* name, const char* label, int32 min,
+		int32 max, const char* unit)
+	{
+		BSlider* slider = new BSlider(name, label, new BMessage(MSG_TUNING),
+			min, max, B_HORIZONTAL);
+		slider->SetModificationMessage(NULL);
+		slider->SetHashMarks(B_HASH_MARKS_BOTTOM);
+		slider->SetHashMarkCount(max / 5 + 1);
+		BString minLabel, maxLabel;
+		minLabel << min << " " << unit;
+		maxLabel << max << " " << unit;
+		slider->SetLimitLabels(minLabel, maxLabel);
+		return slider;
+	}
+
+	//!	Opens the selected pad again: new mappings and tuning apply.
+	void _Reopen()
+	{
+		BPrivate::gamepad_reload_mappings();
+		BString path = fGamepad.Path();
+		fGamepad.Close();
+		fGamepad.Open(path.String());
+		_UpdateInfo();
+		_UpdateTuning();
+	}
+
+	void _UpdateTuning()
+	{
+		bool valid = fGamepad.InitCheck() == B_OK;
+		fTuning.SetDefaults();
+		if (valid)
+			GamepadTuning::Load(fGamepad.GUID(), fTuning);
+		fDeadZone->SetValue(fTuning.deadZone);
+		fTrigger->SetValue(fTuning.triggerThreshold);
+		fSwap->SetValue(fTuning.swapFaceButtons);
+		int32 curveIndex = fTuning.curve >= 3.0f ? 3
+			: fTuning.curve >= 2.0f ? 2 : fTuning.curve >= 1.5f ? 1 : 0;
+		BMenuItem* item = fCurve->Menu()->ItemAt(curveIndex);
+		if (item != NULL)
+			item->SetMarked(true);
+		fTester->SetDeadZone(fTuning.deadZone);
+		fDeadZone->SetEnabled(valid);
+		fTrigger->SetEnabled(valid);
+		fCurve->SetEnabled(valid);
+		fSwap->SetEnabled(valid);
+		fMap->SetEnabled(valid);
+		fMapReset->SetEnabled(valid);
+	}
+
 	BCheckBox* _CheckBox(const char* setting, const char* label)
 	{
 		BMessage* message = new BMessage(MSG_SETTING);
@@ -354,10 +670,8 @@ private:
 		fOverlay->SetValue(fSettings.overlay);
 		fLowBattery->SetValue(fSettings.lowBattery);
 		fRawAccess->SetValue(fSettings.rawAccess);
-		Settings defaults;
-		fDefaults->SetEnabled(fSettings.overlay != defaults.overlay
-			|| fSettings.lowBattery != defaults.lowBattery
-			|| fSettings.rawAccess != defaults.rawAccess);
+		fConnectNotice->SetValue(fSettings.connectNotice);
+		fDefaults->SetEnabled(!fSettings.IsDefault());
 	}
 
 	void _Rescan()
@@ -406,6 +720,7 @@ private:
 		fRumble->SetEnabled(valid && fGamepad.CanRumble());
 		fPlayer->SetEnabled(valid);
 		_UpdateInfo();
+		_UpdateTuning();
 
 		delete fRunner;
 		fRunner = NULL;
@@ -450,6 +765,8 @@ private:
 			mapping << "no standard layout known";
 		else if (strstr(line, ",default") != NULL)
 			mapping << "standard gamepad codes";
+		else if (_HasUserMapping())
+			mapping << "your mapping (Map buttons)";
 		else
 			mapping << "SDL mapping database";
 		fMapping->SetText(mapping);
@@ -458,6 +775,26 @@ private:
 		BMenuItem* item = fPlayer->Menu()->ItemAt(player - 1);
 		if (item != NULL)
 			item->SetMarked(true);
+	}
+
+	bool _HasUserMapping()
+	{
+		BPath path;
+		if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK
+			|| path.Append("Gamepads/mappings") != B_OK)
+			return false;
+		BFile file(path.Path(), B_READ_ONLY);
+		char buffer[8192];
+		ssize_t bytes = file.InitCheck() == B_OK
+			? file.Read(buffer, sizeof(buffer) - 1) : 0;
+		if (bytes <= 0)
+			return false;
+		buffer[bytes] = '\0';
+		BString lowered(buffer);
+		lowered.ToLower();
+		BString guid(fGamepad.GUID());
+		guid.ToLower();
+		return lowered.FindFirst(guid) >= 0;
 	}
 
 	void _Tick()
@@ -481,7 +818,15 @@ private:
 	BCheckBox*			fOverlay;
 	BCheckBox*			fLowBattery;
 	BCheckBox*			fRawAccess;
+	BCheckBox*			fConnectNotice;
 	BButton*			fDefaults;
+	BSlider*			fDeadZone;
+	BSlider*			fTrigger;
+	BMenuField*			fCurve;
+	BCheckBox*			fSwap;
+	BButton*			fMap;
+	BButton*			fMapReset;
+	GamepadTuning		fTuning;
 	BGamepad			fGamepad;
 	BMessageRunner*		fRunner;
 };
@@ -507,6 +852,42 @@ public:
 };
 
 
+/*!	The mapping wizard on the command line: each prompt on its own line
+	("step <n>: <prompt>"), "line: <SDL mapping>" and "saved" at the end.
+	A step not answered within 20 seconds is skipped.
+*/
+static int
+learn_command(const char* path)
+{
+	MappingLearner learner;
+	status_t status = learner.Open(path);
+	if (status != B_OK) {
+		fprintf(stderr, "cannot open %s: %s\n", path, strerror(status));
+		return 1;
+	}
+	while (!learner.Done()) {
+		printf("step %d: %s\n", (int)learner.Step() + 1, learner.Prompt());
+		fflush(stdout);
+		bigtime_t deadline = system_time() + 20000000;
+		int32 step = learner.Step();
+		while (learner.Step() == step) {
+			struct pollfd pollFD = { learner.FileDescriptor(), POLLIN, 0 };
+			poll(&pollFD, 1, 100);
+			learner.Poll();
+			if (system_time() > deadline) {
+				learner.Skip();
+				break;
+			}
+		}
+	}
+	BString line = learner.Line();
+	printf("line: %s\n", line.String());
+	status = MappingLearner::Save(line);
+	printf("%s\n", status == B_OK ? "saved" : strerror(status));
+	return status == B_OK ? 0 : 1;
+}
+
+
 static int
 command_line(int argc, char** argv)
 {
@@ -529,9 +910,35 @@ command_line(int argc, char** argv)
 			return 1;
 		return 0;
 	}
+	if (argc == 3 && strcmp(argv[1], "--learn") == 0)
+		return learn_command(argv[2]);
+	if (argc == 3 && strcmp(argv[1], "--get-tuning") == 0) {
+		BGamepad pad;
+		if (pad.Open(argv[2]) != B_OK)
+			return 1;
+		GamepadTuning tuning;
+		GamepadTuning::Load(pad.GUID(), tuning);
+		printf("%d %.1f %d %d\n", (int)tuning.deadZone, tuning.curve,
+			(int)tuning.triggerThreshold, tuning.swapFaceButtons ? 1 : 0);
+		return 0;
+	}
+	if (argc == 7 && strcmp(argv[1], "--tune") == 0) {
+		BGamepad pad;
+		if (pad.Open(argv[2]) != B_OK)
+			return 1;
+		GamepadTuning tuning;
+		tuning.deadZone = atoi(argv[3]);
+		tuning.curve = atof(argv[4]);
+		tuning.triggerThreshold = atoi(argv[5]);
+		tuning.swapFaceButtons = atoi(argv[6]) != 0;
+		tuning.Clamp();
+		return GamepadTuning::Save(pad.GUID(), tuning) == B_OK ? 0 : 1;
+	}
 	fprintf(stderr, "usage: %s [--agent | --get <setting> | "
-		"--set <setting> on|off]\n"
-		"settings: overlay, low_battery, raw_access\n", argv[0]);
+		"--set <setting> on|off | --learn <device> | --get-tuning <device> "
+		"| --tune <device> <dead zone %%> <curve> <trigger %%> <swap 0|1>]\n"
+		"settings: overlay, low_battery, raw_access, connect_notice\n",
+		argv[0]);
 	return 2;
 }
 

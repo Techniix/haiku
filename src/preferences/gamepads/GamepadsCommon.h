@@ -47,6 +47,8 @@
 #include <Screen.h>
 #include <ScrollView.h>
 #include <SeparatorView.h>
+#include <Slider.h>
+#include <Box.h>
 #include <String.h>
 #include <StringView.h>
 #include <View.h>
@@ -67,7 +69,15 @@ enum {
 	MSG_SETTING			= 'gset',
 	MSG_DEFAULTS		= 'gdef',
 	MSG_SHOW_OVERLAY	= 'govl',
-	MSG_HIDE_OVERLAY	= 'ghov'
+	MSG_HIDE_OVERLAY	= 'ghov',
+	MSG_TUNING			= 'gtun',
+	MSG_MAP				= 'gmap',
+	MSG_MAP_RESET		= 'gmrs',
+	MSG_MAP_SKIP		= 'gmsk',
+	MSG_MAP_BACK		= 'gmbk',
+	MSG_MAP_SAVE		= 'gmsv',
+	MSG_MAP_TICK		= 'gmtk',
+	MSG_MAP_DONE		= 'gmdn'
 };
 
 
@@ -78,6 +88,7 @@ struct Settings {
 	bool	overlay;
 	bool	lowBattery;
 	bool	rawAccess;
+	bool	connectNotice;
 
 	Settings() { Defaults(); }
 
@@ -86,6 +97,16 @@ struct Settings {
 		overlay = true;
 		lowBattery = true;
 		rawAccess = true;
+		connectNotice = true;
+	}
+
+	bool IsDefault() const
+	{
+		Settings defaults;
+		return overlay == defaults.overlay
+			&& lowBattery == defaults.lowBattery
+			&& rawAccess == defaults.rawAccess
+			&& connectNotice == defaults.connectNotice;
 	}
 
 	static status_t Path(BPath& path)
@@ -116,6 +137,7 @@ struct Settings {
 			&& archive.Unflatten(&file) == B_OK) {
 			archive.FindBool("overlay", &overlay);
 			archive.FindBool("low_battery", &lowBattery);
+			archive.FindBool("connect_notice", &connectNotice);
 		}
 		if (RawPath(path) == B_OK
 			&& file.SetTo(path.Path(), B_READ_ONLY) == B_OK) {
@@ -141,6 +163,7 @@ struct Settings {
 		BMessage archive;
 		archive.AddBool("overlay", overlay);
 		archive.AddBool("low_battery", lowBattery);
+		archive.AddBool("connect_notice", connectNotice);
 		BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
 		status = file.InitCheck();
 		if (status == B_OK)
@@ -170,6 +193,8 @@ struct Settings {
 			return &lowBattery;
 		if (strcmp(name, "raw_access") == 0)
 			return &rawAccess;
+		if (strcmp(name, "connect_notice") == 0)
+			return &connectNotice;
 		return NULL;
 	}
 };

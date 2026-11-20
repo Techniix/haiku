@@ -2,9 +2,12 @@
  * Copyright 2026, Renga contributors.
  * Distributed under the terms of the MIT License.
  *
- * gamepad_agent (roadmap F-42): the small background server behind two
- * settings of the Gamepads preferences, the guide-button overlay and the
- * low-battery notification. The user's launch script starts it
+ * gamepad_agent (roadmap F-42): the small background server behind three
+ * settings of the Gamepads preferences, the guide-button overlay, the
+ * low-battery notification and the connect notification (a pad's name,
+ * player number, battery and whether its layout is known when it is
+ * plugged in; clicking it opens the Gamepads preferences; a short notice
+ * when it goes). The user's launch script starts it
  * (data/launch/user_gamepads); it is a background application
  * (B_BACKGROUND_APP), so it never shows in Deskbar, and exclusive
  * (B_EXCLUSIVE_LAUNCH), so it runs once per session. It used to be the
@@ -147,6 +150,7 @@ public:
 			case B_GAMEPAD_ADDED:
 			case B_GAMEPAD_REMOVED:
 				fSettings.Load();
+				_ConnectNotice(message);
 				_Restart();
 				break;
 			case 'bchk':
@@ -191,6 +195,71 @@ public:
 	}
 
 private:
+	/*!	The connect and disconnect notifications. Names are remembered by
+		device path, since a removed pad can no longer be asked.
+	*/
+	void _ConnectNotice(BMessage* message)
+	{
+		const char* path;
+		if (message->FindString("path", &path) != B_OK)
+			return;
+		bool added = message->what == B_GAMEPAD_ADDED;
+		BString name;
+		BString content;
+		if (added) {
+			BGamepad pad;
+			if (pad.Open(path) != B_OK)
+				return;
+			name = pad.Name();
+			fNames.RemoveName(path);
+			fNames.AddString(path, name);
+			int32 level = -1;
+			bool charging = false, wired = false;
+			pad.GetBattery(&level, &charging, &wired);
+			if (pad.Player() > 0)
+				content << "Player " << pad.Player();
+			else
+				content << "No player number";
+			if (wired)
+				content << " · wired";
+			else if (level >= 0) {
+				content << " · battery " << level << " %";
+				if (charging)
+					content << " (charging)";
+			}
+			const char* line = pad.Mapping();
+			content << (line != NULL ? " · layout known"
+				: " · layout unknown: map its buttons in Gamepads");
+		} else {
+			if (fNames.FindString(path, &name) != B_OK)
+				name = "A gamepad";
+			fNames.RemoveName(path);
+		}
+		if (!fSettings.connectNotice)
+			return;
+
+		BNotification notification(B_INFORMATION_NOTIFICATION);
+		notification.SetGroup("Gamepads");
+		BString title(name);
+		title << (added ? " connected" : " disconnected");
+		notification.SetTitle(title);
+		notification.SetContent(content);
+		notification.SetMessageID(BString("connect:") << path);
+		if (added)
+			notification.SetOnClickApp("application/x-vnd.Renga-Gamepads");
+		notification.Send(added ? 5000000 : 2000000);
+		syslog_notice(title, content);
+	}
+
+	static void syslog_notice(const BString& title, const BString& content)
+	{
+		// for the harness and the system log viewer
+		BString line;
+		line << "gamepad_agent: notification \"" << title << "\": "
+			<< content << "\n";
+		debug_printf("%s", line.String());
+	}
+
 	void _Stop()
 	{
 		if (fThread >= 0) {
@@ -355,6 +424,8 @@ private:
 	int							fWakeUp[2];
 	BLocker						fLock;
 	BObjectList<WatchedPad, true> fPads;
+	BMessage					fNames;
+		// device path -> pad name, for the disconnect notice
 };
 
 

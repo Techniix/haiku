@@ -16,6 +16,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			DigitalPort.cpp
 			Gamepad.cpp
 			GamepadMapping.cpp
+			GamepadTuning.cpp
 			Joystick.cpp
 			JoystickTweaker.cpp
 			SerialPort.cpp
