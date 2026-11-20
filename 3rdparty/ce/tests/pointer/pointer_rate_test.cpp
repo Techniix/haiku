@@ -707,8 +707,13 @@ flick_latency(BRect screen, int32 rate, uint32 pollMode, BPoint& final,
 	wait_for_device(0, names);
 	ce_vmouse_plug request = { 1, CE_VMOUSE_USB,
 		(uint32)(1000000 / rate), pollMode };
-	if (ioctl(sControl, CE_VMOUSE_PLUG, &request, sizeof(request)) != 0
-		|| !wait_for_device(1, names)) {
+	int plugged = ioctl(sControl, CE_VMOUSE_PLUG, &request, sizeof(request));
+	int plugError = plugged != 0 ? errno : 0;
+	if (plugged != 0 || !wait_for_device(1, names)) {
+		printf("CE-INFO pointer_rate: USB mouse at %" B_PRId32 " Hz: %s "
+			"(%s), devices: %s\n", rate, plugged != 0 ? "plug failed"
+				: "never appeared", strerror(plugError), names.String());
+		fflush(stdout);
 		final = expected = BPoint(-1, -1);
 		return -1;
 	}

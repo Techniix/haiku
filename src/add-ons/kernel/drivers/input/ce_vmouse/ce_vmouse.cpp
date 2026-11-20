@@ -327,6 +327,10 @@ plug(const ce_vmouse_plug& request)
 			&& request.mode != CE_VMOUSE_ON_DEMAND
 			&& request.mode != CE_VMOUSE_USB)
 		|| request.poll_mode > CE_VMOUSE_POLL_ON_DEMAND) {
+		dprintf("ce_vmouse: refused plug: %" B_PRIu32 " node(s), mode %"
+			B_PRIu32 ", poll interval %" B_PRIu32 ", poll mode %" B_PRIu32
+			"\n", request.nodes, request.mode, request.poll_interval,
+			request.poll_mode);
 		return B_BAD_VALUE;
 	}
 
