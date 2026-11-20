@@ -7,6 +7,7 @@ SubInclude HAIKU_TOP 3rdparty ce tests agents ;
 SubInclude HAIKU_TOP 3rdparty ce tests appserver ;
 SubInclude HAIKU_TOP 3rdparty ce tests bootmenu ;
 SubInclude HAIKU_TOP 3rdparty ce tests crashlog ;
+SubInclude HAIKU_TOP 3rdparty ce tests dbus ;
 SubInclude HAIKU_TOP 3rdparty ce tests devel ;
 SubInclude HAIKU_TOP 3rdparty ce tests gamepad ;
 SubInclude HAIKU_TOP 3rdparty ce tests hda_eld ;

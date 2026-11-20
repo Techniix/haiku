@@ -1,0 +1,17 @@
+SubDir HAIKU_TOP 3rdparty ce tests dbus ;
+
+# Renga's D-Bus session bus (roadmap F-43 phase D): the bus, its routing
+# and descriptor passing, and the services inside it.
+
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src servers dbus ] ;
+UseHeaders [ FDirName $(HAIKU_TOP) src servers dbus ] : true ;
+
+Application dbus_test :
+	dbus_test.cpp
+	DBusMessage.cpp
+	: be network [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : dbus_test ;
+}

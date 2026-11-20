@@ -1,0 +1,14 @@
+resource app_signature "application/x-vnd.Renga-SessionBus";
+
+resource app_flags B_SINGLE_LAUNCH | B_BACKGROUND_APP;
+
+resource app_version {
+	major  = 1,
+	middle = 0,
+	minor  = 0,
+	variety = B_APPV_FINAL,
+	internal = 0,
+	short_info = "Session bus",
+	long_info = "Renga's D-Bus session bus, with notifications, power, "
+		"portal and secret services for Linux and ported programs."
+};

@@ -35,6 +35,9 @@
 #include <notification/Notifications.h>
 
 #include "GeneralView.h"
+
+#include <CheckBox.h>
+#include <Messenger.h>
 #include "NotificationsConstants.h"
 #include "SettingsHost.h"
 
@@ -62,6 +65,56 @@ notification_position_to_index(uint32 notification_position) {
 	else if (notification_position == (B_FOLLOW_LEFT | B_FOLLOW_TOP))
 		return 4;
 	return 0;
+}
+
+
+// Renga (roadmap F-43 phase D): the D-Bus session bus (session_bus) and its
+// notifications, in ~/config/settings/Renga/dbus ("disabled true",
+// "notifications false"); written at once, outside Revert/Defaults, as the
+// other system service switches are.
+static const uint32 kToggleBus = 'tgbs';
+static const uint32 kToggleBusNotifications = 'tgbn';
+static const char* kBusSignature = "application/x-vnd.Renga-SessionBus";
+
+
+static bool
+bus_setting(const char* name, bool defaultValue)
+{
+	BPath path;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK
+		|| path.Append("Renga/dbus") != B_OK)
+		return defaultValue;
+	FILE* file = fopen(path.Path(), "r");
+	if (file == NULL)
+		return defaultValue;
+	char line[128];
+	bool value = defaultValue;
+	size_t length = strlen(name);
+	while (fgets(line, sizeof(line), file) != NULL) {
+		if (strncmp(line, name, length) == 0 && line[length] == ' ')
+			value = strstr(line + length, "true") != NULL;
+	}
+	fclose(file);
+	return value;
+}
+
+
+static void
+write_bus_settings(bool enabled, bool notifications)
+{
+	BPath path;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK
+		|| path.Append("Renga") != B_OK)
+		return;
+	create_directory(path.Path(), 0755);
+	path.Append("dbus");
+	FILE* file = fopen(path.Path(), "w");
+	if (file == NULL)
+		return;
+	fprintf(file, "# Notifications preferences: the D-Bus session bus\n"
+		"disabled %s\nnotifications %s\n", enabled ? "false" : "true",
+		notifications ? "true" : "false");
+	fclose(file);
 }
 
 
@@ -134,9 +187,25 @@ GeneralView::GeneralView(SettingsHost* host)
 		.AddGlue()
 		.View());
 	
+	// Linux and ported programs (D-Bus)
+	fBusBox = new BCheckBox("session_bus",
+		B_TRANSLATE("Desktop services for Linux and ported programs (D-Bus)"),
+		new BMessage(kToggleBus));
+	fBusNotificationsBox = new BCheckBox("bus_notifications",
+		B_TRANSLATE("Show their notifications"),
+		new BMessage(kToggleBusNotifications));
+	BBox* busBox = new BBox("bus");
+	busBox->SetLabel(fBusBox);
+	busBox->AddChild(BLayoutBuilder::Group<>(B_VERTICAL)
+		.SetInsets(B_USE_DEFAULT_SPACING)
+		.Add(fBusNotificationsBox)
+		.View());
+	_UpdateBusBoxes();
+
 	BLayoutBuilder::Group<>(this, B_VERTICAL)
 		.SetInsets(B_USE_WINDOW_SPACING)
 		.Add(box)
+		.Add(busBox)
 	.End();
 }
 
@@ -149,6 +218,8 @@ GeneralView::AttachedToWindow()
 	fWidthSlider->SetTarget(this);
 	fDurationSlider->SetTarget(this);
 	fPositionMenu->SetTargetForItems(this);
+	fBusBox->SetTarget(this);
+	fBusNotificationsBox->SetTarget(this);
 }
 
 
@@ -160,6 +231,21 @@ GeneralView::MessageReceived(BMessage* msg)
 		{
 			SettingsPane::SettingsChanged(false);
 			_EnableControls();
+			break;
+		}
+		case kToggleBus:
+		case kToggleBusNotifications:
+		{
+			bool enabled = fBusBox->Value() == B_CONTROL_ON;
+			write_bus_settings(enabled,
+				fBusNotificationsBox->Value() == B_CONTROL_ON);
+			if (msg->what == kToggleBus) {
+				if (enabled)
+					be_roster->Launch(kBusSignature);
+				else
+					BMessenger(kBusSignature).SendMessage(B_QUIT_REQUESTED);
+			}
+			_UpdateBusBoxes();
 			break;
 		}
 		case kWidthChanged: {
@@ -186,6 +272,17 @@ GeneralView::MessageReceived(BMessage* msg)
 			BView::MessageReceived(msg);
 			break;
 	}
+}
+
+
+void
+GeneralView::_UpdateBusBoxes()
+{
+	bool enabled = !bus_setting("disabled", false);
+	fBusBox->SetValue(enabled ? B_CONTROL_ON : B_CONTROL_OFF);
+	fBusNotificationsBox->SetValue(bus_setting("notifications", true)
+		? B_CONTROL_ON : B_CONTROL_OFF);
+	fBusNotificationsBox->SetEnabled(enabled);
 }
 
 

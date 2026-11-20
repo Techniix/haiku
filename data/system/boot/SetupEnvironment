@@ -92,3 +92,6 @@ export XDG_RUNTIME_DIR=/tmp/xdg-runtime
 if [ ! -d "$XDG_RUNTIME_DIR" ]; then
 	mkdir -p -m 700 "$XDG_RUNTIME_DIR" 2>/dev/null
 fi
+# Renga (roadmap F-43 phase D): the D-Bus session bus (session_bus, see
+# data/launch/user_session_bus), for Linux programs and ported programs.
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"

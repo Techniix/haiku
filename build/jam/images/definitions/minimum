@@ -238,6 +238,7 @@ SYSTEM_SERVERS = [ FFilterByBuildFeatures
 	registrar
 	syslog_daemon
 	wayland_compositor@x86_64
+	session_bus
 ] ;
 
 SYSTEM_NETWORK_DEVICES =

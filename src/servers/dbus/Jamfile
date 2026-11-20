@@ -1,0 +1,16 @@
+SubDir HAIKU_TOP src servers dbus ;
+
+# Renga's D-Bus session bus (roadmap F-43 phase D): the message bus, and
+# the notification, UPower, portal (settings, open URI) and Secret Service
+# services inside it, for Linux programs under Renguin and ported programs.
+
+UsePrivateHeaders device ;
+
+Application session_bus :
+	main.cpp
+	DBusMessage.cpp
+	SessionBus.cpp
+	Services.cpp
+	: be bnetapi network [ TargetLibstdc++ ]
+	: session_bus.rdef SessionBusIcon.rdef
+;

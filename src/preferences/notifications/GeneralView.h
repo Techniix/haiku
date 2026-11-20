@@ -38,7 +38,11 @@ public:
 			bool			UseDefaultRevertButtons();
 
 private:
+		void				_UpdateBusBoxes();
+
 		BCheckBox*			fNotificationBox;
+		BCheckBox*			fBusBox;
+		BCheckBox*			fBusNotificationsBox;
 		BSlider*			fDurationSlider;
 		BSlider*			fWidthSlider;
 		BPopUpMenu*			fPositionMenu;

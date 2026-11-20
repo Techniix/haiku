@@ -1,0 +1,18 @@
+# Renga (roadmap F-43 phase D): the D-Bus session bus, with the
+# notification, UPower, portal and Secret Service services, for Linux
+# programs under Renguin and ported programs. It listens on
+# $XDG_RUNTIME_DIR/bus (DBUS_SESSION_BUS_ADDRESS, see SetupEnvironment).
+# On by default; "disabled true" in ~/config/settings/Renga/dbus turns it
+# off (Notifications preferences). A service: launch_daemon restarts it
+# if it ends.
+target desktop {
+	service x-vnd.Renga-SessionBus {
+		launch /system/servers/session_bus
+		if {
+			file_exists /system/servers/session_bus
+			not setting ~/config/settings/Renga/dbus disabled
+		}
+		on initial_volumes_mounted
+		no_safemode
+	}
+}
