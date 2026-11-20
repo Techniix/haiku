@@ -32,6 +32,15 @@
 	  multi.left_of        output 1 placed left of the primary output
 	  multi.restored       without the settings file: back to the default
 	                       arrangement
+	  multi.reconfig_repaint  that committed set_configuration() starts
+	                       the changed-pixels copy over (Quasar gives every
+	                       output a new frame buffer, 2026-11-20): with the
+	                       "changed" mode, at least 90% of the desktop
+	                       (2048x768x4 bytes) is written to the frame buffer
+	                       within 2 s although its picture did not change,
+	                       and the window on output 1 is drawn again
+	                       (screenshot multi_reconfig1, harness check
+	                       multi.reconfig_drawn)
 	One output:
 	  multi.single_output  one output, the whole screen, primary
 	Output format: see 3rdparty/ce/README.md.
@@ -47,7 +56,10 @@
 #include <View.h>
 #include <Window.h>
 
+#include <AppServerLink.h>
+#include <FrontCopyInfo.h>
 #include <ScreenOutputs.h>
+#include <ServerProtocol.h>
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -61,6 +73,19 @@ static const char* kSettings
 	= "/boot/home/config/settings/system/app_server/displays";
 
 static int sFailures = 0;
+
+
+static bool
+front_copy_stats_get(front_copy_stats& stats, bool reset)
+{
+	BPrivate::AppServerLink link;
+	link.StartMessage(AS_GET_FRONT_COPY_STATS);
+	link.Attach<bool>(reset);
+	int32 code;
+	if (link.FlushWithReply(code) != B_OK || code != B_OK)
+		return false;
+	return link.Read(&stats, sizeof(stats)) == B_OK;
+}
 
 
 static void
@@ -281,6 +306,8 @@ main()
 	}
 
 	unlink(kSettings);
+	front_copy_stats before;
+	bool haveStats = front_copy_stats_get(before, true);
 	BPrivate::reload_display_settings();
 	snooze(1000000);
 	count = outputs(list);
@@ -288,6 +315,30 @@ main()
 			&& rect_is(list[0].frame, 0, 0, 1024, 768)
 			&& rect_is(list[1].frame, 1024, 0, 1024, 768),
 		"%s", describe(list, count).String());
+
+	// The same arrangement once more: the picture does not change, so
+	// only a reset copy writes the whole desktop again.
+	snooze(1000000);
+	haveStats = haveStats && front_copy_stats_get(before, true);
+	BPrivate::reload_display_settings();
+	snooze(2000000);
+	front_copy_stats after;
+	haveStats = haveStats && front_copy_stats_get(after, false);
+	uint64 desktop = 2048ULL * 768 * 4;
+	report("reconfig_repaint", haveStats
+			&& (after.mode != B_FRONT_COPY_CHANGED
+				|| after.bytes_written >= desktop * 9 / 10),
+		"mode %d, %" B_PRIu64 " of %" B_PRIu64 " desktop bytes written "
+		"after set_configuration (%" B_PRIu64 " requested)",
+		haveStats ? (int)after.mode : -1,
+		haveStats ? after.bytes_written : 0, desktop,
+		haveStats ? after.bytes_requested : 0);
+	if (window->Lock()) {
+		window->Activate();
+		window->Unlock();
+	}
+	snooze(500000);
+	host_screenshot("multi_reconfig1", 1);
 
 	if (pageWindow->Lock())
 		pageWindow->Quit();

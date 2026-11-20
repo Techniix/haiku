@@ -70,6 +70,11 @@ public:
 
 	static	const char*			SettingsPath();
 
+	// True once the last Apply() committed a configuration to the driver,
+	// even if Apply() failed after that: the outputs then have new frame
+	// buffers (Quasar gives every output a new one, output 0 included).
+			bool				Committed() const { return fCommitted; }
+
 private:
 								MultiOutput(multi_head_hooks* hooks);
 			void				_Load();
@@ -82,6 +87,7 @@ private:
 			area_id				fDesktopArea;
 			uint32				fDesktopBytesPerRow;
 			BRect				fDesktopFrame;
+			bool				fCommitted;
 };
 
 

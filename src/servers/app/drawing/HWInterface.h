@@ -245,6 +245,10 @@ protected:
 			void				_AdoptDragBitmap();
 
 			void				_NotifyFrameBufferChanged();
+			// Renga: forgets what the changed-pixels copy (FrontCopy) knows
+			// about the frame buffer, so the next copies write everything.
+			void				_InvalidateFrontCopy()
+									{ fFrontCopy.Invalidate(); }
 			void				_NotifyScreenChanged();
 
 	static	bool				_IsValidMode(const display_mode& mode);

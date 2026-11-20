@@ -274,7 +274,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
 	"media_stream_test", "libbnetapi.so", "http_streamer", "Screenshot",
 	"SoundRecorder", "media_addon_server", "crash_collector",
-	"crashlog_test", "SystemLogs", "debug_server"]
+	"crashlog_test", "SystemLogs", "debug_server",
+	"webpositive_test", "WebPositive"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -4461,6 +4462,23 @@ def check_multi_screens(args, results_dir, report):
 			"detail": "%d of %d sampled pixels differ" % (differ, total)})
 	except OSError as error:
 		checks.append({"name": "multi.mirror_same_picture", "pass": False,
+			"detail": "no screenshot: %s" % error})
+	# After the committed set_configuration() of the second restore, head 1
+	# has a new frame buffer: it must show the desktop again, not the
+	# black of a buffer the changed-pixels copy skipped (Quasar,
+	# 2026-11-20).
+	try:
+		picture = load("multi_reconfig1")
+		pixels = picture.load()
+		width, height = picture.size
+		lit = sum(1 for y in range(0, height, 4) for x in range(0, width, 4)
+			if sum(pixels[x, y]) > 30)
+		total = ((width + 3) // 4) * ((height + 3) // 4)
+		checks.append({"name": "multi.reconfig_drawn",
+			"pass": lit * 2 > total,
+			"detail": "%d of %d sampled pixels not black" % (lit, total)})
+	except OSError as error:
+		checks.append({"name": "multi.reconfig_drawn", "pass": False,
 			"detail": "no screenshot: %s" % error})
 
 

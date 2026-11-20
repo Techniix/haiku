@@ -736,6 +736,13 @@ AccelerantHWInterface::_SetMultiOutputMode(const display_mode& mode)
 	frame_buffer_config desktopBuffer;
 	status_t status = fMultiOutput->Apply(fInitialModeSwitch ? NULL : &mode,
 		desktopMode, desktopBuffer);
+	if (fMultiOutput->Committed()) {
+		// A committed set_configuration() is a mode change: the outputs have
+		// new frame buffers, so the changed-pixels copy starts over, also
+		// when the rest of Apply() failed (Quasar, 2026-11-20). The success
+		// path below also notifies the listeners, which repaint everything.
+		_InvalidateFrontCopy();
+	}
 	if (status != B_OK)
 		return status;
 

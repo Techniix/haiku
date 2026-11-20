@@ -75,7 +75,8 @@ MultiOutput::MultiOutput(multi_head_hooks* hooks)
 	fCount(0),
 	fDesktop(NULL),
 	fDesktopArea(-1),
-	fDesktopBytesPerRow(0)
+	fDesktopBytesPerRow(0),
+	fCommitted(false)
 {
 	_Load();
 }
@@ -294,6 +295,7 @@ MultiOutput::Apply(const display_mode* primaryMode, display_mode& desktopMode,
 		config.source_output = output.mirrorOf;
 		config.mode = output.mode;
 	}
+	fCommitted = false;
 	status_t status = fHooks->set_configuration(configs, configCount,
 		B_MULTI_HEAD_TEST_ONLY);
 	if (status == B_OK)
@@ -303,6 +305,13 @@ MultiOutput::Apply(const display_mode* primaryMode, display_mode& desktopMode,
 			"(%s)", strerror(status));
 		return status;
 	}
+
+	// Committed: every output has a new frame buffer now (Quasar's answer
+	// to R-19, 2026-11-20), so the old addresses must not be written to
+	// again, even if the rest of this fails.
+	fCommitted = true;
+	for (int32 i = 0; i < fCount; i++)
+		fOutputs[i].buffer.frame_buffer = NULL;
 
 	for (int32 i = 0; i < fCount; i++) {
 		Output& output = fOutputs[i];
