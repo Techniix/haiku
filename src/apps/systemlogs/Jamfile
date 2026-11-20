@@ -14,7 +14,7 @@ Application SystemLogs :
 	ReportArchive.cpp
 	: be localestub [ TargetLibstdc++ ]
 		[ BuildFeatureAttribute zlib : library ]
-	: SystemLogs.rdef
+	: SystemLogs.rdef SystemLogsIcon.rdef
 ;
 
 # The background server that shows a notification for each new kernel
@@ -23,7 +23,7 @@ Application SystemLogs :
 Application crash_report_notifier :
 	CrashReportNotifier.cpp
 	: be localestub [ TargetLibstdc++ ]
-	: CrashReportNotifier.rdef
+	: CrashReportNotifier.rdef CrashReportNotifierIcon.rdef
 ;
 
 DoCatalogs crash_report_notifier :

@@ -5,7 +5,7 @@ UsePrivateHeaders interface shared storage ;
 Application BootMenu :
 	BootMenu.cpp
 	: be localestub [ TargetLibstdc++ ]
-	: BootMenu.rdef
+	: BootMenu.rdef BootMenuIcon.rdef
 ;
 
 DoCatalogs BootMenu :

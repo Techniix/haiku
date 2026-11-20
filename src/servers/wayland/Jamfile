@@ -89,5 +89,5 @@ Application wayland_compositor :
 	be translation libgnu.so
 	libwayland_server_renga.a network
 	[ TargetLibstdc++ ]
-	: WaylandCompositor.rdef
+	: WaylandCompositor.rdef WaylandCompositorIcon.rdef
 ;
