@@ -374,6 +374,8 @@ BrowserWindow::BrowserWindow(BRect frame, SettingsMessage* appSettings, const BS
 
 	fAutoHidePointer = fAppSettings->GetValue(kSettingsKeyAutoHidePointer,
 		fAutoHidePointer);
+	fFollowDarkAppearance = fAppSettings->GetValue(
+		kSettingsKeyFollowDarkAppearance, true);
 
 	fNewWindowPolicy = fAppSettings->GetValue(kSettingsKeyNewWindowPolicy,
 		(uint32)OpenStartPage);
@@ -1205,9 +1207,19 @@ BrowserWindow::MessageReceived(BMessage* message)
 			} else if (name == kSettingsShowBookmarkBar
 				&& message->FindBool("value", &flag) == B_OK) {
 				_ShowBookmarkBar(flag);
+			} else if (name == kSettingsKeyFollowDarkAppearance
+				&& message->FindBool("value", &flag) == B_OK) {
+				fFollowDarkAppearance = flag;
+				be_app->PostMessage(APPEARANCE_CHANGED);
 			}
 			break;
 		}
+		case B_COLORS_UPDATED:
+			// Appearance changed the system colours: pages follow a switch
+			// between light and dark (BrowserApp, application thread).
+			be_app->PostMessage(APPEARANCE_CHANGED);
+			BWebWindow::MessageReceived(message);
+			break;
 		case ADD_CONSOLE_MESSAGE:
 			be_app->PostMessage(message);
 			BWebWindow::MessageReceived(message);
@@ -1422,6 +1434,10 @@ BrowserWindow::CreateNewTab(const BString& _url, bool select,
 	bool isNewWindow = fTabManager->CountTabs() == 0;
 
 	fTabManager->AddTab(webView, B_TRANSLATE("New tab"));
+	// Renga: the new page gets the dark colour scheme before it loads when
+	// the system appearance is dark; CreateNewTab() runs on the application
+	// thread, which owns the page.
+	webView->SetDarkMode(WantsDarkPages(fFollowDarkAppearance));
 
 	BString url(_url);
 	if (applyNewPagePolicy && url.Length() == 0)
@@ -1441,6 +1457,28 @@ BrowserWindow::CreateNewTab(const BString& _url, bool select,
 
 	_ShowInterface(true);
 	_UpdateTabGroupVisibility();
+}
+
+
+/*static*/ bool
+BrowserWindow::WantsDarkPages(bool followDarkAppearance)
+{
+	// Appearance's dark colour sets darken the document background, which
+	// is what a web page's own background stands in for.
+	return followDarkAppearance
+		&& ui_color(B_DOCUMENT_BACKGROUND_COLOR).IsDark();
+}
+
+
+void
+BrowserWindow::ApplyDarkAppearance()
+{
+	bool dark = WantsDarkPages(fFollowDarkAppearance);
+	for (int32 i = 0; i < fTabManager->CountTabs(); i++) {
+		BWebView* view = dynamic_cast<BWebView*>(fTabManager->ViewForTab(i));
+		if (view != NULL)
+			view->SetDarkMode(dark);
+	}
 }
 
 

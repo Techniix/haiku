@@ -692,6 +692,21 @@ of a 1 GiB guest was, so the bounce path went untested.
   after `EndUpdate()`; totals per source. The cost of 15 full-screen reads
   while the host moves the pointer, old and new way (engine locked,
   pointer waits), is printed as INFO.
+- **webpositive_history** (every image, `webpositive_test`; F-57, batch 8):
+  WebPositive's own `BrowsingHistory.cpp` built into the test: a file of
+  8000 items with 100 duplicates loads in under 1 s, in the file's order
+  and without the duplicates; 200 visits cost the same with 8000 items as
+  with none (at most 3 times plus 50 ms, under 5 ms each); the saver
+  thread writes all 2000 visits within 6 s; a visit right before quitting
+  is written by the destructor (the test runs itself with
+  `--history-child`). The user's history file is restored at the end.
+- **webpositive_dark** (renga-* images, `webpositive_test`): a local page
+  shows `prefers-color-scheme` in its title, read from WebPositive's
+  window: light with light colours, dark after Appearance switches to dark
+  colours while the page is open, dark when started with dark colours,
+  light with the "follow dark appearance" setting off. Colours and
+  WebPositive's settings are restored afterwards. No checks without
+  WebPositive or a desktop.
 - **tracker_menu** (every image, `tracker_menu_test`; F-59): Tracker's
   folder menus built ahead of time (`'Tnav'` builds one for the test): on
   by default; a folder of 400 files and 3 subfolders gives 403 items with

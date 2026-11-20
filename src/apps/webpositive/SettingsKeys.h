@@ -20,6 +20,7 @@ extern const char* kSettingsKeyShowTabsIfSinglePageOpen;
 extern const char* kSettingsKeyAutoHideInterfaceInFullscreenMode;
 extern const char* kSettingsKeyAutoHidePointer;
 extern const char* kSettingsKeyShowHomeButton;
+extern const char* kSettingsKeyFollowDarkAppearance;
 
 extern const char* kSettingsKeyStartUpPolicy;
 extern const char* kSettingsKeyNewWindowPolicy;

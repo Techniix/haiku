@@ -9,6 +9,10 @@
 #include "DateTime.h"
 #include <List.h>
 #include <Locker.h>
+#include <OS.h>
+#include <String.h>
+
+#include <map>
 
 class BFile;
 class BString;
@@ -76,14 +80,29 @@ private:
 
 			void				_LoadSettings();
 			void				_SaveSettings();
+			void				_ScheduleSave();
+			void				_ArchiveTo(BMessage& archive);
+			void				_WriteArchive(const BMessage& archive);
+	static	status_t			_SaveThreadEntry(void* data);
+			void				_SaveThread();
 			bool				_OpenSettingsFile(BFile& file, uint32 mode);
 
 private:
 			BList				fHistoryItems;
+			// Renga: the items by URL, so a visit finds its item without
+			// comparing it with every other one.
+			std::map<BString, BrowsingHistoryItem*> fItemsByURL;
 			int32				fMaxHistoryItemAge;
 
 	static	BrowsingHistory		sDefaultInstance;
 			bool				fSettingsLoaded;
+
+			// Renga: saving is done by a thread of its own a moment after
+			// the last change, not on the window thread for every page.
+			sem_id				fSaveRequest;
+			thread_id			fSaveThread;
+			bool				fSaveNeeded;
+			bool				fQuitting;
 };
 
 

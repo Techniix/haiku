@@ -1,0 +1,17 @@
+SubDir HAIKU_TOP 3rdparty ce tests webpositive ;
+
+# WebPositive's batch 8 quick fixes and speed pass (F-57), see the source.
+# WebPositive's own BrowsingHistory.cpp is built into the test, so its
+# history checks need no WebKit and run on every image.
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src apps webpositive ] ;
+SubDirHdrs $(HAIKU_TOP) src apps webpositive ;
+UsePrivateHeaders netservices ;
+Application webpositive_test :
+	webpositive_test.cpp
+	BrowsingHistory.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : webpositive_test ;
+}

@@ -365,6 +365,17 @@ BrowserApp::MessageReceived(BMessage* message)
 	case ADD_CONSOLE_MESSAGE:
 		fConsoleWindow->PostMessage(message);
 		break;
+	case APPEARANCE_CHANGED:
+		// Renga: BWebView::SetDarkMode() reaches into the page, which lives
+		// on this thread; the windows only ask for it.
+		for (int i = 0; BWindow* window = WindowAt(i); i++) {
+			BrowserWindow* webWindow = dynamic_cast<BrowserWindow*>(window);
+			if (webWindow == NULL || !webWindow->Lock())
+				continue;
+			webWindow->ApplyDarkAppearance();
+			webWindow->Unlock();
+		}
+		break;
 
 	default:
 		BApplication::MessageReceived(message);

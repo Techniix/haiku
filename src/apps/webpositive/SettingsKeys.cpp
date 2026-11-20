@@ -20,6 +20,9 @@ const char* kSettingsKeyAutoHideInterfaceInFullscreenMode
 	= "auto hide interface in full screen mode";
 const char* kSettingsKeyAutoHidePointer = "auto hide pointer";
 const char* kSettingsKeyShowHomeButton = "show home button";
+// Renga: web pages see prefers-color-scheme: dark while the system's
+// document background is dark (Appearance). On by default.
+const char* kSettingsKeyFollowDarkAppearance = "follow dark appearance";
 
 const char* kSettingsKeyNewWindowPolicy = "new window policy";
 const char* kSettingsKeyNewTabPolicy = "new tab policy";

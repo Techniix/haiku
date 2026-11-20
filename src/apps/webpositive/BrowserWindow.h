@@ -91,7 +91,11 @@ enum {
 	SHOW_DOWNLOAD_WINDOW			= 'sdwd',
 	SHOW_SETTINGS_WINDOW			= 'sswd',
 	SHOW_CONSOLE_WINDOW				= 'scwd',
-	SHOW_COOKIE_WINDOW				= 'skwd'
+	SHOW_COOKIE_WINDOW				= 'skwd',
+	// Renga: the system appearance or the "follow dark appearance" setting
+	// changed, or a tab was created; BrowserApp applies it to every tab on
+	// the application thread, where the web pages live.
+	APPEARANCE_CHANGED				= 'apch'
 };
 
 
@@ -128,6 +132,11 @@ public:
 			BRect				WindowFrame() const;
 
 			void				ToggleFullscreen();
+
+			// Renga: tells every tab's page whether to use the dark colour
+			// scheme. Call with the window locked, on the application thread.
+			void				ApplyDarkAppearance();
+	static	bool				WantsDarkPages(bool followDarkAppearance);
 
 private:
 	// WebPage notification API implementations
@@ -276,6 +285,7 @@ private:
 			bool				fShowTabsIfSinglePageOpen;
 			bool				fAutoHideInterfaceInFullscreenMode;
 			bool				fAutoHidePointer;
+			bool				fFollowDarkAppearance;
 			uint32				fNewWindowPolicy;
 			uint32				fNewTabPolicy;
 			BString				fStartPageURL;

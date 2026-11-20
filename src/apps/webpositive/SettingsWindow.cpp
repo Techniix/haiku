@@ -58,6 +58,7 @@ enum {
 	MSG_AUTO_HIDE_INTERFACE_BEHAVIOR_CHANGED	= 'ahic',
 	MSG_AUTO_HIDE_POINTER_BEHAVIOR_CHANGED		= 'ahpc',
 	MSG_SHOW_HOME_BUTTON_CHANGED				= 'shbc',
+	MSG_FOLLOW_DARK_APPEARANCE_CHANGED			= 'fdac',
 
 	MSG_STANDARD_FONT_CHANGED					= 'stfc',
 	MSG_SERIF_FONT_CHANGED						= 'sefc',
@@ -227,6 +228,7 @@ SettingsWindow::MessageReceived(BMessage* message)
 		case MSG_AUTO_HIDE_INTERFACE_BEHAVIOR_CHANGED:
 		case MSG_AUTO_HIDE_POINTER_BEHAVIOR_CHANGED:
 		case MSG_SHOW_HOME_BUTTON_CHANGED:
+		case MSG_FOLLOW_DARK_APPEARANCE_CHANGED:
 		case MSG_STANDARD_FONT_CHANGED:
 		case MSG_SERIF_FONT_CHANGED:
 		case MSG_SANS_SERIF_FONT_CHANGED:
@@ -400,6 +402,11 @@ SettingsWindow::_CreateGeneralPage(float spacing)
 		new BMessage(MSG_SHOW_HOME_BUTTON_CHANGED));
 	fShowHomeButton->SetValue(B_CONTROL_ON);
 
+	fFollowDarkAppearance = new BCheckBox("follow dark appearance",
+		B_TRANSLATE("Dark web pages when the system appearance is dark"),
+		new BMessage(MSG_FOLLOW_DARK_APPEARANCE_CHANGED));
+	fFollowDarkAppearance->SetValue(B_CONTROL_ON);
+
 	BView* view = BGroupLayoutBuilder(B_VERTICAL, 0)
 		.Add(BGridLayoutBuilder(spacing / 2, spacing / 2)
 			.Add(fStartPageControl->CreateLabelLayoutItem(), 0, 0)
@@ -431,6 +438,7 @@ SettingsWindow::_CreateGeneralPage(float spacing)
 		.Add(fAutoHideInterfaceInFullscreenMode)
 		.Add(fAutoHidePointer)
 		.Add(fShowHomeButton)
+		.Add(fFollowDarkAppearance)
 		.Add(BSpaceLayoutItem::CreateVerticalStrut(spacing))
 
 		.AddGroup(B_HORIZONTAL)
@@ -612,6 +620,9 @@ SettingsWindow::_CanApplySettings() const
 	canApply = canApply || ((fShowHomeButton->Value() == B_CONTROL_ON)
 		!= fSettings->GetValue(kSettingsKeyShowHomeButton, true));
 
+	canApply = canApply || ((fFollowDarkAppearance->Value() == B_CONTROL_ON)
+		!= fSettings->GetValue(kSettingsKeyFollowDarkAppearance, true));
+
 	canApply = canApply || (fDaysInHistory->Value()
 		!= BrowsingHistory::DefaultInstance()->MaxHistoryItemAge());
 
@@ -689,6 +700,8 @@ SettingsWindow::_ApplySettings()
 		fAutoHidePointer->Value() == B_CONTROL_ON);
 	fSettings->SetValue(kSettingsKeyShowHomeButton,
 		fShowHomeButton->Value() == B_CONTROL_ON);
+	fSettings->SetValue(kSettingsKeyFollowDarkAppearance,
+		fFollowDarkAppearance->Value() == B_CONTROL_ON);
 
 	// New page policies
 	fSettings->SetValue(kSettingsKeyStartUpPolicy, _StartUpPolicy());
@@ -789,6 +802,8 @@ SettingsWindow::_RevertSettings()
 		fSettings->GetValue(kSettingsKeyAutoHidePointer, false));
 	fShowHomeButton->SetValue(
 		fSettings->GetValue(kSettingsKeyShowHomeButton, true));
+	fFollowDarkAppearance->SetValue(
+		fSettings->GetValue(kSettingsKeyFollowDarkAppearance, true));
 
 	fDaysInHistory->SetValue(
 		BrowsingHistory::DefaultInstance()->MaxHistoryItemAge());
