@@ -74,6 +74,8 @@ notification_position_to_index(uint32 notification_position) {
 // other system service switches are.
 static const uint32 kToggleBus = 'tgbs';
 static const uint32 kToggleBusNotifications = 'tgbn';
+static const uint32 kShowSecretAccess = 'mngs';
+	// session_bus opens its list of programs allowed to use saved passwords
 static const char* kBusSignature = "application/x-vnd.Renga-SessionBus";
 
 
@@ -196,9 +198,16 @@ GeneralView::GeneralView(SettingsHost* host)
 		new BMessage(kToggleBusNotifications));
 	BBox* busBox = new BBox("bus");
 	busBox->SetLabel(fBusBox);
+	fSecretAccessButton = new BButton("secret_access",
+		B_TRANSLATE("Programs allowed to use saved passwords" B_UTF8_ELLIPSIS),
+		new BMessage(kShowSecretAccess));
 	busBox->AddChild(BLayoutBuilder::Group<>(B_VERTICAL)
 		.SetInsets(B_USE_DEFAULT_SPACING)
 		.Add(fBusNotificationsBox)
+		.AddGroup(B_HORIZONTAL)
+			.Add(fSecretAccessButton)
+			.AddGlue()
+		.End()
 		.View());
 	_UpdateBusBoxes();
 
@@ -220,6 +229,7 @@ GeneralView::AttachedToWindow()
 	fPositionMenu->SetTargetForItems(this);
 	fBusBox->SetTarget(this);
 	fBusNotificationsBox->SetTarget(this);
+	fSecretAccessButton->SetTarget(this);
 }
 
 
@@ -233,6 +243,9 @@ GeneralView::MessageReceived(BMessage* msg)
 			_EnableControls();
 			break;
 		}
+		case kShowSecretAccess:
+			BMessenger(kBusSignature).SendMessage(kShowSecretAccess);
+			break;
 		case kToggleBus:
 		case kToggleBusNotifications:
 		{
@@ -283,6 +296,7 @@ GeneralView::_UpdateBusBoxes()
 	fBusNotificationsBox->SetValue(bus_setting("notifications", true)
 		? B_CONTROL_ON : B_CONTROL_OFF);
 	fBusNotificationsBox->SetEnabled(enabled);
+	fSecretAccessButton->SetEnabled(enabled);
 }
 
 

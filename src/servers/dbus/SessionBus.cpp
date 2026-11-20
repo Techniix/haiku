@@ -603,6 +603,14 @@ SessionBus::_Deliver(Connection* to, const Message& message)
 }
 
 
+team_id
+SessionBus::PeerTeam(const BString& name)
+{
+	Connection* connection = _Find(name);
+	return connection != NULL ? (team_id)connection->pid : -1;
+}
+
+
 Connection*
 SessionBus::_Find(const BString& name)
 {

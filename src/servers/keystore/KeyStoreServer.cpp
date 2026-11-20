@@ -643,14 +643,19 @@ KeyStoreServer::_ValidateAppAccess(Keyring& keyring, const app_info& appInfo,
 	BMessage appMessage;
 	BPath path(&appInfo.ref);
 
-	// Renga (roadmap F-43 phase D): the system's own servers (packaged,
-	// read-only in /boot/system/servers) are not asked about. They are part
-	// of the system that keeps the keys; a background server such as
-	// session_bus (the Secret Service for Linux and ported programs) has no
-	// window to explain the request, and its callers would wait on a
-	// dialog. Applications are still asked, as before.
+	// Renga (roadmap F-43 phase D, narrowed 2026-11-20): session_bus, the
+	// Secret Service for Linux and ported programs, is not asked about its
+	// own keyring: it asks the user about each program itself (per
+	// program and collection, with "Always allow" stored in that keyring).
+	// A background server has no window to explain the request, and its
+	// callers would wait on a second dialog. Only that server (by
+	// signature and its packaged, read-only path) and only that keyring:
+	// other servers and other keyrings are asked about as before.
 	if (path.InitCheck() == B_OK
-		&& strncmp(path.Path(), "/boot/system/servers/", 21) == 0)
+		&& strcmp(appInfo.signature, "application/x-vnd.Renga-SessionBus")
+			== 0
+		&& strcmp(path.Path(), "/boot/system/servers/session_bus") == 0
+		&& strcmp(keyring.Name(), "Secret Service") == 0)
 		return B_OK;
 
 	status_t result = keyring.FindApplication(appInfo.signature,

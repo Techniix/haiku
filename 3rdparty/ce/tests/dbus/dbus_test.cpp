@@ -17,8 +17,13 @@
 	- notifications: GetServerInformation and Notify (an ID back);
 	- upower: EnumerateDevices, GetDisplayDevice and OnBattery;
 	- portal_settings: org.freedesktop.appearance color-scheme;
-	- secrets: OpenSession("plain"), CreateItem with attributes, SearchItems,
-	  GetSecrets returning the secret, Delete.
+	- secrets (2026-11-20, per-application approval): OpenSession needs no
+	  approval; an unknown program's SearchItems gets no answer while the
+	  prompt is up and AccessDenied after Deny (Escape; screenshot
+	  "secret_prompt"); Deny is remembered for that run; a new run of the
+	  program is asked again and "Always allow" ('a') lets it CreateItem,
+	  SearchItems and GetSecrets; the run after that gets them without a
+	  prompt, then Delete.
 
 	Only on images with the bus (/boot/system/servers/session_bus); the test
 	starts it when no session runs it (harness boots have no desktop).
@@ -36,6 +41,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <OS.h>
@@ -307,7 +313,9 @@ start_bus()
 	if (thread < 0)
 		return false;
 	resume_thread(thread);
-	for (int i = 0; i < 50; i++) {
+	// up to 20 s: on a short partial run the bus starts while the desktop
+	// is still coming up
+	for (int i = 0; i < 200; i++) {
 		snooze(100000);
 		Client probe;
 		BString error;
@@ -532,26 +540,69 @@ test_services()
 			&& (scheme == 1 || scheme == 2),
 		"color-scheme %u (1 dark, 2 light)", (unsigned)scheme);
 
-	// Secret Service
+}
+
+
+// #pragma mark - Secret Service
+
+
+static BString
+open_session(Client& client)
+{
 	DValueList open;
 	open.push_back(DValue::String("plain"));
 	open.push_back(DValue::Variant(DValue::String("")));
+	Message reply;
+	DValueList values;
 	client.Call(call("org.freedesktop.secrets", "/org/freedesktop/secrets",
 		"org.freedesktop.Secret.Service", "OpenSession", open), reply);
 	reply.GetArguments(values);
-	BString session = reply.type == METHOD_RETURN && values.size() == 2
+	return reply.type == METHOD_RETURN && values.size() == 2
 		? values[1].s : BString();
+}
 
+
+static DValue
+test_attributes()
+{
 	DValue attributes = DValue::Array("{ss}");
 	attributes.Add(DValue::DictEntry(DValue::String("application"),
 		DValue::String("renga-dbus-test")));
+	return attributes;
+}
+
+
+static Message
+search_call()
+{
+	DValueList search;
+	search.push_back(test_attributes());
+	return call("org.freedesktop.secrets", "/org/freedesktop/secrets",
+		"org.freedesktop.Secret.Service", "SearchItems", search);
+}
+
+
+/*!	A child process (a new team of the same program) that creates, finds,
+	reads and, with \a remove, deletes the test secret. With \a key it
+	presses that key for the approval prompt first. Exit status 0 when it
+	got the secret back, 2 when it was refused, 1 on other failures.
+*/
+static int
+secret_child(const char* key, bool remove, bigtime_t* _latency)
+{
+	Client client;
+	BString error;
+	if (!client.Connect(error))
+		return 1;
+	BString session = open_session(client);
+
 	DValue properties = DValue::Array("{sv}");
 	properties.Add(DValue::DictEntry(
 		DValue::String("org.freedesktop.Secret.Item.Label"),
 		DValue::Variant(DValue::String("Renga test secret"))));
 	properties.Add(DValue::DictEntry(
 		DValue::String("org.freedesktop.Secret.Item.Attributes"),
-		DValue::Variant(attributes)));
+		DValue::Variant(test_attributes())));
 	DValue secret = DValue::Struct();
 	secret.Add(DValue::ObjectPath(session.IsEmpty() ? "/" : session.String()));
 	secret.Add(DValue::Array("y"));
@@ -564,25 +615,43 @@ test_services()
 	create.push_back(properties);
 	create.push_back(secret);
 	create.push_back(DValue::Bool(true));
-	client.Call(call("org.freedesktop.secrets",
+
+	Message request = call("org.freedesktop.secrets",
 		"/org/freedesktop/secrets/collection/login",
-		"org.freedesktop.Secret.Collection", "CreateItem", create), reply);
+		"org.freedesktop.Secret.Collection", "CreateItem", create);
+	bigtime_t start = system_time();
+	if (key != NULL) {
+		client.Send(request);
+		snooze(1500000);
+		printf("CE-HOST sendkey %s\n", key);
+		fflush(stdout);
+	}
+	Message reply;
+	if (key != NULL) {
+		uint32 serial = request.serial;
+		client.WaitFor(reply, [serial](const Message& message) {
+			return message.replySerial == serial; }, 10000000);
+	} else
+		client.Call(request, reply);
+	*_latency = system_time() - start;
+	if (reply.type == ERROR)
+		return reply.errorName == "org.freedesktop.DBus.Error.AccessDenied"
+			? 2 : 1;
+	DValueList values;
 	reply.GetArguments(values);
 	BString item = reply.type == METHOD_RETURN && values.size() == 2
 		? values[0].s : BString();
-	BString createError = reply.errorName;
+	if (item.IsEmpty())
+		return 1;
 
-	DValueList search;
-	search.push_back(attributes);
-	client.Call(call("org.freedesktop.secrets", "/org/freedesktop/secrets",
-		"org.freedesktop.Secret.Service", "SearchItems", search), reply);
+	client.Call(search_call(), reply);
 	reply.GetArguments(values);
 	bool found = reply.type == METHOD_RETURN && values.size() == 2
 		&& values[0].items.size() == 1 && values[0].items[0].s == item;
 
 	DValueList get;
 	DValue items = DValue::Array("o");
-	items.Add(DValue::ObjectPath(item.IsEmpty() ? "/" : item.String()));
+	items.Add(DValue::ObjectPath(item.String()));
 	get.push_back(items);
 	get.push_back(DValue::ObjectPath(session.IsEmpty() ? "/"
 		: session.String()));
@@ -599,21 +668,112 @@ test_services()
 				value << (char)entry.items[2].items[i].u;
 		}
 	}
+	bool deletedAndGone = true;
+	if (remove) {
+		client.Call(call("org.freedesktop.secrets", item.String(),
+			"org.freedesktop.Secret.Item", "Delete"), reply);
+		bool deleted = reply.type == METHOD_RETURN;
+		client.Call(search_call(), reply);
+		reply.GetArguments(values);
+		deletedAndGone = deleted && reply.type == METHOD_RETURN
+			&& values.size() == 2 && values[0].items.empty();
+	}
+	printf("CE-INFO secret child: item %s, found %d, secret [%s], removed"
+		" %d\n", item.String(), found, value.String(), deletedAndGone);
+	return found && value == "hunter2" && deletedAndGone ? 0 : 1;
+}
 
-	client.Call(call("org.freedesktop.secrets",
-		item.IsEmpty() ? "/" : item.String(), "org.freedesktop.Secret.Item",
-		"Delete"), reply);
-	bool deleted = reply.type == METHOD_RETURN;
-	client.Call(call("org.freedesktop.secrets", "/org/freedesktop/secrets",
-		"org.freedesktop.Secret.Service", "SearchItems", search), reply);
-	reply.GetArguments(values);
-	bool gone = reply.type == METHOD_RETURN && values.size() == 2
-		&& values[0].items.empty();
-	report("secrets", !session.IsEmpty() && !item.IsEmpty() && found
-			&& value == "hunter2" && deleted && gone,
-		"session %s, item %s %s, found %d, secret [%s], deleted %d, gone %d",
-		session.String(), item.String(), createError.String(), found,
-		value.String(), deleted, gone);
+
+//! Runs secret_child() in a child process; its exit status.
+static int
+run_secret_child(const char* key, bool remove, bigtime_t* _latency)
+{
+	int pipeFDs[2];
+	if (pipe(pipeFDs) != 0)
+		return 1;
+	pid_t child = fork();
+	if (child == 0) {
+		close(pipeFDs[0]);
+		bigtime_t latency = 0;
+		int result = secret_child(key, remove, &latency);
+		write(pipeFDs[1], &latency, sizeof(latency));
+		fflush(stdout);
+		_exit(result);
+	}
+	close(pipeFDs[1]);
+	*_latency = -1;
+	read(pipeFDs[0], _latency, sizeof(*_latency));
+	close(pipeFDs[0]);
+	int status = 1;
+	if (child < 0 || waitpid(child, &status, 0) != child)
+		return 1;
+	return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
+
+/*!	Per-application approval (2026-11-20): an unknown program gets no secret
+	without the user's consent; Deny is remembered for the run of the
+	program; "Always allow" is remembered across runs.
+*/
+static void
+test_secrets()
+{
+	Client client;
+	BString error;
+	if (!client.Connect(error)) {
+		report("secrets.unknown_denied", false, "connect: %s",
+			error.String());
+		return;
+	}
+	BString session = open_session(client);
+	report("secrets.open_session", !session.IsEmpty(),
+		"OpenSession needs no approval: %s", session.String());
+
+	// an unknown program: the call waits for the prompt, nothing leaks
+	Message request = search_call();
+	client.Send(request);
+	uint32 serial = request.serial;
+	Message reply;
+	bool early = client.WaitFor(reply, [serial](const Message& message) {
+		return message.replySerial == serial; }, 1500000);
+	printf("CE-HOST screenshot secret_prompt\n");
+	fflush(stdout);
+	snooze(300000);
+	printf("CE-HOST sendkey esc\n");
+	fflush(stdout);
+	bool answered = early || client.WaitFor(reply,
+		[serial](const Message& message) {
+			return message.replySerial == serial; }, 10000000);
+
+	report("secrets.unknown_denied", !early && answered
+			&& reply.type == ERROR
+			&& reply.errorName == "org.freedesktop.DBus.Error.AccessDenied",
+		"answer before the prompt was answered: %s; after Deny: %s %s",
+		early ? "yes (leak)" : "none", answered ? (reply.type == ERROR
+			? "error" : "a result") : "nothing", reply.errorName.String());
+
+	// Deny is remembered for this run: no second prompt
+	bigtime_t start = system_time();
+	client.Call(search_call(), reply);
+	bigtime_t latency = system_time() - start;
+	report("secrets.denied_remembered", reply.type == ERROR
+			&& reply.errorName == "org.freedesktop.DBus.Error.AccessDenied"
+			&& latency < 1000000,
+		"second call: %s after %lld us", reply.errorName.String(),
+		(long long)latency);
+
+	// another run of the program is asked again; "Always allow" ('a')
+	bigtime_t childLatency;
+	int first = run_secret_child("a", false, &childLatency);
+	report("secrets.always_allow", first == 0,
+		"new run asked again, \"Always allow\": child status %d", first);
+
+	// and remembered for the next run: no prompt, no key pressed
+	int second = run_secret_child(NULL, true, &childLatency);
+	report("secrets.allowed_remembered", second == 0
+			&& childLatency < 3000000,
+		"next run: child status %d, first call answered after %lld us",
+		second, (long long)childLatency);
 }
 
 
@@ -632,6 +792,7 @@ main()
 	if (running) {
 		test_bus();
 		test_services();
+		test_secrets();
 	}
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

@@ -14,3 +14,11 @@ Application session_bus :
 	: be bnetapi network [ TargetLibstdc++ ]
 	: session_bus.rdef SessionBusIcon.rdef
 ;
+
+# The approval question as a normal application (it gets the keyboard
+# focus, which session_bus, a background application, does not).
+Application session_bus_prompt :
+	secret_prompt.cpp
+	: be [ TargetLibstdc++ ]
+	: secret_prompt.rdef SessionBusIcon.rdef
+;

@@ -79,6 +79,10 @@ public:
 				// service's name), serial assigned
 			uint32			NextSerial();
 
+			team_id			PeerTeam(const BString& name);
+				// the team behind a connection (SO_PEERCRED), -1 if
+				// unknown; bus thread only (services' HandleCall())
+
 private:
 			void			_Accept();
 			bool			_Read(Connection* connection);

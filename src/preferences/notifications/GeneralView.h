@@ -43,6 +43,7 @@ private:
 		BCheckBox*			fNotificationBox;
 		BCheckBox*			fBusBox;
 		BCheckBox*			fBusNotificationsBox;
+		BButton*			fSecretAccessButton;
 		BSlider*			fDurationSlider;
 		BSlider*			fWidthSlider;
 		BPopUpMenu*			fPositionMenu;

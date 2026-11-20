@@ -39,6 +39,7 @@
 #include <unistd.h>
 
 #include <Application.h>
+#include <image.h>
 #include <Autolock.h>
 #include <Bitmap.h>
 #include <File.h>
@@ -720,13 +721,19 @@ static const char* kCollectionPath
 static const char* kItemPrefix = "/org/freedesktop/secrets/collection/login/";
 
 
+static const char* kAccessKey = "renga.access";
+	// the "Always allow" list, a key in the same keyring as the secrets
+static const bigtime_t kAskTimeout = 120000000;
+
+
 SecretService::SecretService(SessionBus* bus)
 	:
 	Service(bus),
 	fNextSession(1),
 	fLock("secret service"),
 	fQuit(false),
-	fKeyringReady(false)
+	fKeyringReady(false),
+	fAllowedLoaded(false)
 {
 	fWakeUp = create_sem(0, "secret service");
 	fThread = spawn_thread(_Worker, "secret service", B_NORMAL_PRIORITY,
@@ -748,6 +755,8 @@ SecretService::~SecretService()
 void
 SecretService::HandleCall(const Message& call)
 {
+	// The bus thread: the caller's team is known only here.
+	QueuedCall queued = { call, fBus->PeerTeam(call.sender) };
 	BAutolock locker(fLock);
 	if (fQueue.size() >= 64) {
 		// the key store does not answer: say so rather than pile up
@@ -755,7 +764,7 @@ SecretService::HandleCall(const Message& call)
 			"The key store is busy");
 		return;
 	}
-	fQueue.push_back(call);
+	fQueue.push_back(queued);
 	release_sem(fWakeUp);
 }
 
@@ -767,12 +776,12 @@ SecretService::_Worker(void* data)
 	while (!self->fQuit) {
 		acquire_sem(self->fWakeUp);
 		while (!self->fQuit) {
-			Message call;
+			QueuedCall queued;
 			{
 				BAutolock locker(self->fLock);
 				if (self->fQueue.empty())
 					break;
-				call = self->fQueue.front();
+				queued = self->fQueue.front();
 				self->fQueue.erase(self->fQueue.begin());
 			}
 			if (!self->fKeyringReady) {
@@ -780,10 +789,203 @@ SecretService::_Worker(void* data)
 					// B_NAME_IN_USE after the first time
 				self->fKeyringReady = true;
 			}
-			self->_Handle(call);
+			if (!self->_Approved(queued.call, queued.team)) {
+				self->Error(queued.call,
+					"org.freedesktop.DBus.Error.AccessDenied",
+					"Access to the saved passwords was not allowed");
+				continue;
+			}
+			self->_Handle(queued.call);
 		}
 	}
 	return B_OK;
+}
+
+
+//! Calls that read or change items need the program to be allowed.
+static bool
+needs_approval(const Message& call)
+{
+	if (call.interface == "org.freedesktop.DBus.Introspectable")
+		return false;
+	if (call.path.StartsWith("/org/freedesktop/secrets/session/"))
+		return false;
+	if (call.path == kServicePath) {
+		if (call.interface == kPropertiesInterface)
+			return false;	// only the list of collections
+		if (call.member == "OpenSession" || call.member == "ReadAlias"
+			|| call.member == "SetAlias")
+			return false;
+	}
+	return true;
+}
+
+
+//! The program file of \a team, or an empty string.
+static BString
+team_program(team_id team)
+{
+	if (team < 0)
+		return BString();
+	image_info info;
+	int32 cookie = 0;
+	while (get_next_image_info(team, &cookie, &info) == B_OK) {
+		if (info.type == B_APP_IMAGE)
+			return BString(info.name);
+	}
+	return BString();
+}
+
+
+bool
+SecretService::_Approved(const Message& call, team_id team)
+{
+	if (!needs_approval(call))
+		return true;
+
+	BString program = team_program(team);
+	if (program.IsEmpty())
+		return false;
+		// a caller we cannot identify gets nothing
+
+	BString runKey;
+	runKey << team << ":" << program;
+	{
+		BAutolock locker(fLock);
+		if (!fAllowedLoaded)
+			_LoadAllowed();
+		if (fAllowed.HasString(program))
+			return true;
+		std::map<std::string, bool>::iterator decision
+			= fDecisions.find(runKey.String());
+		if (decision != fDecisions.end())
+			return decision->second;
+	}
+
+	int32 answer = _Ask(program);
+	BAutolock locker(fLock);
+	// 0 Deny (also time-out and closing), 1 Allow this time, 2 Always
+	if (answer == 2) {
+		fAllowed.Add(program);
+		_StoreAllowed();
+		return true;
+	}
+	fDecisions[runKey.String()] = answer == 1;
+	// forget runs of programs that have quit
+	for (std::map<std::string, bool>::iterator i = fDecisions.begin();
+			i != fDecisions.end();) {
+		team_id decided = atoi(i->first.c_str());
+		team_info info;
+		if (get_team_info(decided, &info) != B_OK)
+			fDecisions.erase(i++);
+		else
+			i++;
+	}
+	return answer == 1;
+}
+
+
+/*!	Asks the user (worker thread). Returns 0 Deny, 1 Allow this time,
+	2 Always allow; 0 if nobody answers within kAskTimeout.
+*/
+int32
+SecretService::_Ask(const BString& program)
+{
+	// A program of its own (session_bus_prompt): session_bus is a
+	// background application, whose windows get no keyboard focus. Its exit
+	// status is the answer.
+	const char* arguments[] = { "/boot/system/servers/session_bus_prompt",
+		program.String(), NULL };
+	thread_id thread = load_image(2, arguments, (const char**)environ);
+	if (thread < 0) {
+		fprintf(stderr, "session_bus: cannot ask about %s: %s\n",
+			program.String(), strerror(thread));
+		return 0;
+	}
+	resume_thread(thread);
+
+	bigtime_t deadline = system_time() + kAskTimeout;
+	while (true) {
+		status_t result;
+		status_t status = wait_for_thread_etc(thread, B_RELATIVE_TIMEOUT,
+			100000, &result);
+		if (status == B_OK)
+			return result >= 0 && result <= 2 ? result : 0;
+		if (status != B_TIMED_OUT && status != B_INTERRUPTED)
+			return 0;
+		if (fQuit || system_time() > deadline) {
+			kill_thread(thread);
+			return 0;
+		}
+	}
+}
+
+
+//! Called with fLock held.
+status_t
+SecretService::_LoadAllowed()
+{
+	fAllowed.MakeEmpty();
+	BKey key;
+	status_t status = BKeyStore().GetKey(kKeyring, B_KEY_TYPE_GENERIC,
+		kAccessKey, key);
+	fAllowedLoaded = true;
+	if (status != B_OK)
+		return status == B_ENTRY_NOT_FOUND ? B_OK : status;
+	BMessage archive;
+	if (key.DataLength() == 0
+		|| archive.Unflatten((const char*)key.Data()) != B_OK)
+		return B_BAD_DATA;
+	const char* program;
+	for (int32 i = 0; archive.FindString("program", i, &program) == B_OK;
+			i++)
+		fAllowed.Add(program);
+	return B_OK;
+}
+
+
+//! Called with fLock held.
+status_t
+SecretService::_StoreAllowed()
+{
+	BMessage archive;
+	for (int32 i = 0; i < fAllowed.CountStrings(); i++)
+		archive.AddString("program", fAllowed.StringAt(i));
+	ssize_t size = archive.FlattenedSize();
+	std::vector<char> buffer(size);
+	status_t status = archive.Flatten(buffer.data(), size);
+	if (status != B_OK)
+		return status;
+	BKeyStore store;
+	BKey old;
+	if (store.GetKey(kKeyring, B_KEY_TYPE_GENERIC, kAccessKey, old) == B_OK)
+		store.RemoveKey(kKeyring, old);
+	BKey key(B_KEY_PURPOSE_GENERIC, kAccessKey, "",
+		(const uint8*)buffer.data(), size);
+	return store.AddKey(kKeyring, key);
+}
+
+
+status_t
+SecretService::GetAllowedPrograms(BStringList& programs)
+{
+	BAutolock locker(fLock);
+	if (!fAllowedLoaded)
+		_LoadAllowed();
+	programs = fAllowed;
+	return B_OK;
+}
+
+
+status_t
+SecretService::RemoveAllowedProgram(const BString& program)
+{
+	BAutolock locker(fLock);
+	if (!fAllowedLoaded)
+		_LoadAllowed();
+	if (!fAllowed.Remove(program))
+		return B_ENTRY_NOT_FOUND;
+	return _StoreAllowed();
 }
 
 
@@ -866,6 +1068,9 @@ all_items(std::vector<secret_item>& items)
 	uint32 cookie = 0;
 	BKey key;
 	while (store.GetNextKey(kKeyring, cookie, key) == B_OK) {
+		if (strcmp(key.Identifier(), kAccessKey) == 0)
+			continue;
+			// the approval list, not an item
 		secret_item item;
 		if (item_from_key(key, item))
 			items.push_back(item);
