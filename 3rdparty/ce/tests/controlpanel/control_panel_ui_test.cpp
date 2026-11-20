@@ -12,7 +12,8 @@
 	  control_panel.window_search    the window's search lists the results
 	  control_panel.window_page_*    the window shows a page, built in
 	                                 (Displays, Audio, Streaming and privacy,
-	                                 Boot and recovery) or a preference's;
+	                                 Boot and recovery, Devices and drivers)
+	                                 or a preference's;
 	                                 the built-in pages' controls are there
 	  control_panel.streamer_mode    the Streaming page shows the streamer
 	                                 mode file's state
@@ -247,6 +248,16 @@ main()
 	report("window_page_displays", shown == "displays", "page \"%s\"",
 		shown.String());
 	printf("CE-HOST screenshot control_panel_displays\n");
+	fflush(stdout);
+	snooze(1500000);
+
+	shown = show_page(messenger, "devices");
+	snooze(800000);
+	report("window_page_devices", shown == "devices"
+			&& has_view(messenger, "deviceList")
+			&& has_view(messenger, "devicesSummary"),
+		"page \"%s\"", shown.String());
+	printf("CE-HOST screenshot control_panel_devices\n");
 	fflush(stdout);
 	snooze(1500000);
 

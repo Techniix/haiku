@@ -223,7 +223,8 @@ RENGA_DOCTOR_SCREENSHOTS = ["renga_doctor"]
 WELCOME_SCREENSHOTS = ["welcome_graphics", "welcome_setup"]
 RENGUIN_MANAGER_SCREENSHOTS = ["renguin_manager"]
 CONTROL_PANEL_SCREENSHOTS = ["control_panel_search",
-	"control_panel_streaming", "control_panel_displays"]
+	"control_panel_streaming", "control_panel_displays",
+	"control_panel_devices"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
 	"linuxkpi_hardware", "linuxkpi_compatibility",
 	"linuxkpi_settings_mt7921e"]

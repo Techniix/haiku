@@ -4,7 +4,8 @@ SubDir HAIKU_TOP src apps controlpanel ;
 # from their preferences' sources (Displays from the Screen preferences,
 # Audio from the Audio preferences), which still build those preferences.
 
-UsePrivateHeaders app interface media shared ;
+UsePrivateHeaders app interface media shared system linuxkpi ;
+UsePrivateSystemHeaders ;
 UsePrivateHeaders [ FDirName graphics common ] ;
 
 local screenDir = [ FDirName $(HAIKU_TOP) src preferences screen ] ;
@@ -12,6 +13,8 @@ local audioDir = [ FDirName $(HAIKU_TOP) src preferences audio ] ;
 local mediaDir = [ FDirName $(HAIKU_TOP) src preferences media ] ;
 local desklinkDir = [ FDirName $(HAIKU_TOP) src bin desklink ] ;
 local renguinDir = [ FDirName $(HAIKU_TOP) src apps renguinmanager ] ;
+local lkpiCoreDir = [ FDirName $(HAIKU_TOP) src apps linuxkpimanager core ] ;
+SubDirHdrs $(lkpiCoreDir) ;
 SEARCH_SOURCE += $(screenDir) $(audioDir) $(mediaDir) $(desklinkDir)
 	$(renguinDir) ;
 SubDirHdrs $(renguinDir) ;
@@ -31,7 +34,9 @@ Application ControlPanel :
 	ApplicationVolumesView.cpp
 	MixerControl.cpp
 	RenguinView.cpp
-	: be media localestub [ TargetLibstdc++ ] [ TargetLibsupc++ ]
+	: liblinuxkpi_manage.a
+		libcolumnlistview.a be media bnetapi network localestub
+		[ TargetLibstdc++ ] [ TargetLibsupc++ ]
 	: ControlPanel.rdef ControlPanelIcon.rdef
 ;
 

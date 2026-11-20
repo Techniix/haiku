@@ -37,6 +37,8 @@
 #include <CardLayout.h>
 #include <Catalog.h>
 #include <CheckBox.h>
+#include <ColumnListView.h>
+#include <ColumnTypes.h>
 #include <GroupView.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
@@ -69,6 +71,7 @@
 
 #include "AudioSettingsView.h"
 #include "DisplaysView.h"
+#include "LinuxKPIManage.h"
 #include "RenguinView.h"
 
 
@@ -117,8 +120,8 @@ static const PageInfo kPages[] = {
 		"/boot/system/preferences/Gamepads",
 		"controller joystick xbox dualsense 8bitdo switch pad" },
 	{ "devices", "Hardware", "Devices and drivers",
-		"Linux drivers through LinuxKPI, Wi-Fi diagnostics and driver "
-		"settings.", "/boot/system/apps/LinuxKPIManager",
+		"Every device and its driver: native, or Linux through LinuxKPI.",
+		"/boot/system/apps/LinuxKPIManager",
 		"linuxkpi driver wifi wireless hardware device" },
 	{ "input", "Hardware", "Mouse, keyboard and touchpad",
 		"Pointer speed and acceleration, keyboard repeat.",
@@ -220,6 +223,7 @@ static const SettingInfo kSettings[] = {
 	{ "gamepads", "Gamepad mapping", "buttons remap" },
 	{ "gamepads", "Test a gamepad", "tester" },
 	{ "gamepads", "Player numbers", "player lights" },
+	{ "devices", "Every device and its driver", "hardware pci list" },
 	{ "devices", "Linux drivers", "linuxkpi" },
 	{ "devices", "Wi-Fi statistics", "throughput speed" },
 	{ "input", "Pointer speed", "mouse acceleration" },
@@ -557,6 +561,111 @@ private:
 };
 
 
+/*!	Devices and drivers (roadmap F-26/F-28, batch 5): every PCI device with
+	its class and IDs, and which driver it has: a Linux driver through
+	LinuxKPI (with its state: working, firmware missing, not installed,
+	disabled at boot) or a native one. Haiku's device manager does not say
+	which native driver bound a device, so those show "Native or none".
+	Switching a Linux driver on or off, its settings and logs are in
+	LinuxKPI Manager.
+*/
+using namespace LKPI;
+
+
+class DriversPage : public BGroupView {
+public:
+	DriversPage()
+		:
+		BGroupView("devices", B_VERTICAL)
+	{
+		fList = new BColumnListView("deviceList", 0, B_FANCY_BORDER, true);
+		fList->AddColumn(new BStringColumn(B_TRANSLATE("Device"), 220, 60,
+			500, B_TRUNCATE_END), 0);
+		fList->AddColumn(new BStringColumn(B_TRANSLATE("ID"), 80, 40, 120,
+			B_TRUNCATE_END), 1);
+		fList->AddColumn(new BStringColumn(B_TRANSLATE("Driver"), 130, 60,
+			300, B_TRUNCATE_END), 2);
+		fList->AddColumn(new BStringColumn(B_TRANSLATE("State"), 170, 60,
+			400, B_TRUNCATE_END), 3);
+		fList->SetExplicitMinSize(BSize(400, 220));
+		fSummary = new BStringView("devicesSummary", "");
+		BMessage* open = new BMessage(kMsgOpenPreference);
+		open->AddString("id", "devices");
+		BLayoutBuilder::Group<>(this)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(page_heading(find_page("devices")))
+			.Add(new BSeparatorView(B_HORIZONTAL))
+			.Add(fList, 1.0f)
+			.Add(fSummary)
+			.AddGroup(B_HORIZONTAL)
+				.Add(new BButton("linuxkpiManager", B_TRANSLATE(
+					"Linux drivers" B_UTF8_ELLIPSIS), open))
+				.AddGlue()
+			.End();
+		_Fill();
+	}
+
+	int32 CountDevices() const { return fList->CountRows(); }
+
+private:
+	void _Fill()
+	{
+		BObjectList<PCIDevice, true> devices;
+		ScanPCIDevices(devices);
+		DriverCatalog catalog;
+		catalog.Load();
+		int32 linuxDrivers = 0;
+		for (int32 i = 0; i < devices.CountItems(); i++) {
+			const PCIDevice* device = devices.ItemAt(i);
+			BString id;
+			id.SetToFormat("%04x:%04x", device->vendor, device->device);
+			const DeviceId* deviceId = NULL;
+			Driver* driver = catalog.FindDriverFor(device->vendor,
+				device->device, &deviceId);
+			BString name(PCIClassName(device->classBase,
+				device->classSub));
+			BString driverName = B_TRANSLATE("Native or none");
+			BString state;
+			if (driver != NULL) {
+				linuxDrivers++;
+				if (deviceId != NULL && !deviceId->name.IsEmpty())
+					name = deviceId->name;
+				driverName.SetToFormat(B_TRANSLATE("Linux: %s"),
+					driver->name.String());
+				BStringList missing;
+				if (deviceId != NULL)
+					driver->MissingFirmware(*deviceId, missing);
+				if (!driver->Installed())
+					state = B_TRANSLATE("Driver not installed");
+				else if (!missing.IsEmpty())
+					state = B_TRANSLATE("Firmware missing");
+				else if (!driver->interfaces.IsEmpty())
+					state = B_TRANSLATE("Working");
+				else if (!driver->enabledAtBoot)
+					state = B_TRANSLATE("Disabled at boot");
+				else
+					state = B_TRANSLATE("Not running");
+			}
+			BRow* row = new BRow();
+			row->SetField(new BStringField(name), 0);
+			row->SetField(new BStringField(id), 1);
+			row->SetField(new BStringField(driverName), 2);
+			row->SetField(new BStringField(state), 3);
+			fList->AddRow(row);
+			printf("ControlPanel: device %s %s: %s %s\n", id.String(),
+				name.String(), driverName.String(), state.String());
+		}
+		BString summary;
+		summary.SetToFormat(B_TRANSLATE("%" B_PRId32 " devices, %" B_PRId32
+			" with a Linux driver"), devices.CountItems(), linuxDrivers);
+		fSummary->SetText(summary);
+	}
+
+	BColumnListView*	fList;
+	BStringView*		fSummary;
+};
+
+
 /*!	A page whose settings are still in their own preference: what it holds
 	and a button that opens it.
 */
@@ -845,6 +954,8 @@ private:
 		}
 		if (strcmp(page->id, "streaming") == 0)
 			return new StreamingPage();
+		if (strcmp(page->id, "devices") == 0)
+			return new DriversPage();
 		if (strcmp(page->id, "boot") == 0)
 			return new BootPage();
 		return new PreferencePage(page);
