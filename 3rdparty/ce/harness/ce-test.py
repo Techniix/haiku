@@ -219,6 +219,8 @@ STREAM_SCREENSHOTS = ["mediaplayer_hls"]
 HTML5_SCREENSHOTS = ["html5_webm", "html5_mp4"]
 # The Boot menu preferences (F-22) with the menu on and a default set.
 BOOTMENU_SCREENSHOTS = ["bootmenu_preferences"]
+CONTROL_PANEL_SCREENSHOTS = ["control_panel_search",
+	"control_panel_streaming", "control_panel_displays"]
 LINUXKPI_SCREENSHOTS = ["linuxkpi_overview", "linuxkpi_drivers",
 	"linuxkpi_hardware", "linuxkpi_compatibility",
 	"linuxkpi_settings_mt7921e"]
@@ -4465,6 +4467,9 @@ def main():
 		if "bootmenu_ui_test" in (args.only or available):
 			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
 				"bootmenu.screenshots")
+		if "control_panel_ui_test" in (args.only or available):
+			check_screenshots(results_dir, report, CONTROL_PANEL_SCREENSHOTS,
+				"control_panel.screenshots")
 		if "hw_cursor_test" in (args.only or available) \
 				and "usb" in args.pointer_devices:
 			check_screenshots(results_dir, report, HW_CURSOR_SCREENSHOTS,

@@ -1,0 +1,15 @@
+SubDir HAIKU_TOP 3rdparty ce tests controlpanel ;
+
+UsePrivateHeaders shared ;
+
+# The Control Panel (F-28, batch 5): pages, search and built-in pages; needs
+# the desktop of the renga-* images, hence the second phase's directory.
+Application control_panel_ui_test :
+	control_panel_ui_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: control_panel_ui_test ;
+}

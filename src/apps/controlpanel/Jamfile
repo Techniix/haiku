@@ -1,0 +1,38 @@
+SubDir HAIKU_TOP src apps controlpanel ;
+
+# Renga (roadmap F-28, batch 5): the Control Panel. Its built-in pages come
+# from their preferences' sources (Displays from the Screen preferences,
+# Audio from the Audio preferences), which still build those preferences.
+
+UsePrivateHeaders app interface media shared ;
+UsePrivateHeaders [ FDirName graphics common ] ;
+
+local screenDir = [ FDirName $(HAIKU_TOP) src preferences screen ] ;
+local audioDir = [ FDirName $(HAIKU_TOP) src preferences audio ] ;
+local mediaDir = [ FDirName $(HAIKU_TOP) src preferences media ] ;
+local desklinkDir = [ FDirName $(HAIKU_TOP) src bin desklink ] ;
+SEARCH_SOURCE += $(screenDir) $(audioDir) $(mediaDir) $(desklinkDir) ;
+SubDirHdrs $(screenDir) ;
+SubDirHdrs $(audioDir) ;
+SubDirHdrs $(mediaDir) ;
+SubDirHdrs $(desklinkDir) ;
+
+Application ControlPanel :
+	ControlPanel.cpp
+	DisplaysView.cpp
+	WaylandSwitch.cpp
+	AudioDevices.cpp
+	AudioSettingsView.cpp
+	AudioDevicePolicy.cpp
+	OutputMenuField.cpp
+	ApplicationVolumesView.cpp
+	MixerControl.cpp
+	: be media localestub [ TargetLibstdc++ ] [ TargetLibsupc++ ]
+	: ControlPanel.rdef ControlPanelIcon.rdef
+;
+
+DoCatalogs ControlPanel :
+	x-vnd.Renga-ControlPanel
+	:
+	ControlPanel.cpp
+;

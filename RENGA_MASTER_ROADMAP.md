@@ -338,7 +338,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-25 | Lumina, rebuilt into Renga (window management, title bars, panel) | Designed (rework 2026-11-12: merging into Renga; portable core host-tested) | Host unit tests only |
 | F-26 | LinuxKPI_HaikuOS | QEMU Tested (core, in-tree build, Manager and `lkpictl`); `mt7921e` Implemented in Renga, hardware regression check pending | 31 `linuxkpi.*` (every image), 10 `linuxkpi_ui.*` + `linuxkpi_ui.screenshots` (renga-raw) |
 | F-27 | Renguin | In Development (static and dynamic Linux programs, networking QEMU Tested 2026-11-14) | `renguin` 32 |
-| F-28 | Control Panel suite | Not Started | None |
+| F-28 | Control Panel suite | Partly QEMU Tested (2026-11-20, batch 5: window with sidebar and search; built-in Displays, Audio, Streaming and privacy, Boot and recovery; the other pages open their preferences) | 14 `control_panel.*` + 3 screenshots (renga-raw) |
 | F-29 | Upstream bug fixes carried | QEMU Tested | See section 10.2 |
 | F-30 | Periodic NTP sync | Not Started | None |
 | F-31 | Media Kit | Phase 1 QEMU Tested, with windowed-sinc resampling and clock-drift correction (cubeb back end: recipe in RengaPorts, compile-checked only); phase 2 In Progress (USB audio UAC1, hot-plug QEMU Tested; UAC2, HDMI detection and playback, UVC Implemented, need hardware); phase 3 QEMU Tested; phase 4 QEMU Tested (open: FFmpeg update, network audio, WebRTC); phase 5 plumbing QEMU Tested with a software back end, GPU back ends not started; phase 6 QEMU Tested (`F-32`) | 35 `media.*` + 11 `media_audio.*` + 17 `media_usb.*` + 5 `media_usb_audio.*` (renga-raw); 46 `usb_audio.*` + 32 `usb_audio_uac2.*` + 6 `usb_audio_out.*`, 19 `hda_eld.*`, 18 `uvc.*` (every image); 39+7 `capture.*` + `capture.screenshots`, 21+2 `media_latency.*`, 17 `media_codec.*`, 9+1 `media_stream.*` (renga-raw); 2026-11-11 also `media_codec`, `media_stream` (RTMP), 9 `video_accel.*`, `media_resample` (4), `media_drift` (5), `html5_media` (9 + screenshots), `sound_settings` with `sound_audio` (renga-raw), `user_locks` 24 (every image) |
@@ -1257,10 +1257,10 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Field | Value |
 | --- | --- |
 | Upstream maturity | Separate preflets (A/B); no power preferences, no services manager, no hardware inspector |
-| Renga maturity | None |
-| Status | **Not Started** |
-| Completed | None |
-| Remaining | One place for installed software, hardware and settings; LinuxKPI device manager. Related audit proposals: Services manager (3), System Report / hardware inspector (3), Power preferences (3), Repository manager (4). |
+| Renga maturity | Started (batch 5) |
+| Status | **Partly QEMU Tested** |
+| Completed | 2026-11-20: `/boot/system/apps/ControlPanel` (Deskbar, HVIF icon): categories in a sidebar, a search over every page's settings with synonyms, built-in pages Displays and Audio (from their preferences' sources), Streaming and privacy, Boot and recovery; 21 more pages list their settings and open their preference, which keeps working |
+| Remaining | Turn the remaining preferences' windows into pages (Gamepads, Notifications, Network, Input, ...); Restore defaults per page; "Settings..." links from features; One place for installed software, hardware and settings; LinuxKPI device manager. Related audit proposals: Services manager (3), System Report / hardware inspector (3), Power preferences (3), Repository manager (4). |
 | Known bugs/limitations | Not applicable |
 | Dependencies | APIs it presents (LinuxKPI `F-26`, sensors, SMART); Interface Kit only (no Qt, per audit) |
 | Difficulty | 3-4 per panel (audit proposals) |

@@ -22,6 +22,9 @@ Icons and where they go:
                          a screen with a red record dot
     WaylandCompositor    src/servers/wayland/WaylandCompositorIcon.rdef
                          two overlapping windows, the front one green
+    ControlPanel         src/apps/controlpanel/ControlPanelIcon.rdef
+                         (batch 5) a window with a sidebar and two
+                         switches, one on (green), one off
 """
 
 import os
@@ -131,6 +134,27 @@ def wayland_compositor():
 	return icon
 
 
+def control_panel():
+	icon = hvif.Icon()
+	icon.polygon(skew(rect(4, 6, 60, 58, 3)), fill(PAPER, (4, 6), (60, 58)),
+		outline=(OUTLINE, 2))
+	icon.polygon(skew(rect(4, 6, 60, 14, 3)), fill(GOLD))
+	icon.polygon(skew(rect(8, 18, 22, 54, 1)), fill(SCREEN, (8, 18),
+		(22, 54)))
+	for y in (22, 30, 38):
+		icon.polygon(skew(rect(10, y, 20, y + 3, 0)), fill(PAPER))
+	# two switches: on (green, knob right), off (grey, knob left)
+	icon.polygon(skew(rect(28, 22, 54, 32, 5)), fill(GREEN),
+		outline=(OUTLINE, 2))
+	icon.polygon(skew(hvif.circle(48, 27, 4)), fill(PAPER),
+		outline=(OUTLINE, 1))
+	icon.polygon(skew(rect(28, 40, 54, 50, 5)), fill(GREY),
+		outline=(OUTLINE, 2))
+	icon.polygon(skew(hvif.circle(34, 45, 4)), fill(PAPER),
+		outline=(OUTLINE, 1))
+	return icon
+
+
 ICONS = [
 	("SystemLogs", system_logs,
 		"src/apps/systemlogs/SystemLogsIcon.rdef"),
@@ -141,6 +165,8 @@ ICONS = [
 		"src/preferences/screenrecording/ScreenRecordingIcon.rdef"),
 	("WaylandCompositor", wayland_compositor,
 		"src/servers/wayland/WaylandCompositorIcon.rdef"),
+	("ControlPanel", control_panel,
+		"src/apps/controlpanel/ControlPanelIcon.rdef"),
 ]
 
 
