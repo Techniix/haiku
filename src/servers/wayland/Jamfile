@@ -39,6 +39,8 @@ local protocols =
 	cursor-shape-v1
 	tablet-v2
 	xdg-toplevel-icon-v1
+	linux-dmabuf-v1
+	linux-drm-syncobj-v1
 ;
 local headers = [ WaylandProtocols wayland : server cpp ]
 	[ WaylandProtocols $(protocols) : c server cpp ]
@@ -74,6 +76,7 @@ local sources =
 	HaikuTextInput.cpp
 	XkbKeymap.cpp
 	HaikuDataDeviceManager.cpp
+	HaikuGpuSync.cpp
 ;
 
 Depends [ FGristFiles $(sources:S=$(SUFOBJ)) $(generated:S=$(SUFOBJ)) ]

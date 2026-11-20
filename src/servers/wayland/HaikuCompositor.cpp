@@ -9,6 +9,8 @@
 #include "HaikuOutput.h"
 #include "RengaProtocols.h"
 #include "HaikuServerDecoration.h"
+#include "HaikuGpuSync.h"
+#include <unistd.h>
 #include <Window.h>
 #include "Wayland.h"
 #include "WaylandEnv.h"
@@ -304,6 +306,22 @@ HaikuSurface *HaikuSurface::Create(struct wl_client *client, uint32_t version, u
 
 HaikuSurface::~HaikuSurface()
 {
+	// Renga: explicit sync. Queued commits are dropped (their buffers were
+	// never shown: signal their release points), the buffer on screen is
+	// released, and the syncobj object forgets the surface (no_surface).
+	HaikuSyncobjSurfaceGone(this);
+	while (!fDeferred.empty()) {
+		DeferredCommit *deferred = fDeferred.front();
+		fDeferred.pop_front();
+		SignalRelease(deferred->state);
+		delete deferred;
+	}
+	SignalRelease(fState);
+	if (fSyncEventSource != NULL)
+		wl_event_source_remove(fSyncEventSource);
+	if (fSyncEventFd >= 0)
+		close(fSyncEventFd);
+
 	HaikuOutputSurfaceGone(this);
 	HaikuPointerConstraintsSurfaceGone(this);
 
@@ -493,7 +511,142 @@ void HaikuSurface::HandleSetInputRegion(struct wl_resource *region_resource)
 	fPendingFields |= (1 << fieldInputRgn);
 }
 
+/*!	Renga: moves the double-buffered fields in \a fields from \a from to
+	\a to (for commits that wait for their acquire point).
+*/
+void HaikuSurface::MoveState(State &to, State &from, uint32 fields)
+{
+	if ((fields & (1 << fieldBuffer)) != 0) {
+		to.buffer = from.buffer;
+		from.buffer.Unset();
+	}
+	if ((fields & (1 << fieldOffset)) != 0) {
+		to.dx = from.dx;
+		to.dy = from.dy;
+	}
+	if ((fields & (1 << fieldTransform)) != 0)
+		to.transform = from.transform;
+	if ((fields & (1 << fieldScale)) != 0)
+		to.scale = from.scale;
+	if ((fields & (1 << fieldOpaqueRgn)) != 0)
+		to.opaqueRgn = std::move(from.opaqueRgn);
+	if ((fields & (1 << fieldInputRgn)) != 0)
+		to.inputRgn = std::move(from.inputRgn);
+	if ((fields & (1 << fieldFrameCallbacks)) != 0)
+		to.frameCallbacks.TakeFrom(&from.frameCallbacks);
+	if ((fields & (1 << fieldViewport)) != 0) {
+		to.viewportSrc = from.viewportSrc;
+		to.viewportDst = from.viewportDst;
+	}
+	// the sync points always travel with their commit
+	to.acquireTimeline = from.acquireTimeline;
+	to.acquirePoint = from.acquirePoint;
+	to.releaseTimeline = from.releaseTimeline;
+	to.releasePoint = from.releasePoint;
+	from.acquireTimeline.Unset();
+	from.acquirePoint = 0;
+	from.releaseTimeline.Unset();
+	from.releasePoint = 0;
+}
+
+void HaikuSurface::SignalRelease(State &state)
+{
+	if (state.releaseTimeline.IsSet())
+		HaikuSyncTimelineSignal(state.releaseTimeline, state.releasePoint);
+	state.releaseTimeline.Unset();
+	state.releasePoint = 0;
+}
+
+void HaikuSurface::DeferCommit()
+{
+	DeferredCommit *deferred = new(std::nothrow) DeferredCommit();
+	if (deferred == NULL) {
+		wl_client_post_no_memory(Client());
+		return;
+	}
+	MoveState(deferred->state, fPendingState, fPendingFields);
+	deferred->fields = fPendingFields;
+	fPendingFields = 0;
+	fDeferred.push_back(deferred);
+
+	if (fSyncEventFd < 0) {
+		fSyncEventFd = HaikuSyncCreateEventFd();
+		if (fSyncEventFd >= 0) {
+			struct wl_event_loop *loop = wl_display_get_event_loop(
+				wl_client_get_display(Client()));
+			fSyncEventSource = wl_event_loop_add_fd(loop, fSyncEventFd,
+				WL_EVENT_READABLE, [](int fd, uint32_t mask, void *data) {
+					uint64 count;
+					read(fd, &count, sizeof(count));
+					((HaikuSurface*)data)->ProcessDeferredCommits();
+					return 0;
+				}, this);
+		}
+	}
+	// one-shot: written once the point has signalled (at once if it has)
+	if (fSyncEventFd < 0 || HaikuSyncTimelineWatch(
+			deferred->state.acquireTimeline, deferred->state.acquirePoint,
+			fSyncEventFd) != B_OK) {
+		// cannot wait without blocking: show it now rather than never
+		ProcessDeferredCommits();
+	}
+}
+
+void HaikuSurface::ProcessDeferredCommits()
+{
+	bool watchFailed = false;
+	while (!fDeferred.empty()) {
+		DeferredCommit *deferred = fDeferred.front();
+		if (deferred->state.acquireTimeline.IsSet() && !watchFailed
+			&& !HaikuSyncTimelineReady(deferred->state.acquireTimeline,
+				deferred->state.acquirePoint)) {
+			// the next one waits; its watch is registered
+			if (fSyncEventFd >= 0)
+				break;
+			watchFailed = true;
+		}
+		fDeferred.pop_front();
+
+		// Apply it through the normal path, keeping what the client has
+		// set since for its next commit.
+		State newer;
+		uint32 newerFields = fPendingFields;
+		MoveState(newer, fPendingState, fPendingFields);
+		MoveState(fPendingState, deferred->state, deferred->fields);
+		fPendingFields = deferred->fields;
+		delete deferred;
+		ApplyCommit();
+		MoveState(fPendingState, newer, newerFields);
+		fPendingFields = newerFields;
+	}
+}
+
 void HaikuSurface::HandleCommit()
+{
+	// Renga: explicit sync. With a wp_linux_drm_syncobj_surface_v1 the
+	// commit is checked (protocol errors), and a commit whose acquire point
+	// has not signalled waits, without blocking: an eventfd on the
+	// compositor's event loop applies it once it has (SYNCOBJ_EVENTFD).
+	if (fSyncobjSurface != NULL || !fDeferred.empty()) {
+		if (!HaikuSyncobjCheckCommit(this, fSyncobjSurface,
+				(fPendingFields & (1 << fieldBuffer)) != 0
+					&& fPendingState.buffer != NULL,
+				fPendingState.buffer.Get(), fPendingState.acquireTimeline,
+				fPendingState.acquirePoint, fPendingState.releaseTimeline,
+				fPendingState.releasePoint)) {
+			return;
+		}
+		if (!fDeferred.empty() || (fPendingState.acquireTimeline.IsSet()
+				&& !HaikuSyncTimelineReady(fPendingState.acquireTimeline,
+					fPendingState.acquirePoint))) {
+			DeferCommit();
+			return;
+		}
+	}
+	ApplyCommit();
+}
+
+void HaikuSurface::ApplyCommit()
 {
 	//printf("HaikuSurface::HandleCommit()\n");
 
@@ -508,7 +661,19 @@ void HaikuSurface::HandleCommit()
 				if (fState.buffer != NULL && fState.buffer != fPendingState.buffer) {
 					fState.buffer->SendReleaseIfAlive();
 				}
+				// Renga: the previous commit's release point. Signalled
+				// once its buffer is off screen; for the same buffer again
+				// it is signalled too, unless the new point is later on the
+				// same timeline (which signals it as well).
+				if (fState.releaseTimeline.IsSet()
+					&& (fState.buffer != fPendingState.buffer
+						|| fState.releaseTimeline != fPendingState.releaseTimeline
+						|| fState.releasePoint > fPendingState.releasePoint)) {
+					SignalRelease(fState);
+				}
 				fState.buffer = fPendingState.buffer;
+				fState.releaseTimeline = fPendingState.releaseTimeline;
+				fState.releasePoint = fPendingState.releasePoint;
 				break;
 			case fieldOffset:
 				fState.dx = fPendingState.dx;
@@ -535,6 +700,11 @@ void HaikuSurface::HandleCommit()
 				break;
 		}
 	}
+
+	fPendingState.acquireTimeline.Unset();
+	fPendingState.acquirePoint = 0;
+	fPendingState.releaseTimeline.Unset();
+	fPendingState.releasePoint = 0;
 
 	if (View() != NULL && View()->Window() != NULL) {
 		auto viewLocked = AppKitPtrs::LockedPtr(View());

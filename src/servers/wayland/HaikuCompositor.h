@@ -8,9 +8,12 @@
 #include <Point.h>
 #include <Region.h>
 
+#include <deque>
 #include <optional>
 
 class HaikuXdgSurface;
+class HaikuSyncTimeline;
+class HaikuSyncobjSurface;
 class HaikuServerDecoration;
 class WaylandView;
 class BBitmap;
@@ -95,6 +98,21 @@ private:
 		FrameCallback::List frameCallbacks;
 		ViewportSrc viewportSrc;
 		ViewportDst viewportDst;
+
+		// Renga: explicit sync (wp_linux_drm_syncobj_v1, HaikuGpuSync.cpp).
+		// Pending: the points set for the next commit. Current: the release
+		// point of the buffer on screen, signalled once it is replaced.
+		BReference<HaikuSyncTimeline> acquireTimeline;
+		uint64 acquirePoint = 0;
+		BReference<HaikuSyncTimeline> releaseTimeline;
+		uint64 releasePoint = 0;
+	};
+
+	// Renga: a commit that waits for its acquire point. Commits apply in
+	// order, so later ones queue behind it.
+	struct DeferredCommit {
+		State state;
+		uint32 fields = 0;
 	};
 
 	ObjectDeleter<Hook> fHook;
@@ -112,6 +130,19 @@ private:
 
 	int32 fXdgDecorationMode = 0;
 		// Renga: DecorationMode from xdg-decoration (HaikuXdgDecoration.cpp)
+
+	friend class HaikuSyncobjSurface;
+	friend class HaikuSyncobjManager;
+	friend void HaikuSyncobjSurfaceGone(HaikuSurface *surface);
+	HaikuSyncobjSurface *fSyncobjSurface{};
+	std::deque<DeferredCommit*> fDeferred;
+	int fSyncEventFd = -1;
+	struct wl_event_source *fSyncEventSource{};
+
+	static void MoveState(State &to, State &from, uint32 fields);
+	void ApplyCommit();
+	void DeferCommit();
+	void SignalRelease(State &state);
 
 public:
 	enum DecorationMode {
@@ -147,6 +178,10 @@ public:
 	void CallFrameCallbacks();
 
 	void SetHook(Hook *hook);
+
+	//! Renga: applies queued commits whose acquire points have signalled.
+	void ProcessDeferredCommits();
+	size_t CountDeferredCommits() const {return fDeferred.size();}
 
 	void SetViewportSrc(float x, float y, float width, float height);
 	void SetViewportDst(int32_t width, int32_t height);

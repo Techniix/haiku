@@ -14,6 +14,7 @@
 #include "HaikuServerDecoration.h"
 #include "HaikuXdgDecoration.h"
 #include "RengaProtocols.h"
+#include "HaikuGpuSync.h"
 #include "WaylandEnv.h"
 
 #include <wayland-server-core.h>
@@ -252,6 +253,9 @@ create_globals(struct wl_display* display)
 	Assert(HaikuRelativePointerGlobal::Create(display) != NULL);
 	Assert(HaikuActivationGlobal::Create(display) != NULL);
 	Assert(HaikuDataDeviceManagerGlobal::Create(display) != NULL);
+	Assert(HaikuDmabufGlobal::Create(display) != NULL);
+	HaikuSyncobjManagerGlobal::Create(display);
+		// none without /dev/syncobj (an image without the module)
 	Assert((seat = HaikuSeatGlobal::Create(display)) != NULL);
 	Assert(HaikuTextInputGlobal::Create(display, seat) != NULL);
 	Assert(HaikuXdgShell::Create(display) != NULL);

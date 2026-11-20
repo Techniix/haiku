@@ -1575,6 +1575,16 @@ and native programs linked against a socket-transport libwayland-client.
   `xdg_activation_v1`, `org_kde_kwin_server_decoration_manager`, and since
   the 2026-11-14 batch (core protocol XML from Wayland 1.24, the others
   from wayland-protocols 1.45):
+  - `zwp_linux_dmabuf_v1` version 4 (2026-11-20): buffers whose descriptor
+    the compositor can map (memfds today, CPU-mappable GPU buffers once
+    Quasar's import exists), ARGB8888/XRGB8888, one plane, modifiers
+    LINEAR and INVALID; version 4 feedback with a format table and an
+    8-byte `main_device` of 0 (no DRM device yet).
+  - `wp_linux_drm_syncobj_manager_v1` version 1 (2026-11-20): timelines are
+    DRM syncobj descriptors (`/dev/syncobj`, see "GPU sync objects"); a
+    commit waits for its acquire point without blocking the compositor,
+    release points are signalled once the buffer is off screen.
+    linux-dmabuf buffers only (`unsupported_buffer` for `wl_shm`).
   - `zxdg_decoration_manager_v1`: server-side mode by default (Renga's
     frame); a client asking for client-side gets no frame. It takes
     precedence over the KDE protocol for the same window.

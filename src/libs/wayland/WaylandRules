@@ -80,5 +80,7 @@ WAYLAND_CPP_NAME_relative-pointer-unstable-v1 = RelativePointerUnstableV1 ;
 WAYLAND_CPP_NAME_cursor-shape-v1 = CursorShapeV1 ;
 WAYLAND_CPP_NAME_tablet-v2 = TabletV2 ;
 WAYLAND_CPP_NAME_xdg-toplevel-icon-v1 = XdgToplevelIconV1 ;
+WAYLAND_CPP_NAME_linux-dmabuf-v1 = LinuxDmabufV1 ;
+WAYLAND_CPP_NAME_linux-drm-syncobj-v1 = LinuxDrmSyncobjV1 ;
 
 }

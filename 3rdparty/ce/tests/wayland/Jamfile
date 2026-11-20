@@ -47,7 +47,20 @@ Application wayland_protocols_test :
 		libwayland-cursor-renga.so network [ TargetLibstdc++ ]
 ;
 
+# linux-dmabuf v4 and wp_linux_drm_syncobj_v1 (Quasar R-18), with memfd
+# buffers and CPU-signalled DRM syncobj points.
+local gpuSyncProtocols = linux-dmabuf-v1 linux-drm-syncobj-v1 ;
+local gpuSyncHeaders = [ WaylandProtocols $(gpuSyncProtocols) : c client ] ;
+Depends [ FGristFiles wayland_gpusync_test.o $(gpuSyncProtocols)-protocol.o ]
+	: $(headers) $(gpuSyncHeaders) ;
+
+Application wayland_gpusync_test :
+	wayland_gpusync_test.cpp
+	$(gpuSyncProtocols)-protocol.c
+	: be libgnu.so libwayland-client-renga.so network [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : wayland_test
-		wayland_protocols_test ;
+		wayland_protocols_test wayland_gpusync_test ;
 }

@@ -58,6 +58,9 @@ private:
 
 	BReference<HaikuShmAreaRef> fAreaRef;
 	std::optional<BBitmap> fBitmap;
+	bool fExplicitSync = false;
+		// Renga: a linux-dmabuf buffer (HaikuGpuSync.cpp), which
+		// wp_linux_drm_syncobj_v1 accepts; wl_shm buffers are not
 
 	// Renga: the resource holds one reference, released when the client
 	// destroys the buffer; surfaces showing it hold theirs. The object is
@@ -104,4 +107,18 @@ public:
 	void SendReleaseIfAlive() {if (ToResource() != NULL) SendRelease();}
 
 	inline BBitmap &Bitmap() {return fBitmap.value();}
+
+	/*!	Renga: makes this a buffer over \a area (linux-dmabuf buffers that
+		are CPU-mappable: memfds and areas). Returns the BBitmap's status. */
+	status_t InitForArea(const BReference<HaikuShmAreaRef> &area,
+		int32_t offset, int32_t width, int32_t height, int32_t stride,
+		color_space colorSpace, bool explicitSync)
+	{
+		fAreaRef = area;
+		fBitmap.emplace(area->Area(), offset, BRect(0, 0, width - 1,
+			height - 1), 0, colorSpace, stride);
+		fExplicitSync = explicitSync;
+		return fBitmap.value().InitCheck();
+	}
+	bool SupportsExplicitSync() const {return fExplicitSync;}
 };
