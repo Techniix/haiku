@@ -49,6 +49,8 @@
 */
 
 
+#include <algorithm>
+
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -480,7 +482,12 @@ drag(TestWindow* window, BPoint to, const char* keys = NULL,
 		host("key_hold %s down", moreKeys);
 		snooze(150000);
 	}
-	move_pointer(to - BPoint(5, 5));
+	// the step before the target stays on the screen (the tablet refuses
+	// negative positions; edge_snap drags to x = 0)
+	BPoint before = to - BPoint(5, 5);
+	before.x = std::max(before.x, sScreen.left);
+	before.y = std::max(before.y, sScreen.top);
+	move_pointer(before);
 	move_pointer(to);
 	snooze(400000);
 	if (screenshot != NULL) {
