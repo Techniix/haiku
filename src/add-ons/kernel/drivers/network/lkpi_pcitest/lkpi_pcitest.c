@@ -42,6 +42,10 @@
 #include <linux/spinlock.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
+#include <linux/mutex.h>
+#ifdef __HAIKU__
+#include "lkpi_deferred.h"	/* Renga: deferred requests (ADDBA) */
+#endif
 
 #define DRV_NAME "lkpi_pcitest"
 
@@ -318,6 +322,89 @@ pcitest_edu_timers(struct pcitest *t)
 	kfree(et);
 }
 
+#ifdef __HAIKU__
+/*
+ * Renga: LinuxKPI 802.11 defers ieee80211_start_tx_ba_session()'s ADDBA to a
+ * task (lkpi_deferred.h), because drivers call it with their own mutex held
+ * and the ADDBA ends in the driver's ampdu_action, which takes that mutex:
+ * mt7921e panicked with "double lock" (mt7921e_mac_reset() -> tx token put
+ * -> start_tx_ba_session -> ... -> mt7921_ampdu_action()). Here a "driver
+ * mutex" is held while requests are made; the work takes the same mutex, as
+ * mt7921_ampdu_action() does. Before the fix the work ran in the caller and
+ * deadlocked on that mutex.
+ */
+struct edu_deferred {
+	struct lkpi_deferred_bits	bits;
+	struct mutex			driver_lock;
+	struct completion		done;
+	atomic_t			runs[8];
+	atomic_t			total;
+	int				expected;
+	bool				held;	/* the requester still holds it */
+	atomic_t			ran_while_held;
+};
+
+static void
+edu_deferred_fn(void *context, int bit)
+{
+	struct edu_deferred *ed = context;
+
+	/* like mt7921_ampdu_action(): the driver's mutex */
+	mutex_lock(&ed->driver_lock);
+	if (ed->held)
+		atomic_inc(&ed->ran_while_held);
+	if (bit >= 0 && bit < 8)
+		atomic_inc(&ed->runs[bit]);
+	mutex_unlock(&ed->driver_lock);
+	if (atomic_inc_return(&ed->total) >= ed->expected)
+		complete(&ed->done);
+}
+
+static void
+pcitest_edu_deferred(struct pcitest *t)
+{
+	struct edu_deferred *ed;
+	int accepted3, accepted5;
+	long r;
+
+	ed = kzalloc(sizeof(*ed), GFP_KERNEL);
+	if (ed == NULL) {
+		EDU_RESULT("deferred", false, "no memory");
+		return;
+	}
+	mutex_init(&ed->driver_lock);
+	init_completion(&ed->done);
+	lkpi_deferred_bits_init(&ed->bits, edu_deferred_fn, ed);
+
+	mutex_lock(&ed->driver_lock);
+	ed->held = true;
+	accepted3 = lkpi_deferred_bits_request(&ed->bits, 3);
+	accepted3 += lkpi_deferred_bits_request(&ed->bits, 3);
+	accepted5 = lkpi_deferred_bits_request(&ed->bits, 5);
+	ed->expected = accepted3 + accepted5;
+	msleep(50);
+	r = atomic_read(&ed->total);
+	EDU_RESULT("deferred_no_deadlock", r == 0 && accepted3 >= 1 &&
+	    accepted5 == 1, "requests returned with the driver mutex held; "
+	    "%ld ran meanwhile (want 0)", r);
+	ed->held = false;
+	mutex_unlock(&ed->driver_lock);
+
+	r = wait_for_completion_timeout(&ed->done, msecs_to_jiffies(2000));
+	EDU_RESULT("deferred_runs_after", r > 0 &&
+	    atomic_read(&ed->ran_while_held) == 0 &&
+	    atomic_read(&ed->runs[3]) == accepted3 &&
+	    atomic_read(&ed->runs[5]) == 1,
+	    "bit 3: %d runs for %d accepted of 2 requests, bit 5: %d runs, "
+	    "%d while held", atomic_read(&ed->runs[3]), accepted3,
+	    atomic_read(&ed->runs[5]), atomic_read(&ed->ran_while_held));
+
+	lkpi_deferred_bits_drain(&ed->bits);
+	mutex_destroy(&ed->driver_lock);
+	kfree(ed);
+}
+#endif
+
 static void
 pcitest_edu(struct pcitest *t)
 {
@@ -443,6 +530,9 @@ pcitest_edu(struct pcitest *t)
 	dma_free_coherent(dev, EDU_BUF_SIZE, coh, coh_dma);
 
 	pcitest_edu_timers(t);
+#ifdef __HAIKU__
+	pcitest_edu_deferred(t);
+#endif
 	EDU_RESULT("done", true, "%d interrupts", atomic_read(&t->irqs));
 }
 

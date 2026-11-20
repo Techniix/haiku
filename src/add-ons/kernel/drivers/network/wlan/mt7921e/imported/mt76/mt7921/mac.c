@@ -12,6 +12,14 @@
 #include "../mt76_connac2_mac.h"
 #include "mcu.h"
 
+#ifdef __HAIKU__
+/* Renga: reset reasons for lkpictl wifi-stats (LinuxKPI lkpi_control.c) */
+void lkpi_note_device_reset(const char *reason);
+#define RENGA_NOTE_RESET(reason)	lkpi_note_device_reset(reason)
+#else
+#define RENGA_NOTE_RESET(reason)	do { } while (0)
+#endif
+
 #define MT_WTBL_TXRX_CAP_RATE_OFFSET	7
 #define MT_WTBL_TXRX_RATE_G2_HE		24
 #define MT_WTBL_TXRX_RATE_G2		12
@@ -674,6 +682,10 @@ void mt7921_mac_reset_work(struct work_struct *work)
 	int i, ret;
 
 	dev_dbg(dev->mt76.dev, "chip reset\n");
+#ifdef __HAIKU__
+	/* Renga: always in the syslog, with the reason noted before. */
+	dev_info(dev->mt76.dev, "chip reset\n");
+#endif
 	set_bit(MT76_RESET, &dev->mphy.state);
 	dev->hw_full_reset = true;
 	ieee80211_stop_queues(hw);
@@ -758,6 +770,7 @@ void mt7921_coredump_work(struct work_struct *work)
 		dev_coredumpv(dev->mt76.dev, dump, MT76_CONNAC_COREDUMP_SZ,
 			      GFP_KERNEL);
 
+	RENGA_NOTE_RESET("firmware crash (core dump)");
 	mt792x_reset(&dev->mt76);
 }
 

@@ -183,6 +183,10 @@ struct lkpi_txq {
 #define	TXQ_TO_LTXQ(_txq)	container_of(_txq, struct lkpi_txq, txq)
 
 
+#ifdef __HAIKU__
+#include "lkpi_deferred.h"	/* Renga: deferred ADDBA */
+#endif
+
 struct lkpi_sta {
 	struct list_head	lsta_list;
 	struct ieee80211_node	*ni;
@@ -203,6 +207,16 @@ struct lkpi_sta {
 
 	struct station_info	sinfo;				/* statistics */
 	uint64_t		frms_tx;			/* (*tx) */
+
+#ifdef __HAIKU__
+	/*
+	 * Renga: TX block-ack sessions asked for by the driver
+	 * (ieee80211_start_tx_ba_session()), one bit per TID, set up later by
+	 * addba_task without the caller's locks, as mac80211 does in its
+	 * per-station ampdu work (see linuxkpi_ieee80211_start_tx_ba_session()).
+	 */
+	struct lkpi_deferred_bits addba;
+#endif
 
 	/* Must be last! */
 	struct ieee80211_sta	sta __aligned(CACHE_LINE_SIZE);

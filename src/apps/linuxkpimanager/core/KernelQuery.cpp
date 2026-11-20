@@ -240,6 +240,18 @@ KernelQuery::WifiReport(const char* interface, BString& out)
 	add_line(out, "To the network stack", per_event(value_of(keys, values,
 		"perf.rxq_us", "0"), value_of(keys, values, "perf.rxq_frames", "0"),
 		"frame"));
+	out << "Health\n";
+	BString resets = value_of(keys, values, "device.resets", "0");
+	BString reason = value_of(keys, values, "device.last_reset_reason", "");
+	if (!reason.IsEmpty()) {
+		resets << ", last: " << reason << " ("
+			<< value_of(keys, values, "device.last_reset_ms_ago", "?")
+			<< " ms ago)";
+	}
+	add_line(out, "Chip resets", resets);
+	add_line(out, "Block-ack requests", value_of(keys, values,
+		"wlan.addba_deferred", "0") << " queued, "
+		<< value_of(keys, values, "wlan.addba_done", "0") << " sent");
 	return B_OK;
 }
 

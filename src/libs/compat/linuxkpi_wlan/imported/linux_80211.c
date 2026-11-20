@@ -184,6 +184,9 @@ static struct lkpi_sta *lkpi_find_lsta_by_ni(struct lkpi_vif *,
 static void lkpi_sw_scan_task(void *, int);
 static void lkpi_80211_txq_tx_one(struct lkpi_sta *, struct mbuf *);
 static void lkpi_80211_txq_task(void *, int);
+#ifdef __HAIKU__
+static void lkpi_80211_addba_tid(void *, int);
+#endif
 static void lkpi_80211_lhw_rxq_task(void *, int);
 static void lkpi_ieee80211_free_skb_mbuf(void *);
 #ifdef LKPI_80211_WME
@@ -1244,6 +1247,9 @@ lkpi_lsta_alloc(struct ieee80211vap *vap, const uint8_t mac[IEEE80211_ADDR_LEN],
 	TASK_INIT(&lsta->txq_task, 0, lkpi_80211_txq_task, lsta);
 	mbufq_init(&lsta->txq, 32 * NAPI_POLL_WEIGHT);
 	lsta->txq_ready = true;
+#ifdef __HAIKU__
+	lkpi_deferred_bits_init(&lsta->addba, lkpi_80211_addba_tid, lsta);
+#endif
 
 	return (lsta);
 
@@ -1287,6 +1293,10 @@ lkpi_lsta_free(struct lkpi_sta *lsta, struct ieee80211_node *ni)
 	/* Drain taskq, won't be restarted until added_to_drv is set again. */
 	while (taskqueue_cancel(taskqueue_thread, &lsta->txq_task, NULL) != 0)
 		taskqueue_drain(taskqueue_thread, &lsta->txq_task);
+#ifdef __HAIKU__
+	/* Renga: no block-ack set-up after the station is gone. */
+	lkpi_deferred_bits_drain(&lsta->addba);
+#endif
 
 	/* Flush mbufq (make sure to release ni refs!). */
 	m = mbufq_dequeue(&lsta->txq);
@@ -7006,6 +7016,28 @@ linuxkpi_ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, uint8_t tid,
 		return (-EINPROGRESS);
 	}
 
+#ifdef __HAIKU__
+	/*
+	 * Renga: only record the request; lkpi_80211_addba_tid() sets the
+	 * session up later, without the caller's locks.
+	 *
+	 * In Linux, ieee80211_start_tx_ba_session() only queues the ADDBA
+	 * (mac80211's per-station ampdu work sends it), so drivers call it
+	 * from their TX completion paths with their own locks held. Here it
+	 * ran net80211's whole ADDBA request synchronously, down into the
+	 * driver's ampdu_action, which takes the driver's mutex again:
+	 * mt7921e_mac_reset() (device mutex held) -> mt76_connac2_tx_token_put()
+	 * -> mt76_connac2_txwi_free() -> mt76_tx_check_agg_ssn() -> here ->
+	 * ieee80211_ampdu_request() -> lkpi_ic_addba_request() ->
+	 * mt7921_ampdu_action() -> mt792x_mutex_acquire(): "double lock" panic
+	 * on hardware (2026-11-19). Repeated requests for the same TID while
+	 * one is pending are merged.
+	 */
+	(void)worked;
+	if (lkpi_deferred_bits_request(&lsta->addba, tid))
+		lkpi_perf_addba_deferred();
+	return (0);
+#else
 	/* Tell net80211 to setup an aggr sessions. */
 	/* XXX-BZ we have no way to carry the timeout forward easily. */
 	worked = ieee80211_ampdu_tx_request_ext(lsta->ni, tid);
@@ -7034,7 +7066,53 @@ linuxkpi_ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, uint8_t tid,
 	}
 
 	return (0);
+#endif
 }
+
+#ifdef __HAIKU__
+/*
+ * Renga: the deferred half of linuxkpi_ieee80211_start_tx_ba_session(), run
+ * on taskqueue_thread with no driver or wiphy lock held (lkpi_deferred.h),
+ * once per pending TID: what that function did synchronously before (net80211's
+ * ADDBA request, which ends in the driver's ampdu_action).
+ */
+static void
+lkpi_80211_addba_tid(void *ctx, int tid)
+{
+	struct lkpi_sta *lsta;
+	struct ieee80211_tx_ampdu *tap;
+	int worked;
+
+	lsta = ctx;
+	if (tid >= IEEE80211_NUM_TIDS)
+		return;
+
+	/* The station may have gone away or left the BSS meanwhile. */
+	if (!lsta->added_to_drv || lsta->ni == NULL ||
+	    lsta->state < IEEE80211_STA_ASSOC)
+		return;
+
+	tap = &lsta->ni->ni_tx_ampdu[tid];
+	if (IEEE80211_AMPDU_REQUESTED(tap))
+		return;
+
+	/* XXX-BZ we have no way to carry the timeout forward easily. */
+	worked = ieee80211_ampdu_tx_request_ext(lsta->ni, tid);
+	if (worked != 1) {
+		net80211_vap_printf(lsta->ni->ni_vap, "%s: "
+		    "ieee80211_ampdu_tx_request_ext returned %d != 1\n",
+		    __func__, worked);
+		return;
+	}
+	worked = ieee80211_ampdu_request(lsta->ni, tap);
+	if (worked != 1) {
+		net80211_vap_printf(lsta->ni->ni_vap, "%s: "
+		    "ieee80211_ampdu_request returned %d != 1\n",
+		    __func__, worked);
+	}
+	lkpi_perf_addba_done();
+}
+#endif
 
 static void
 lkpi_ic_getradiocaps_ht(struct ieee80211com *ic, struct ieee80211_hw *hw,

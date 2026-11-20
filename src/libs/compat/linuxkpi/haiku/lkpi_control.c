@@ -168,6 +168,40 @@ lkpi_perf_rxq(uint64_t start, int frames)
 	atomic_add64(&lkpi_perf_rxq_us, system_time() - (bigtime_t)start);
 }
 
+static int64 lkpi_device_resets, lkpi_addba_deferred, lkpi_addba_done;
+static bigtime_t lkpi_last_reset_time;
+static char lkpi_last_reset_reason[64];
+static spinlock lkpi_reset_lock = B_SPINLOCK_INITIALIZER;
+
+void
+lkpi_note_device_reset(const char *reason)
+{
+	cpu_status state;
+
+	atomic_add64(&lkpi_device_resets, 1);
+	state = disable_interrupts();
+	acquire_spinlock(&lkpi_reset_lock);
+	strlcpy(lkpi_last_reset_reason, reason != NULL ? reason : "unknown",
+	    sizeof(lkpi_last_reset_reason));
+	lkpi_last_reset_time = system_time();
+	release_spinlock(&lkpi_reset_lock);
+	restore_interrupts(state);
+	dprintf("%s: device reset requested: %s\n", gDriverName,
+	    reason != NULL ? reason : "unknown");
+}
+
+void
+lkpi_perf_addba_deferred(void)
+{
+	atomic_add64(&lkpi_addba_deferred, 1);
+}
+
+void
+lkpi_perf_addba_done(void)
+{
+	atomic_add64(&lkpi_addba_done, 1);
+}
+
 static void
 build_stats(struct lkpi_reply *r)
 {
@@ -203,6 +237,27 @@ build_stats(struct lkpi_reply *r)
 	    (long long)atomic_get64(&lkpi_perf_rxq_frames));
 	reply_add(r, "perf.rxq_us", "%lld",
 	    (long long)atomic_get64(&lkpi_perf_rxq_us));
+	{
+		char reason[64];
+		bigtime_t when;
+		cpu_status state = disable_interrupts();
+		acquire_spinlock(&lkpi_reset_lock);
+		strlcpy(reason, lkpi_last_reset_reason, sizeof(reason));
+		when = lkpi_last_reset_time;
+		release_spinlock(&lkpi_reset_lock);
+		restore_interrupts(state);
+		reply_add(r, "device.resets", "%lld",
+		    (long long)atomic_get64(&lkpi_device_resets));
+		if (when != 0) {
+			reply_add(r, "device.last_reset_reason", "%s", reason);
+			reply_add(r, "device.last_reset_ms_ago", "%lld",
+			    (long long)((system_time() - when) / 1000));
+		}
+	}
+	reply_add(r, "wlan.addba_deferred", "%lld",
+	    (long long)atomic_get64(&lkpi_addba_deferred));
+	reply_add(r, "wlan.addba_done", "%lld",
+	    (long long)atomic_get64(&lkpi_addba_done));
 	if (lkpi_control_stats_provider != NULL)
 		lkpi_control_stats_provider(r);
 }

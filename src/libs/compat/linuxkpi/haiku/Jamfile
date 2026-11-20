@@ -22,6 +22,7 @@ SubDirC++Flags [ FDefines _KERNEL=1 ] ;
 
 KernelMergeObject linuxkpi_haiku.o :
 	lkpi_control.c
+	lkpi_deferred.c
 	lkpi_devfs.c
 	lkpi_driver.c
 	lkpi_errno.c

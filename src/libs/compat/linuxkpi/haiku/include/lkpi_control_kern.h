@@ -30,6 +30,15 @@ void	lkpi_perf_irq(uint64_t start);
 void	lkpi_perf_napi(uint64_t start, int packets);
 void	lkpi_perf_rx80211(uint64_t start);
 void	lkpi_perf_rxq(uint64_t start, int frames);
+/*
+ * Renga: device resets (the driver's whole-chip reset after a firmware or
+ * DMA hang; keys device.resets, device.last_reset_reason,
+ * device.last_reset_ms_ago) and TX block-ack requests deferred out of the
+ * driver's locked paths (wlan.addba_deferred, wlan.addba_done).
+ */
+void	lkpi_note_device_reset(const char *reason);
+void	lkpi_perf_addba_deferred(void);
+void	lkpi_perf_addba_done(void);
 void	lkpi_control_add(struct lkpi_reply *r, const char *key,
 	    const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 

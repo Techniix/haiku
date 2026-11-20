@@ -12,6 +12,14 @@
 #include "../mt76_connac2_mac.h"
 #include "../mt792x_trace.h"
 
+#ifdef __HAIKU__
+/* Renga: reset reasons for lkpictl wifi-stats (LinuxKPI lkpi_control.c) */
+void lkpi_note_device_reset(const char *reason);
+#define RENGA_NOTE_RESET(reason)	lkpi_note_device_reset(reason)
+#else
+#define RENGA_NOTE_RESET(reason)	do { } while (0)
+#endif
+
 #define MT_STA_BFER			BIT(0)
 #define MT_STA_BFEE			BIT(1)
 
@@ -29,6 +37,7 @@ int mt7921_mcu_parse_response(struct mt76_dev *mdev, int cmd,
 	if (!skb) {
 		dev_err(mdev->dev, "Message %08x (seq %d) timeout\n",
 			cmd, seq);
+		RENGA_NOTE_RESET("firmware message timeout");
 		mt792x_reset(mdev);
 
 		return -ETIMEDOUT;

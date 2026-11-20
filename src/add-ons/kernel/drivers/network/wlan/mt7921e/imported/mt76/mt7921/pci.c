@@ -17,6 +17,14 @@
 #include "../dma.h"
 #include "mcu.h"
 
+#ifdef __HAIKU__
+/* Renga: reset reasons for lkpictl wifi-stats (LinuxKPI lkpi_control.c) */
+void lkpi_note_device_reset(const char *reason);
+#define RENGA_NOTE_RESET(reason)	lkpi_note_device_reset(reason)
+#else
+#define RENGA_NOTE_RESET(reason)	do { } while (0)
+#endif
+
 static const struct pci_device_id mt7921_pci_device_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_MEDIATEK, 0x7961),
 		.driver_data = (kernel_ulong_t)MT7921_FIRMWARE_WM },
@@ -510,8 +518,10 @@ restore_napi:
 restore_suspend:
 	pm->suspended = false;
 
-	if (err < 0)
+	if (err < 0) {
+		RENGA_NOTE_RESET("suspend failed");
 		mt792x_reset(&dev->mt76);
+	}
 
 	return err;
 }
@@ -568,8 +578,10 @@ static int mt7921_pci_resume(struct device *device)
 failed:
 	pm->suspended = false;
 
-	if (err < 0)
+	if (err < 0) {
+		RENGA_NOTE_RESET("resume failed");
 		mt792x_reset(&dev->mt76);
+	}
 
 	return err;
 }

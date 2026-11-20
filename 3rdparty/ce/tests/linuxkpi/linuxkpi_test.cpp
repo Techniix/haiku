@@ -28,7 +28,11 @@
 	Checks:
 
 	- edu_<check>: the driver's "edu: <check> PASS|FAIL" lines of the first
-	  load
+	  load; edu_deferred_no_deadlock and edu_deferred_runs_after check the
+	  deferral LinuxKPI 802.11 uses for ieee80211_start_tx_ba_session():
+	  requests made with a "driver mutex" held return at once, and the
+	  work, which takes that mutex as mt7921_ampdu_action() does, runs
+	  after it is released, once per accepted request
 	- selftest_<n>: "linuxkpi: selftest <n> ...: OK" of the first load
 	- load_cycles: every load ran the test to the end and detached again
 	- reload_results: the later loads passed the same checks
@@ -236,7 +240,10 @@ static const char* kEduChecks[] = {
 	"mmio_id", "mmio_liveness", "msi_raise", "msi_factorial",
 	"dma_coherent_alloc", "dma_coherent_roundtrip", "dma_map_bounce",
 	"dma_streaming_roundtrip", "dma_sync_for_cpu", "timer_list",
-	"timer_cancel", "delayed_work", "delayed_work_cancel", "hrtimer", "done"
+	"timer_cancel", "delayed_work", "delayed_work_cancel", "hrtimer",
+	"deferred_no_deadlock", "deferred_runs_after", "done"
+		// deferred_*: LinuxKPI 802.11's deferred ADDBA (lkpi_deferred.h,
+		// the mt7921e "double lock" panic of 2026-11-19)
 };
 
 static const char* kSelftests[] = {
