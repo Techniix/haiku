@@ -235,6 +235,19 @@ static const RootCheck kRootChecks[] = {
 		"echo $XDG_RUNTIME_DIR $WAYLAND_DISPLAY'", 0,
 		"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
 		"/sbin/apk\n/tmp/xdg-runtime wayland-0" },
+	// the linux command's locale (batch 3): Linux programs said
+	// "Translation: Unsupported language 'C.UTF-8'" on hardware. C,
+	// POSIX and C.UTF-8 become English; Haiku's language-only names and
+	// its @strings=messages modifier become what Linux C libraries know.
+	{ "linux_locale_default", "unset LC_ALL LC_MESSAGES LC_NUMERIC LC_TIME "
+		"LC_MONETARY; LANG=C.UTF-8 /bin/linux sh -c 'echo $LANG'", 0,
+		"en_US.UTF-8" },
+	{ "linux_locale_haiku_names", "unset LC_ALL LANG LC_NUMERIC "
+		"LC_MONETARY; LC_MESSAGES=de.UTF-8 "
+		"LC_TIME=en_GB.UTF-8@strings=messages /bin/linux sh -c "
+		"'echo $LANG $LC_TIME'", 0, "de_DE.UTF-8 en_GB.UTF-8" },
+	{ "linux_locale_kept", "unset LC_ALL LC_MESSAGES; LANG=pt_BR.UTF-8 "
+		"/bin/linux sh -c 'echo $LANG'", 0, "pt_BR.UTF-8" },
 	// apk update from a repository on a dual-stack name whose IPv6
 	// address has no route (renga-dual.test, root/build-root.sh): apk must
 	// fall back to IPv4 (it hung on hardware with dl-cdn.alpinelinux.org)
@@ -461,9 +474,10 @@ run_chromium_check()
 	// threads): works under Renguin.
 	run_chromium_dump("chrome.dump_dom", "--single-process", false);
 	// Chromium's normal process model (browser, renderer and utility
-	// processes over Mojo): its child processes still report "no
-	// connection" after 15 s (open, see docs/partners/CHROMIUM.md);
-	// informational until it works.
+	// processes over Mojo). Batch 3: worked in 3 of 5 runs (one failure
+	// came from a session bus that did not answer, since fixed); the other
+	// child processes reported "no connection" after 15 s. Informational
+	// until it passes every time (docs/partners/CHROMIUM.md).
 	run_chromium_dump("chrome.dump_dom_multi", "", true);
 }
 

@@ -12,9 +12,12 @@
 	the Linux root's login shell (the user's shell from the root's
 	/etc/passwd, otherwise /bin/sh) or runs one command, with:
 	  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin,
-	  HOME, TERM, LANG, USER and LOGNAME from Haiku (defaults when unset),
+	  HOME, TERM, USER and LOGNAME from Haiku (defaults when unset),
+	  LANG, LANGUAGE and the formatting LC_* from Haiku's Locale settings
+	  in the form Linux C libraries know (see linux_locale_environment()),
 	  XDG_RUNTIME_DIR=/tmp/xdg-runtime and WAYLAND_DISPLAY=wayland-0 (Renga's
-	  Wayland compositor), SHELL.
+	  Wayland compositor), DBUS_SESSION_BUS_ADDRESS (Renga's session bus),
+	  SHELL.
 	The interactive shell shows that it is Linux: the Terminal window is
 	titled "Linux (Renguin)", a line says so at start-up, and the prompt
 	starts with a coloured "[linux]" (/etc/profile.d/renga.sh in the root,
@@ -28,12 +31,14 @@
 */
 
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -41,6 +46,12 @@
 
 #include <string>
 #include <vector>
+
+#include <FormattingConventions.h>
+#include <Locale.h>
+#include <LocaleRoster.h>
+#include <Message.h>
+#include <String.h>
 
 
 static const char* kRoot = "/boot/system/non-packaged/compat/linux";
@@ -263,13 +274,206 @@ alpine_release()
 }
 
 
+// #pragma mark - locale
+
+
+/*!	True for the names that mean "no locale chosen": unset, empty, C or
+	POSIX with or without a character set (C.UTF-8, C.utf8, POSIX.UTF-8).
+*/
+static bool
+is_default_locale(const char* name)
+{
+	if (name == NULL || name[0] == '\0')
+		return true;
+	size_t length = strcspn(name, ".@");
+	return (length == 1 && (name[0] == 'C' || name[0] == 'c'))
+		|| (length == 5 && strncasecmp(name, "POSIX", 5) == 0);
+}
+
+
+/*!	The country a language is most often written with, for the language-only
+	names Haiku uses for messages ("de.UTF-8"): Linux C libraries and the
+	programs on them (ICU, Chromium, GTK, Qt) expect language_COUNTRY.
+*/
+static const char*
+default_country(const std::string& language)
+{
+	static const char* const kCountries[][2] = {
+		{ "ar", "EG" }, { "be", "BY" }, { "bg", "BG" }, { "ca", "ES" },
+		{ "cs", "CZ" }, { "da", "DK" }, { "de", "DE" }, { "el", "GR" },
+		{ "en", "US" }, { "eo", "XX" }, { "es", "ES" }, { "et", "EE" },
+		{ "eu", "ES" }, { "fa", "IR" }, { "fi", "FI" }, { "fr", "FR" },
+		{ "fur", "IT" }, { "gl", "ES" }, { "he", "IL" }, { "hi", "IN" },
+		{ "hr", "HR" }, { "hu", "HU" }, { "id", "ID" }, { "it", "IT" },
+		{ "ja", "JP" }, { "ko", "KR" }, { "lt", "LT" }, { "lv", "LV" },
+		{ "nb", "NO" }, { "nl", "NL" }, { "pa", "IN" }, { "pl", "PL" },
+		{ "pt", "PT" }, { "ro", "RO" }, { "ru", "RU" }, { "sk", "SK" },
+		{ "sl", "SI" }, { "sq", "AL" }, { "sr", "RS" }, { "sv", "SE" },
+		{ "th", "TH" }, { "tr", "TR" }, { "uk", "UA" }, { "vi", "VN" },
+		{ "zh", "CN" },
+	};
+	for (size_t i = 0; i < sizeof(kCountries) / sizeof(kCountries[0]); i++) {
+		if (language == kCountries[i][0])
+			return kCountries[i][1];
+	}
+	return NULL;
+}
+
+
+/*!	A Haiku locale name as Linux C libraries name it: "de.UTF-8" ->
+	"de_DE.UTF-8", "en_GB.UTF-8@strings=messages" -> "en_GB.UTF-8" (the
+	modifier is Haiku's own), "pt-BR" -> "pt_BR.UTF-8", "zh_Hant_TW" ->
+	"zh_TW.UTF-8", "zh_Hans" -> "zh_CN.UTF-8"; C, POSIX and C.UTF-8 ->
+	"en_US.UTF-8", Haiku's default language. Never returns C.UTF-8: with it
+	Linux programs found no language to translate to ("Translation:
+	Unsupported language 'C.UTF-8'" on hardware).
+*/
+static std::string
+linux_locale_name(const char* haikuName)
+{
+	if (is_default_locale(haikuName))
+		return "en_US.UTF-8";
+
+	std::string name(haikuName, strcspn(haikuName, ".@"));
+	for (size_t i = 0; i < name.size(); i++) {
+		if (name[i] == '-')
+			name[i] = '_';
+	}
+
+	// language[_Script][_COUNTRY]
+	std::vector<std::string> parts;
+	size_t start = 0;
+	while (start <= name.size()) {
+		size_t end = name.find('_', start);
+		if (end == std::string::npos)
+			end = name.size();
+		parts.push_back(name.substr(start, end - start));
+		start = end + 1;
+	}
+	std::string language = parts[0];
+	for (size_t i = 0; i < language.size(); i++)
+		language[i] = tolower(language[i]);
+	if (language.empty() || language.size() > 3
+		|| strspn(language.c_str(), "abcdefghijklmnopqrstuvwxyz")
+			!= language.size())
+		return "en_US.UTF-8";
+
+	std::string country;
+	std::string script;
+	for (size_t i = 1; i < parts.size(); i++) {
+		const std::string& part = parts[i];
+		if (part.size() == 4)
+			script = part;
+		else if (part.size() == 2 || part.size() == 3)
+			country = part;
+	}
+	for (size_t i = 0; i < country.size(); i++)
+		country[i] = toupper(country[i]);
+	if (country.empty() && language == "zh")
+		country = strcasecmp(script.c_str(), "Hant") == 0 ? "TW" : "CN";
+	if (country.empty() && language == "sr" && strcasecmp(script.c_str(),
+			"Latn") == 0)
+		return "sr_RS.UTF-8@latin";
+	if (country.empty()) {
+		const char* fallback = default_country(language);
+		if (fallback != NULL && strcmp(fallback, "XX") != 0)
+			country = fallback;
+	}
+	if (country.empty())
+		return language + ".UTF-8";
+	return language + "_" + country + ".UTF-8";
+}
+
+
+//!	The first of \a names (environment variables) that names a locale.
+static const char*
+chosen_locale(const char* const* names)
+{
+	for (int i = 0; names[i] != NULL; i++) {
+		const char* value = getenv(names[i]);
+		if (!is_default_locale(value))
+			return value;
+	}
+	return NULL;
+}
+
+
+/*!	LANG, LANGUAGE and the formatting categories for the Linux side.
+	Messages: LC_ALL, LC_MESSAGES or LANG from Haiku's environment when one
+	names a real locale (Terminal's profile sets LC_MESSAGES from the Locale
+	preferences), otherwise the Locale preferences' first language.
+	LANGUAGE lists all preferred languages (gettext's fallback list).
+	Formatting (numbers, dates, money, units, paper): LC_ALL, the category
+	itself, LC_NUMERIC, or the Locale preferences' formatting conventions;
+	set only where it differs from LANG.
+*/
+static void
+linux_locale_environment(std::vector<std::string>& environment)
+{
+	BMessage preferred;
+	BLocaleRoster::Default()->GetPreferredLanguages(&preferred);
+
+	static const char* const kMessages[]
+		= { "LC_ALL", "LC_MESSAGES", "LANG", NULL };
+	const char* messages = chosen_locale(kMessages);
+	std::string lang;
+	if (messages != NULL)
+		lang = linux_locale_name(messages);
+	else {
+		const char* first = NULL;
+		if (preferred.FindString("language", &first) != B_OK)
+			first = "en";
+		lang = linux_locale_name(first);
+	}
+	environment.push_back("LANG=" + lang);
+
+	std::string languages;
+	const char* language;
+	for (int32 i = 0; preferred.FindString("language", i, &language) == B_OK;
+			i++) {
+		std::string entry = linux_locale_name(language);
+		entry = entry.substr(0, entry.find('.'));
+		if (!languages.empty())
+			languages += ":";
+		languages += entry;
+	}
+	if (languages.empty())
+		languages = lang.substr(0, lang.find('.'));
+	environment.push_back("LANGUAGE=" + languages);
+
+	std::string formatting;
+	BFormattingConventions conventions;
+	if (BLocale::Default()->GetFormattingConventions(&conventions) == B_OK
+		&& conventions.LanguageCode() != NULL) {
+		std::string id = conventions.LanguageCode();
+		if (conventions.CountryCode() != NULL)
+			id += std::string("_") + conventions.CountryCode();
+		formatting = linux_locale_name(id.c_str());
+	}
+
+	static const char* const kCategories[] = { "LC_NUMERIC", "LC_TIME",
+		"LC_MONETARY", "LC_MEASUREMENT", "LC_PAPER", NULL };
+	for (int i = 0; kCategories[i] != NULL; i++) {
+		const char* names[] = { "LC_ALL", kCategories[i], "LC_NUMERIC",
+			NULL };
+		const char* value = chosen_locale(names);
+		std::string category = value != NULL ? linux_locale_name(value)
+			: formatting;
+		if (!category.empty() && category != lang)
+			environment.push_back(std::string(kCategories[i]) + "=" + category);
+	}
+}
+
+
+// #pragma mark -
+
+
 static std::vector<std::string>
 linux_environment(const std::string& shell)
 {
 	std::vector<std::string> environment;
 	const char* home = getenv("HOME");
 	const char* term = getenv("TERM");
-	const char* lang = getenv("LANG");
 	const char* user = getenv("USER");
 	if (user == NULL) {
 		struct passwd* entry = getpwuid(getuid());
@@ -280,12 +484,15 @@ linux_environment(const std::string& shell)
 		+ (home != NULL ? home : "/boot/home"));
 	environment.push_back(std::string("TERM=")
 		+ (term != NULL ? term : "xterm-256color"));
-	environment.push_back(std::string("LANG=")
-		+ (lang != NULL ? lang : "C.UTF-8"));
+	linux_locale_environment(environment);
 	environment.push_back(std::string("USER=") + user);
 	environment.push_back(std::string("LOGNAME=") + user);
 	environment.push_back("XDG_RUNTIME_DIR=/tmp/xdg-runtime");
 	environment.push_back("WAYLAND_DISPLAY=wayland-0");
+	// Renga's session bus (session_bus): notifications, UPower, portals,
+	// Secret Service
+	environment.push_back(
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/xdg-runtime/bus");
 	environment.push_back("SHELL=" + shell);
 	return environment;
 }

@@ -912,6 +912,7 @@ renguin_team_released(Team* team)
 {
 	renguin_team* data = (renguin_team*)team->personality_data;
 	if (data != NULL) {
+		renguin_trace_team_released(data);
 		renguin_team_threads_free(data);
 		free(data);
 		team->personality_data = NULL;

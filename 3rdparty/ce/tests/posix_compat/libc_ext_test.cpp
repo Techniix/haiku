@@ -21,6 +21,8 @@
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
+#include <wchar.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -389,6 +391,49 @@ test_copy_file_range()
 }
 
 
+/*!	Renga (batch 3): the Linux names of the C locale with a character set,
+	which programs started from a Linux shell under Renguin inherit in
+	LANG, are accepted (setlocale() used to fail for them) and give UTF-8
+	multibyte handling; plain C stays ASCII.
+*/
+static void
+test_c_utf8_locale()
+{
+	static const char* const kNames[] = { "C.UTF-8", "C.utf8",
+		"POSIX.UTF-8" };
+	for (size_t i = 0; i < sizeof(kNames) / sizeof(kNames[0]); i++) {
+		const char* result = setlocale(LC_ALL, kNames[i]);
+		wchar_t wide = 0;
+		mbstate_t state = {};
+		size_t length = result != NULL
+			? mbrtowc(&wide, "\xc3\xa9", 2, &state) : (size_t)-1;
+		char name[32];
+		snprintf(name, sizeof(name), "locale_%s", i == 0 ? "c_utf8"
+			: i == 1 ? "c_utf8_short" : "posix_utf8");
+		report(name, result != NULL && length == 2 && wide == 0xe9
+			&& MB_CUR_MAX > 1,
+			"setlocale(LC_ALL, \"%s\") -> %s; U+00E9 from 2 bytes: %zd, "
+			"%#x; MB_CUR_MAX %zu", kNames[i], result != NULL ? result : "NULL",
+			(ssize_t)length, (unsigned)wide, (size_t)MB_CUR_MAX);
+	}
+
+	// LANG=C.UTF-8 through setlocale(LC_ALL, "")
+	setenv("LANG", "C.UTF-8", 1);
+	unsetenv("LC_ALL");
+	unsetenv("LC_CTYPE");
+	const char* fromEnvironment = setlocale(LC_ALL, "");
+	report("locale_lang_c_utf8", fromEnvironment != NULL,
+		"LANG=C.UTF-8, setlocale(LC_ALL, \"\") -> %s",
+		fromEnvironment != NULL ? fromEnvironment : "NULL");
+	unsetenv("LANG");
+
+	const char* plain = setlocale(LC_ALL, "C");
+	report("locale_c_plain", plain != NULL && MB_CUR_MAX == 1,
+		"setlocale(LC_ALL, \"C\") -> %s, MB_CUR_MAX %zu",
+		plain != NULL ? plain : "NULL", (size_t)MB_CUR_MAX);
+}
+
+
 int
 main()
 {
@@ -397,6 +442,7 @@ main()
 	test_backtrace();
 	test_mmsg();
 	test_copy_file_range();
+	test_c_utf8_locale();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

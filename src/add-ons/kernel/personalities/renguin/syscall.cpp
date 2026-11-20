@@ -36,6 +36,10 @@
 #include <arch/x86/64/iframe.h>
 #include <team.h>
 #include <thread.h>
+#include <util/atomic.h>
+
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "abi/linux_syscall_names.h"
 
@@ -333,11 +337,88 @@ log_unimplemented(uint64 number)
 	successful file lookups, clocks, getpid/gettid, getrandom, mremap and
 	ENOENT path searches. Read again at every exec of a Linux program, so it can
 	be changed without restarting. Off by default.
+
+	"trace_buffer true" (with any of the above) keeps the lines in memory,
+	with a millisecond time stamp, instead of writing each to the syslog as
+	it happens, and writes them out when the traced process ends (up to
+	16000 lines). Writing every line at once slows the traced program down
+	so much that timing-dependent problems disappear: Linux Chrome's child
+	processes worked under trace_all and failed without it.
 */
 static char sTracePattern[64];
 static bool sTraceAll;
 static bool sTraceProcess;
 static int32 sTraceGeneration = 1;
+static bool sTraceBuffer;
+
+static const int32 kTraceBufferLines = 16000;
+static const size_t kTraceLineSize = 176;
+static char* sTraceRing;
+static int32 sTraceRingCount;
+static spinlock sTraceRingLock = B_SPINLOCK_INITIALIZER;
+
+
+//!	Writes a trace line, or keeps it for later (trace_buffer).
+static void
+trace_emit(const char* line)
+{
+	if (!sTraceBuffer) {
+		dprintf("%s", line);
+		return;
+	}
+	if (sTraceRing == NULL) {
+		char* ring = (char*)malloc(kTraceBufferLines * kTraceLineSize);
+		if (ring == NULL || atomic_pointer_test_and_set(&sTraceRing, ring,
+				(char*)NULL) != NULL) {
+			free(ring);
+		}
+		if (sTraceRing == NULL) {
+			dprintf("%s", line);
+			return;
+		}
+	}
+	cpu_status state = disable_interrupts();
+	acquire_spinlock(&sTraceRingLock);
+	if (sTraceRingCount < kTraceBufferLines) {
+		snprintf(sTraceRing + sTraceRingCount * kTraceLineSize,
+			kTraceLineSize, "%" B_PRId64 " %s", system_time() / 1000, line);
+		sTraceRingCount++;
+	}
+	release_spinlock(&sTraceRingLock);
+	restore_interrupts(state);
+}
+
+
+/*!	A team went away: with trace_buffer, write out what was kept when it
+	was a traced one.
+*/
+void
+renguin_trace_team_released(renguin_team* data)
+{
+	if (data == NULL || data->trace_match != 1 || sTraceRing == NULL)
+		return;
+	dprintf("renguin trace: buffered lines follow (ms since boot first)\n");
+	for (int32 i = 0; i < kTraceBufferLines; i++) {
+		cpu_status state = disable_interrupts();
+		acquire_spinlock(&sTraceRingLock);
+		bool more = i < sTraceRingCount;
+		char line[kTraceLineSize];
+		if (more)
+			memcpy(line, sTraceRing + i * kTraceLineSize, kTraceLineSize);
+		release_spinlock(&sTraceRingLock);
+		restore_interrupts(state);
+		if (!more)
+			break;
+		line[kTraceLineSize - 1] = '\0';
+		dprintf("renguin trace: @%s", line);
+	}
+	cpu_status state = disable_interrupts();
+	acquire_spinlock(&sTraceRingLock);
+	sTraceRingCount = 0;
+	release_spinlock(&sTraceRingLock);
+	restore_interrupts(state);
+	dprintf("renguin trace: end of buffered lines\n");
+}
 
 
 void
@@ -346,7 +427,10 @@ renguin_reload_trace_settings()
 	char pattern[sizeof(sTracePattern)] = "";
 	bool all = false;
 	bool process = false;
+	bool buffer = false;
 	if (void* handle = load_driver_settings("renguin")) {
+		buffer = get_driver_boolean_parameter(handle, "trace_buffer", false,
+			true);
 		const char* value = get_driver_parameter(handle, "trace_all", NULL,
 			NULL);
 		process = false;
@@ -362,12 +446,13 @@ renguin_reload_trace_settings()
 		unload_driver_settings(handle);
 	}
 	if (strcmp(pattern, sTracePattern) != 0 || all != sTraceAll
-		|| process != sTraceProcess) {
+		|| process != sTraceProcess || buffer != sTraceBuffer) {
 		dprintf("renguin: system call trace %s%s%s\n",
 			pattern[0] != '\0' ? (all ? "of all calls" : "of errors") : "off",
 			pattern[0] != '\0' ? " for " : "", pattern);
 		sTraceAll = all;
 		sTraceProcess = process;
+		sTraceBuffer = buffer;
 		strlcpy(sTracePattern, pattern, sizeof(sTracePattern));
 		atomic_add(&sTraceGeneration, 1);
 	}
@@ -455,7 +540,7 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 	if (data->trace_match != 1)
 		return;
 	static int32 sTraced = 0;
-	if (atomic_add(&sTraced, 1) >= 4000)
+	if (atomic_add(&sTraced, 1) >= (sTraceBuffer ? kTraceBufferLines : 4000))
 		return;
 	const char* name = number < LINUX_SYSCALL_COUNT
 		? kLinuxSyscallNames[number] : NULL;
@@ -476,18 +561,22 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 		&& renguin_copy_string_in(path, pathArgument, sizeof(path)) < 0) {
 		path[0] = '\0';
 	}
+	char line[kTraceLineSize];
 	if (entering) {
 		// (with trace_all: shows the call a thread blocks in)
-		dprintf("renguin trace: %" B_PRId32 ":%" B_PRId32 " > %s(%#" B_PRIx64
-			", %#" B_PRIx64 ", %#" B_PRIx64 ")%s%s\n", thread->team->id,
-			thread->id, name != NULL ? name : "?", a1, a2, a3,
+		snprintf(line, sizeof(line), "renguin trace: %" B_PRId32 ":%"
+			B_PRId32 " > %s(%#" B_PRIx64 ", %#" B_PRIx64 ", %#" B_PRIx64
+			")%s%s\n", thread->team->id, thread->id,
+			name != NULL ? name : "?", a1, a2, a3,
 			path[0] != '\0' ? " " : "", path);
-		return;
+	} else {
+		snprintf(line, sizeof(line), "renguin trace: %" B_PRId32 ":%"
+			B_PRId32 " %s(%#" B_PRIx64 ", %#" B_PRIx64 ", %#" B_PRIx64
+			") = %" B_PRId64 "%s%s\n", thread->team->id, thread->id,
+			name != NULL ? name : "?", a1, a2, a3, result,
+			path[0] != '\0' ? " " : "", path);
 	}
-	dprintf("renguin trace: %" B_PRId32 ":%" B_PRId32 " %s(%#" B_PRIx64
-		", %#" B_PRIx64 ", %#" B_PRIx64 ") = %" B_PRId64 "%s%s\n",
-		thread->team->id, thread->id, name != NULL ? name : "?", a1, a2, a3,
-		result, path[0] != '\0' ? " " : "", path);
+	trace_emit(line);
 }
 
 void

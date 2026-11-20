@@ -87,7 +87,21 @@ ICULocaleBackend::SetLocale(int category, const char* posixLocaleName)
 		|| strcasecmp(posixLocaleName, "C") == 0)
 		return _SetPosixLocale(category);
 
-	Locale locale = Locale::createCanonical(posixLocaleName);
+	// Renga (batch 3): "C.UTF-8", "C.utf8" and "POSIX.UTF-8", the names
+	// Linux systems use for the C locale with a character set, as programs
+	// started from a Linux shell under Renguin inherit them. ICU took "c"
+	// for a language, found none, and setlocale() failed. They get the
+	// POSIX locale's rules (en_US_POSIX) with the character set they name,
+	// and keep their own name, as on Linux.
+	size_t baseLength = strcspn(posixLocaleName, ".@");
+	bool posixWithCharset = posixLocaleName[baseLength] == '.'
+		&& ((baseLength == 1 && (posixLocaleName[0] == 'C'
+				|| posixLocaleName[0] == 'c'))
+			|| (baseLength == 5
+				&& strncasecmp(posixLocaleName, "POSIX", 5) == 0));
+
+	Locale locale = posixWithCharset ? Locale::createFromName("en_US_POSIX")
+		: Locale::createCanonical(posixLocaleName);
 
 	// Locale::create doesn't check validity, so make sure the locale
 	// has a real ISO-3166 language code to validate that it actually exists.

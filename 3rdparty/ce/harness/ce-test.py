@@ -128,13 +128,22 @@ SOUND_PHASES = [
 		None, True),
 	("sound_audio.app_output_routed", "sdl-out.raw", None, 4650, 1.0, None,
 		True),
+	# Renga (audio routing): "Also play on" the second card, then off
+	("sound_audio.mirror_default", "audio.wav", 4920, 4970, 1.0, None, True),
+	("sound_audio.mirror_second", "sdl-out.raw", 4920, 4970, 1.0, None,
+		True),
+	("sound_audio.mirror_off_default", "audio.wav", 5020, 5070, 1.0, None,
+		True),
+	("sound_audio.mirror_off_second", "sdl-out.raw", 5020, 5070, 0, None,
+		False),
 ]
 SOUND_FREQUENCIES = sorted({hz for phase in SOUND_PHASES
 	for hz in phase[2:4] if hz} | {4700})
 SOUND_SCREENSHOTS = ["sound_output", "sound_input", "sound_applications",
 	"sound_devices", "sound_output_second", "sound_output_advanced",
 	"sound_applications_volume", "sound_applications_advanced",
-	"sound_devices_advanced", "sound_devices_usb", "sound_search"]
+	"sound_devices_advanced", "sound_devices_usb", "sound_search",
+	"sound_output_mirror"]
 
 
 def qemu_usb_audio_gain(db):
@@ -2624,7 +2633,15 @@ def parse_serial(results_dir, report):
 			continue
 		if "virtio_sound" in line:
 			driver_lines.append(line)
-		if PANIC_PATTERN.search(line) or "vm_page_fault" in line \
+		# A kernel-mode fault of user_memcpy() and friends is how a system
+		# call finds a bad user pointer (EFAULT): the fault handler takes
+		# it, and only a fault without one panics, which the panic pattern
+		# catches. Linux programs probe their own read-only pages that way
+		# (Linux Chrome under Renguin, batch 3), and so on hardware the
+		# line means nothing; user-mode faults stay problems.
+		handled_fault = "vm_page_fault" in line and ", kernel," in line
+		if PANIC_PATTERN.search(line) or ("vm_page_fault" in line
+					and not handled_fault) \
 				or "Welcome to Kernel Debugging Land" in line:
 			# In an announced debugger entry, only its own panic and the
 			# debugger's welcome are expected.

@@ -5,5 +5,5 @@ SubDir HAIKU_TOP src bin linux ;
 
 Application linux :
 	linux.cpp
-	: [ TargetLibstdc++ ]
+	: be [ TargetLibstdc++ ]
 ;

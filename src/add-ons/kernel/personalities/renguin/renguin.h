@@ -237,6 +237,7 @@ status_t	renguin_load(struct foreign_exec_args* args);
 status_t	renguin_enter_userspace(Thread* thread, addr_t entry,
 				addr_t stackPointer);
 void		renguin_team_released(Team* team);
+void		renguin_trace_team_released(renguin_team* data);
 bool		renguin_is_linux_team(Team* team);
 
 // exec.cpp
