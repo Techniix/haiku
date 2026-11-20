@@ -35,6 +35,10 @@
 	  rules true|false            per-application rules apply (on)
 	  switcher_plus true|false    the Deskbar's workspace switcher ends
 	                              in a "+" that adds a workspace (on)
+	  edge_snap true|false        a window dragged to a screen edge snaps
+	                              without the modifier: left or right half,
+	                              the whole work area at the top, a quarter
+	                              in a corner (on; batch 8)
 	  default <spec>              layout of every screen and workspace
 	                              without its own (1x2)
 	  display <index> <spec>      layout of one screen (0 = first)
@@ -123,6 +127,7 @@ struct Settings {
 	bool	tabMenu;
 	bool	rules;
 	bool	switcherPlus;
+	bool	edgeSnap;
 	char	defaultSpec[kSpecLength];
 	char	displaySpec[kMaxDisplays][kSpecLength];
 	char	workspaceSpec[kMaxWorkspaces][kSpecLength];
@@ -147,6 +152,7 @@ defaults(Settings& settings)
 	settings.tabMenu = true;
 	settings.rules = true;
 	settings.switcherPlus = true;
+	settings.edgeSnap = true;
 	strcpy(settings.defaultSpec, "1x2");
 }
 
@@ -351,6 +357,50 @@ zone_frames(const Layout& layout, BRect area, int32 gap, BRect* frames,
 }
 
 
+/*!	Edge snapping without a key (batch 8): the zone for a drag whose pointer
+	is at \a where on the screen \a screen (work area \a area, which leaves
+	out an edge Deskbar). Within kEdgeDistance pixels of the left or right
+	edge: that half, or that quarter when the pointer is also in the top or
+	bottom quarter of the screen's height (a corner); within it of the top
+	edge, elsewhere: the whole work area. Returns false away from the edges
+	(the bottom edge snaps nothing, so windows can still be dragged down).
+*/
+static const int32 kEdgeDistance = 3;
+
+static inline bool
+edge_zone(BRect screen, BRect area, BPoint where, int32 gap, BRect& frame)
+{
+	bool left = where.x <= screen.left + kEdgeDistance;
+	bool right = where.x >= screen.right - kEdgeDistance;
+	bool top = where.y <= screen.top + kEdgeDistance;
+	float cornerHeight = (screen.Height() + 1) / 4;
+	bool upper = where.y < screen.top + cornerHeight;
+	bool lower = where.y > screen.bottom - cornerHeight;
+	if (!screen.Contains(where) || !(left || right || top))
+		return false;
+
+	Layout layout;
+	memset(&layout, 0, sizeof(layout));
+	layout.count = 1;
+	Zone& zone = layout.zones[0];
+	zone.left = 0;
+	zone.top = 0;
+	zone.right = 1;
+	zone.bottom = 1;
+	if (left || right) {
+		if (left)
+			zone.right = 0.5f;
+		else
+			zone.left = 0.5f;
+		if (upper)
+			zone.bottom = 0.5f;
+		else if (lower)
+			zone.top = 0.5f;
+	}
+	return zone_frames(layout, area, gap, &frame, 1) == 1;
+}
+
+
 //!	Index of the zone containing \a point, or the nearest one; -1 if none.
 static inline int32
 zone_at(const BRect* frames, int32 count, BPoint point)
@@ -419,6 +469,8 @@ load_from(FILE* in, Settings& settings)
 			settings.rules = parse_bool(value, settings.rules);
 		else if (strcmp(line, "switcher_plus") == 0)
 			settings.switcherPlus = parse_bool(value, settings.switcherPlus);
+		else if (strcmp(line, "edge_snap") == 0)
+			settings.edgeSnap = parse_bool(value, settings.edgeSnap);
 		else if (strcmp(line, "default") == 0) {
 			copy_word(settings.defaultSpec, sizeof(settings.defaultSpec),
 				value);
@@ -528,7 +580,7 @@ write_file(const char* file, const Settings& settings, bool workspacesOnly,
 	else {
 		fprintf(out, "snap %s\nmodifier %s\nspan %s\nshow_grid %s\ngap %d\n"
 			"zone_shortcuts %s\ntab_menu %s\nrules %s\nswitcher_plus %s\n"
-			"default %s\n",
+			"edge_snap %s\ndefault %s\n",
 			settings.snap ? "true" : "false",
 			modifier_name(settings.modifier),
 			settings.span ? "true" : "false",
@@ -536,7 +588,8 @@ write_file(const char* file, const Settings& settings, bool workspacesOnly,
 			settings.zoneShortcuts ? "true" : "false",
 			settings.tabMenu ? "true" : "false",
 			settings.rules ? "true" : "false",
-			settings.switcherPlus ? "true" : "false", settings.defaultSpec);
+			settings.switcherPlus ? "true" : "false",
+			settings.edgeSnap ? "true" : "false", settings.defaultSpec);
 		for (int32 i = 0; i < kMaxDisplays; i++) {
 			if (settings.displaySpec[i][0] != '\0')
 				fprintf(out, "display %d %s\n", (int)i, settings.displaySpec[i]);

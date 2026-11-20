@@ -266,6 +266,9 @@ public:
 			"several zones"));
 		fGrid = _Check("showGrid", B_TRANSLATE("Show every zone while "
 			"choosing"));
+		fEdgeSnap = _Check("edgeSnap", B_TRANSLATE("Drag a window to a "
+			"screen edge to snap it, without a key (half, quarter in a "
+			"corner, whole screen at the top)"));
 		fGap = new BSlider("gap", B_TRANSLATE("Gap between windows"),
 			new BMessage(kMsgChanged), 0, 32, B_HORIZONTAL);
 		fGap->SetHashMarks(B_HASH_MARKS_BOTTOM);
@@ -348,6 +351,7 @@ public:
 				.End()
 				.Add(fSpan)
 				.Add(fGrid)
+				.Add(fEdgeSnap)
 				.Add(fGap)
 				.Add(new BStringView("editorTitle", B_TRANSLATE(
 					"Zone editor: drag over cells to make a zone")))
@@ -453,6 +457,7 @@ public:
 				settings.snap = fSnap->Value() != 0;
 				settings.span = fSpan->Value() != 0;
 				settings.showGrid = fGrid->Value() != 0;
+				settings.edgeSnap = fEdgeSnap->Value() != 0;
 				settings.gap = fGap->Value();
 				settings.zoneShortcuts = fShortcuts->Value() != 0;
 				settings.tabMenu = fTabMenu->Value() != 0;
@@ -793,8 +798,9 @@ private:
 		_FillSpecMenu(fDisplayLayout, kMsgDisplaySpec,
 			B_TRANSLATE("Same as the layout"), settings.displaySpec[0],
 			settings);
-		BControl* snapParts[] = { fSpan, fGrid, fGap };
-		for (int i = 0; i < 3; i++)
+		fEdgeSnap->SetValue(settings.edgeSnap);
+		BControl* snapParts[] = { fSpan, fGrid, fGap, fEdgeSnap };
+		for (int i = 0; i < 4; i++)
 			snapParts[i]->SetEnabled(settings.snap);
 		fModifier->SetEnabled(settings.snap);
 		fShortcuts->SetValue(settings.zoneShortcuts);
@@ -824,6 +830,7 @@ private:
 	BMenuField*		fModifier;
 	BCheckBox*		fSpan;
 	BCheckBox*		fGrid;
+	BCheckBox*		fEdgeSnap;
 	BSlider*		fGap;
 	BMenuField*		fDefault;
 	BMenuField*		fWorkspaceLayout;

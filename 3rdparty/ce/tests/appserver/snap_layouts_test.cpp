@@ -37,6 +37,9 @@
 	on the tab, per-application rules, saved arrangements, the overview,
 	and the Deskbar switcher (the Control Panel page is checked by
 	control_panel_ui_test, in the renga-* images that have it).
+	Edge snapping without a key (batch 8): model_edge_zone,
+	model_edge_default, edge_snap (the tab dragged to the left edge fills
+	the left half; screenshot snap_edge), edge_snap_off.
 	Screenshots: snap_grid (the grid while choosing), snap_span,
 	snap_window_menu, snap_switcher, snap_overview.
 
@@ -47,6 +50,8 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+
+#include <string>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -58,6 +63,7 @@
 #include <Entry.h>
 #include <Roster.h>
 #include <Screen.h>
+#include <String.h>
 #include <ServerProtocol.h>
 #include <View.h>
 #include <Window.h>
@@ -253,6 +259,30 @@ model_checks()
 
 	BRect span = span_frame(frames, count, 0, 3);
 	result("model_span", same(span, area, 0), "%s", text(span));
+
+	// Edge snapping without a key (batch 8): left edge middle -> left
+	// half, left edge near the top -> top-left quarter, top edge -> the
+	// whole area, bottom edge and the middle -> nothing.
+	{
+		BRect half, quarter, whole, none;
+		bool gotHalf = edge_zone(area, area, BPoint(0, 384), 8, half);
+		bool gotQuarter = edge_zone(area, area, BPoint(1, 20), 8, quarter);
+		bool gotWhole = edge_zone(area, area, BPoint(500, 0), 8, whole);
+		bool gotRight = edge_zone(area, area, BPoint(1023, 700), 8, none);
+		BRect rightLower = none;
+		bool gotBottom = edge_zone(area, area, BPoint(500, 767), 8, none);
+		bool gotMiddle = edge_zone(area, area, BPoint(500, 384), 8, none);
+		result("model_edge_zone", gotHalf && same(half, BRect(8, 8, 507, 759), 0)
+				&& gotQuarter && same(quarter, BRect(8, 8, 507, 379), 0)
+				&& gotWhole && same(whole, BRect(8, 8, 1015, 759), 0)
+				&& gotRight && same(rightLower, BRect(516, 388, 1015, 759), 0)
+				&& !gotBottom && !gotMiddle,
+			"half %s, quarter %s, whole %s, right lower %s, bottom %d, "
+			"middle %d", text(half), text(quarter), text(whole),
+			text(rightLower), gotBottom, gotMiddle);
+		result("model_edge_default", settings.edgeSnap, "edge_snap %d",
+			settings.edgeSnap);
+	}
 	result("model_nearest", zone_at(frames, count, BPoint(600, 100)) == 1
 		&& zone_at(frames, count, BPoint(-50, 900)) == 2,
 		"%d %d", (int)zone_at(frames, count, BPoint(600, 100)),
@@ -587,6 +617,43 @@ live_checks()
 	result("s4_no_overlay", read && !same_color(edge, highlight),
 		"pixel %d,%d,%d", edge.red, edge.green, edge.blue);
 
+	// Edge snapping without a key (batch 8): the tab dragged to the left
+	// edge puts the window into the left half (the 1x2 layout's zone 0 is
+	// the same frame); with the switch off it is a stock drag.
+	{
+		BPoint leftEdge(sScreen.left, (sScreen.top + sScreen.bottom) / 2);
+		drag(window, leftEdge, NULL, "snap_edge");
+		after = window->CurrentFrame();
+		BRect expected = content_for(window, zones[0]);
+		result("edge_snap", same(after, expected), "%s, expected %s",
+			text(after), text(expected));
+
+		host("sendkey ctrl-alt-0");
+		snooze(600000);
+		if (window->Lock()) {
+			window->ResizeTo(299, 199);
+			window->MoveTo(200, 200);
+			window->Unlock();
+		}
+		snooze(400000);
+		settings.edgeSnap = false;
+		apply(settings);
+		before = window->CurrentFrame();
+		drag(window, leftEdge);
+		after = window->CurrentFrame();
+		result("edge_snap_off", after.Width() == before.Width()
+				&& after.Height() == before.Height()
+				&& !same(after, expected),
+			"%s -> %s", text(before), text(after));
+		settings.edgeSnap = true;
+		apply(settings);
+		if (window->Lock()) {
+			window->MoveTo(200, 200);
+			window->Unlock();
+		}
+		snooze(400000);
+	}
+
 	// S6: the master switch off acts without a restart
 	settings.snap = false;
 	apply(settings);
@@ -817,6 +884,46 @@ damaged_settings_checks()
 }
 
 
+/*!	snap.window_menu_catalog (batch 8): the window menu's strings are in
+	libbe's catalog under the context "Window menu", so translators get
+	them. The English catalog in the image is built from the sources'
+	B_TRANSLATE() keys (collectcatkeys), so it holds each string and its
+	context. Known-bad: the menu used plain literals and Window.cpp was not
+	a catalog source of libbe, so none of them were there.
+*/
+static void
+catalog_checks()
+{
+	const char* kCatalog = "/boot/system/data/locale/catalogs/"
+		"x-vnd.Haiku-libbe/en.catalog";
+	const char* kStrings[] = { "Window menu", "Move to workspace",
+		"Workspace %number%", "New workspace", "Snap to", "Zone %number%",
+		"Restore size", "Minimize", "Zoom", "Close", NULL };
+	FILE* file = fopen(kCatalog, "rb");
+	std::string data;
+	if (file != NULL) {
+		char buffer[65536];
+		size_t got;
+		while ((got = fread(buffer, 1, sizeof(buffer), file)) > 0)
+			data.append(buffer, got);
+		fclose(file);
+	}
+	int found = 0;
+	BString missing;
+	for (int i = 0; kStrings[i] != NULL; i++) {
+		std::string key(kStrings[i]);
+		key.push_back('\0');
+		if (data.find(key) != std::string::npos)
+			found++;
+		else
+			missing << " \"" << kStrings[i] << "\"";
+	}
+	result("window_menu_catalog", file != NULL && missing.IsEmpty(),
+		"%d of 10 strings in %s%s%s", found, kCatalog,
+		missing.IsEmpty() ? "" : "; missing:", missing.String());
+}
+
+
 class TestApp : public BApplication {
 public:
 	TestApp() : BApplication(kSignature) {}
@@ -825,6 +932,7 @@ public:
 	{
 		sScreen = BScreen().Frame();
 		backup_settings();
+		catalog_checks();
 		model_checks();
 		live_checks();
 		damaged_settings_checks();

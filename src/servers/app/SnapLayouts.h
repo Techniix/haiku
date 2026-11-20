@@ -30,6 +30,9 @@ enum { kMaxFrames = 36 };
 //!	whether the span key is held as well.
 bool			DragActive(int32 modifiers, bool* span);
 
+//!	Edge snapping without a key (batch 8): the zone for a drag whose pointer
+//!	is at \a where, if it touches a screen edge and the setting is on.
+bool			EdgeZone(Desktop* desktop, BPoint where, BRect* zone);
 //!	Zones of the screen containing \a where, for the current workspace.
 int32			ZoneFrames(Desktop* desktop, BPoint where, BRect* frames,
 					int32 maxFrames);

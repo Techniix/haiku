@@ -292,15 +292,31 @@ private:
 	/*!	Renga (batch 7, F-25): while the snap modifier is held, the zones
 		of the screen under the pointer are shown and the one under the
 		pointer is chosen; with the span key as well, every zone between
-		the first one chosen and the current one. Without the modifier the
-		drag is exactly the stock drag.
+		the first one chosen and the current one. Without the modifier, a
+		pointer at a screen edge chooses that edge's zone (EdgeZone(), batch
+		8, switchable); elsewhere the drag is exactly the stock drag.
 	*/
 	void _UpdateSnapping(int32 modifiers)
 	{
 		bool span = false;
-		if ((fWindow->Flags() & B_NOT_MOVABLE) != 0 || !fWindow->IsNormal()
-			|| !SnapLayouts::DragActive(modifiers, &span)) {
+		if ((fWindow->Flags() & B_NOT_MOVABLE) != 0 || !fWindow->IsNormal()) {
 			_StopSnapping();
+			return;
+		}
+		if (!SnapLayouts::DragActive(modifiers, &span)) {
+			// Renga (batch 8): without the modifier, a screen edge under
+			// the pointer offers its half, quarter or the whole area.
+			BRect edge;
+			if (!SnapLayouts::EdgeZone(fDesktop, fPointer, &edge)) {
+				_StopSnapping();
+				return;
+			}
+			if (fSnapping && edge == fTarget)
+				return;
+			fSnapping = true;
+			fAnchorZone = -1;
+			fTarget = edge;
+			SnapLayouts::ShowOverlay(fDesktop, &fTarget, 1, fTarget);
 			return;
 		}
 

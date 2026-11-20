@@ -47,6 +47,7 @@
 #include <ServerProtocol.h>
 #include <ScreenOutputs.h>
 #include <String.h>
+#include <SystemCatalog.h>
 #include <TextView.h>
 #include <TokenSpace.h>
 #include <ToolTipManager.h>
@@ -59,6 +60,18 @@
 #include <input_globals.h>
 #include <tracker_private.h>
 #include <util/SplayTree.h>
+
+
+// Renga: the window menu (the tab's menu, F-25) is part of libbe, so its
+// strings come from libbe's system catalog, as BMenu's and BTextView's do.
+using BPrivate::gSystemCatalog;
+
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "Window menu"
+
+#undef B_TRANSLATE
+#define B_TRANSLATE(str) \
+	gSystemCatalog.GetString(B_TRANSLATE_MARK(str), "Window menu")
 
 
 //#define DEBUG_WIN
@@ -1013,14 +1026,18 @@ show_window_menu(BWindow* window, BMessage* request)
 	BPopUpMenu* menu = new BPopUpMenu("window menu", false, false);
 	menu->SetAsyncAutoDestruct(true);
 
-	BMenu* workspaces = new BMenu("Move to workspace");
+	BMenu* workspaces = new BMenu(B_TRANSLATE("Move to workspace"));
 	for (int32 i = 0; i < count && i < 32; i++) {
 		BString label;
 		const char* name = request->GetString("name", i, "");
 		if (name[0] != '\0')
 			label.SetToFormat("%" B_PRId32 ": %s", i + 1, name);
-		else
-			label.SetToFormat("Workspace %" B_PRId32, i + 1);
+		else {
+			BString number;
+			number << i + 1;
+			label = B_TRANSLATE("Workspace %number%");
+			label.ReplaceFirst("%number%", number);
+		}
 		BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
 		message->AddInt32("workspace", i);
 		BMenuItem* item = new BMenuItem(label.String(), message);
@@ -1034,17 +1051,22 @@ show_window_menu(BWindow* window, BMessage* request)
 		workspaces->AddSeparatorItem();
 		BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
 		message->AddInt32("workspace", -2);
-		workspaces->AddItem(new BMenuItem("New workspace", message));
+		workspaces->AddItem(new BMenuItem(B_TRANSLATE("New workspace"), message));
 	}
 	workspaces->SetTargetForItems(window);
 	menu->AddItem(workspaces);
 
 	if (request->GetBool("snap", true) && zones > 0
 		&& (window->Flags() & B_NOT_MOVABLE) == 0) {
-		BMenu* snap = new BMenu("Snap to");
+		BMenu* snap = new BMenu(B_TRANSLATE("Snap to"));
 		for (int32 i = 0; i < zones; i++) {
 			BString label;
-			label.SetToFormat("Zone %" B_PRId32, i + 1);
+			{
+				BString number;
+				number << i + 1;
+				label = B_TRANSLATE("Zone %number%");
+				label.ReplaceFirst("%number%", number);
+			}
 			BMessage* message
 				= new BMessage(WindowLayouts::kMsgWindowMenuAction);
 			message->AddInt32("zone", i);
@@ -1054,7 +1076,7 @@ show_window_menu(BWindow* window, BMessage* request)
 		snap->AddSeparatorItem();
 		BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
 		message->AddInt32("zone", -1);
-		snap->AddItem(new BMenuItem("Restore size", message, '0',
+		snap->AddItem(new BMenuItem(B_TRANSLATE("Restore size"), message, '0',
 			B_COMMAND_KEY | B_CONTROL_KEY));
 		snap->SetTargetForItems(window);
 		menu->AddItem(snap);
@@ -1063,18 +1085,18 @@ show_window_menu(BWindow* window, BMessage* request)
 	menu->AddSeparatorItem();
 	BMessage* message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
 	message->AddBool("minimize", true);
-	BMenuItem* item = new BMenuItem("Minimize", message);
+	BMenuItem* item = new BMenuItem(B_TRANSLATE("Minimize"), message);
 	item->SetEnabled((window->Flags() & B_NOT_MINIMIZABLE) == 0);
 	menu->AddItem(item);
 	message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
 	message->AddBool("zoom", true);
-	item = new BMenuItem("Zoom", message);
+	item = new BMenuItem(B_TRANSLATE("Zoom"), message);
 	item->SetEnabled((window->Flags() & B_NOT_ZOOMABLE) == 0);
 	menu->AddItem(item);
 	menu->AddSeparatorItem();
 	message = new BMessage(WindowLayouts::kMsgWindowMenuAction);
 	message->AddBool("close", true);
-	item = new BMenuItem("Close", message);
+	item = new BMenuItem(B_TRANSLATE("Close"), message);
 	item->SetEnabled((window->Flags() & B_NOT_CLOSABLE) == 0);
 	menu->AddItem(item);
 	menu->SetTargetForItems(window);

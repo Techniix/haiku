@@ -84,6 +84,10 @@ SEARCH_SOURCE += [ FDirName $(SUBDIR) interface ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) interface textview_support ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) shared ] ;
 
+# Renga: Window.cpp (the window menu's strings, batch 8) includes private
+# headers of these kits; collectcatkeys preprocesses it with them.
+UsePrivateHeaders app input interface locale shared tracker ;
+
 DoCatalogs libbe.so
 	: x-vnd.Haiku-libbe
 	:
@@ -98,6 +102,7 @@ DoCatalogs libbe.so
 	StringForRate.cpp
 	StringForSize.cpp
 	TextView.cpp
+	Window.cpp
 	ZombieReplicantView.cpp
 	;
 

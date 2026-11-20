@@ -175,6 +175,24 @@ DragActive(int32 modifiers, bool* span)
 }
 
 
+bool
+EdgeZone(Desktop* desktop, BPoint where, BRect* zone)
+{
+	int32 gap;
+	{
+		BAutolock _(sLock);
+		reload_if_changed();
+		if (!sSettings.snap || !sSettings.edgeSnap)
+			return false;
+		gap = sSettings.gap;
+	}
+	BRect screen;
+	display_for(desktop, where, screen);
+	return WindowLayouts::edge_zone(screen, work_area(desktop, screen), where,
+		gap, *zone);
+}
+
+
 int32
 ZoneFrames(Desktop* desktop, BPoint where, BRect* frames, int32 maxFrames)
 {
