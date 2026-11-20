@@ -45,6 +45,7 @@
 #include <thread.h>
 #include <user_runtime.h>
 #include <util/AutoLock.h>
+#include <fs/fd.h>
 #include <vfs.h>
 #include <vm/vm.h>
 
@@ -334,6 +335,188 @@ renguin_sys_wait4(int64 pid, uint64 statusPtr, uint64 options,
 	}
 
 	return child;
+}
+
+
+/*!	waitid() (glibc's posix_spawn and waitid(), Python's subprocess):
+	the same wait as wait4(), with the result as a Linux siginfo.
+*/
+int64
+renguin_sys_waitid(int idType, int64 id, uint64 infoPtr, uint64 options,
+	uint64 rusagePtr)
+{
+	enum { LX_P_ALL = 0, LX_P_PID = 1, LX_P_PGID = 2 };
+	enum {
+		LX_WEXITED = 0x04, LX_WSTOPPED = 0x02, LX_WNOWAIT = 0x01000000
+	};
+	if ((options & ~(uint64)(LX_WNOHANG | LX_WSTOPPED | LX_WEXITED
+			| LX_WCONTINUED | LX_WNOWAIT | LX_WNOTHREAD | LX_WALL
+			| LX_WCLONE)) != 0
+		|| (options & (LX_WEXITED | LX_WSTOPPED | LX_WCONTINUED)) == 0) {
+		return -LX_EINVAL;
+	}
+
+	thread_id child;
+	switch (idType) {
+		case LX_P_ALL:
+			child = -1;
+			break;
+		case LX_P_PID:
+			if (id <= 0)
+				return -LX_EINVAL;
+			child = (thread_id)id;
+			break;
+		case LX_P_PGID:
+			if (id < 0)
+				return -LX_EINVAL;
+			child = id == 0 ? 0 : -(thread_id)id;
+			break;
+		default:
+			// P_PIDFD: pidfds are not offered (COVERAGE.md)
+			return -LX_EINVAL;
+	}
+
+	uint32 flags = 0;
+	if ((options & LX_WEXITED) != 0)
+		flags |= WEXITED;
+	if ((options & LX_WSTOPPED) != 0)
+		flags |= WSTOPPED;
+	if ((options & LX_WCONTINUED) != 0)
+		flags |= WCONTINUED;
+	if ((options & LX_WNOHANG) != 0)
+		flags |= WNOHANG;
+	if ((options & LX_WNOWAIT) != 0)
+		flags |= WNOWAIT;
+
+	renguin_scratch scratch;
+	renguin_scratch_init(&scratch);
+	uint64 userInfo = renguin_scratch_alloc(&scratch, sizeof(siginfo_t));
+	uint64 userUsage = renguin_scratch_alloc(&scratch,
+		sizeof(team_usage_info));
+	if (userInfo == 0 || userUsage == 0)
+		return -LX_EFAULT;
+
+	// Linux's siginfo layout for SIGCHLD (128 bytes)
+	struct {
+		int32	signo;
+		int32	errnoValue;
+		int32	code;
+		int32	pad0;
+		int32	pid;
+		uint32	uid;
+		int32	status;
+		int32	pad1;
+		int64	utime;
+		int64	stime;
+		uint8	rest[80];
+	} linuxInfo;
+	static_assert(sizeof(linuxInfo) == 128, "Linux siginfo");
+	memset(&linuxInfo, 0, sizeof(linuxInfo));
+
+	pid_t result = _user_wait_for_child(child, flags,
+		(siginfo_t*)(addr_t)userInfo, (team_usage_info*)(addr_t)userUsage);
+	if (result == B_WOULD_BLOCK && (options & LX_WNOHANG) != 0) {
+		// nothing to report: Linux clears the siginfo (si_pid 0)
+		if (infoPtr != 0 && renguin_copy_out(infoPtr, &linuxInfo,
+				sizeof(linuxInfo)) != B_OK) {
+			return -LX_EFAULT;
+		}
+		return 0;
+	}
+	if (result < 0)
+		return renguin_encode(result);
+
+	siginfo_t info;
+	team_usage_info usage;
+	if (user_memcpy(&info, (void*)(addr_t)userInfo, sizeof(info)) != B_OK
+		|| user_memcpy(&usage, (void*)(addr_t)userUsage, sizeof(usage))
+			!= B_OK) {
+		return -LX_EFAULT;
+	}
+
+	int linuxSignal = renguin_signal_from_haiku(info.si_status);
+	if (linuxSignal == 0)
+		linuxSignal = LX_SIGKILL;
+	linuxInfo.signo = 17;		// SIGCHLD
+	linuxInfo.pid = info.si_pid;
+	linuxInfo.uid = info.si_uid;
+	linuxInfo.utime = usage.user_time / 10000;		// clock ticks (100 Hz)
+	linuxInfo.stime = usage.kernel_time / 10000;
+	switch (info.si_code) {
+		case CLD_EXITED:
+			linuxInfo.code = 1;
+			linuxInfo.status = info.si_status & 0xff;
+			break;
+		case CLD_KILLED:
+			linuxInfo.code = 2;
+			linuxInfo.status = linuxSignal;
+			break;
+		case CLD_DUMPED:
+			linuxInfo.code = 3;
+			linuxInfo.status = linuxSignal;
+			break;
+		case CLD_STOPPED:
+			linuxInfo.code = 5;
+			linuxInfo.status = linuxSignal;
+			break;
+		case CLD_CONTINUED:
+			linuxInfo.code = 6;
+			linuxInfo.status = 18;		// SIGCONT
+			break;
+	}
+	if (infoPtr != 0 && renguin_copy_out(infoPtr, &linuxInfo,
+			sizeof(linuxInfo)) != B_OK) {
+		return -LX_EFAULT;
+	}
+
+	if (rusagePtr != 0) {
+		int64 rusage[18];
+		memset(rusage, 0, sizeof(rusage));
+		rusage[0] = usage.user_time / 1000000;
+		rusage[1] = usage.user_time % 1000000;
+		rusage[2] = usage.kernel_time / 1000000;
+		rusage[3] = usage.kernel_time % 1000000;
+		if (renguin_copy_out(rusagePtr, rusage, sizeof(rusage)) != B_OK)
+			return -LX_EFAULT;
+	}
+	return 0;
+}
+
+
+/*!	close_range() (glibc's posix_spawn, Python, systemd-style daemons):
+	closes, or with CLOSE_RANGE_CLOEXEC marks close-on-exec, every open
+	descriptor from \a first to \a last. CLOSE_RANGE_UNSHARE is accepted:
+	a Linux process has its own descriptor table here.
+*/
+int64
+renguin_sys_close_range(uint32 first, uint32 last, uint64 flags)
+{
+	const uint64 kUnshare = 1 << 1;
+	const uint64 kCloseOnExec = 1 << 2;
+	if ((flags & ~(kUnshare | kCloseOnExec)) != 0 || first > last)
+		return -LX_EINVAL;
+
+	io_context* context = get_current_io_context(false);
+	uint32 size;
+	{
+		ReadLocker locker(context->lock);
+		size = context->table_size;
+	}
+	if (last >= size)
+		last = size - 1;
+	for (uint32 fd = first; fd <= last && fd < size; fd++) {
+		if ((flags & kCloseOnExec) != 0) {
+			file_descriptor* descriptor = get_fd(context, fd);
+			if (descriptor == NULL)
+				continue;
+			put_fd(descriptor);
+			WriteLocker locker(context->lock);
+			fd_set_close_on_exec(context, fd, true);
+		} else
+			_user_close(fd);
+				// EBADF for holes is ignored, as Linux does
+	}
+	return 0;
 }
 
 

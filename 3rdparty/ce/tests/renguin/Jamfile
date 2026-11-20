@@ -60,6 +60,9 @@ programs += [ RenguinLinuxProgram libc-pie : libc.c : libc
 	: -static-pie -fPIE ] ;
 programs += [ RenguinLinuxProgram libc-procfs : libc-procfs.c : libc
 	: -static ] ;
+# waitid() and close_range() (batch 4, COVERAGE.md's next calls).
+programs += [ RenguinLinuxProgram libc-wait : libc-wait.c : libc
+	: -static ] ;
 # DRM sync objects passed through (Quasar R-18).
 programs += [ RenguinLinuxProgram libc-syncobj : libc-syncobj.c : libc
 	: -static ] ;

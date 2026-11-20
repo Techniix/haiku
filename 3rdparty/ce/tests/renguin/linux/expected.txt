@@ -19,3 +19,4 @@ libc-fs||0|statx\nstatfs\nchmod\nutimensat\nlinks\nmkfifo\ntruncate\nsendfile\nf
 libc-procfs|x|0|stat\nstatus\ncmdline\nexe\nfd\nlisting\nsystem\nrelative\nlinks\nerrors\nok
 segv||139|
 libc-syncobj||0|create\ntimeline\nsync_file\neventfd\nwait\nok
+libc-wait||0|exited\nkilled\nclose_range\nok

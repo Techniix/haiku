@@ -277,7 +277,9 @@ enum {
 	LINUX_copy_file_range	= 326,
 	LINUX_statx				= 332,
 	LINUX_rseq				= 334,
+	LINUX_waitid			= 247,
 	LINUX_clone3			= 435,
+	LINUX_close_range		= 436,
 	LINUX_faccessat2		= 439,
 	LINUX_epoll_pwait2		= 441,
 	LINUX_fchmodat2			= 452,
@@ -474,6 +476,7 @@ trace_call(uint64 number, uint64 a1, uint64 a2, uint64 a3, int64 result,
 		switch (number) {
 			case LINUX_clone: case LINUX_clone3: case LINUX_fork:
 			case LINUX_vfork: case LINUX_execve: case LINUX_wait4:
+			case LINUX_waitid: case LINUX_close_range:
 			case LINUX_socketpair: case LINUX_sendmsg: case LINUX_recvmsg:
 			case LINUX_dup2: case LINUX_dup3: case LINUX_kill:
 			case LINUX_tgkill: case LINUX_tkill:
@@ -1271,6 +1274,12 @@ renguin_syscall(struct iframe* frame)
 			break;
 		case LINUX_wait4:
 			result = renguin_sys_wait4((int64)a1, a2, a3, a4);
+			break;
+		case LINUX_waitid:
+			result = renguin_sys_waitid((int)a1, (int64)a2, a3, a4, a5);
+			break;
+		case LINUX_close_range:
+			result = renguin_sys_close_range((uint32)a1, (uint32)a2, a3);
 			break;
 
 		// --- Process exit (handled inline) ---

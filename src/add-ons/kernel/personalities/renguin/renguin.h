@@ -248,6 +248,10 @@ int64		renguin_sys_fork();
 int64		renguin_sys_vfork();
 int64		renguin_sys_wait4(int64 pid, uint64 status, uint64 options,
 				uint64 rusage);
+int64		renguin_sys_waitid(int idType, int64 id, uint64 info,
+				uint64 options, uint64 rusage);
+int64		renguin_sys_close_range(uint32 first, uint32 last,
+				uint64 flags);
 int64		renguin_sys_execve(uint64 path, uint64 argv, uint64 envp);
 
 // threads.cpp

@@ -67,7 +67,8 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `302 prlimit64`, `306 syncfs`, `307 sendmmsg`, `309 getcpu`
 `316 renameat2`, `318 getrandom`, `319 memfd_create`, `324 membarrier`
 `327 preadv2`
-`328 pwritev2`, `332 statx`, `435 clone3`, `439 faccessat2`
+`247 waitid`, `328 pwritev2`, `332 statx`, `435 clone3`,
+`436 close_range`, `439 faccessat2`
 `441 epoll_pwait2`, `452 fchmodat2`
 
 ## Stubbed
@@ -99,7 +100,7 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `226 timer_delete`, `227 clock_settime`, `237 mbind`, `238 set_mempolicy`
 `239 get_mempolicy`, `240 mq_open`, `241 mq_unlink`, `242 mq_timedsend`
 `243 mq_timedreceive`, `244 mq_notify`, `245 mq_getsetattr`
-`246 kexec_load`, `247 waitid`, `248 add_key`, `249 request_key`
+`246 kexec_load`, `248 add_key`, `249 request_key`
 `250 keyctl`, `251 ioprio_set`, `252 ioprio_get`, `256 migrate_pages`
 `272 unshare`, `275 splice`, `276 tee`, `278 vmsplice`, `279 move_pages`
 `298 perf_event_open`, `300 fanotify_init`, `301 fanotify_mark`
@@ -111,15 +112,14 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `331 pkey_free`, `333 io_pgetevents`, `424 pidfd_send_signal`
 `425 io_uring_setup`, `426 io_uring_enter`, `427 io_uring_register`
 `428 open_tree`, `429 move_mount`, `430 fsopen`, `431 fsconfig`
-`432 fsmount`, `433 fspick`, `434 pidfd_open`, `436 close_range`
+`432 fsmount`, `433 fspick`, `434 pidfd_open`
 `437 openat2`, `438 pidfd_getfd`, `440 process_madvise`
 `442 mount_setattr`, `443 quotactl_fd`, `444 landlock_create_ruleset`
 `445 landlock_add_rule`, `446 landlock_restrict_self`, `447 memfd_secret`
 `448 process_mrelease`, `449 futex_waitv`, `450 set_mempolicy_home_node`
 `451 cachestat`, `453 map_shadow_stack`
 
-Next, by use in the application ladder (F-27): `waitid`, `close_range`,
-`execveat`, `restart_syscall`, `mincore`; the POSIX timers
+Next, by use in the application ladder (F-27): `execveat`, `restart_syscall`, `mincore`; the POSIX timers
 (`timer_*`) and message queues (`mq_*`) and System V shared memory, which
 Renga has natively (F-12) and only need mapping; `copy_file_range` and
 `splice`/`tee` (coreutils, cat and cp fall back today); `pidfd_open`,
