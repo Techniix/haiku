@@ -30,6 +30,11 @@ renguin_errno_from_haiku(status_t status)
 	if (status == B_UNSUPPORTED)
 		return LINUX_EOPNOTSUPPORT;	// a hook the file system lacks (as
 									// libroot's posix_fallocate() maps it)
+	if (status == ETIME)
+		return 62;		// Linux ETIME: DRM sync object waits that time out
+						// (FreeBSD has no ETIME, so the table lacks it)
+	if (status == B_DEV_INVALID_IOCTL)
+		return 25;		// ENOTTY: a request the device does not know
 
 	// Translate POSIX-range Haiku errors. B_TO_POSIX_ERROR() maps a Haiku
 	// status_t to its POSIX errno; values outside the POSIX range come back

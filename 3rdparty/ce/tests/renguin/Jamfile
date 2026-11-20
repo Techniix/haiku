@@ -60,6 +60,9 @@ programs += [ RenguinLinuxProgram libc-pie : libc.c : libc
 	: -static-pie -fPIE ] ;
 programs += [ RenguinLinuxProgram libc-procfs : libc-procfs.c : libc
 	: -static ] ;
+# DRM sync objects passed through (Quasar R-18).
+programs += [ RenguinLinuxProgram libc-syncobj : libc-syncobj.c : libc
+	: -static ] ;
 for name in pthread libc-signals libc-fs {
 	programs += [ RenguinLinuxProgram $(name) : $(name).c : libc
 		: -static -pthread ] ;

@@ -21,6 +21,7 @@ SubInclude HAIKU_TOP 3rdparty ce tests posix_compat ;
 SubInclude HAIKU_TOP 3rdparty ce tests renguin ;
 SubInclude HAIKU_TOP 3rdparty ce tests toolchain ;
 SubInclude HAIKU_TOP 3rdparty ce tests shortcut_keys ;
+SubInclude HAIKU_TOP 3rdparty ce tests syncobj ;
 SubInclude HAIKU_TOP 3rdparty ce tests tracker ;
 SubInclude HAIKU_TOP 3rdparty ce tests usb_audio ;
 SubInclude HAIKU_TOP 3rdparty ce tests uvc ;

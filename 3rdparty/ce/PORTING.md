@@ -1380,6 +1380,14 @@ something ports call today.
 
 Since: `744fa9b4`. Tests: `appserver_fd_test.cpp` (every image).
 
+### GPU sync objects and sync_file (`/dev/syncobj`, for drivers)
+
+Renga's `generic/syncobj/v1` kernel module implements Linux's DRM sync objects (`DRM_IOCTL_SYNCOBJ_*`: binary and timeline, handle/fd export, sync_file import and export, wait with `WAIT_ALL`, `WAIT_FOR_SUBMIT` and `WAIT_AVAILABLE`, reset, signal, query, transfer, `SYNCOBJ_EVENTFD`) and `sync_file` descriptors (`poll()`, `SYNC_IOC_MERGE`, `SYNC_IOC_FILE_INFO`), with Linux's layouts and ioctl numbers.
+
+- Programs: `<drm/drm_syncobj.h>` and `<linux/sync_file.h>` (gnu compatibility headers). Open `/dev/syncobj`; handles belong to that descriptor. Time-outs are absolute `CLOCK_MONOTONIC` nanoseconds; a time-out fails with `ETIME`. `/dev/syncobj` also offers Linux's `sw_sync` CPU timeline (`SW_SYNC_IOC_CREATE_FENCE`, `SW_SYNC_IOC_INC`) for tests.
+- GPU drivers: `<syncobj_module.h>`. A render node forwards the requests `is_syncobj_ioctl()` accepts to `ioctl()`, with one `syncobj_file` per open descriptor; `create_fence()`, `signal_fence()`, `find_fence()` and `replace_fence()` connect submissions to sync objects.
+- Linux programs under Renguin: the same requests pass through unchanged.
+
 ### Hardware cursor during drags (for drivers)
 
 While something is dragged, app_server gives the accelerant the pointer and the drag

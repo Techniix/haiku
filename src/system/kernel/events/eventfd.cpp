@@ -236,6 +236,43 @@ static struct fd_ops sEventFDOps = {
 };
 
 
+//	#pragma mark - kernel API
+
+
+/*!	Whether \a descriptor is an eventfd. Kernel users that take an eventfd
+	from user space (the syncobj module's SYNCOBJ_EVENTFD) check with this
+	before they signal it.
+*/
+bool
+eventfd_is_descriptor(struct file_descriptor* descriptor)
+{
+	return descriptor != NULL && descriptor->ops == &sEventFDOps;
+}
+
+
+/*!	Adds \a value to the counter of the eventfd \a descriptor, as a write()
+	would, but never blocks: like Linux's eventfd_signal(), the sum saturates
+	instead. The caller holds a reference to the descriptor. May be called
+	with other kernel locks held; the eventfd lock is innermost.
+*/
+status_t
+eventfd_signal_descriptor(struct file_descriptor* descriptor, uint64 value)
+{
+	if (!eventfd_is_descriptor(descriptor))
+		return B_BAD_VALUE;
+
+	EventFD* event = (EventFD*)descriptor->cookie;
+	MutexLocker locker(event->lock);
+
+	if (kMaxCounter - event->counter < value)
+		value = kMaxCounter - event->counter;
+	event->counter += value;
+	if (value > 0)
+		event->Notify();
+	return B_OK;
+}
+
+
 //	#pragma mark - syscall
 
 

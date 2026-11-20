@@ -16,6 +16,14 @@ extern "C" {
 
 extern int		_user_eventfd(uint32 initialValue, int openFlags, bool semaphore);
 
+struct file_descriptor;
+
+/* Kernel API (Renga, 2026-11-20): for kernel objects that signal an
+   eventfd a program handed them, such as SYNCOBJ_EVENTFD. */
+extern bool		eventfd_is_descriptor(struct file_descriptor* descriptor);
+extern status_t	eventfd_signal_descriptor(struct file_descriptor* descriptor,
+					uint64 value);
+
 
 #ifdef __cplusplus
 }

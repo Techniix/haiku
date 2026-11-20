@@ -10,6 +10,11 @@ KernelAddon null :
 	null.cpp
 	;
 
+# Renga (Quasar R-18): /dev/syncobj, on the generic/syncobj/v1 module.
+KernelAddon syncobj_node :
+	syncobj_node.cpp
+	;
+
 KernelAddon console :
 	console.cpp
 	;

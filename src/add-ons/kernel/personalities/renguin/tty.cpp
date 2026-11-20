@@ -330,6 +330,24 @@ renguin_sys_ioctl(int fd, uint64 cmd, uint64 arg)
 
 		default:
 		{
+			// GPU synchronisation (Quasar R-18): DRM sync objects (type
+			// 'd', the DRM_IOCTL_SYNCOBJ_* numbers), sync_file ('>') and
+			// sw_sync ('W') requests. Renga's syncobj module uses Linux's
+			// layouts and numbers, so the program's own buffer goes
+			// through unchanged, whatever node or descriptor it is on.
+			uint32 type = ((uint32)cmd >> 8) & 0xff;
+			uint32 nr = (uint32)cmd & 0xff;
+			bool syncRequest = (type == 'd' && nr >= 0xbf && nr <= 0xcf
+					&& nr != 0xc6 && nr != 0xc7 && nr != 0xc8 && nr != 0xc9
+					&& nr != 0xce)
+				|| (type == '>' && nr >= 3 && nr <= 5)
+				|| (type == 'W' && nr <= 1);
+			if (syncRequest) {
+				size_t size = ((uint32)cmd >> 16) & 0x3fff;
+				return renguin_encode(_user_ioctl(fd, (uint32)cmd,
+					(void*)(addr_t)arg, size));
+			}
+
 			// Socket requests (interfaces, SIOCATMARK): net.cpp.
 			if (((uint32)cmd & 0xff00) == 0x8900) {
 				bool handled;

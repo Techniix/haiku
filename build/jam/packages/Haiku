@@ -101,6 +101,7 @@ AddFilesToPackage add-ons kernel generic :
 	mpu401
 	scsi_periph
 	smbios@x86,x86_64
+	syncobj
 	<module>tty
 	;
 AddFilesToPackage add-ons kernel partitioning_systems :
@@ -180,6 +181,7 @@ AddDriversToPackage :
 	dprintf
 	null
 	<driver>pty
+	syncobj_node
 	usb_modeswitch
 	;
 AddDriversToPackage audio hmulti :

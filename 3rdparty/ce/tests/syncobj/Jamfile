@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP 3rdparty ce tests syncobj ;
+
+# The syncobj module (Quasar R-18) through /dev/syncobj: DRM sync objects,
+# sync_file, sw_sync, SYNCOBJ_EVENTFD. eventfd() is in libroot.
+
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+
+Application syncobj_test :
+	syncobj_test.cpp
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : syncobj_test ;
+}

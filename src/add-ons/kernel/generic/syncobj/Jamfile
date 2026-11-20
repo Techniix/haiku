@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP src add-ons kernel generic syncobj ;
+
+# Renga (Quasar R-18): DRM sync objects and sync_file descriptors with a
+# kernel fence API for GPU drivers (<syncobj_module.h>).
+
+UsePrivateKernelHeaders ;
+SubDirSysHdrs $(HAIKU_TOP) headers compatibility gnu ;
+
+KernelAddon syncobj :
+	syncobj.cpp
+;
