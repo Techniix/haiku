@@ -3656,6 +3656,37 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			break;
 		}
 
+		case AS_SET_FRONT_COPY_MODE:
+		{
+			int32 mode;
+			if (link.Read<int32>(&mode) != B_OK)
+				break;
+			HWInterface* interface = fDesktop->HWInterface();
+			if (interface->LockExclusiveAccess()) {
+				interface->SetFrontCopyMode(mode);
+				interface->UnlockExclusiveAccess();
+			}
+			// everything once, so the screen and the shadow agree
+			fDesktop->RedrawBackground();
+			BRegion all(fDesktop->VirtualScreen().Frame());
+			fDesktop->MarkDirty(all);
+			fLink.StartMessage(B_OK);
+			fLink.Flush();
+			break;
+		}
+
+		case AS_GET_FRONT_COPY_STATS:
+		{
+			bool reset = false;
+			link.Read<bool>(&reset);
+			front_copy_stats stats;
+			fDesktop->HWInterface()->GetFrontCopyStats(stats, reset);
+			fLink.StartMessage(B_OK);
+			fLink.Attach(&stats, sizeof(stats));
+			fLink.Flush();
+			break;
+		}
+
 		case AS_GET_SNAP_ZONES:
 		{
 			BPoint where;

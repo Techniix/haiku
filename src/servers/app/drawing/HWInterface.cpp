@@ -9,8 +9,11 @@
 
 #include "HWInterface.h"
 
+#include <algorithm>
 #include <new>
 #include <stdio.h>
+
+#include <FindDirectory.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -58,6 +61,27 @@ HWInterface::HWInterface()
 	fCursorMoves = 0;
 	fCursorWaitTotal = 0;
 	fCursorWaitMax = 0;
+
+	// Renga (batch 7): ~/config/settings/Renga/framebuffer, "copy
+	// plain|stream|changed" (FrontCopyInfo.h)
+	char path[B_PATH_NAME_LENGTH];
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, -1, false, path,
+			sizeof(path)) == B_OK) {
+		strlcat(path, "/Renga/framebuffer", sizeof(path));
+		FILE* file = fopen(path, "r");
+		if (file != NULL) {
+			char line[64];
+			while (fgets(line, sizeof(line), file) != NULL) {
+				if (strncmp(line, "copy plain", 10) == 0)
+					fFrontCopy.SetMode(B_FRONT_COPY_PLAIN);
+				else if (strncmp(line, "copy stream", 11) == 0)
+					fFrontCopy.SetMode(B_FRONT_COPY_STREAM);
+				else if (strncmp(line, "copy changed", 12) == 0)
+					fFrontCopy.SetMode(B_FRONT_COPY_CHANGED);
+			}
+			fclose(file);
+		}
+	}
 
 }
 
@@ -427,9 +451,26 @@ HWInterface::_CopyBackToFront(/*const*/ BRegion& region)
 	uint32 srcBPR = backBuffer->BytesPerRow();
 	uint8* src = (uint8*)backBuffer->Bits();
 
+	// Renga (batch 7): in "changed" mode, widen each rectangle to whole
+	// 16-pixel blocks (the back buffer has the whole desktop), so the
+	// blocks at its edges become known too and can be skipped next time;
+	// not where the software pointer is drawn on the screen
+	bool widen = fFrontCopy.Mode() == B_FRONT_COPY_CHANGED;
+	IntRect cursor = widen ? _CursorFrame() : IntRect();
+	int32 width = backBuffer->Width();
+
 	int32 count = region.CountRects();
 	for (int32 i = 0; i < count; i++) {
 		clipping_rect r = region.RectAtInt(i);
+		if (widen) {
+			clipping_rect wide = r;
+			wide.left &= ~15;
+			wide.right = std::min(width - 1, (int32)(r.right | 15));
+			if (!cursor.IsValid() || wide.left > cursor.right
+				|| wide.right < cursor.left || wide.top > cursor.bottom
+				|| wide.bottom < cursor.top)
+				r = wide;
+		}
 		// offset to left top pixel in source buffer (always B_RGBA32)
 		uint8* srcOffset = src + r.top * srcBPR + r.left * 4;
 		_CopyToFront(srcOffset, srcBPR, r.left, r.top, r.right, r.bottom);
@@ -701,19 +742,10 @@ HWInterface::_CopyToFront(uint8* src, uint32 srcBPR, int32 x, int32 y,
 		case B_RGB32:
 		case B_RGBA32:
 		{
-			int32 bytes = (right - x + 1) * 4;
-
-			if (bytes > 0) {
-				// offset to left top pixel in dest buffer
-				dst += y * dstBPR + x * 4;
-				// copy
-				for (; y <= bottom; y++) {
-					// bytes is guaranteed to be multiple of 4
-					memcpy(dst, src, bytes);
-					dst += dstBPR;
-					src += srcBPR;
-				}
-			}
+			// Renga (batch 7): SIMD stores, and only what changed
+			// (FrontCopy.h)
+			fFrontCopy.Copy(dst, dstBPR, frontBuffer->Width(),
+				frontBuffer->Height(), src, srcBPR, x, y, right, bottom);
 			break;
 		}
 
@@ -1153,6 +1185,8 @@ HWInterface::_AdoptDragBitmap()
 void
 HWInterface::_NotifyFrameBufferChanged()
 {
+	fFrontCopy.Invalidate();
+
 	BList listeners(fListeners);
 	int32 count = listeners.CountItems();
 	for (int32 i = 0; i < count; i++) {

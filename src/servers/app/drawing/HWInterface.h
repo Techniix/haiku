@@ -22,6 +22,7 @@
 #include <new>
 
 #include "IntRect.h"
+#include "FrontCopy.h"
 #include "MultiLocker.h"
 #include "ServerCursor.h"
 
@@ -209,6 +210,17 @@ public:
 			bool				HideFloatingOverlays();
 			void				ShowFloatingOverlays();
 
+	// Renga (batch 7): how the back buffer reaches the screen
+			void				SetFrontCopyMode(int32 mode)
+									{ fFrontCopy.SetMode(mode); }
+			int32				FrontCopyMode() const
+									{ return fFrontCopy.Mode(); }
+			void				GetFrontCopyStats(front_copy_stats& stats,
+									bool reset)
+									{ fFrontCopy.GetStats(stats, reset); }
+			void				DirectAccessChanged(int32 delta)
+									{ fFrontCopy.DirectAccessChanged(delta); }
+
 	// Renga: screen capture damage
 			void				SetDamageListener(
 									HWInterfaceDamageListener* listener)
@@ -297,6 +309,7 @@ private:
 
 			BList				fListeners;
 			HWInterfaceDamageListener* fDamageListener;
+	mutable	FrontCopy			fFrontCopy;
 };
 
 #endif // HW_INTERFACE_H

@@ -40,9 +40,16 @@ struct video_mode {
 
 static efi_guid sGraphicsOutputGuid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static efi_guid sEdidActiveGuid = EFI_EDID_ACTIVE_PROTOCOL_GUID;
+static efi_guid sEdidDiscoveredGuid = EFI_EDID_DISCOVERED_PROTOCOL_GUID;
 static efi_graphics_output_protocol *sGraphicsOutput;
 static efi_edid_protocol *sEdidActiveProtocol;
 static size_t sGraphicsMode;
+// Renga (batch 7): the largest mode (the old default) and the monitor's
+// native one, from EDID or the mode the firmware set; "native_mode false"
+// in the vesa driver settings goes back to the largest.
+static size_t sLargestMode;
+static ssize_t sNativeMode = -1;
+static const char* sNativeSource = NULL;
 static struct list sModeList;
 static uint32 sModeCount;
 static bool sModeChosen;
@@ -129,6 +136,19 @@ get_mode_from_settings(void)
 
 	sSettingsLoaded = true;
 
+	// Renga (batch 7): "native_mode false" restores the largest mode
+	for (int32 i = 0; i < settings->parameter_count; i++) {
+		driver_parameter &parameter = settings->parameters[i];
+		if (strcmp(parameter.name, "native_mode") == 0
+			&& parameter.value_count >= 1
+			&& (strcmp(parameter.values[0], "false") == 0
+				|| strcmp(parameter.values[0], "off") == 0)
+			&& sNativeMode >= 0 && sGraphicsMode == (size_t)sNativeMode) {
+			sGraphicsMode = sLargestMode;
+			dprintf("video: native mode off in the settings, largest mode\n");
+		}
+	}
+
 	for (int32 i = 0; i < settings->parameter_count; i++) {
 		driver_parameter &parameter = settings->parameters[i];
 
@@ -179,6 +199,74 @@ depth_from_mode_info(efi_graphics_output_mode_information* info)
 	}
 
 	return -1;
+}
+
+
+static video_mode*
+find_mode(size_t width, size_t height)
+{
+	video_mode* best = NULL;
+	video_mode* mode = NULL;
+	while ((mode = (video_mode*)list_get_next_item(&sModeList, mode)) != NULL) {
+		if (mode->width == width && mode->height == height
+			&& (best == NULL || mode->bits_per_pixel > best->bits_per_pixel))
+			best = mode;
+	}
+	return best;
+}
+
+
+/*!	Renga (batch 7): the monitor's native mode. EDID's first detailed
+	timing is the preferred mode (EDID 1.3 and later); if the GOP lists
+	it, that is the native mode. Without EDID, or when the GOP does not
+	list it, the mode the firmware set before starting us is used: the
+	UEFI specification has the firmware start in the native mode. Upstream
+	took the largest mode, which on many machines and in QEMU's OVMF
+	(2048x2048 there) is larger than the monitor and slow.
+*/
+static void
+_choose_native_mode()
+{
+	sNativeMode = -1;
+	sNativeSource = NULL;
+	edid1_info* info = (edid1_info*)gKernelArgs.edid_info.Pointer();
+	if (info != NULL) {
+		for (int32 i = 0; i < EDID1_NUM_DETAILED_MONITOR_DESC; i++) {
+			edid1_detailed_monitor& monitor = info->detailed_monitor[i];
+			if (monitor.monitor_desc_type != EDID1_IS_DETAILED_TIMING)
+				continue;
+			video_mode* mode = find_mode(
+				monitor.data.detailed_timing.h_active,
+				monitor.data.detailed_timing.v_active);
+			if (mode != NULL) {
+				sNativeMode = mode->mode;
+				sNativeSource = "EDID";
+			}
+			break;
+		}
+	}
+	if (sNativeMode < 0 && sGraphicsOutput->Mode != NULL
+		&& sGraphicsOutput->Mode->Info != NULL) {
+		size_t width = sGraphicsOutput->Mode->Info->HorizontalResolution;
+		size_t height = sGraphicsOutput->Mode->Info->VerticalResolution;
+		video_mode* mode = find_mode(width, height);
+		if (mode != NULL && width >= 640 && height >= 480) {
+			sNativeMode = mode->mode;
+			sNativeSource = "firmware";
+		}
+	}
+	if (sNativeMode >= 0) {
+		video_mode* mode = NULL;
+		while ((mode = (video_mode*)list_get_next_item(&sModeList, mode))
+				!= NULL) {
+			if (mode->mode == (size_t)sNativeMode) {
+				dprintf("video: native mode %lux%lu from %s\n", mode->width,
+					mode->height, sNativeSource);
+				break;
+			}
+		}
+	} else
+		dprintf("video: no native mode found, largest mode\n");
 }
 
 
@@ -255,16 +343,28 @@ platform_init_video(void)
 	gKernelArgs.frame_buffer.enabled = true;
 	sModeChosen = false;
 	sSettingsLoaded = false;
+	sLargestMode = sGraphicsMode;
 
 	status = kBootServices->LocateProtocol(&sEdidActiveGuid, NULL, (void **)&sEdidActiveProtocol);
+	if (sEdidActiveProtocol == NULL || status != EFI_SUCCESS
+		|| sEdidActiveProtocol->SizeOfEdid == 0) {
+		// Renga (batch 7): some firmware only has the discovered EDID
+		sEdidActiveProtocol = NULL;
+		status = kBootServices->LocateProtocol(&sEdidDiscoveredGuid, NULL,
+			(void **)&sEdidActiveProtocol);
+	}
 	if ((sEdidActiveProtocol != NULL) && (status == EFI_SUCCESS)
-		&& (sEdidActiveProtocol->SizeOfEdid) != 0) {
+		&& (sEdidActiveProtocol->SizeOfEdid) >= sizeof(edid1_raw)) {
 		edid1_info* edid_info = (edid1_info*)kernel_args_malloc(sizeof(edid1_info));
 		if (edid_info != NULL) {
 			edid_decode(edid_info, (edid1_raw*)sEdidActiveProtocol->Edid);
 			gKernelArgs.edid_info = edid_info;
 		}
 	}
+
+	_choose_native_mode();
+	if (sNativeMode >= 0)
+		sGraphicsMode = sNativeMode;
 
 	return B_OK;
 }
@@ -288,6 +388,8 @@ platform_switch_to_logo(void)
 	gKernelArgs.frame_buffer.height = sGraphicsOutput->Mode->Info->VerticalResolution;
 	int depth = depth_from_mode_info(sGraphicsOutput->Mode->Info);
 	gKernelArgs.frame_buffer.depth = depth;
+	dprintf("video: using %" B_PRIu32 "x%" B_PRIu32 "\n",
+		gKernelArgs.frame_buffer.width, gKernelArgs.frame_buffer.height);
 	gKernelArgs.frame_buffer.bytes_per_row = sGraphicsOutput->Mode->Info->PixelsPerScanLine
 			* ((depth + 7) / 8);
 

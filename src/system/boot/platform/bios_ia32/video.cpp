@@ -48,6 +48,8 @@ struct video_mode {
 
 static vbe_info_block sInfo;
 static video_mode *sMode, *sDefaultMode;
+// Renga (batch 7): the mode chosen without EDID, for "native_mode false"
+static video_mode *sStandardMode;
 static bool sVesaCompatible;
 static struct list sModeList;
 static uint32 sModeCount;
@@ -307,6 +309,17 @@ get_mode_from_settings(void)
 
 	for (int32 i = 0; i < settings->parameter_count; i++) {
 		driver_parameter &parameter = settings->parameters[i];
+
+		// Renga (batch 7): "native_mode false" ignores EDID, as the
+		// Control Panel's switch writes it
+		if (!strcmp(parameter.name, "native_mode")
+			&& parameter.value_count >= 1
+			&& (!strcmp(parameter.values[0], "false")
+				|| !strcmp(parameter.values[0], "off"))
+			&& sStandardMode != NULL && sMode == sDefaultMode) {
+			sMode = sStandardMode;
+			dprintf("video: native mode off in the settings\n");
+		}
 
 		if (!strcmp(parameter.name, "mode") && parameter.value_count > 2) {
 			// parameter found, now get its values
@@ -865,6 +878,8 @@ platform_switch_to_logo(void)
 
 		gKernelArgs.frame_buffer.width = modeInfo.width;
 		gKernelArgs.frame_buffer.height = modeInfo.height;
+		dprintf("video: using %ux%u\n", (unsigned)modeInfo.width,
+			(unsigned)modeInfo.height);
 		gKernelArgs.frame_buffer.bytes_per_row = modeInfo.bytes_per_row;
 		gKernelArgs.frame_buffer.depth = modeInfo.bits_per_pixel;
 		gKernelArgs.frame_buffer.physical_buffer.size
@@ -943,6 +958,7 @@ platform_init_video(void)
 		// One example of those is the SiS 630 chipset in my laptop.
 
 	sVesaCompatible = vesa_init(&sInfo, &sDefaultMode) == B_OK;
+	sStandardMode = sDefaultMode;
 	if (!sVesaCompatible) {
 		TRACE(("No VESA compatible graphics!\n"));
 		gKernelArgs.vesa_capabilities = 0;
@@ -987,6 +1003,9 @@ platform_init_video(void)
 		if (defaultMode != NULL) {
 			// We found a new default mode to use!
 			sDefaultMode = defaultMode;
+			dprintf("video: native mode %" B_PRIu32 "x%" B_PRIu32
+				" from EDID\n", (uint32)defaultMode->width,
+				(uint32)defaultMode->height);
 		}
 
 		gKernelArgs.edid_info = kernel_args_malloc(sizeof(edid1_info));

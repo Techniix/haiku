@@ -40,10 +40,16 @@ Application snap_layouts_test :
 	: be [ TargetLibstdc++ ]
 ;
 
+# Back buffer to screen copies (batch 7, default display driver).
+Application front_copy_test :
+	front_copy_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test
 		hw_cursor_test screen_read_test capture_privacy_test
-		snap_layouts_test ;
+		snap_layouts_test front_copy_test ;
 	AddFilesToHaikuImage system non-packaged bin : screen_read_direct ;
 }
 

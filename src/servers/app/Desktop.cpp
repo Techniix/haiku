@@ -1061,8 +1061,11 @@ Desktop::LockDirectScreen(team_id team)
 	// which would make this method superfluous.
 
 	status_t status = fDirectScreenLock.LockWithTimeout(1000000L);
-	if (status == B_OK)
+	if (status == B_OK) {
 		fDirectScreenTeam = team;
+		// Renga (batch 7): BWindowScreen writes the frame buffer itself
+		HWInterface()->DirectAccessChanged(1);
+	}
 
 	return status;
 }
@@ -1074,6 +1077,7 @@ Desktop::UnlockDirectScreen(team_id team)
 	if (fDirectScreenTeam == team) {
 		fDirectScreenLock.Unlock();
 		fDirectScreenTeam = -1;
+		HWInterface()->DirectAccessChanged(-1);
 		return B_OK;
 	}
 

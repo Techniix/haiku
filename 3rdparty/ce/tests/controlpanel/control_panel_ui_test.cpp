@@ -246,6 +246,12 @@ main()
 		B_PRId32, shown.String(), control_value(messenger, "autoRecovery"),
 		control_value(messenger, "bootState"));
 
+	// batch 7: the native resolution switch on the Boot page
+	report("native_mode_switch", has_view(messenger, "nativeMode")
+			&& control_value(messenger, "nativeMode") == 1,
+		"switch %" B_PRId32 " (no vesa settings line: on)",
+		control_value(messenger, "nativeMode"));
+
 	// batch 7 (F-25): Windows and workspaces
 	search_check("search_snap", "snap", "workspaces", "Snap layouts");
 	search_check("search_workspace_names", "workspace names", "workspaces",
@@ -265,8 +271,11 @@ main()
 
 	shown = show_page(messenger, "displays");
 	snooze(500000);
-	report("window_page_displays", shown == "displays", "page \"%s\"",
-		shown.String());
+	report("window_page_displays", shown == "displays"
+			&& has_view(messenger, "frontCopy")
+			&& control_value(messenger, "frontCopy") == 1,
+		"page \"%s\", changed-pixels switch %" B_PRId32, shown.String(),
+		control_value(messenger, "frontCopy"));
 	printf("CE-HOST screenshot control_panel_displays\n");
 	fflush(stdout);
 	snooze(1500000);

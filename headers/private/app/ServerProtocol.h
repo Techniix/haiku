@@ -431,6 +431,11 @@ enum {
 		// application link: BPoint where; replies status_t, int32 count,
 		// count BRects (the zones there, for the current workspace)
 
+	// Renga (batch 7): back buffer to screen copies (FrontCopyInfo.h)
+	AS_SET_FRONT_COPY_MODE,
+		// int32 mode; replies status_t
+	AS_GET_FRONT_COPY_STATS,
+		// bool reset; replies status_t, front_copy_stats
 
 	AS_LAST_CODE
 };

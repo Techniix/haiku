@@ -60,12 +60,16 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
 
+#include <AppServerLink.h>
+#include <FrontCopyInfo.h>
+#include <ServerProtocol.h>
 #include <boot_state_file.h>
 #include <capture_privacy.h>
 #include <streamer_mode.h>
@@ -262,6 +266,10 @@ static const SettingInfo kSettings[] = {
 		"boot counting safe mode" },
 	{ "boot", "Restart into another system", "windows dual boot" },
 	{ "boot", "Boot menu timeout", "countdown" },
+	{ "displays", "Write only changed pixels to the screen", "vesa "
+		"framebuffer speed fast copy" },
+	{ "boot", "Native resolution at start", "edid monitor resolution vesa "
+		"framebuffer gop" },
 	{ "boot", "Default system", "windows dual boot" },
 	{ "software", "Repositories", "sources renga haikuports" },
 	{ "doctor", "Collect a hardware report", "renga doctor bug" },
@@ -495,6 +503,131 @@ private:
 };
 
 
+/*!	Renga (batch 7): "Write only changed pixels to the screen", how
+	app_server copies its back buffer to the frame buffer
+	(<FrontCopyInfo.h>): on is "changed" (the default), off is "stream".
+	Saved in ~/config/settings/Renga/framebuffer and sent to app_server.
+*/
+class FrontCopySwitch : public BCheckBox {
+public:
+	FrontCopySwitch()
+		:
+		BCheckBox("frontCopy", B_TRANSLATE("Write only changed pixels to the "
+			"screen (faster with the default display driver)"),
+			new BMessage('fcSw'))
+	{
+	}
+
+	virtual void AttachedToWindow()
+	{
+		BCheckBox::AttachedToWindow();
+		SetTarget(this);
+		BPrivate::AppServerLink link;
+		link.StartMessage(AS_GET_FRONT_COPY_STATS);
+		link.Attach<bool>(false);
+		int32 code;
+		front_copy_stats stats;
+		if (link.FlushWithReply(code) == B_OK && code == B_OK
+			&& link.Read(&stats, sizeof(stats)) == B_OK)
+			SetValue(stats.mode == B_FRONT_COPY_CHANGED);
+	}
+
+	virtual void MessageReceived(BMessage* message)
+	{
+		if (message->what != 'fcSw') {
+			BCheckBox::MessageReceived(message);
+			return;
+		}
+		int32 mode = Value() != 0 ? B_FRONT_COPY_CHANGED : B_FRONT_COPY_STREAM;
+		char path[B_PATH_NAME_LENGTH];
+		if (find_directory(B_USER_SETTINGS_DIRECTORY, -1, true, path,
+				sizeof(path)) == B_OK) {
+			strlcat(path, "/Renga", sizeof(path));
+			mkdir(path, 0755);
+			strlcat(path, "/framebuffer", sizeof(path));
+			FILE* out = fopen(path, "w");
+			if (out != NULL) {
+				fprintf(out, "copy %s\n", mode == B_FRONT_COPY_CHANGED
+					? "changed" : "stream");
+				fclose(out);
+			}
+		}
+		BPrivate::AppServerLink link;
+		link.StartMessage(AS_SET_FRONT_COPY_MODE);
+		link.Attach<int32>(mode);
+		int32 code;
+		link.FlushWithReply(code);
+	}
+};
+
+
+/*!	Renga (batch 7): the boot loader's "native_mode" in the vesa driver
+	settings (~/config/settings/kernel/drivers/vesa), which the BIOS and
+	EFI loaders read: on (the default, no line) the monitor's native mode
+	from EDID or the firmware; off the old choice. Other lines (a "mode"
+	the vesa driver saved) are kept.
+*/
+static bool
+vesa_settings_path(char* buffer, size_t size)
+{
+	char settings[B_PATH_NAME_LENGTH];
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, -1, false, settings,
+			sizeof(settings)) != B_OK)
+		return false;
+	snprintf(buffer, size, "%s/kernel/drivers/vesa", settings);
+	return true;
+}
+
+
+static bool
+native_mode_enabled()
+{
+	char file[B_PATH_NAME_LENGTH];
+	if (!vesa_settings_path(file, sizeof(file)))
+		return true;
+	FILE* in = fopen(file, "r");
+	if (in == NULL)
+		return true;
+	bool enabled = true;
+	char line[256];
+	while (fgets(line, sizeof(line), in) != NULL) {
+		if (strncmp(line, "native_mode", 11) == 0)
+			enabled = strstr(line, "false") == NULL
+				&& strstr(line, "off") == NULL;
+	}
+	fclose(in);
+	return enabled;
+}
+
+
+static void
+set_native_mode(bool enabled)
+{
+	char file[B_PATH_NAME_LENGTH];
+	if (!vesa_settings_path(file, sizeof(file)))
+		return;
+	std::string kept;
+	FILE* in = fopen(file, "r");
+	if (in != NULL) {
+		char line[256];
+		while (fgets(line, sizeof(line), in) != NULL) {
+			if (strncmp(line, "native_mode", 11) != 0)
+				kept += line;
+		}
+		fclose(in);
+	}
+	if (!enabled)
+		kept += "native_mode false\n";
+	std::string temporary = std::string(file) + ".new";
+	FILE* out = fopen(temporary.c_str(), "w");
+	if (out == NULL)
+		return;
+	fputs(kept.c_str(), out);
+	fclose(out);
+	rename(temporary.c_str(), file);
+}
+
+
 /*!	Boot and recovery: the restore points by date, the automatic recovery
 	switch (through the Boot menu preferences' command line, which owns the
 	kernel settings file), and the boot menu preferences for the rest.
@@ -512,6 +645,9 @@ public:
 		fRecovery = new BCheckBox("autoRecovery", B_TRANSLATE(
 			"After two failed starts, open the boot menu with the last "
 			"working system selected"), new BMessage(kMsgRecoveryOption));
+		fNativeMode = new BCheckBox("nativeMode", B_TRANSLATE(
+			"Start in the monitor's native resolution (off: the largest "
+			"mode the firmware offers)"), new BMessage(kMsgRecoveryOption));
 		fPoints = new BListView("restorePoints");
 		BScrollView* scroll = new BScrollView("restorePointsScroll", fPoints,
 			0, false, true);
@@ -527,6 +663,7 @@ public:
 				.SetInsets(B_USE_DEFAULT_SPACING, 0, 0, 0)
 				.Add(fRecovery)
 			.End()
+			.Add(fNativeMode)
 			.Add(new BStringView("pointsLabel", B_TRANSLATE(
 				"Restore points (saved before every update; start one from "
 				"the boot menu):")))
@@ -544,6 +681,7 @@ public:
 		BGroupView::AttachedToWindow();
 		fRecovery->SetTarget(this);
 		fBootState->SetTarget(this);
+		fNativeMode->SetTarget(this);
 		_Show();
 	}
 
@@ -555,7 +693,9 @@ public:
 		}
 		BControl* source = NULL;
 		message->FindPointer("source", (void**)&source);
-		if (source == fBootState) {
+		if (source == fNativeMode) {
+			set_native_mode(fNativeMode->Value() != 0);
+		} else if (source == fBootState) {
 			run(fBootState->Value() != 0
 				? "/boot/system/preferences/BootMenu --set-boot-state on"
 				: "/boot/system/preferences/BootMenu --set-boot-state off");
@@ -577,6 +717,7 @@ private:
 		bool bootState = shown.find("boot_state off") == std::string::npos;
 		fBootState->SetValue(bootState);
 		fRecovery->SetEnabled(bootState);
+		fNativeMode->SetValue(native_mode_enabled());
 
 		while (BListItem* item = fPoints->RemoveItem((int32)0))
 			delete item;
@@ -595,6 +736,7 @@ private:
 
 	BCheckBox*	fRecovery;
 	BCheckBox*	fBootState;
+	BCheckBox*	fNativeMode;
 	BListView*	fPoints;
 };
 
@@ -971,7 +1113,8 @@ private:
 			BLayoutBuilder::Group<>(group)
 				.SetInsets(B_USE_WINDOW_SPACING)
 				.Add(page_heading(page))
-				.Add(new DisplaysView());
+				.Add(new DisplaysView())
+				.Add(new FrontCopySwitch());
 			return group;
 		}
 		if (strcmp(page->id, "audio") == 0) {

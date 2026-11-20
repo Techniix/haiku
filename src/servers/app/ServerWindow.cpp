@@ -205,6 +205,12 @@ ServerWindow::~ServerWindow()
 
 	BPrivate::gDefaultTokens.RemoveToken(fServerToken);
 
+	if (fIsDirectlyAccessing && fDesktop != NULL) {
+		// Renga (batch 7): a direct window that never stopped
+		fDesktop->HWInterface()->DirectAccessChanged(-1);
+		fIsDirectlyAccessing = false;
+	}
+
 	if (!fWindow->IsOffscreenWindow()) {
 		fWindowAddedToDesktop = false;
 		fDesktop->RemoveWindow(fWindow.Get());
@@ -4468,10 +4474,20 @@ ServerWindow::HandleDirectConnection(int32 bufferState, int32 driverState)
 		// within the given timeout. Or something else went wrong.
 		// Deleting this member should make it crash.
 		fDirectWindowInfo.Unset();
-	} else if ((bufferState & B_DIRECT_MODE_MASK) == B_DIRECT_START)
+	} else if ((bufferState & B_DIRECT_MODE_MASK) == B_DIRECT_START) {
+		// Renga (batch 7): the frame buffer is written by the client now
+		if (!fIsDirectlyAccessing)
+			fDesktop->HWInterface()->DirectAccessChanged(1);
 		fIsDirectlyAccessing = true;
-	else if ((bufferState & B_DIRECT_MODE_MASK) == B_DIRECT_STOP)
+	} else if ((bufferState & B_DIRECT_MODE_MASK) == B_DIRECT_STOP) {
+		if (fIsDirectlyAccessing)
+			fDesktop->HWInterface()->DirectAccessChanged(-1);
 		fIsDirectlyAccessing = false;
+	}
+	if (!fDirectWindowInfo.IsSet() && fIsDirectlyAccessing) {
+		fDesktop->HWInterface()->DirectAccessChanged(-1);
+		fIsDirectlyAccessing = false;
+	}
 }
 
 

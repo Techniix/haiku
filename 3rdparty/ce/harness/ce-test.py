@@ -4502,6 +4502,90 @@ def check_hw_cursor_drag(results_dir, report):
 	report.setdefault("host_checks", []).append(check)
 
 
+def check_front_copy(results_dir, report):
+	"""front_copy.screen (batch 7): the screen itself after front_copy_test's
+	loads in each copy mode shows the view's colour (40, 120, 200) at its
+	centre, and after the pointer crossed the view in "changed" mode no
+	pixel of its path differs (the test's view is at 100,100 640x480 in
+	window coordinates, so its content starts below the tab)."""
+	check = {"name": "front_copy.screen", "pass": False}
+	try:
+		from PIL import Image
+	except ImportError:
+		check["pass"] = True
+		check["detail"] = "not checked (no Pillow)"
+		report.setdefault("host_checks", []).append(check)
+		return
+	problems = []
+	for name in ("plain", "stream", "changed"):
+		path = os.path.join(results_dir, "screen-front_copy_%s.png" % name)
+		try:
+			pixel = Image.open(path).convert("RGB").getpixel((420, 340))
+			if pixel != (40, 120, 200):
+				problems.append("%s: %s at the centre" % (name, pixel))
+		except OSError as error:
+			problems.append("%s: %s" % (name, error))
+	try:
+		picture = Image.open(os.path.join(results_dir,
+			"screen-front_copy_cursor.png")).convert("RGB")
+		traces = 0
+		for i in range(6):
+			for dy in range(0, 12, 3):
+				for dx in range(0, 12, 3):
+					if picture.getpixel((300 + i * 20 + dx,
+							300 + i * 10 + dy)) != (40, 120, 200):
+						traces += 1
+		if traces:
+			problems.append("%d pixels of the pointer's path differ" % traces)
+	except OSError as error:
+		problems.append("cursor: %s" % error)
+	check["pass"] = not problems
+	check["detail"] = "; ".join(problems) or "the view's colour everywhere"
+	report.setdefault("host_checks", []).append(check)
+
+
+def check_native_mode(args, results_dir, report):
+	"""display.native_mode (batch 7): the boot loader starts in the
+	monitor's native mode. QEMU's display has EDID with a preferred mode
+	(1280x800 by default); the BIOS loader took it before, the EFI loader
+	took OVMF's largest mode (2048x2048). Both now log "video: native mode
+	<w>x<h> from <source>" and "video: using <w>x<h>"; they must agree,
+	and a screenshot of the desktop, if any, must have that size."""
+	check = {"name": "display.native_mode", "pass": False}
+	try:
+		with open(os.path.join(results_dir, "serial.log"), "rb") as log:
+			text = log.read().decode("latin-1")
+	except OSError as error:
+		check["detail"] = "no serial log: %s" % error
+		report.setdefault("host_checks", []).append(check)
+		return
+	native = re.findall(r"video: native mode (\d+)x(\d+) from (\w+)", text)
+	using = re.findall(r"video: using (\d+)x(\d+)", text)
+	if not native or not using:
+		check["detail"] = "boot loader lines missing (native %d, using %d)" \
+			% (len(native), len(using))
+		report.setdefault("host_checks", []).append(check)
+		return
+	width, height, source = native[-1]
+	used = using[-1]
+	check["pass"] = used == (width, height)
+	check["detail"] = "native %sx%s from %s, using %sx%s" % (width, height,
+		source, used[0], used[1])
+	try:
+		from PIL import Image
+		for name in sorted(os.listdir(results_dir)):
+			if name.startswith("screen-") and name.endswith(".png") \
+					and args.displays <= 1:
+				size = Image.open(os.path.join(results_dir, name)).size
+				check["detail"] += ", %s %dx%d" % (name, size[0], size[1])
+				if size != (int(width), int(height)):
+					check["pass"] = False
+				break
+	except ImportError:
+		pass
+	report.setdefault("host_checks", []).append(check)
+
+
 # #pragma mark - report
 
 
@@ -4983,6 +5067,11 @@ def main():
 				"linuxkpi_ui.screenshots")
 		if "displays_multi_test" in (args.only or available):
 			check_multi_screens(args, results_dir, report)
+		if args.displays <= 1:
+			check_native_mode(args, results_dir, report)
+		if "front_copy_test" in (args.only or available) \
+				and "usb" in args.pointer_devices:
+			check_front_copy(results_dir, report)
 		if "wayland_test" in (args.only or available):
 			check_screenshots(results_dir, report, WAYLAND_SCREENSHOTS
 				+ WAYLAND_LINUX_SCREENSHOTS, "wayland.screenshots")
