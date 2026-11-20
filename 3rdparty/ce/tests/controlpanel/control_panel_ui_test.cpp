@@ -239,9 +239,12 @@ main()
 	snooze(500000);
 	report("window_page_boot", shown == "boot"
 			&& has_view(messenger, "autoRecovery")
-			&& control_value(messenger, "autoRecovery") == 1,
-		"page \"%s\", recovery switch %" B_PRId32, shown.String(),
-		control_value(messenger, "autoRecovery"));
+			&& control_value(messenger, "autoRecovery") == 1
+			&& has_view(messenger, "bootState")
+			&& control_value(messenger, "bootState") == 1,
+		"page \"%s\", recovery switch %" B_PRId32 ", boot state switch %"
+		B_PRId32, shown.String(), control_value(messenger, "autoRecovery"),
+		control_value(messenger, "bootState"));
 
 	shown = show_page(messenger, "displays");
 	snooze(500000);

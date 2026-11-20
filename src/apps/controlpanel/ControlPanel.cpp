@@ -488,6 +488,10 @@ public:
 		:
 		BGroupView("boot", B_VERTICAL)
 	{
+		// batch 6: the switch for every boot loader write
+		fBootState = new BCheckBox("bootState", B_TRANSLATE(
+			"Count starts and keep restore choices in the boot loader"),
+			new BMessage(kMsgRecoveryOption));
 		fRecovery = new BCheckBox("autoRecovery", B_TRANSLATE(
 			"After two failed starts, open the boot menu with the last "
 			"working system selected"), new BMessage(kMsgRecoveryOption));
@@ -501,7 +505,11 @@ public:
 			.SetInsets(B_USE_WINDOW_SPACING)
 			.Add(page_heading(find_page("boot")))
 			.Add(new BSeparatorView(B_HORIZONTAL))
-			.Add(fRecovery)
+			.Add(fBootState)
+			.AddGroup(B_VERTICAL)
+				.SetInsets(B_USE_DEFAULT_SPACING, 0, 0, 0)
+				.Add(fRecovery)
+			.End()
 			.Add(new BStringView("pointsLabel", B_TRANSLATE(
 				"Restore points (saved before every update; start one from "
 				"the boot menu):")))
@@ -518,6 +526,7 @@ public:
 	{
 		BGroupView::AttachedToWindow();
 		fRecovery->SetTarget(this);
+		fBootState->SetTarget(this);
 		_Show();
 	}
 
@@ -527,9 +536,17 @@ public:
 			BGroupView::MessageReceived(message);
 			return;
 		}
-		run(fRecovery->Value() != 0
-			? "/boot/system/preferences/BootMenu --set-auto-recovery on"
-			: "/boot/system/preferences/BootMenu --set-auto-recovery off");
+		BControl* source = NULL;
+		message->FindPointer("source", (void**)&source);
+		if (source == fBootState) {
+			run(fBootState->Value() != 0
+				? "/boot/system/preferences/BootMenu --set-boot-state on"
+				: "/boot/system/preferences/BootMenu --set-boot-state off");
+		} else {
+			run(fRecovery->Value() != 0
+				? "/boot/system/preferences/BootMenu --set-auto-recovery on"
+				: "/boot/system/preferences/BootMenu --set-auto-recovery off");
+		}
 		_Show();
 	}
 
@@ -540,6 +557,9 @@ private:
 		run("/boot/system/preferences/BootMenu --show 2>/dev/null", &shown);
 		fRecovery->SetValue(shown.find("auto_recovery off")
 			== std::string::npos);
+		bool bootState = shown.find("boot_state off") == std::string::npos;
+		fBootState->SetValue(bootState);
+		fRecovery->SetEnabled(bootState);
 
 		while (BListItem* item = fPoints->RemoveItem((int32)0))
 			delete item;
@@ -557,6 +577,7 @@ private:
 	}
 
 	BCheckBox*	fRecovery;
+	BCheckBox*	fBootState;
 	BListView*	fPoints;
 };
 
