@@ -6,6 +6,8 @@
 #define _NOTIFICATION_SERVER_H
 
 
+#include <MessageRunner.h>
+#include <ObjectList.h>
 #include <Server.h>
 
 
@@ -26,7 +28,13 @@ public:
 									const char* prop);
 
 private:
+			bool				_StreamerMode(BMessage* message);
+			void				_ReleaseHeld();
+
 			NotificationWindow*	fWindow;
+			BObjectList<BMessage, true> fHeld;
+				// Renga: held while streamer mode pauses notifications
+			BMessageRunner*		fHeldCheck;
 };
 
 

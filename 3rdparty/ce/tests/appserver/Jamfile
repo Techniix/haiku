@@ -2,7 +2,7 @@ SubDir HAIKU_TOP 3rdparty ce tests appserver ;
 
 # Passing descriptors from applications to app_server (F-58, the Quasar
 # driver's R-1 prerequisite), see the source.
-UsePrivateHeaders app interface ;
+UsePrivateHeaders app interface shared ;
 ObjectHdrs [ FGristFiles appserver_fd_test$(SUFOBJ) ]
 	: [ FDirName $(HAIKU_TOP) headers compatibility gnu ] ;
 Application appserver_fd_test :
@@ -22,6 +22,12 @@ Application screen_read_test :
 	screen_read_test.cpp
 	: be [ TargetLibstdc++ ]
 ;
+# Hide from capture and streamer mode (batch 5), see the source.
+Application capture_privacy_test :
+	capture_privacy_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
 # its direct window (libgame), started by the test where libgame exists
 Application screen_read_direct :
 	screen_read_direct.cpp
@@ -30,7 +36,7 @@ Application screen_read_direct :
 
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test
-		hw_cursor_test screen_read_test ;
+		hw_cursor_test screen_read_test capture_privacy_test ;
 	AddFilesToHaikuImage system non-packaged bin : screen_read_direct ;
 }
 

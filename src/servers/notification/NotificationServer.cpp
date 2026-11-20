@@ -20,6 +20,8 @@
 
 #include "NotificationWindow.h"
 
+#include <streamer_mode.h>
+
 
 const char* kSoundNames[] = {
 	"Notification information",
@@ -32,13 +34,80 @@ const char* kSoundNames[] = {
 
 NotificationServer::NotificationServer(status_t& error)
 	:
-	BServer(kNotificationServerSignature, true, &error)
+	BServer(kNotificationServerSignature, true, &error),
+	fWindow(NULL),
+	fHeld(8),
+	fHeldCheck(NULL)
 {
 }
 
 
 NotificationServer::~NotificationServer()
 {
+	delete fHeldCheck;
+}
+
+
+static const uint32 kMsgCheckHeld = 'chkh';
+static const int32 kMaxHeld = 100;
+
+
+/*!	Renga (batch 5, streamer mode, headers/private/shared/streamer_mode.h):
+	returns true if \a message (a notification) is held for later because
+	notifications are paused; otherwise it may hide its content (only the
+	application's name stays) and returns false. Progress notifications are
+	not held, only made content-free.
+*/
+bool
+NotificationServer::_StreamerMode(BMessage* message)
+{
+	StreamerMode::Settings settings;
+	StreamerMode::load(settings);
+	if (!settings.enabled)
+		return false;
+
+	int32 type = 0;
+	message->FindInt32("_type", &type);
+	if (settings.pauseNotifications && type != B_PROGRESS_NOTIFICATION) {
+		if (fHeld.CountItems() < kMaxHeld)
+			fHeld.AddItem(new BMessage(*message));
+		if (fHeldCheck == NULL) {
+			BMessage check(kMsgCheckHeld);
+			fHeldCheck = new BMessageRunner(be_app_messenger, &check,
+				2000000);
+		}
+		BMessage reply(B_REPLY);
+		reply.AddInt32("error", B_OK);
+		message->SendReply(&reply);
+		return true;
+	}
+
+	if (settings.hideNotificationContent) {
+		const char* name = message->GetString("_appname", "");
+		message->RemoveName("_title");
+		message->RemoveName("_content");
+		message->AddString("_title", name);
+		message->AddString("_content", "New notification");
+	}
+	return false;
+}
+
+
+//!	Streamer mode ended (or no longer pauses): the held notifications.
+void
+NotificationServer::_ReleaseHeld()
+{
+	StreamerMode::Settings settings;
+	StreamerMode::load(settings);
+	if (settings.enabled && settings.pauseNotifications)
+		return;
+	delete fHeldCheck;
+	fHeldCheck = NULL;
+	while (BMessage* held = fHeld.RemoveItemAt(0)) {
+		if (fWindow != NULL && !_StreamerMode(held))
+			BMessenger(fWindow).SendMessage(held);
+		delete held;
+	}
 }
 
 
@@ -59,6 +128,10 @@ NotificationServer::MessageReceived(BMessage* message)
 			if (!fWindow)
 				return;
 
+			// Renga: streamer mode may hold it or hide its content
+			if (_StreamerMode(message))
+				break;
+
 			// Emit a sound for this event
 			// Progress notifications only emit a sound if the visible percentage changed
 			int32 type = 0;
@@ -72,6 +145,9 @@ NotificationServer::MessageReceived(BMessage* message)
 			BMessenger(fWindow).SendMessage(message);
 			break;
 		}
+		case kMsgCheckHeld:
+			_ReleaseHeld();
+			break;
 		default:
 			BApplication::MessageReceived(message);
 	}

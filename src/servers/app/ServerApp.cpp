@@ -23,6 +23,8 @@
 
 #include "ServerApp.h"
 
+#include "CapturePrivacy.h"
+
 #include "FdTransferServer.h"
 
 #include <new>
@@ -3654,6 +3656,34 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 				fLink.Flush();
 			}
 			break;
+
+		// Renga (batch 5): hide one of the caller's windows from captures
+		case AS_SCREEN_CAPTURE_SET_WINDOW_HIDDEN:
+		{
+			int32 token;
+			bool hidden;
+			link.Read<int32>(&token);
+			if (link.Read<bool>(&hidden) != B_OK) {
+				fLink.StartMessage(B_BAD_DATA);
+				fLink.Flush();
+				break;
+			}
+			// the client knows its BWindow's handler token
+			int32 serverToken = -1;
+			{
+				BAutolock locker(fWindowListLock);
+				for (int32 i = 0; i < fWindowList.CountItems(); i++) {
+					if (fWindowList.ItemAt(i)->ClientToken() == token)
+						serverToken = fWindowList.ItemAt(i)->ServerToken();
+				}
+			}
+			bool ours = serverToken >= 0;
+			if (ours)
+				CapturePrivacy::SetWindowHidden(serverToken, hidden);
+			fLink.StartMessage(ours ? B_OK : B_BAD_VALUE);
+			fLink.Flush();
+			break;
+		}
 
 		case AS_GET_DRIVER_PATH:
 		{

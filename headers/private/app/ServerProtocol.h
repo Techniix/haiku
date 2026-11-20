@@ -409,6 +409,11 @@ enum {
 	// app_server would, and replies when it lets go (pointer suite)
 	AS_TEST_STALL_INPUT,
 
+	// Renga (batch 5, hide from capture): int32 BWindow handler token, bool
+	// hidden; the window stays on screen but is blank in every capture
+	// (src/servers/app/CapturePrivacy.h). Only for the caller's windows.
+	AS_SCREEN_CAPTURE_SET_WINDOW_HIDDEN,
+
 	AS_LAST_CODE
 };
 

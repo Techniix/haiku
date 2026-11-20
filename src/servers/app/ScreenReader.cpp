@@ -6,6 +6,8 @@
 
 #include "ScreenReader.h"
 
+#include "CapturePrivacy.h"
+
 #include <math.h>
 
 #include <new>
@@ -118,6 +120,38 @@ copy_rect(ServerBitmap* bitmap, BPoint origin, clipping_rect rect,
 			right - left + 1, bottom - top + 1) != B_OK)
 		return 0;
 	return (int64)(right - left + 1) * (bottom - top + 1);
+}
+
+
+/*!	Renga (hide from capture): fills \a region (screen coordinates) of
+	\a bitmap with a plain grey, in strips through ImportBits(), so any
+	bitmap color space works.
+*/
+void
+blank_region(ServerBitmap* bitmap, BPoint origin, const BRegion& region)
+{
+	static const int32 kStripRows = 32;
+	BRect bounds = region.Frame();
+	int32 width = (int32)bounds.Width() + 1;
+	if (!bounds.IsValid() || width <= 0)
+		return;
+	uint32* strip = (uint32*)malloc((size_t)width * kStripRows * 4);
+	if (strip == NULL)
+		return;
+	for (int32 i = 0; i < width * kStripRows; i++)
+		strip[i] = 0xff303030;
+
+	for (int32 i = 0; i < region.CountRects(); i++) {
+		clipping_rect rect = region.RectAtInt(i);
+		for (int32 top = rect.top; top <= rect.bottom; top += kStripRows) {
+			clipping_rect part = rect;
+			part.top = top;
+			part.bottom = min_c(rect.bottom, top + kStripRows - 1);
+			copy_rect(bitmap, origin, part, (const uint8*)strip, width * 4,
+				B_RGB32, BPoint(part.left, part.top), width, kStripRows);
+		}
+	}
+	free(strip);
 }
 
 
@@ -380,6 +414,20 @@ Read(Desktop* desktop, ServerBitmap* bitmap, const BRegion& area,
 					snapshot->bounds.right - snapshot->bounds.left + 1,
 					snapshot->bounds.bottom - snapshot->bounds.top + 1);
 			}
+		}
+	}
+
+	// Renga (hide from capture): windows that must not appear in captures
+	// are blank in every read, whatever buffer their pixels came from.
+	if (status == B_OK && CapturePrivacy::Enabled()) {
+		int32 workspace = desktop->CurrentWorkspace();
+		for (Window* window = desktop->CurrentWindows().FirstWindow();
+				window != NULL; window = window->NextWindow(workspace)) {
+			if (!window->IsVisible() || !CapturePrivacy::IsHidden(window))
+				continue;
+			BRegion region(window->VisibleRegion());
+			region.IntersectWith(&area);
+			blank_region(bitmap, origin, region);
 		}
 	}
 

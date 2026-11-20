@@ -18,6 +18,20 @@
 	  ScreenRecording --set <signature> allow|deny|ask
 	  ScreenRecording --list          for scripts and tests
 
+	Renga, batch 5 (streaming): the "Privacy and streaming" box. Streamer
+	mode (headers/private/shared/streamer_mode.h): one switch, off by
+	default, and its parts; Hide from capture (headers/private/shared/
+	capture_privacy.h): windows that stay on screen but are blank in every
+	capture, with its own switch, marked per application or per window in
+	the list of open windows.
+
+	  ScreenRecording --streamer-mode on|off
+	  ScreenRecording --streamer-part content|pause|windows on|off
+	  ScreenRecording --hide-from-capture on|off
+	  ScreenRecording --hide-app <signature> on|off
+	  ScreenRecording --hide-window <signature> <title> on|off
+	  ScreenRecording --privacy       the settings above, as text
+
 	app_server accepts answers and permission changes only from system
 	software, which this program is (it lives in /boot/system/preferences).
 */
@@ -50,6 +64,9 @@
 #include <vector>
 
 #include <ScreenCapture.h>
+#include <WindowInfo.h>
+#include <capture_privacy.h>
+#include <streamer_mode.h>
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -143,6 +160,14 @@ static const uint32 kMsgAllowSelected = 'asel';
 static const uint32 kMsgDenySelected = 'dsel';
 static const uint32 kMsgForgetSelected = 'fsel';
 static const uint32 kMsgStopSelected = 'ssel';
+static const uint32 kMsgStreamerOption = 'stmo';
+	// also from other programs (tests): bools "enabled", "content",
+	// "pause", "windows"
+static const uint32 kMsgPrivacySwitch = 'prsw';
+	// also with a bool "enabled"
+static const uint32 kMsgHideSelected = 'hsel';
+static const uint32 kMsgShowSelected = 'shsl';
+static const uint32 kMsgHideAppSelected = 'hase';
 
 
 static const char*
@@ -543,12 +568,63 @@ public:
 		indicatorBox->AddChild(indicatorGroup);
 		_ShowSettings();
 
+		// batch 5: privacy and streaming
+		fStreamerMode = new BCheckBox("streamerMode",
+			B_TRANSLATE("Streamer mode"), new BMessage(kMsgStreamerOption));
+		fStreamerContent = new BCheckBox("streamerContent",
+			B_TRANSLATE("Notifications show only the application's name"),
+			new BMessage(kMsgStreamerOption));
+		fStreamerPause = new BCheckBox("streamerPause",
+			B_TRANSLATE("Hold notifications until streamer mode ends"),
+			new BMessage(kMsgStreamerOption));
+		fStreamerWindows = new BCheckBox("streamerWindows",
+			B_TRANSLATE("Keep windows marked below hidden while streaming"),
+			new BMessage(kMsgStreamerOption));
+		fPrivacy = new BCheckBox("hideFromCapture",
+			B_TRANSLATE("Hide marked windows from captures, recordings and "
+				"screenshots"), new BMessage(kMsgPrivacySwitch));
+		fWindows = new BColumnListView("windows", 0, B_FANCY_BORDER, true);
+		fWindows->AddColumn(new BStringColumn(B_TRANSLATE("Window"),
+			200, 50, 400, B_TRUNCATE_END), 0);
+		fWindows->AddColumn(new BStringColumn(B_TRANSLATE("Application"),
+			130, 50, 300, B_TRUNCATE_END), 1);
+		fWindows->AddColumn(new BStringColumn(B_TRANSLATE("In captures"),
+			110, 50, 200, B_TRUNCATE_END), 2);
+		fWindows->SetExplicitMinSize(BSize(460, 90));
+		BBox* privacyBox = new BBox("privacy box");
+		privacyBox->SetLabel(B_TRANSLATE("Privacy and streaming"));
+		BGroupView* privacyGroup = new BGroupView(B_VERTICAL, 0);
+		BLayoutBuilder::Group<>(privacyGroup)
+			.SetInsets(B_USE_DEFAULT_SPACING)
+			.Add(fStreamerMode)
+			.AddGroup(B_VERTICAL, 0)
+				.SetInsets(B_USE_DEFAULT_SPACING, 0, 0, 0)
+				.Add(fStreamerContent)
+				.Add(fStreamerPause)
+				.Add(fStreamerWindows)
+			.End()
+			.AddStrut(B_USE_HALF_ITEM_SPACING)
+			.Add(fPrivacy)
+			.Add(fWindows)
+			.AddGroup(B_HORIZONTAL)
+				.Add(new BButton("hideWindow", B_TRANSLATE("Hide this window"),
+					new BMessage(kMsgHideSelected)))
+				.Add(new BButton("hideApp", B_TRANSLATE("Hide all its windows"),
+					new BMessage(kMsgHideAppSelected)))
+				.Add(new BButton("showWindow", B_TRANSLATE("Show again"),
+					new BMessage(kMsgShowSelected)))
+				.AddGlue()
+			.End();
+		privacyBox->AddChild(privacyGroup);
+		_ShowPrivacy();
+
 		BLayoutBuilder::Group<>(this, B_VERTICAL)
 			.SetInsets(B_USE_WINDOW_SPACING)
 			.Add(note)
 			.Add(appsBox)
 			.Add(sessionsBox)
 			.Add(indicatorBox)
+			.Add(privacyBox)
 			.AddGroup(B_HORIZONTAL)
 				.Add(fDefaults)
 				.AddGlue()
@@ -570,6 +646,64 @@ public:
 			case kMsgRefresh:
 				_Refresh();
 				break;
+			case kMsgStreamerOption:
+			{
+				bool value;
+				if (message->FindBool("enabled", &value) == B_OK)
+					fStreamerMode->SetValue(value);
+				if (message->FindBool("content", &value) == B_OK)
+					fStreamerContent->SetValue(value);
+				if (message->FindBool("pause", &value) == B_OK)
+					fStreamerPause->SetValue(value);
+				if (message->FindBool("windows", &value) == B_OK)
+					fStreamerWindows->SetValue(value);
+				StreamerMode::Settings streamer;
+				streamer.enabled = fStreamerMode->Value() != 0;
+				streamer.hideNotificationContent
+					= fStreamerContent->Value() != 0;
+				streamer.pauseNotifications = fStreamerPause->Value() != 0;
+				streamer.hideMarkedWindows = fStreamerWindows->Value() != 0;
+				StreamerMode::save(streamer);
+				_ShowPrivacy();
+				break;
+			}
+			case kMsgPrivacySwitch:
+			{
+				bool value;
+				if (message->FindBool("enabled", &value) == B_OK)
+					fPrivacy->SetValue(value);
+				CapturePrivacyRules::Rules rules;
+				CapturePrivacyRules::load(rules);
+				rules.enabled = fPrivacy->Value() != 0;
+				CapturePrivacyRules::save(rules);
+				_ShowPrivacy();
+				break;
+			}
+			case kMsgHideSelected:
+			case kMsgHideAppSelected:
+			case kMsgShowSelected:
+			{
+				BRow* row = fWindows->CurrentSelection();
+				int32 index = row != NULL ? fWindows->IndexOf(row) : -1;
+				if (index < 0 || index >= (int32)fWindowKeys.size())
+					break;
+				const std::string& signature = fWindowKeys[index].first;
+				std::string entry = signature + "\t"
+					+ fWindowKeys[index].second;
+				CapturePrivacyRules::Rules rules;
+				CapturePrivacyRules::load(rules);
+				if (message->what == kMsgHideSelected)
+					CapturePrivacyRules::set(rules.windows, entry, true);
+				else if (message->what == kMsgHideAppSelected)
+					CapturePrivacyRules::set(rules.apps, signature, true);
+				else {
+					CapturePrivacyRules::set(rules.windows, entry, false);
+					CapturePrivacyRules::set(rules.apps, signature, false);
+				}
+				CapturePrivacyRules::save(rules);
+				_RefreshWindows();
+				break;
+			}
 			case kMsgAllowSelected:
 			case kMsgDenySelected:
 			case kMsgForgetSelected:
@@ -668,6 +802,66 @@ private:
 		}
 	}
 
+	void _ShowPrivacy()
+	{
+		StreamerMode::Settings streamer;
+		StreamerMode::load(streamer);
+		fStreamerMode->SetValue(streamer.enabled);
+		fStreamerContent->SetValue(streamer.hideNotificationContent);
+		fStreamerPause->SetValue(streamer.pauseNotifications);
+		fStreamerWindows->SetValue(streamer.hideMarkedWindows);
+		fStreamerContent->SetEnabled(streamer.enabled);
+		fStreamerPause->SetEnabled(streamer.enabled);
+		fStreamerWindows->SetEnabled(streamer.enabled);
+
+		CapturePrivacyRules::Rules rules;
+		CapturePrivacyRules::load(rules);
+		fPrivacy->SetValue(rules.enabled);
+		_RefreshWindows();
+	}
+
+	//!	The open windows of other applications, and whether they show.
+	void _RefreshWindows()
+	{
+		CapturePrivacyRules::Rules rules;
+		CapturePrivacyRules::load(rules);
+		int32 selected = fWindows->CurrentSelection() != NULL
+			? fWindows->IndexOf(fWindows->CurrentSelection()) : -1;
+		fWindows->Clear();
+		fWindowKeys.clear();
+
+		int32 count = 0;
+		int32* tokens = get_token_list(-1, &count);
+		for (int32 i = 0; tokens != NULL && i < count; i++) {
+			client_window_info* info = get_window_info(tokens[i]);
+			if (info == NULL)
+				continue;
+			app_info appInfo;
+			if (info->team != be_app->Team() && info->show_hide_level <= 0
+				&& info->name[0] != '\0'
+				&& be_roster->GetRunningAppInfo(info->team, &appInfo)
+					== B_OK) {
+				std::string signature = appInfo.signature;
+				std::string entry = signature + "\t" + info->name;
+				bool hidden = CapturePrivacyRules::contains(rules.apps,
+						signature)
+					|| CapturePrivacyRules::contains(rules.windows, entry);
+				BRow* row = new BRow();
+				row->SetField(new BStringField(info->name), 0);
+				row->SetField(new BStringField(appInfo.ref.name), 1);
+				row->SetField(new BStringField(hidden
+					? B_TRANSLATE("Hidden") : B_TRANSLATE("Shown")), 2);
+				fWindows->AddRow(row);
+				fWindowKeys.push_back(std::make_pair(signature,
+					std::string(info->name)));
+			}
+			free(info);
+		}
+		free(tokens);
+		if (selected >= 0 && selected < fWindows->CountRows())
+			fWindows->AddToSelection(fWindows->RowAt(selected));
+	}
+
 	void _ShowSettings()
 	{
 		fShowElapsed->SetValue(fSettings.showElapsed);
@@ -682,6 +876,13 @@ private:
 	BCheckBox*			fShowElapsed;
 	BCheckBox*			fShowSize;
 	BButton*			fDefaults;
+	BCheckBox*			fStreamerMode;
+	BCheckBox*			fStreamerContent;
+	BCheckBox*			fStreamerPause;
+	BCheckBox*			fStreamerWindows;
+	BCheckBox*			fPrivacy;
+	BColumnListView*	fWindows;
+	std::vector<std::pair<std::string, std::string> > fWindowKeys;
 	BMessageRunner*		fRunner;
 };
 
@@ -755,6 +956,58 @@ command_line(int argc, char** argv)
 		}
 		return status == B_OK ? 0 : 1;
 	}
+	if (strcmp(argv[1], "--privacy") == 0 && argc == 2) {
+		StreamerMode::Settings streamer;
+		StreamerMode::load(streamer);
+		CapturePrivacyRules::Rules rules;
+		CapturePrivacyRules::load(rules);
+		printf("streamer_mode %s\ncontent %s\npause %s\nwindows %s\n"
+			"hide_from_capture %s\n", streamer.enabled ? "on" : "off",
+			streamer.hideNotificationContent ? "on" : "off",
+			streamer.pauseNotifications ? "on" : "off",
+			streamer.hideMarkedWindows ? "on" : "off",
+			rules.enabled ? "on" : "off");
+		for (size_t i = 0; i < rules.apps.size(); i++)
+			printf("app %s\n", rules.apps[i].c_str());
+		for (size_t i = 0; i < rules.windows.size(); i++)
+			printf("window %s\n", rules.windows[i].c_str());
+		return 0;
+	}
+	bool on = strcmp(argv[argc - 1], "on") == 0;
+	if (strcmp(argv[1], "--streamer-mode") == 0 && argc == 3) {
+		StreamerMode::Settings streamer;
+		StreamerMode::load(streamer);
+		streamer.enabled = on;
+		return StreamerMode::save(streamer) ? 0 : 1;
+	}
+	if (strcmp(argv[1], "--streamer-part") == 0 && argc == 4) {
+		StreamerMode::Settings streamer;
+		StreamerMode::load(streamer);
+		if (strcmp(argv[2], "content") == 0)
+			streamer.hideNotificationContent = on;
+		else if (strcmp(argv[2], "pause") == 0)
+			streamer.pauseNotifications = on;
+		else if (strcmp(argv[2], "windows") == 0)
+			streamer.hideMarkedWindows = on;
+		else
+			return 1;
+		return StreamerMode::save(streamer) ? 0 : 1;
+	}
+	if ((strcmp(argv[1], "--hide-from-capture") == 0 && argc == 3)
+		|| (strcmp(argv[1], "--hide-app") == 0 && argc == 4)
+		|| (strcmp(argv[1], "--hide-window") == 0 && argc == 5)) {
+		CapturePrivacyRules::Rules rules;
+		CapturePrivacyRules::load(rules);
+		if (argc == 3)
+			rules.enabled = on;
+		else if (argc == 4)
+			CapturePrivacyRules::set(rules.apps, argv[2], on);
+		else {
+			CapturePrivacyRules::set(rules.windows,
+				std::string(argv[2]) + "\t" + argv[3], on);
+		}
+		return CapturePrivacyRules::save(rules) ? 0 : 1;
+	}
 	if (strcmp(argv[1], "--set") == 0 && argc == 4) {
 		int32 state = BPrivate::SCREEN_CAPTURE_PERMISSION_UNKNOWN;
 		if (strcmp(argv[3], "allow") == 0)
@@ -781,7 +1034,13 @@ int
 main(int argc, char** argv)
 {
 	if (argc >= 2 && (strcmp(argv[1], "--list") == 0
-			|| strcmp(argv[1], "--set") == 0)) {
+			|| strcmp(argv[1], "--set") == 0
+			|| strcmp(argv[1], "--privacy") == 0
+			|| strcmp(argv[1], "--streamer-mode") == 0
+			|| strcmp(argv[1], "--streamer-part") == 0
+			|| strcmp(argv[1], "--hide-from-capture") == 0
+			|| strcmp(argv[1], "--hide-app") == 0
+			|| strcmp(argv[1], "--hide-window") == 0)) {
 		// The app_server link needs a BApplication.
 		BApplication app("application/x-vnd.Renga-ScreenRecording-cli");
 		return command_line(argc, argv);

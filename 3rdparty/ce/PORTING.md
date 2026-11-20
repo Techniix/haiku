@@ -1149,6 +1149,30 @@ Since: the commits that added `ScreenCaptureManager` to app_server,
 `screen_capture_test.cpp` (renga-* images), `screen_read_test.cpp` (every
 image).
 
+### Hide from capture and streamer mode
+
+Batch 5 (streaming). A window can stay on screen but be blank (plain grey)
+in every capture, recording and screenshot: every screen read goes through
+app_server's `ScreenReader::Read()`, which fills such windows' visible
+area, so recorders need no code for it.
+
+- **Your own secret windows** (password managers, key dialogs):
+  `BPrivate::BScreenCapture::SetWindowHidden(window, true)`
+  (`headers/private/interface/ScreenCapture.h`). Only for the caller's
+  windows; honoured while the user's "Hide from capture" switch is on (the
+  default).
+- **The user's rules** are in `~/config/settings/Renga/capture_privacy`
+  (`headers/private/shared/capture_privacy.h`): `enabled`, `app
+  <signature>`, `window <signature>\t<title>`. The Screen recording
+  preferences edit them; do not write the file from a port.
+- **Streamer mode** (`headers/private/shared/streamer_mode.h`, file
+  `~/config/settings/Renga/streamer_mode`): one switch, off by default,
+  with parts: notifications show only the application's name, notifications
+  held until it ends, marked windows kept hidden. A streaming application
+  may read it (for example to hide its own previews of chat) but should not
+  turn it on by itself; `ScreenRecording --streamer-mode on|off` is there
+  for a user's hotkey or script.
+
 ### Low-latency audio
 
 For games, emulators and music programs (roadmap `F-31`; the Eglantine

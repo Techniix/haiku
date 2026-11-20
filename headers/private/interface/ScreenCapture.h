@@ -19,6 +19,9 @@ class BMessage;
 class BMessenger;
 
 
+class BWindow;
+
+
 namespace BPrivate {
 
 
@@ -106,6 +109,12 @@ public:
 				// these up, not "bytes", for what all recordings wrote)
 	static	status_t			StopSession(int32 id);
 	static	status_t			SetOutputSize(int64 bytes);
+
+	// Renga (batch 5, hide from capture): \a window stays on screen but is
+	// blank in every capture, recording and screenshot while the user's
+	// "Hide from capture" switch is on (the default). For windows that
+	// show secrets (password managers, keys). Only the caller's windows.
+	static	status_t			SetWindowHidden(BWindow* window, bool hidden);
 				// F-59: what the calling team's recording has written so
 				// far, shown by the recording indicator ("total_bytes" in
 				// GetSessions()); one size per team, however many

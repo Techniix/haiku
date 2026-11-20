@@ -16,6 +16,8 @@
 #include <BitmapPrivate.h>
 #include <MessengerPrivate.h>
 #include <ServerProtocol.h>
+#include <AppMisc.h>
+#include <Window.h>
 
 #include <map>
 
@@ -435,6 +437,25 @@ BScreenCapture::AnswerRequest(int32 request, bool allow, bool remember)
 	link.Attach<int32>(request);
 	link.Attach<bool>(allow);
 	link.Attach<bool>(remember);
+	status_t status;
+	if (link.FlushWithReply(status) != B_OK)
+		return B_ERROR;
+	return status;
+}
+
+
+status_t
+BScreenCapture::SetWindowHidden(BWindow* window, bool hidden)
+{
+	if (window == NULL)
+		return B_BAD_VALUE;
+	int32 token = _get_object_token_(window);
+	if (token < 0)
+		return B_BAD_VALUE;
+	AppServerLink link;
+	link.StartMessage(AS_SCREEN_CAPTURE_SET_WINDOW_HIDDEN);
+	link.Attach<int32>(token);
+	link.Attach<bool>(hidden);
 	status_t status;
 	if (link.FlushWithReply(status) != B_OK)
 		return B_ERROR;
