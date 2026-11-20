@@ -2,9 +2,17 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-14 02:25 UTC. Newest entries first.
+Updated: 2026-11-20 05:30 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-20: R-18 landed: `syncobj` module, `linux-dmabuf` v4, `wp_linux_drm_syncobj_v1`
+
+- **Module** ([`1424ffb4`](https://github.com/Techniix/haiku/commit/1424ffb4)): `generic/syncobj/v1`, header `<syncobj_module.h>` (`headers/os/drivers/syncobj_module.h`, installed with the development headers). DRM syncobj semantics and Linux layouts; user headers `<drm/drm_syncobj.h>` and `<linux/sync_file.h>`. `/dev/syncobj` for programs without a GPU node; Renguin passes the requests through.
+- **Render node:** call `open_file()` in your node's open hook and `close_file()` in its free hook; in its control hook, forward every `op` for which `is_syncobj_ioctl(op)` is true to `ioctl(file, op, buffer, length)`. Handles are per open file.
+- **Fences:** `create_fence()` (one reference, pending), `signal_fence(fence, B_OK or error)`, `acquire_fence()`/`release_fence()`, `fence_status()`, `wait_fence()`, `add_fence_callback()`/`remove_fence_callback()` (run once, module lock held: no blocking, no calls back). Submit path: `find_fence(file, handle, point, flags, timeout, &fence)` for in-fences (`B_SYNCOBJ_FIND_WAIT_FOR_SUBMIT` waits), `replace_fence(file, handle, point, fence)` for out-fences (point 0 binary, else a timeline point), `get_sync_file_fence()`/`create_sync_file()` for sync_file fds. Thread context only: signal from a DPC or thread, not from the interrupt handler.
+- **Compositor** ([`11591601`](https://github.com/Techniix/haiku/commit/11591601)): `zwp_linux_dmabuf_v1` version 4 maps the plane descriptor (memfds now; your buffer fds once they can be mapped or imported), ARGB8888/XRGB8888, LINEAR/INVALID; `main_device` is a dev_t of 0 until your render node exists (tell us its node and dev_t). `wp_linux_drm_syncobj_manager_v1` waits for acquire points without blocking and signals release points when a buffer leaves the screen.
+- QEMU Tested only (CPU-signalled fences, memfd buffers); nothing ran on the RTX 5070.
 
 ### 2026-11-20: GPU stage not in batch 3 (`2026.11.20-batch3`)
 
