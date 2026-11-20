@@ -33,3 +33,21 @@ if $(CE_HARNESS) {
 		hw_cursor_test screen_read_test ;
 	AddFilesToHaikuImage system non-packaged bin : screen_read_direct ;
 }
+
+# Screen -> Displays (batch 4), the page from the Screen preferences'
+# sources, see the source.
+local screenPrefsDir = [ FDirName $(HAIKU_TOP) src preferences screen ] ;
+ObjectHdrs [ FGristFiles displays_ui_test$(SUFOBJ) DisplaysView$(SUFOBJ)
+		WaylandSwitch$(SUFOBJ) ]
+	: $(screenPrefsDir) ;
+SEARCH_SOURCE += $(screenPrefsDir) ;
+Application displays_ui_test :
+	displays_ui_test.cpp
+	DisplaysView.cpp
+	WaylandSwitch.cpp
+	: be localestub [ TargetLibstdc++ ]
+;
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: displays_ui_test ;
+}

@@ -55,6 +55,7 @@
 #include "MonitorView.h"
 #include "ScreenSettings.h"
 #include "Utility.h"
+#include "DisplaysView.h"
 #include "WaylandSwitch.h"
 
 /* Note, this headers defines a *private* interface to the Radeon accelerant.
@@ -610,6 +611,12 @@ ScreenWindow::ScreenWindow(ScreenSettings* settings)
 		new BMessage(BUTTON_REVERT_MSG));
 	fRevertButton->SetEnabled(false);
 
+	// Renga (batch 4): every display setting on one page (DisplaysView,
+	// the Control Panel page of F-28)
+	BButton* displaysButton = new BButton("DisplaysButton",
+		B_TRANSLATE("Displays" B_UTF8_ELLIPSIS),
+		new BMessage(kMsgShowDisplays));
+
 	BLayoutBuilder::Group<>(this, B_VERTICAL, B_USE_DEFAULT_SPACING)
 		.AddGroup(B_HORIZONTAL)
 			.AddGroup(B_VERTICAL, 0, 1)
@@ -625,6 +632,7 @@ ScreenWindow::ScreenWindow(ScreenSettings* settings)
 		.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
 			.Add(fRevertButton)
 			.AddGlue()
+			.Add(displaysButton)
 			.End()
 		.SetInsets(B_USE_WINDOW_SPACING);
 
@@ -1037,6 +1045,10 @@ ScreenWindow::MessageReceived(BMessage* message)
 	switch (message->what) {
 		case WORKSPACE_CHECK_MSG:
 			_CheckApplyEnabled();
+			break;
+
+		case kMsgShowDisplays:
+			(new DisplaysWindow())->Show();
 			break;
 
 		case kMsgWaylandChanged:

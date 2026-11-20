@@ -44,6 +44,7 @@ static const uint32 kMsgWorkspaceLayoutChanged = 'wslc';
 static const uint32 kMsgWorkspaceColumnsChanged = 'wscc';
 static const uint32 kMsgWorkspaceRowsChanged = 'wsrc';
 static const uint32 kMsgWaylandChanged = 'wlch';
+static const uint32 kMsgShowDisplays = 'shdp';
 	// Renga: the Wayland compositor switch
 
 // Constants

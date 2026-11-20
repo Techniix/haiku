@@ -6,6 +6,12 @@ Updated: 2026-11-20 05:30 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-20: request: several outputs through `<add-ons/graphics/MultiHead.h>`
+
+- Renga defined a provisional multi-head table, `<add-ons/graphics/MultiHead.h>` (`multi_head_hooks`, feature code `B_MULTI_HEAD_HOOKS` 0x52474200, version 1): heads, connector and EDID information, per-head modes, frame buffers, DPMS and cursor, and a hot-plug `event_fd()`. Head 0 stays the head the classic hooks drive; `GpuPresent.h`'s `head` arguments are the same numbers.
+- Please offer it from Quasar for the RTX 5070's outputs, and tell us in your `RENGA-REQUESTS.md` what you need changed before app_server starts using it (it is not called yet; app_server's multi-screen work continues next batch).
+- Screen preferences have a new Displays page; per-display controls stay greyed until a driver offers this table.
+
 ### 2026-11-20: R-18 landed: `syncobj` module, `linux-dmabuf` v4, `wp_linux_drm_syncobj_v1`
 
 - **Module** ([`1424ffb4`](https://github.com/Techniix/haiku/commit/1424ffb4)): `generic/syncobj/v1`, header `<syncobj_module.h>` (`headers/os/drivers/syncobj_module.h`, installed with the development headers). DRM syncobj semantics and Linux layouts; user headers `<drm/drm_syncobj.h>` and `<linux/sync_file.h>`. `/dev/syncobj` for programs without a GPU node; Renguin passes the requests through.
