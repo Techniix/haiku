@@ -1442,7 +1442,15 @@ system call trace is set in `~/config/settings/kernel/drivers/renguin`:
 `trace_process "<pattern>"` (clone/fork/execve/wait4 and descriptor
 passing of every matching process). The pattern is matched against the
 program's command line; a leading `^` anchors it. It is read at every
-exec of a Linux program; delete the file to turn it off.
+exec of a Linux program; delete the file to turn it off. With
+`trace_buffer true` as well, the lines (with a millisecond time stamp) are
+kept in memory and written to the syslog when the traced process ends, so
+the trace does not slow the program down and hide races.
+
+Locale for Linux programs (batch 3): the `linux` command sets `LANG`,
+`LANGUAGE` and the formatting `LC_*` from the Locale preferences in Linux
+form (`en_US.UTF-8`, `de_DE.UTF-8`; never `C.UTF-8`), and libroot accepts
+`C.UTF-8`, `C.utf8` and `POSIX.UTF-8` (the POSIX rules with UTF-8).
 
 Cross builds (HaikuPorter's cross mode, the cross-tools): build the sysroot
 package from Renga's tree, `jam -q haiku_cross_devel_sysroot_x86_64.hpkg`
@@ -1652,6 +1660,38 @@ and native programs linked against a socket-transport libwayland-client.
   background application; toplevel icons are kept for it); per-screen
   scale factors (Haiku has one).
 - x86_64 only (the build replaces libffi with a direct x86-64 call).
+
+### D-Bus session bus
+
+Roadmap F-43 phase D (batch 3). `session_bus`, a system server started at
+login (`data/launch/user_session_bus`), is a D-Bus message bus on
+`unix:path=/tmp/xdg-runtime/bus`; `DBUS_SESSION_BUS_ADDRESS` is set for
+native programs (SetupEnvironment) and Linux programs (the `linux`
+command).
+
+- The bus: EXTERNAL authentication (peer credentials), Unix descriptor
+  passing, the `org.freedesktop.DBus` methods (Hello, RequestName and the
+  other name calls, AddMatch/RemoveMatch with type, sender, interface,
+  member, path, path_namespace, destination and arg0, the connection
+  credential calls), NameOwnerChanged, routing of calls, replies and
+  signals. No activation (`.service` files).
+- Services inside it (a client may take a name over with RequestName's
+  replace flag):
+  - `org.freedesktop.Notifications`: native notifications; a click is
+    ActionInvoked "default"; markup is shown as text.
+  - `org.freedesktop.UPower`: ACPI batteries, `DisplayDevice`,
+    `OnBattery`.
+  - `org.freedesktop.portal.Desktop`: Settings
+    (`org.freedesktop.appearance`: color-scheme, accent-color, contrast)
+    and OpenURI. No FileChooser, Screenshot or ScreenCast yet.
+  - `org.freedesktop.secrets`: the Secret Service on Haiku's key store
+    (keyring "Secret Service"), one always-unlocked collection `login`
+    (alias `default`), "plain" sessions only.
+- Switches: Notifications preferences, "Desktop services for Linux and
+  ported programs (D-Bus)" and "Show their notifications"
+  (`~/config/settings/Renga/dbus`).
+- No libdbus is shipped: ports link HaikuPorts' `dbus` or their own
+  client code.
 
 ### Drivers in non-packaged
 

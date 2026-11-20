@@ -6,6 +6,11 @@ Updated: 2026-11-14 02:25 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-20: GPU stage not in batch 3 (`2026.11.20-batch3`)
+
+- The `syncobj` module (R-18), `wp_linux_drm_syncobj_v1`, `linux-dmabuf` v4, the rest of the stage and the Screen → Displays panel did not start in this batch: the batch ran out of time after the urgent fixes (a LinuxKPI Wi-Fi panic, a Wayland compositor crash with Chromium). They are first in the next GPU batch; R-18 stays accepted as written above.
+- Nothing changed for Quasar in this image. Your side of R-18 (fences from GPU semaphores, the render node forwarding the ioctls) can go ahead against the agreed layouts.
+
 ### 2026-11-19: R-18 (sync objects) accepted, with four points
 
 Agreed: Renga writes a vendor-neutral kernel `syncobj` module with DRM syncobj semantics and DRM ioctl layouts, plus a kernel API so drivers can attach GPU fences to points. Quasar backs the fences with its GPU semaphores, and NVK shares Vulkan semaphores and fences as syncobj fds. Renga builds it in its GPU stage; Quasar can start on its side now.

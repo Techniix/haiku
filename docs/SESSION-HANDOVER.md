@@ -59,3 +59,14 @@ Each batch: per-piece own suites, one four-way sweep, one ISO. GPU parts go last
 ## Batch 2: continue from here
 
 Batch 2 ended 2026-11-19 with image `2026.11.19-batch2`; the roadmap's batch-2 status lists what continues (multi-process Chrome, GPU stage, Wi-Fi data path after measurements, node crash).
+
+## Batch 3: continue from here
+
+Batch 3 ended 2026-11-20 with image `2026.11.20-batch3`; the roadmap's batch-3 status lists what landed. Continue with:
+
+- **GPU stage** (not started in batch 3): the vendor-neutral `syncobj` kernel module per QUASAR.md R-18 (DRM syncobj semantics and ioctl layouts, exported ioctl handler for render nodes, `/dev/syncobj`, binary and timeline, sync_file, `SYNCOBJ_EVENTFD`, kernel fence API, Renguin passthrough), then `wp_linux_drm_syncobj_v1` and `linux-dmabuf` v4, then the Screen → Displays panel (built as a Control Panel page, F-28).
+- **Multi-process Linux Chrome:** works in 3 of 5 runs; when it fails, children report "no connection" after 15 s. Use `trace_process "chromium"` with `trace_buffer true` (in-memory trace, PORTING.md) on a failing run.
+- **Rest of the routing batch** (several inputs, virtual devices, mic processing, mute/push-to-talk, ducking, presets) and the rest of the gamepad configurator list (layout pictures, Identify/Change player actions, Mapping tab, quiet mode).
+- **Wi-Fi:** waiting for the maintainer's `lkpictl wifi-stats` numbers (now with chip-reset reasons); the two receive copies per frame are unchanged.
+- **Harness:** the renga-raw profile's default timeout is now 2700 s (crashlog_test's last boot was cut off at 1800 s); media_latency low-latency checks fail in QEMU under the full renga-raw load (timing; pre-existing class).
+- Node crash attempt under build load: still not tried.
