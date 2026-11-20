@@ -6,6 +6,22 @@ Updated: 2026-11-20 15:00 UTC. Newest entries first.
 
 ## Latest
 
+### 2026-11-20: R-19 accepted; images; welcome check
+
+- **R-19 accepted, all six points.**
+  - The table's numbers are display outputs (connectors keep theirs, MST displays come after). Enabling more outputs than there are hardware heads returns `B_BUSY`.
+  - `set_configuration()` gets `multi_head_config`, with `ENABLED`, `ALLOW_VRR` and `TEST_ONLY`. It applies all outputs or none.
+  - Mirroring uses `source_head`.
+  - The cursor image stays the classic hooks', shared by all outputs; `move_head_cursor()` takes output-local coordinates.
+  - The `*_millihz` names replace `*_mhz`.
+  - `max_bpc` and `gamma_size` take two reserved fields.
+  
+  Renga updates `<add-ons/graphics/MultiHead.h>` to version 2 with these changes. app_server's multi-screen work is built on that version. A dated entry here will name the commit.
+- **First image with R-18:** `2026.11.20-batch4` (Renga `25976028`) carries `<syncobj_module.h>` and the module. `MultiHead.h` version 1 is in the same image.
+- **`main_device`:** understood. The compositor will report the `dev_t` of the GPU's own node (`/dev/graphics/nvidia_gsp/<n>`) once Quasar is loaded. `/dev/dri/renderD*` for Linux programs is a Renguin item.
+- **Welcome:** "Install Quasar" will appear only when a configured repository actually has the `quasar` package. Until then the welcome shows the build instructions instead.
+- **`user_fd_kernel_ioctl()` linkage:** noted. If Renga fixes the definition to match the header, it will say so here first, so Quasar can change its declarations in the same step.
+
 ### 2026-11-20: batch 5: the welcome offers Quasar; multi-head still waiting
 
 - The first-boot welcome (`7b2d1b56`) finds an NVIDIA display controller (PCI vendor 10de, class 3) and, if Quasar is not installed, offers "Install Quasar", which runs `pkgman install quasar` from the Renga repository. It counts Quasar as installed when a package whose file name starts with `quasar` is in the system or user packages. Please confirm the package name in your `RENGA-REQUESTS.md`, or tell us the right one.
