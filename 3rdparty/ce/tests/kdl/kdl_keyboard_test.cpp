@@ -28,6 +28,7 @@
 #include "HIDReport.h"
 #include "HIDReportItem.h"
 #include "KeyboardDebugLayout.h"
+#include "HidrawPolicy.h"
 
 #include <usb/USB_hid.h>
 
@@ -118,6 +119,38 @@ static const uint8 kMediaKeys[] = {
 };
 
 
+// batch 11: a gamepad report (Game Pad: buttons and two axes)
+static const uint8 kGamepad[] = {
+	0x05, 0x01, 0x09, 0x05, 0xa1, 0x01,
+	0x05, 0x09, 0x19, 0x01, 0x29, 0x08, 0x15, 0x00, 0x25, 0x01,
+	0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+	0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x81, 0x25, 0x7f,
+	0x75, 0x08, 0x95, 0x02, 0x81, 0x02,
+	0xc0
+};
+
+// A vendor-defined collection only (a pad before its handshake, or a
+// keyboard dongle's configuration interface)
+static const uint8 kVendorOnly[] = {
+	0x06, 0x00, 0xff, 0x09, 0x01, 0xa1, 0x01,
+	0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x20,
+	0x09, 0x01, 0x81, 0x02, 0x09, 0x01, 0x91, 0x02,
+	0xc0
+};
+
+// A dongle's second interface: media keys next to a vendor collection
+static const uint8 kMediaAndVendor[] = {
+	0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x02,
+	0x15, 0x00, 0x26, 0xff, 0x03, 0x19, 0x00, 0x2a, 0xff, 0x03,
+	0x75, 0x10, 0x95, 0x01, 0x81, 0x00,
+	0xc0,
+	0x06, 0x00, 0xff, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x05,
+	0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x10,
+	0x09, 0x01, 0x81, 0x02,
+	0xc0
+};
+
+
 struct Parsed {
 	HIDParser parser;
 	usb_kdl_keyboard_layout layout;
@@ -180,6 +213,31 @@ int
 main()
 {
 	uint8 boot[2 + USB_KDL_MAX_KEYS];
+
+	// batch 11: hidraw never takes an 8BitDo (0x2dc8) keyboard's
+	// interfaces; pads by usage, vendor-only interfaces by vendor
+	{
+		Parsed keyboard(kBootKeyboard, sizeof(kBootKeyboard));
+		Parsed withMedia(kReportIdKeyboard, sizeof(kReportIdKeyboard));
+		Parsed media(kMediaAndVendor, sizeof(kMediaAndVendor));
+		Parsed pad(kGamepad, sizeof(kGamepad));
+		Parsed vendor(kVendorOnly, sizeof(kVendorOnly));
+		bool keyboardRaw = hidraw_policy_allows(keyboard.parser, 0x2dc8);
+		bool withMediaRaw = hidraw_policy_allows(withMedia.parser, 0x2dc8);
+		bool mediaRaw = hidraw_policy_allows(media.parser, 0x2dc8);
+		bool padRaw = hidraw_policy_allows(pad.parser, 0x1234);
+		bool vendorRaw = hidraw_policy_allows(vendor.parser, 0x2dc8);
+		bool otherVendorRaw = hidraw_policy_allows(vendor.parser, 0x1234);
+		report("hidraw_8bitdo_keyboard", !keyboardRaw && !withMediaRaw
+				&& !mediaRaw && padRaw && vendorRaw && !otherVendorRaw
+				&& keyboard.layout.score > 0,
+			"0x2dc8 boot keyboard %d, keyboard with media keys %d, media "
+			"and vendor interface %d (all want 0); a game pad %d, a "
+			"vendor-only 0x2dc8 interface %d (want 1), another vendor's "
+			"%d (want 0); the keyboard stays usable (score %d)",
+			keyboardRaw, withMediaRaw, mediaRaw, padRaw, vendorRaw,
+			otherVendorRaw, (int)keyboard.layout.score);
+	}
 
 	{
 		Parsed keyboard(kBootKeyboard, sizeof(kBootKeyboard));

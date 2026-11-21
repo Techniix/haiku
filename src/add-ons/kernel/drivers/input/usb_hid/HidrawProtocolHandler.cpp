@@ -26,6 +26,7 @@
 #include "HIDDevice.h"
 #include "HIDParser.h"
 #include "GamepadEvdevBridge.h"
+#include "HidrawPolicy.h"
 
 #include <errno.h>
 #include <new>
@@ -73,8 +74,11 @@ HidrawProtocolHandler::HidrawProtocolHandler(HIDDevice& device,
 	}
 	memcpy(fDescriptor, descriptor, descriptorLength);
 	fDescriptorLength = descriptorLength;
+	// batch 11: read on first use, not while usb_hid attaches the device
+	// (string requests can take seconds on devices that do not answer
+	// them, and they ran for every interface a hidraw node was made for)
 	memset(&fIdentity, 0, sizeof(fIdentity));
-	gamepad_hid_get_identity(&device, fIdentity);
+	fIdentityRead = false;
 	fStatus = B_OK;
 }
 
@@ -101,52 +105,8 @@ HidrawProtocolHandler::IsAllowed(HIDDevice& device, uint16 vendor)
 			return false;
 	}
 
-	HIDCollection* root = device.Parser().RootCollection();
-	if (root == NULL)
-		return false;
-
-	bool gameController = false;
-	uint32 count = root->CountChildrenFlat(COLLECTION_APPLICATION);
-	for (uint32 i = 0; i < count; i++) {
-		HIDCollection* collection
-			= root->ChildAtFlat(COLLECTION_APPLICATION, i);
-		if (collection == NULL)
-			continue;
-		uint16 page = collection->UsagePage();
-		uint16 usage = collection->UsageID();
-		if (page == B_HID_USAGE_PAGE_GENERIC_DESKTOP) {
-			switch (usage) {
-				case B_HID_UID_GD_JOYSTICK:
-				case B_HID_UID_GD_GAMEPAD:
-				case B_HID_UID_GD_MULTIAXIS:
-					gameController = true;
-					break;
-				case B_HID_UID_GD_KEYBOARD:
-				case B_HID_UID_GD_KEYPAD:
-				case B_HID_UID_GD_MOUSE:
-				case B_HID_UID_GD_POINTER:
-					// never: raw reports would show typing and pointing
-					return false;
-			}
-		} else if (page == B_HID_USAGE_PAGE_DIGITIZER)
-			return false;
-	}
-
-	if (gameController)
-		return true;
-
-	// Pads that only describe vendor collections (some Nintendo and Sony
-	// modes, 8BitDo in Switch mode before its handshake): allowed by vendor.
-	switch (vendor) {
-		case 0x054c:	// Sony
-		case 0x057e:	// Nintendo
-		case 0x0f0d:	// Hori
-		case 0x20d6:	// PowerA
-		case 0x28de:	// Valve
-		case 0x2dc8:	// 8BitDo
-			return true;
-	}
-	return false;
+	// batch 11: the policy is shared with the harness (HidrawPolicy.h)
+	return hidraw_policy_allows(device.Parser(), vendor);
 }
 
 
@@ -421,6 +381,10 @@ HidrawProtocolHandler::Control(uint32* cookie, uint32 op, void* buffer,
 	if (fHIDDevice.IsRemoved())
 		return ENODEV;
 
+	if (!fIdentityRead) {
+		gamepad_hid_get_identity(&fHIDDevice, fIdentity);
+		fIdentityRead = true;
+	}
 	const gamepad_hid_identity& identity = fIdentity;
 
 	uint32 size = _LINUX_IOC_SIZE(op);

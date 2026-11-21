@@ -78,6 +78,7 @@ private:
 			ConditionVariable	fReadable;
 			selectsync*			fReadSync;
 			gamepad_hid_identity fIdentity;
+			bool				fIdentityRead;
 				// read once when the node is made (batch 5): the
 				// HIDIOCGRAW* ioctls asked the device for its strings
 				// every time, and a device that does not answer string
