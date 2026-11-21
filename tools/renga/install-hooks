@@ -1,0 +1,43 @@
+#!/bin/sh
+# install-hooks: install the Renga git hooks into this clone.
+#
+# Usage: tools/renga/install-hooks [--uninstall]
+#
+# Writes .git/hooks/pre-push as a two-line wrapper that runs
+# tools/renga/hooks/pre-push from the checked-out tree, so the hook always
+# follows the branch's own version. An existing pre-push hook that is not
+# Renga's is kept as pre-push.local and not replaced silently.
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+hooks=$(git rev-parse --git-path hooks)
+mkdir -p "$hooks"
+target=$hooks/pre-push
+marker="# renga-hook"
+
+case ${1:-} in
+-h|--help) renga_usage; exit 0 ;;
+--uninstall)
+	if [ -f "$target" ] && grep -q "$marker" "$target"; then
+		rm -f "$target"
+		echo "install-hooks: removed $target"
+	fi
+	exit 0 ;;
+'') ;;
+*) renga_die "unknown option $1 (see --help)" ;;
+esac
+
+if [ -f "$target" ] && ! grep -q "$marker" "$target"; then
+	mv "$target" "$target.local"
+	echo "install-hooks: kept the existing hook as $target.local (not run by Renga's)"
+fi
+cat > "$target" <<HOOK
+#!/bin/sh
+$marker: runs the tree's tools/renga/hooks/pre-push (tools/renga/install-hooks)
+hook="\$(git rev-parse --show-toplevel)/tools/renga/hooks/pre-push"
+[ -x "\$hook" ] || exit 0
+exec "\$hook" "\$@"
+HOOK
+chmod +x "$target"
+echo "install-hooks: installed $target"

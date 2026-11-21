@@ -1,0 +1,38 @@
+#!/bin/sh
+# pre-push hook: runs tools/renga/renga-guard against origin/ce/main for
+# every branch being pushed. Installed by tools/renga/install-hooks.
+#
+# Git passes "<local ref> <local sha> <remote ref> <remote sha>" lines on
+# standard input. Deletions and tags are skipped. Each pushed commit is
+# checked as it will arrive: committed changes only, compared with
+# origin/ce/main (renga-guard --head <sha>).
+#
+# When the architect approved a protected-path change for a local push:
+#   RENGA_ARCHITECT_APPROVED=yes git push ...
+# Bypassing the hook entirely (git push --no-verify) is possible; the PR
+# check on GitHub runs the same guard on the PR description.
+set -eu
+
+case ${1:-} in
+-h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+root=$(git rev-parse --show-toplevel)
+guard=$root/tools/renga/renga-guard
+[ -x "$guard" ] || exit 0          # a branch from before tools/renga existed
+
+git rev-parse -q --verify origin/ce/main >/dev/null || {
+	echo "pre-push: origin/ce/main unknown; run: git fetch origin ce/main" >&2
+	exit 1
+}
+
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref _remote_sha; do
+	[ "$local_sha" = "$zero" ] && continue
+	case $remote_ref in refs/heads/*) ;; *) continue ;; esac
+	echo "pre-push: renga-guard for $local_ref -> $remote_ref"
+	"$guard" --head "$local_sha" origin/ce/main || status=1
+done
+[ $status = 0 ] || echo "pre-push: blocked by renga-guard (see above)" >&2
+exit $status

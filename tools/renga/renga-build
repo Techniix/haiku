@@ -1,0 +1,108 @@
+#!/bin/sh
+# renga-build: configure the tree if needed, then build with jam.
+#
+# Usage: tools/renga/renga-build [options] [<jam target> ...]
+#
+#   (no target)           build the renga-raw image (@renga-raw)
+#   <jam target> ...      build those targets, e.g. HaikuDepot, libbe.so
+#   --image <profile>     build the image of a build profile, e.g.
+#                         renga-anyboot, renga-raw, minimum-raw (profiles:
+#                         3rdparty/ce/build/RengaBuildProfiles)
+#   --configure-only      configure (and build jam if missing), then stop
+#   --reconfigure         run configure again even if the tree is configured
+#   --buildtools <dir>    Haiku buildtools checkout (default: ../buildtools,
+#                         next to this tree, or RENGA_BUILDTOOLS)
+#   -j <n>                jobs (default: all CPUs)
+#
+# What it runs, per ReadMe.Compiling.md and 3rdparty/ce/README.md:
+#
+#   # once, if jam is not on PATH (installs to ~/bin):
+#   cd <buildtools>/jam && make && ./jam0 -sBINDIR=$HOME/bin install
+#   # once, if <output>/build/BuildConfig does not exist (cross-tools: 1-2 h):
+#   cd generated.x86_64 && ../configure --cross-tools-source <buildtools> \
+#       --build-cross-tools x86_64 -j<n>
+#   # every time:
+#   cd generated.x86_64 && jam -q -j<n> -sHAIKU_INCLUDE_3RDPARTY=1 <targets>
+#
+# The output directory is generated.x86_64 (HAIKU_OUTPUT_DIR overrides it).
+# Images handed to the maintainer come from tools/renga/renga-image, which
+# builds from a clean tree only; this script builds whatever is checked out.
+# The full jam output goes to <output>/renga-build.log; the terminal gets
+# the last lines on failure.
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+jobs=$(nproc 2>/dev/null || echo 2)
+buildtools=${RENGA_BUILDTOOLS:-$(dirname "$renga_root")/buildtools}
+configure_only=no
+reconfigure=no
+targets=
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h|--help) renga_usage; exit 0 ;;
+	--image) [ $# -ge 2 ] || renga_die "--image needs a profile"; targets="$targets @$2"; shift ;;
+	--configure-only) configure_only=yes ;;
+	--reconfigure) reconfigure=yes ;;
+	--buildtools) [ $# -ge 2 ] || renga_die "--buildtools needs a directory"; buildtools=$2; shift ;;
+	-j) [ $# -ge 2 ] || renga_die "-j needs a number"; jobs=$2; shift ;;
+	-j*) jobs=${1#-j} ;;
+	-*) renga_die "unknown option $1 (see --help)" ;;
+	*) targets="$targets $1" ;;
+	esac
+	shift
+done
+[ -n "$targets" ] || targets=@renga-raw
+
+mkdir -p "$RENGA_OUTPUT"
+log=$RENGA_OUTPUT/renga-build.log
+: > "$log"
+
+run_logged() {
+	# Runs "$@" with its output in the log; on failure shows the end.
+	echo "+ $*" >> "$log"
+	if ! "$@" >> "$log" 2>&1; then
+		echo "renga-build: failed: $*" >&2
+		echo "renga-build: last lines of $log:" >&2
+		tail -n 25 "$log" >&2
+		exit 1
+	fi
+}
+
+# 1. jam (ReadMe.Compiling.md, "Building Jam").
+if ! command -v jam >/dev/null 2>&1; then
+	[ -d "$buildtools/jam" ] || renga_die "jam is not installed and $buildtools/jam does not exist.
+  Clone the build tools next to this tree first (ReadMe.Compiling.md):
+    git clone https://review.haiku-os.org/buildtools.git $buildtools"
+	echo "renga-build: building jam into \$HOME/bin"
+	mkdir -p "$HOME/bin"
+	(cd "$buildtools/jam" && run_logged make && run_logged ./jam0 "-sBINDIR=$HOME/bin" install)
+	PATH=$HOME/bin:$PATH
+	export PATH
+	command -v jam >/dev/null 2>&1 || renga_die "jam was built but is not on PATH; add \$HOME/bin to PATH"
+fi
+
+# 2. configure (ReadMe.Compiling.md, "Configure an x86_64 (GCC 8) build").
+if [ $reconfigure = yes ] || [ ! -f "$RENGA_OUTPUT/build/BuildConfig" ]; then
+	[ -d "$buildtools" ] || renga_die "no buildtools at $buildtools (see --help)"
+	buildtools=$(cd "$buildtools" && pwd)
+	echo "renga-build: configuring $RENGA_OUTPUT (cross-tools; the first time takes 1-2 hours)"
+	(cd "$RENGA_OUTPUT" && run_logged "$renga_root/configure" \
+		--cross-tools-source "$buildtools" --build-cross-tools x86_64 "-j$jobs")
+else
+	echo "renga-build: already configured ($RENGA_OUTPUT/build/BuildConfig)"
+fi
+[ $configure_only = yes ] && exit 0
+
+# 3. jam (3rdparty/ce/README.md, "Renga images"; build-handover-image).
+echo "renga-build: jam -q -j$jobs -sHAIKU_INCLUDE_3RDPARTY=1$targets (log: $log)"
+start=$(date +%s)
+# shellcheck disable=SC2086
+(cd "$RENGA_OUTPUT" && run_logged jam -q "-j$jobs" -sHAIKU_INCLUDE_3RDPARTY=1 $targets)
+echo "renga-build: done in $(( $(date +%s) - start )) s"
+for t in $targets; do
+	case $t in
+	@*) sed -n "s/^[[:space:]]*DefineBuildProfile ${t#@} : [a-z-]* : \"\(.*\)\" ;$/  image: $RENGA_OUTPUT\/\1/p" \
+		3rdparty/ce/build/RengaBuildProfiles ;;
+	esac
+done

@@ -1,0 +1,111 @@
+#!/bin/sh
+# renga-summary: a short report of one harness run or one gate.
+#
+# Usage: tools/renga/renga-summary [<results dir> | <gate dir> | latest]
+#
+# With no argument (or "latest") it reads the newest run,
+# <output>/ce-test-results/latest. A run directory is read from its
+# results.json (summary.md if that is missing); a ce-gates directory
+# (<output>/ce-gates/<key>/) is read from its summary.txt.
+#
+# Prints at most about 40 lines: the configuration, the verdict, the check
+# counts, every failing check with one line of detail (known-flaky ones
+# marked, from KNOWN_FLAKY in ce-gates.sh), run problems (panics, stalls,
+# missing programs) and test programs with a non-zero exit status. This is
+# what to hand to a Claude session instead of the logs.
+#
+# Exit status: 0 if the run passed (or a partial run's selection passed),
+# 1 if it failed, 2 if there is nothing to read.
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+case ${1:-latest} in
+-h|--help) renga_usage; exit 0 ;;
+latest) dir=$RENGA_RESULTS/latest ;;
+*) dir=$1 ;;
+esac
+[ -d "$dir" ] || { echo "renga-summary: no results directory $dir" >&2; exit 2; }
+dir=$(readlink -f "$dir")
+
+# A gate directory: its summary.txt already is the short form.
+if [ -f "$dir/summary.txt" ] && [ ! -f "$dir/summary.md" ]; then
+	echo "gate $(basename "$dir"): $(cat "$dir/label" 2>/dev/null || echo '?')"
+	head -n 30 "$dir/summary.txt"
+	if grep -q 'FAILED\|not run' "$dir/summary.txt"; then exit 1; fi
+	exit 0
+fi
+
+flaky=$(sed -n "s/^KNOWN_FLAKY='\(.*\)'$/\1/p" 3rdparty/ce/harness/ce-gates.sh 2>/dev/null || true)
+
+if [ -f "$dir/results.json" ]; then
+	python3 - "$dir" "$flaky" <<'EOF'
+import json, os, re, sys
+
+directory, flaky = sys.argv[1], sys.argv[2]
+flaky_re = re.compile("^(%s)" % flaky) if flaky else None
+with open(os.path.join(directory, "results.json")) as f:
+	data = json.load(f)
+
+def short(text, width=150):
+	text = " ".join(str(text).split())
+	return text if len(text) <= width else text[:width - 3] + "..."
+
+lines = []
+verdict = data.get("verdict", {})
+partial = verdict.get("partial")
+passed = verdict.get("selection_passed") if partial else verdict.get("pass")
+word = ("PARTIAL, selection " + ("passed" if passed else "FAILED")) if partial \
+	else ("PASS" if passed else "FAIL")
+lines.append("run %s: %s, %s firmware, %s %s" % (os.path.basename(directory),
+	data.get("profile", "?"), data.get("firmware", "?"),
+	data.get("disk_bus", "?"), data.get("media", "?")))
+if partial:
+	lines.append("selection: " + short(", ".join(data.get("selected_tests") or []), 200))
+lines.append("verdict: %s (%s checks, %s failed)" % (word,
+	verdict.get("checks", "?"), verdict.get("failed", "?")))
+
+build = data.get("build") or {}
+for key in ("compile", "image"):
+	status = build.get(key + "_status")
+	if status not in (0, None):
+		lines.append("build %s: status %s (see build.log)" % (key, status))
+
+for problem in data.get("problems") or []:
+	lines.append("problem: " + short(problem))
+
+failed = [c for c in (data.get("tests") or []) + (data.get("host_checks") or [])
+	if not c.get("pass")]
+if failed:
+	lines.append("failed checks:")
+	for check in failed:
+		mark = " [known flaky]" if flaky_re and flaky_re.match(check.get("name", "")) else ""
+		lines.append("  %s%s: %s" % (check.get("name"), mark, short(check.get("detail", ""), 130)))
+
+for t in (data.get("timing") or {}).get("tests") or []:
+	if t.get("status") not in (0, None):
+		lines.append("program %s exited %s after %ss" % (t.get("test"), t.get("status"), t.get("seconds")))
+
+if os.path.exists(os.path.join(directory, "kdl.log")):
+	lines.append("kernel debugger session: kdl.log (summary.md shows its start)")
+
+limit = 40
+if len(lines) > limit:
+	extra = len(lines) - (limit - 1)
+	lines = lines[:limit - 1] + ["... %d more lines; see %s/summary.md" % (extra, directory)]
+print("\n".join(lines))
+sys.exit(0 if passed else 1)
+EOF
+	exit $?
+fi
+
+if [ -f "$dir/summary.md" ]; then
+	echo "run $(basename "$dir") (no results.json; from summary.md)"
+	grep -m1 '^\*\*Verdict' "$dir/summary.md" | cut -c1-200
+	grep '| \*\*FAIL\*\*' "$dir/summary.md" | head -n 35 | cut -c1-180
+	grep -q -m1 -e '^\*\*Verdict: PASS\*\*' -e '^\*\*Verdict: PARTIAL, selection passed\*\*' \
+		"$dir/summary.md" && exit 0
+	exit 1
+fi
+echo "renga-summary: $dir has neither results.json nor summary.md" >&2
+exit 2
