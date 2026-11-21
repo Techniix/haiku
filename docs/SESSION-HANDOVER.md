@@ -154,4 +154,9 @@ Batch 9 ended 2026-11-21 with image `2026.11.21-batch9`; the roadmap's batch-9 s
 
 ## Batch 10: continue from here
 
-Batch 10 (Renguin, F-27) in progress (2026-11-21). Committed: `d7aa83f6` (POSIX timers, System V IPC, abstract Unix names, vDSO, shared futexes, xattrs, evdev, nice, multi-process Chrome check, ladder), `9469f615` (Open with, badge, AppImages, GTK/Qt colours, Renguin Manager tabs), `ac68dc57` (vDSO commpage fix, Open with launchers). Per-piece runs: renguin 0 failures (renga-raw), with --linux-chromium chrome multi 5 of 5 and ladder rungs 1-3 pass; renguin_manager 0 failures; linux_apps 2 open failures (Tracker's Open with list: registrar B_NAME_NOT_FOUND on SetSupportedTypes; AppImage double-click through the roster). Sweep: default 1375, `--smp 2` 1375, `--firmware uefi` 1371 checks, all pass (ac68dc57); renga-raw stalled in linux_apps_test (fixed in `9bef8ad6`), re-run in progress. Next: the image `build/2026.11.21-batch10`, roadmap batch-10 status.
+Batch 10 ended 2026-11-21 with image `2026.11.21-batch10` (Renga `139bba14`); the roadmap's batch-10 status lists what landed. Continue with:
+
+- **Open from batch 10:** Tracker's Open with list (the registrar answers B_NAME_NOT_FOUND to SetSupportedTypes for the launcher signatures, `linux_apps.open_with`); AppImage double-click through the roster (`linux_apps.appimage`; running linux-apps on the file works); why a native cat spun in full renga-raw runs (seen three times, never alone); IPv4-mapped IPv6 (dual-stack lookups in TCP/UDP); ptrace; V4L2; sysfs/udev enumeration for SDL; Debian/Arch roots (the module's root path is fixed); Flatpak (namespaces); Wine from the Alpine root on real hardware; badge on the window tab and window list.
+- **Harness:** renga-raw hit the 2700 s guest timeout before crashlog_test finished (4 checks); sound_settings.output_device_menu and media_latency.device_continuous failed once (no media code changed).
+- This session's result directories: 20261121-042301 onward (images removed).
+
