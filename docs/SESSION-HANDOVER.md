@@ -141,3 +141,7 @@ Batch 8 ended 2026-11-20 with image `2026.11.20-batch8`; the roadmap's batch-8 s
 - **HaikuWebKit on the Linux host:** configures with Renga's cross-tools (CMake toolchain file, a sysroot from `haiku`/`haiku_devel` plus the recipe's HaikuPorts packages); single files can be compile-checked; a full build is 5-7 hours on 2 cores (F-57).
 - **Harness:** the screen saver's timer is now off during runs (`b293b908`); `snap.s3_snap_drop` was racy (fixed in `74b3b0e8`). This session left its own result directories from 20261120-185437 on; the older ones are earlier sessions'.
 - **Next batch:** 9, Tracker and Deskbar (review first; start-button designs to the maintainer before implementing).
+
+## Batch 9: continue from here
+
+Batch 9 (Tracker and Deskbar, maintainer 2026-11-20) is in progress. Landed so far: Deskbar menu search with calculator and unit conversion, "Restart into", per-application recent documents (`02de5116`, suite `deskbar`). Next in the batch: the F-60 review with measurements, Tracker (F-66) pieces by value and size, start-button design options (designs only), then the four-way sweep and the image `build/2026.11.21-batch9`. This section is updated as pieces land.
