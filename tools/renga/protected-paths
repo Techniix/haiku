@@ -41,3 +41,9 @@ build/jam/
 
 # Roadmap decision entries
 RENGA_MASTER_ROADMAP.md#decisions
+
+# The guard itself, its data and the CI checks (architect review, 2026-11-21):
+# a branch must not be able to loosen its own gates.
+tools/renga/
+.github/workflows/
+CLAUDE.md

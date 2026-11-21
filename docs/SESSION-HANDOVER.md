@@ -108,4 +108,14 @@ Open, not started in batch 12: Linux Chrome leftovers (SIGBUS when a mapped shar
 
 Known test state (QEMU Tested, partial runs): `large_font` passes for Control Panel pages except `control_panel_renguin` (Renguin fix uncommitted) and one `control_panel_time` run without a report (not reproduced); `renguin_manager` window too big until the uncommitted fix lands. `linux_apps.appimage` fails as in batch 11. This session's result directories: 20261121-163726 onward (raw captures removed).
 
+Hardware results on the batch 11 image (maintainer, 2026-11-21 evening), first in the next session's queue:
+- Confirmed working: `apk add chromium` ends "OK" (hard links as copies); the Linux shell runs as `user`; Linux Chromium content fills its window and follows resize (`238208d5`).
+- Open, Linux windows and Chromium:
+  1. Plain `chromium` as the normal user dies in the sandbox (`sandbox/linux/services/credentials.cc:131 Check failed: Function not implemented`): the batch 11 flags (`/etc/chromium/renguin.conf`) are not read by Alpine's launcher. Write them where the launcher reads them; add a test that starts plain `chromium`.
+  2. Without `--single-process`, Chromium exits silently with no window (zygote and GPU process, error 1002).
+  3. As the normal user, Chromium reaches the session bus but its calls time out ("Did not receive a reply"); `/run/dbus/system_bus_socket` is missing.
+  4. Linux windows lack Renga's title bar and borders: add xdg-decoration (server-side) to the compositor (F-27 "First-class Linux windows").
+  5. Linux programs installed with apk do not appear in Deskbar > Applications until login or a Renguin Manager refresh: refresh automatically after apk changes.
+  6. Running Linux programs do not appear in the Deskbar task list (all windows belong to the compositor's team): give each Linux client its own Deskbar entry and icon.
+
 Next steps: finish the Renguin Manager items above, commit; build and test Renga Depot's first part; then the four-way sweep and the image `build/<date>-batch12` (build.txt starts with `iso: renga-<name>-anyboot.iso`).
