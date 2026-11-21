@@ -49,6 +49,7 @@
 #include <Path.h>
 #include <TranslatorRoster.h>
 
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -278,7 +279,24 @@ main()
 		"badge in the lower right %d, rest unchanged %d", lowerDiffers,
 		upperSame);
 
-	// AppImages
+	// AppImages. In full renga-raw runs (not alone) the test stalled here
+	// twice with its thread running (batch 10, not yet understood); a
+	// watchdog reports that as this check's failure and ends the test, so
+	// the suites after it still run.
+	static volatile bool sAppImageDone = false;
+	pthread_t watchdog;
+	pthread_create(&watchdog, NULL, [](void*) -> void* {
+		for (int i = 0; i < 1200 && !sAppImageDone; i++)
+			snooze(100000);
+		if (!sAppImageDone) {
+			printf("CE-TEST %s.appimage FAIL stalled for 120 s (opening the "
+				"AppImage through the roster)\n", SUITE);
+			printf("CE-SUITE %s DONE failures=%d\n", SUITE, sFailures + 1);
+			fflush(stdout);
+			_exit(1);
+		}
+		return NULL;
+	}, NULL);
 	std::string fake = "/tmp/ce-test.AppImage";
 	run(("cp /boot/system/non-packaged/data/renguin-tests/appimage-fake '"
 		+ fake + "' && chmod -x '" + fake + "'").c_str());
@@ -322,6 +340,8 @@ main()
 		"type %s, preferred %s, open %s, ran [%s]%s",
 		guessed.Type() != NULL ? guessed.Type() : "?", preferred,
 		strerror(opened), ran.c_str(), direct.c_str());
+	sAppImageDone = true;
+	pthread_join(watchdog, NULL);
 	unlink(fake.c_str());
 	unlink("/tmp/ce-appimage-ran");
 
