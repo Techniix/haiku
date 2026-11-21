@@ -1588,6 +1588,13 @@ header directory; nothing to link.
 - `<linux/joystick.h>` (2026-11-14) has the classic `js` API's
   definitions so Linux code that supports both compiles; Renga has no
   `/dev/input/js*` nodes.
+- **Gamepads as keyboard and mouse** (batch 11, the Gamepads preferences'
+  Mapping tab, off by default): the `<input>gamepad_keys` input_server
+  add-on reads the pads' evdev nodes without grabbing them and sends key
+  and pointer events (marked `be:gamepad_mapping` in key messages). A
+  game that reads the pad directly still sees it; while mapping is on it
+  also gets the mapped keys, so players switch it off (or use a profile
+  per application) for such games. Guide and start held 3 s switch it off.
 - **BJoystick** keeps working: XInput pads also get
   `/dev/joystick/gamepad/<N>`; HID pads keep their `joystick/usb` node.
 - **BGamepad** (`<Gamepad.h>`, libdevice): the standard layout (SDL's

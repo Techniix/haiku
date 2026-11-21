@@ -1,0 +1,13 @@
+SubDir HAIKU_TOP src add-ons input_server devices gamepad_keys ;
+
+# Gamepads as keyboard and mouse (batch 11, roadmap F-42 "Mapping tab"):
+# reads the pads' evdev nodes and sends keys and pointer moves through
+# input_server, so it works in every application, Renguin programs too.
+# Off until switched on in the Gamepads preferences.
+
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
+UsePrivateHeaders input shared ;
+
+Addon <input>gamepad_keys :
+	GamepadKeysDevice.cpp
+	: be input_server shared [ TargetLibsupc++ ] ;

@@ -6,16 +6,16 @@ SubDir HAIKU_TOP src preferences gamepads ;
 # the agent uses the preferences' icon for its notifications.
 
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
-UsePrivateHeaders device ;
+UsePrivateHeaders device interface shared ;
 
 Application Gamepads :
 	Gamepads.cpp
 	: be device [ TargetLibstdc++ ]
-	: Gamepads.rdef GamepadsIcon.rdef
+	: Gamepads.rdef GamepadsIcon.rdef GamepadLayouts.rdef
 ;
 
 Application gamepad_agent :
 	GamepadAgent.cpp
 	: be device [ TargetLibstdc++ ]
-	: GamepadAgent.rdef GamepadsIcon.rdef
+	: GamepadAgent.rdef GamepadsIcon.rdef GamepadLayouts.rdef
 ;

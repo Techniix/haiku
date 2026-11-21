@@ -25,6 +25,7 @@
 
 #include <AppFileInfo.h>
 #include <Application.h>
+#include <Autolock.h>
 #include <Bitmap.h>
 #include <File.h>
 #include <FindDirectory.h>
@@ -32,7 +33,10 @@
 #include <Messenger.h>
 #include <OS.h>
 #include <Path.h>
+#include <Resources.h>
 #include <Roster.h>
+#include <Screen.h>
+#include <Window.h>
 #include <String.h>
 
 #include <Gamepad.h>
@@ -554,6 +558,381 @@ test_learn()
 }
 
 
+// #pragma mark - configurator polish (batch 11)
+
+
+static void
+screenshot(const char* name)
+{
+	printf("CE-HOST screenshot %s\n", name);
+	fflush(stdout);
+	snooze(1500000);
+}
+
+
+static int
+create_named_pad(const char* name, uint16 vendor, uint16 product)
+{
+	int fd = open("/dev/input/uinput", O_RDWR | O_NONBLOCK);
+	if (fd < 0)
+		return -1;
+	ioctl(fd, UI_SET_EVBIT, (void*)(addr_t)EV_KEY);
+	ioctl(fd, UI_SET_EVBIT, (void*)(addr_t)EV_FF);
+	ioctl(fd, UI_SET_FFBIT, (void*)(addr_t)FF_RUMBLE);
+	static const int kKeys[] = { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_MODE,
+		BTN_START, BTN_SELECT };
+	for (size_t i = 0; i < sizeof(kKeys) / sizeof(kKeys[0]); i++)
+		ioctl(fd, UI_SET_KEYBIT, (void*)(addr_t)kKeys[i]);
+	struct uinput_setup setup;
+	memset(&setup, 0, sizeof(setup));
+	setup.id.bustype = BUS_USB;
+	setup.id.vendor = vendor;
+	setup.id.product = product;
+	setup.ff_effects_max = 4;
+	strlcpy(setup.name, name, sizeof(setup.name));
+	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+
+/*!	A window covering the whole screen, in front: what a full-screen game
+	looks like to the quiet mode.
+*/
+class FullScreenWindow : public BWindow {
+public:
+	FullScreenWindow()
+		:
+		BWindow(BScreen().Frame(), "Full-screen test", B_NO_BORDER_WINDOW_LOOK,
+			B_NORMAL_WINDOW_FEEL, 0)
+	{
+	}
+};
+
+
+static void
+test_polish()
+{
+	// layout families: by vendor and name, with the family's face labels
+	struct {
+		const char*	name;
+		uint16		vendor;
+		uint16		product;
+		const char*	expected;
+	} kPads[] = {
+		{ "Polish X pad", 0x045e, 0x0b12, "offset A B X Y" },
+		{ "Polish P pad", 0x054c, 0x0ce6, "symmetric" },
+		{ "Polish N pad", 0x057e, 0x2009, "nintendo B A Y X" },
+		{ "Polish SN30 pad", 0x1209, 0x7001, "retro" },
+		{ "Polish arcade fight stick", 0x1209, 0x7002, "arcade" },
+		{ "Polish plain pad", 0x1209, 0x7003, "generic 1 2 3 4" },
+	};
+	BString families;
+	int correct = 0;
+	const int padCount = sizeof(kPads) / sizeof(kPads[0]);
+	for (int i = 0; i < padCount; i++) {
+		int fd = create_named_pad(kPads[i].name, kPads[i].vendor,
+			kPads[i].product);
+		BString path = find_pad_path(kPads[i].name);
+		BString family = path.IsEmpty() ? BString("(no device)")
+			: run((BString("--family ") << path).String());
+		if (family.StartsWith(kPads[i].expected))
+			correct++;
+		families << (i > 0 ? "; " : "") << kPads[i].name << ": " << family;
+		if (fd >= 0)
+			close(fd);
+		snooze(300000);
+	}
+	report("layout_families", correct == padCount, "%d of %d right: %s",
+		correct, padCount, families.String());
+
+	// the picture of every family is in the application (and the agent)
+	BFile file(kApp, B_READ_ONLY);
+	BResources resources(&file);
+	int pictures = 0;
+	static const char* kFamilies[] = { "offset", "symmetric", "nintendo",
+		"retro", "generic", "arcade" };
+	for (int i = 0; i < 6; i++) {
+		size_t size = 0;
+		BString name("layout:");
+		name << kFamilies[i];
+		const void* data = resources.LoadResource('VICN', name.String(),
+			&size);
+		BBitmap bitmap(BRect(0, 0, 47, 47), B_RGBA32);
+		if (data != NULL && BIconUtils::GetVectorIcon((const uint8*)data,
+				size, &bitmap) == B_OK) {
+			pictures++;
+		}
+	}
+	report("layout_pictures", pictures == 6, "%d of 6 family pictures "
+		"render", pictures);
+
+	// the agent: notices with the family, quiet in full screen,
+	// "Don't show again"
+	team_id team = -1;
+	if (!be_roster->IsRunning(kAgentSignature)) {
+		const char* arguments[] = { kAgentPath, NULL };
+		thread_id thread = load_image(1, arguments, (const char**)environ);
+		if (thread >= 0)
+			resume_thread(thread);
+		thread_info info;
+		if (thread >= 0 && get_thread_info(thread, &info) == B_OK)
+			team = info.team;
+		snooze(2000000);
+	}
+
+	off_t before = syslog_size();
+	int pad = create_named_pad("Polish notice pad", 0x054c, 0x0ce6);
+	snooze(2500000);
+	std::string log = syslog_since(before);
+	report("notice_family", log.find("notification \"Polish notice pad "
+			"connected\"") != std::string::npos
+			&& log.find("symmetric layout") != std::string::npos,
+		"the notice names the layout: %s", log.find("symmetric layout")
+			!= std::string::npos ? "yes" : "no");
+
+	// Identify: rumbles and runs through the player numbers, then shows
+	// the pad's own number again
+	BString path = find_pad_path("Polish notice pad");
+	BGamepad gamepad;
+	int32 playerBefore = gamepad.Open(path.String()) == B_OK
+		? gamepad.Player() : -1;
+	bigtime_t start = system_time();
+	BString identified = run((BString("--identify ") << path).String());
+	bigtime_t took = system_time() - start;
+	gamepad.Close();
+	int32 playerAfter = gamepad.Open(path.String()) == B_OK
+		? gamepad.Player() : -1;
+	report("identify", identified.IsEmpty() && took > 800000
+			&& playerAfter == (playerBefore > 0 ? playerBefore : 1),
+		"output \"%s\", %.1f s, player %d before, %d after",
+		identified.String(), took / 1e6, (int)playerBefore,
+		(int)playerAfter);
+	if (pad >= 0)
+		close(pad);
+	snooze(1000000);
+
+	// quiet: a full-screen window in front
+	FullScreenWindow* window = new FullScreenWindow;
+	window->Show();
+	snooze(800000);
+	before = syslog_size();
+	pad = create_named_pad("Polish quiet pad", 0x045e, 0x0b12);
+	snooze(2500000);
+	log = syslog_since(before);
+	bool quiet = log.find("\"Polish quiet pad connected\": quiet (")
+		!= std::string::npos;
+	if (pad >= 0)
+		close(pad);
+	snooze(800000);
+	run("--set quiet_mode off");
+	before = syslog_size();
+	pad = create_named_pad("Polish loud pad", 0x045e, 0x0b12);
+	snooze(2500000);
+	log = syslog_since(before);
+	bool loud = log.find("\"Polish loud pad connected\": Player")
+		!= std::string::npos || log.find("\"Polish loud pad connected\": No")
+		!= std::string::npos;
+	if (pad >= 0)
+		close(pad);
+	run("--set quiet_mode on");
+	window->Lock();
+	window->Quit();
+	report("quiet_mode", quiet && loud, "full screen: %s; with the switch "
+		"off: %s", quiet ? "quiet" : "full notice",
+		loud ? "full notice" : "quiet anyway");
+
+	// "Don't show again for this controller": the connected window's
+	// button, then no notice for that pad
+	pad = create_named_pad("Polish silenced pad", 0x057e, 0x2009);
+	path = find_pad_path("Polish silenced pad");
+	BString command;
+	command << kApp << " --connected " << path << " &";
+	system(command.String());
+	BMessenger connected;
+	BString title;
+	for (int i = 0; i < 40 && title != "Polish silenced pad"; i++) {
+		snooze(250000);
+		BList teams;
+		be_roster->GetAppList(kAppSignature, &teams);
+		for (int32 t = 0; t < teams.CountItems(); t++) {
+			BMessenger app(NULL, (team_id)(addr_t)teams.ItemAt(t));
+			BMessage request(B_GET_PROPERTY);
+			request.AddSpecifier("Title");
+			request.AddSpecifier("Window", (int32)0);
+			BMessage reply;
+			if (app.SendMessage(&request, &reply, 1000000, 1000000) == B_OK
+				&& reply.FindString("result", &title) == B_OK
+				&& title == "Polish silenced pad") {
+				BMessage get(B_GET_PROPERTY);
+				get.AddSpecifier("Messenger");
+				get.AddSpecifier("Window", (int32)0);
+				BMessage answer;
+				if (app.SendMessage(&get, &answer, 1000000, 1000000) == B_OK)
+					answer.FindMessenger("result", &connected);
+				break;
+			}
+		}
+	}
+	screenshot("gamepad_connected");
+	status_t sent = connected.SendMessage('gsil');
+	snooze(1000000);
+	BString silenced = run((BString("--silenced ") << path).String());
+	if (pad >= 0)
+		close(pad);
+	snooze(1000000);
+	before = syslog_size();
+	pad = create_named_pad("Polish silenced pad", 0x057e, 0x2009);
+	snooze(2500000);
+	log = syslog_since(before);
+	bool none = log.find("\"Polish silenced pad connected\": silenced")
+		!= std::string::npos;
+	path = find_pad_path("Polish silenced pad");
+	run((BString("--unsilence ") << path).String());
+	if (pad >= 0)
+		close(pad);
+	report("dont_show_again", title == "Polish silenced pad"
+			&& sent == B_OK && silenced == "yes" && none,
+		"window \"%s\", button %s, silenced %s, next plug-in %s",
+		title.String(), strerror(sent), silenced.String(),
+		none ? "without a notice" : "noticed");
+
+	if (team >= 0)
+		kill_team(team);
+}
+
+
+// #pragma mark - Mapping tab (batch 11)
+
+
+/*!	A window that records the keys it gets: the active window, as a game
+	would be.
+*/
+class KeyWindow : public BWindow {
+public:
+	KeyWindow()
+		:
+		BWindow(BRect(100, 100, 400, 300), "Mapping test",
+			B_TITLED_WINDOW, 0),
+		fView(new KeyView)
+	{
+		AddChild(fView);
+		fView->MakeFocus(true);
+	}
+
+	BString Keys()
+	{
+		BAutolock locker(this);
+		return fView->keys;
+	}
+
+	BPoint Mouse()
+	{
+		BAutolock locker(this);
+		BPoint where;
+		uint32 buttons;
+		fView->GetMouse(&where, &buttons, false);
+		fView->ConvertToScreen(&where);
+		return where;
+	}
+
+private:
+	class KeyView : public BView {
+	public:
+		KeyView()
+			:
+			BView(BRect(0, 0, 300, 200), "keys", B_FOLLOW_ALL, B_WILL_DRAW)
+		{
+		}
+
+		virtual void KeyDown(const char* bytes, int32 count)
+		{
+			int32 key = Window()->CurrentMessage()->GetInt32("key", 0);
+			keys << (keys.IsEmpty() ? "" : " ") << "0x";
+			char hex[8];
+			snprintf(hex, sizeof(hex), "%02" B_PRIx32, key);
+			keys << hex;
+		}
+
+		BString keys;
+	};
+
+	KeyView* fView;
+};
+
+
+static void
+test_mapping()
+{
+	BString off = run("--mapping get");
+	mkdir("/boot/home/config/settings/Gamepads", 0755);
+	FILE* file = fopen("/boot/home/config/settings/Gamepads/key_mapping",
+		"w");
+	if (file != NULL) {
+		fprintf(file, "enabled 1\nbutton a 0x5e\nbutton b 0x47\n"
+			"dpad arrows\nleft_stick none\nright_stick mouse\nspeed 20\n");
+		fclose(file);
+	}
+	KeyWindow* window = new KeyWindow;
+	window->Show();
+	window->Lock();
+	window->Activate();
+	window->Unlock();
+	int fd = create_full_pad(0x7010);
+	// the add-on reads the settings twice a second and looks for pads
+	// every two seconds
+	snooze(3000000);
+
+	press(fd, EV_KEY, BTN_A, 1, 0);
+	press(fd, EV_ABS, ABS_HAT0X, 1, 0);
+	press(fd, EV_KEY, BTN_B, 1, 0);
+	snooze(500000);
+	BString keys = window->Keys();
+	report("mapping_keys", off == "off" && keys == "0x5e 0x63 0x47",
+		"off by default: %s; A, D-pad right, B gave [%s] (want 0x5e 0x63 "
+		"0x47: Space, Right, Enter)", off.String(), keys.String());
+
+	BPoint before = window->Mouse();
+	emit(fd, EV_ABS, ABS_RX, 32767);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(500000);
+	emit(fd, EV_ABS, ABS_RX, 0);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(200000);
+	BPoint after = window->Mouse();
+	report("mapping_pointer", after.x > before.x + 20,
+		"right stick right for 0.5 s: the pointer went from %.0f,%.0f to "
+		"%.0f,%.0f", before.x, before.y, after.x, after.y);
+
+	// the escape: guide and start held for 3 seconds
+	emit(fd, EV_KEY, BTN_MODE, 1);
+	emit(fd, EV_KEY, BTN_START, 1);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(3500000);
+	emit(fd, EV_KEY, BTN_MODE, 0);
+	emit(fd, EV_KEY, BTN_START, 0);
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	snooze(800000);
+	BString state = run("--mapping get");
+	BString keysBefore = window->Keys();
+	press(fd, EV_KEY, BTN_A, 1, 0);
+	snooze(500000);
+	BString keysAfter = window->Keys();
+	report("mapping_escape", state == "off" && keysAfter == keysBefore,
+		"after guide+start held 3 s: mapping %s, A then gave [%s]",
+		state.String(), keysAfter == keysBefore ? "nothing" : "a key");
+	screenshot("gamepad_mapping");
+
+	if (fd >= 0)
+		close(fd);
+	unlink("/boot/home/config/settings/Gamepads/key_mapping");
+	window->Lock();
+	window->Quit();
+}
+
+
 int
 main()
 {
@@ -572,6 +951,8 @@ main()
 	test_window();
 	test_overlay();
 	test_learn();
+	test_polish();
+	test_mapping();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	return sFailures == 0 ? 0 : 1;

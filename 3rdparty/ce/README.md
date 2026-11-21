@@ -1101,7 +1101,17 @@ of a 1 GiB guest was, so the bounce path went untested.
   preferences' icon, window and switches (`Gamepads --get/--set`), and
   the agent's guide-button overlay (short press nothing, long press shown,
   switched off nothing); minimum images only report that the application
-  is absent.
+  is absent. Batch 11 (configurator polish): the layout family of six
+  virtual pads by vendor and name (`Gamepads --family`), the six family
+  pictures rendering from the application's resources, the connect notice
+  naming the layout, Identify (`--identify`: rumble and the player LEDs
+  run through, the pad's number afterwards), quiet notices behind a
+  full-screen window (and full ones with `quiet_mode` off), "Don't show
+  again for this controller" through the `--connected` window's button
+  (screenshot `gamepad_connected`), and the Mapping tab's
+  `<input>gamepad_keys` add-on: off by default, A/B and D-pad right as
+  Space/Enter/Right in a focused window, the right stick moving the
+  pointer, guide and start held 3 s switching it off.
 - **uvc**: the UVC payload code of the usb_webcam media add-on
   (`addons/uvc/UVCPayload.cpp`) with replayed payloads: frames split into
   1024-byte payloads with 12-byte headers, the FID toggling, EOF set or

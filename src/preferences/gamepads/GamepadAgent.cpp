@@ -206,11 +206,16 @@ private:
 		bool added = message->what == B_GAMEPAD_ADDED;
 		BString name;
 		BString content;
+		BString guid;
+		layout_family family = LAYOUT_GENERIC;
 		if (added) {
 			BGamepad pad;
 			if (pad.Open(path) != B_OK)
 				return;
 			name = pad.Name();
+			guid = pad.GUID();
+			family = gamepad_layout_family(pad.VendorID(), pad.ProductID(),
+				pad.Name());
 			fNames.RemoveName(path);
 			fNames.AddString(path, name);
 			int32 level = -1;
@@ -230,25 +235,49 @@ private:
 			const char* line = pad.Mapping();
 			content << (line != NULL ? " · layout known"
 				: " · layout unknown: map its buttons in Gamepads");
+			content << " · " << kLayoutNames[family] << " layout";
 		} else {
 			if (fNames.FindString(path, &name) != B_OK)
 				name = "A gamepad";
 			fNames.RemoveName(path);
 		}
+		fSettings.Load();
 		if (!fSettings.connectNotice)
 			return;
+		// batch 11: "Don't show again for this controller"
+		if (added && fSettings.silenced.HasString(guid)) {
+			syslog_notice(BString(name) << " connected", "silenced");
+			return;
+		}
+		// batch 11: quiet while a full-screen program or streamer mode runs
+		BString why;
+		bool quiet = fSettings.quietMode && gamepad_quiet_now(&why);
 
 		BNotification notification(B_INFORMATION_NOTIFICATION);
 		notification.SetGroup("Gamepads");
 		BString title(name);
 		title << (added ? " connected" : " disconnected");
 		notification.SetTitle(title);
-		notification.SetContent(content);
+		if (!quiet)
+			notification.SetContent(content);
 		notification.SetMessageID(BString("connect:") << path);
-		if (added)
+		if (added) {
+			// a click opens the actions: Identify, Change player,
+			// Settings, Don't show again
 			notification.SetOnClickApp("application/x-vnd.Renga-Gamepads");
-		notification.Send(added ? 5000000 : 2000000);
-		syslog_notice(title, content);
+			notification.AddOnClickArg("--connected");
+			notification.AddOnClickArg(path);
+			if (!quiet) {
+				BBitmap* icon = gamepad_layout_icon(family, 32);
+				if (icon != NULL) {
+					notification.SetIcon(icon);
+					delete icon;
+				}
+			}
+		}
+		notification.Send(quiet ? 2000000 : added ? 5000000 : 2000000);
+		syslog_notice(title, quiet ? BString("quiet (") << why << ")"
+			: content);
 	}
 
 	static void syslog_notice(const BString& title, const BString& content)

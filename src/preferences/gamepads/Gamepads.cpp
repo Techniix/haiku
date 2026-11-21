@@ -37,10 +37,24 @@
  * the command line: prompts on standard output, the line saved at the
  * end); Gamepads --tune <device> <dead zone %> <curve> <trigger %>
  * <swap 0|1> and --get-tuning <device>.
+ *
+ * Batch 11 (configurator polish): layout families (GamepadsCommon.h:
+ * offset, symmetric, Nintendo, retro, generic, arcade) with their own
+ * pictures (GamepadLayouts.rdef) and face labels in the tester; the
+ * connect notice's actions (Gamepads --connected <device>: Identify,
+ * Change player, Settings…, Don't show again for this controller); quiet
+ * notices in full screen and streamer mode ("quiet_mode", on). For tests:
+ * --identify, --family, --silenced, --unsilence <device>. The Mapping tab
+ * (MappingView.h): gamepads as keyboard and mouse through the
+ * <input>gamepad_keys input_server add-on, off by default; --mapping
+ * on|off|get.
  */
 
 #include "GamepadsCommon.h"
 #include "MappingLearner.h"
+#include "MappingView.h"
+
+#include <TabView.h>
 
 #include <Roster.h>
 
@@ -66,6 +80,25 @@ public:
 		memset(&fState, 0, sizeof(fState));
 		SetExplicitMinSize(BSize(360, 220));
 	}
+
+	~TesterView()
+	{
+		delete fPicture;
+	}
+
+	//!	Batch 11: the pad's layout family: its picture, the stick and
+	//	D-pad arrangement and the face labels.
+	void SetFamily(layout_family family)
+	{
+		if (family == fFamily && fPicture != NULL)
+			return;
+		fFamily = family;
+		delete fPicture;
+		fPicture = gamepad_layout_icon(family, 48);
+		Invalidate();
+	}
+
+	layout_family Family() const { return fFamily; }
 
 	void SetDeadZone(int32 percent)
 	{
@@ -126,20 +159,37 @@ public:
 		_Trigger(R(230, 5, 300, 25),
 			fState.axes[B_GAMEPAD_AXIS_RIGHT_TRIGGER], accent, idle);
 
-		// D-pad
-		_Button(R(80, 85, 100, 105), B_GAMEPAD_BUTTON_DPAD_UP, accent, idle);
-		_Button(R(80, 125, 100, 145), B_GAMEPAD_BUTTON_DPAD_DOWN, accent,
-			idle);
-		_Button(R(60, 105, 80, 125), B_GAMEPAD_BUTTON_DPAD_LEFT, accent,
-			idle);
-		_Button(R(100, 105, 120, 125), B_GAMEPAD_BUTTON_DPAD_RIGHT, accent,
-			idle);
+		// batch 11: the family's picture in the corner
+		if (fPicture != NULL) {
+			SetDrawingMode(B_OP_ALPHA);
+			DrawBitmap(fPicture, BPoint(4, 4));
+			SetDrawingMode(B_OP_COPY);
+		}
+		// offset families have the left stick up and the D-pad below it;
+		// arcade sticks have no sticks to draw, the lever is the D-pad
+		bool offset = fFamily == LAYOUT_OFFSET || fFamily == LAYOUT_NINTENDO;
+		float dx = offset ? 45 : 0, dy = offset ? 45 : 0;
 
-		// face buttons, by position
-		_Round(P(270, 135), 11 * scale, B_GAMEPAD_BUTTON_A, "A", accent, idle);
-		_Round(P(292, 113), 11 * scale, B_GAMEPAD_BUTTON_B, "B", accent, idle);
-		_Round(P(248, 113), 11 * scale, B_GAMEPAD_BUTTON_X, "X", accent, idle);
-		_Round(P(270, 91), 11 * scale, B_GAMEPAD_BUTTON_Y, "Y", accent, idle);
+		// D-pad
+		_Button(R(80 + dx, 85 + dy, 100 + dx, 105 + dy),
+			B_GAMEPAD_BUTTON_DPAD_UP, accent, idle);
+		_Button(R(80 + dx, 125 + dy, 100 + dx, 145 + dy),
+			B_GAMEPAD_BUTTON_DPAD_DOWN, accent, idle);
+		_Button(R(60 + dx, 105 + dy, 80 + dx, 125 + dy),
+			B_GAMEPAD_BUTTON_DPAD_LEFT, accent, idle);
+		_Button(R(100 + dx, 105 + dy, 120 + dx, 125 + dy),
+			B_GAMEPAD_BUTTON_DPAD_RIGHT, accent, idle);
+
+		// face buttons, by position, labelled as the family names them
+		const char* const* labels = kFaceLabels[fFamily];
+		_Round(P(270, 135), 11 * scale, B_GAMEPAD_BUTTON_A, labels[0], accent,
+			idle);
+		_Round(P(292, 113), 11 * scale, B_GAMEPAD_BUTTON_B, labels[1], accent,
+			idle);
+		_Round(P(248, 113), 11 * scale, B_GAMEPAD_BUTTON_X, labels[2], accent,
+			idle);
+		_Round(P(270, 91), 11 * scale, B_GAMEPAD_BUTTON_Y, labels[3], accent,
+			idle);
 
 		// back, guide, start
 		_Round(P(150, 85), 7 * scale, B_GAMEPAD_BUTTON_BACK, NULL, accent,
@@ -149,13 +199,18 @@ public:
 		_Round(P(210, 85), 7 * scale, B_GAMEPAD_BUTTON_START, NULL, accent,
 			idle);
 
-		// sticks
-		_Stick(P(135, 150), 22 * scale, fState.axes[B_GAMEPAD_AXIS_LEFT_X],
-			fState.axes[B_GAMEPAD_AXIS_LEFT_Y], B_GAMEPAD_BUTTON_LEFT_STICK,
-			accent, idle);
-		_Stick(P(225, 150), 22 * scale, fState.axes[B_GAMEPAD_AXIS_RIGHT_X],
-			fState.axes[B_GAMEPAD_AXIS_RIGHT_Y], B_GAMEPAD_BUTTON_RIGHT_STICK,
-			accent, idle);
+		// sticks (none on arcade and retro pads)
+		bool sticks = fFamily != LAYOUT_ARCADE && fFamily != LAYOUT_RETRO;
+		if (sticks) {
+			_Stick(offset ? P(90, 115) : P(135, 150), 22 * scale,
+				fState.axes[B_GAMEPAD_AXIS_LEFT_X],
+				fState.axes[B_GAMEPAD_AXIS_LEFT_Y],
+				B_GAMEPAD_BUTTON_LEFT_STICK, accent, idle);
+			_Stick(P(225, 150), 22 * scale,
+				fState.axes[B_GAMEPAD_AXIS_RIGHT_X],
+				fState.axes[B_GAMEPAD_AXIS_RIGHT_Y],
+				B_GAMEPAD_BUTTON_RIGHT_STICK, accent, idle);
+		}
 #undef P
 #undef R
 	}
@@ -216,6 +271,8 @@ private:
 	gamepad_state	fState;
 	bool			fValid = false;
 	int32			fDeadZone = 0;
+	layout_family	fFamily = LAYOUT_GENERIC;
+	BBitmap*		fPicture = NULL;
 };
 
 
@@ -434,6 +491,8 @@ public:
 			"Raw controller access for games (gyro, HD rumble, lightbar)");
 		fConnectNotice = _CheckBox("connect_notice",
 			"Notify when a gamepad is connected or disconnected");
+		fQuietMode = _CheckBox("quiet_mode",
+			"Keep those notices quiet in full screen and streamer mode");
 
 		// per-pad tuning
 		fDeadZone = _Slider("dead_zone", "Stick dead zone", 0, 30, "%");
@@ -479,7 +538,9 @@ public:
 		fDefaults = new BButton("defaults", "Defaults",
 			new BMessage(MSG_DEFAULTS));
 
-		BLayoutBuilder::Group<>(this, B_VERTICAL)
+		// batch 11: two tabs, the pads and the Mapping tab
+		BGroupView* padsTab = new BGroupView("Gamepads", B_VERTICAL);
+		BLayoutBuilder::Group<>(padsTab)
 			.SetInsets(B_USE_WINDOW_SPACING)
 			.AddGroup(B_HORIZONTAL)
 				.Add(scroll, 1)
@@ -500,11 +561,19 @@ public:
 			.Add(fOverlay)
 			.Add(fLowBattery)
 			.Add(fConnectNotice)
+			.Add(fQuietMode)
 			.Add(fRawAccess)
 			.AddGroup(B_HORIZONTAL)
 				.Add(fDefaults)
 				.AddGlue()
 			.End();
+		BTabView* tabs = new BTabView("tabs", B_WIDTH_FROM_LABEL);
+		tabs->SetBorder(B_NO_BORDER);
+		tabs->AddTab(padsTab);
+		tabs->AddTab(new MappingView);
+		BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
+			.AddStrut(B_USE_SMALL_SPACING)
+			.Add(tabs);
 
 		_UpdateCheckBoxes();
 		_Rescan();
@@ -671,6 +740,8 @@ private:
 		fLowBattery->SetValue(fSettings.lowBattery);
 		fRawAccess->SetValue(fSettings.rawAccess);
 		fConnectNotice->SetValue(fSettings.connectNotice);
+		fQuietMode->SetValue(fSettings.quietMode);
+		fQuietMode->SetEnabled(fSettings.connectNotice);
 		fDefaults->SetEnabled(!fSettings.IsDefault());
 	}
 
@@ -717,6 +788,10 @@ private:
 			fGamepad.Open(item->fPath.String());
 
 		bool valid = fGamepad.InitCheck() == B_OK;
+		if (valid) {
+			fTester->SetFamily(gamepad_layout_family(fGamepad.VendorID(),
+				fGamepad.ProductID(), fGamepad.Name()));
+		}
 		fRumble->SetEnabled(valid && fGamepad.CanRumble());
 		fPlayer->SetEnabled(valid);
 		_UpdateInfo();
@@ -819,6 +894,7 @@ private:
 	BCheckBox*			fLowBattery;
 	BCheckBox*			fRawAccess;
 	BCheckBox*			fConnectNotice;
+	BCheckBox*			fQuietMode;
 	BButton*			fDefaults;
 	BSlider*			fDeadZone;
 	BSlider*			fTrigger;
@@ -837,18 +913,192 @@ private:
 // #pragma mark - main
 
 
+/*!	Batch 11: "Identify": the pad rumbles and its player LEDs run through
+	the player numbers twice, then show its own number again.
+*/
+static status_t
+identify_gamepad(const char* path)
+{
+	BGamepad pad;
+	status_t status = pad.Open(path);
+	if (status != B_OK)
+		return status;
+	if (pad.CanRumble())
+		pad.Rumble(0xffff, 0xffff, 300000);
+	int32 player = pad.Player();
+	for (int32 round = 0; round < 2; round++) {
+		for (int32 number = 1; number <= 4; number++) {
+			pad.SetPlayer(number);
+			snooze(120000);
+		}
+	}
+	pad.SetPlayer(player > 0 ? player : 1);
+	return B_OK;
+}
+
+
+/*!	Batch 11: what a click on the connect notice opens: the pad's picture
+	and name with Identify, Change player, Settings… and "Don't show again
+	for this controller". Scripting for tests: the buttons' messages.
+*/
+class ConnectedWindow : public BWindow {
+public:
+	ConnectedWindow(const char* path)
+		:
+		BWindow(BRect(0, 0, 320, 120), "Gamepad connected",
+			B_FLOATING_WINDOW_LOOK, B_FLOATING_ALL_WINDOW_FEEL,
+			B_NOT_ZOOMABLE | B_NOT_RESIZABLE | B_AUTO_UPDATE_SIZE_LIMITS
+				| B_ASYNCHRONOUS_CONTROLS | B_CLOSE_ON_ESCAPE),
+		fPath(path)
+	{
+		BGamepad pad;
+		BString name("Gamepad");
+		layout_family family = LAYOUT_GENERIC;
+		if (pad.Open(path) == B_OK) {
+			name = pad.Name();
+			fGUID = pad.GUID();
+			family = gamepad_layout_family(pad.VendorID(), pad.ProductID(),
+				pad.Name());
+			fPlayer = pad.Player();
+		}
+		SetTitle(name);
+		BPopUpMenu* players = new BPopUpMenu("player");
+		for (int32 i = 1; i <= 8; i++) {
+			BString label;
+			label << "Player " << i;
+			BMessage* message = new BMessage(MSG_PLAYER);
+			message->AddInt32("player", i);
+			BMenuItem* item = new BMenuItem(label, message);
+			item->SetMarked(i == fPlayer);
+			players->AddItem(item);
+		}
+		BMenuField* player = new BMenuField("change_player",
+			"Change player:", players);
+		BString familyText(kLayoutTitles[family]);
+		fPicture = new PictureView(family);
+		BLayoutBuilder::Group<>(this, B_VERTICAL, B_USE_SMALL_SPACING)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.AddGroup(B_HORIZONTAL)
+				.Add(fPicture)
+				.AddGroup(B_VERTICAL, 0)
+					.Add(new BStringView("name", name))
+					.Add(new BStringView("family", familyText))
+				.End()
+				.AddGlue()
+			.End()
+			.Add(player)
+			.AddGroup(B_HORIZONTAL)
+				.Add(new BButton("identify", "Identify",
+					new BMessage(MSG_IDENTIFY)))
+				.Add(new BButton("settings", "Settings" B_UTF8_ELLIPSIS,
+					new BMessage(MSG_OPEN_SETTINGS)))
+			.End()
+			.Add(new BButton("silence",
+				"Don't show again for this controller",
+				new BMessage(MSG_SILENCE)));
+		CenterOnScreen();
+	}
+
+	virtual void MessageReceived(BMessage* message)
+	{
+		switch (message->what) {
+			case MSG_IDENTIFY:
+				identify_gamepad(fPath.String());
+				break;
+			case MSG_PLAYER:
+			{
+				BGamepad pad;
+				if (pad.Open(fPath.String()) == B_OK)
+					pad.SetPlayer(message->GetInt32("player", 1));
+				break;
+			}
+			case MSG_OPEN_SETTINGS:
+				be_app->PostMessage(MSG_OPEN_SETTINGS);
+				PostMessage(B_QUIT_REQUESTED);
+				break;
+			case MSG_SILENCE:
+			{
+				Settings settings;
+				settings.Load();
+				if (!fGUID.IsEmpty() && !settings.silenced.HasString(fGUID))
+					settings.silenced.Add(fGUID);
+				settings.Save();
+				PostMessage(B_QUIT_REQUESTED);
+				break;
+			}
+			default:
+				BWindow::MessageReceived(message);
+		}
+	}
+
+	virtual bool QuitRequested()
+	{
+		be_app->PostMessage(B_QUIT_REQUESTED);
+		return true;
+	}
+
+private:
+	class PictureView : public BView {
+	public:
+		PictureView(layout_family family)
+			:
+			BView("picture", B_WILL_DRAW)
+		{
+			fBitmap = gamepad_layout_icon(family, 48);
+			SetExplicitSize(BSize(48, 48));
+		}
+		~PictureView() { delete fBitmap; }
+		virtual void AttachedToWindow()
+		{
+			SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		}
+		virtual void Draw(BRect)
+		{
+			if (fBitmap == NULL)
+				return;
+			SetDrawingMode(B_OP_ALPHA);
+			DrawBitmap(fBitmap, BPoint(0, 0));
+		}
+	private:
+		BBitmap* fBitmap;
+	};
+
+	BString			fPath;
+	BString			fGUID;
+	int32			fPlayer = 0;
+	PictureView*	fPicture;
+};
+
+
 class GamepadsApp : public BApplication {
 public:
-	GamepadsApp()
+	GamepadsApp(const char* connected = NULL)
 		:
-		BApplication(kAppSignature)
+		BApplication(kAppSignature),
+		fConnected(connected)
 	{
 	}
 
 	virtual void ReadyToRun()
 	{
-		(new GamepadsWindow)->Show();
+		if (fConnected != NULL)
+			(new ConnectedWindow(fConnected))->Show();
+		else
+			(new GamepadsWindow)->Show();
 	}
+
+	virtual void MessageReceived(BMessage* message)
+	{
+		if (message->what == MSG_OPEN_SETTINGS) {
+			fConnected = NULL;
+			(new GamepadsWindow)->Show();
+			return;
+		}
+		BApplication::MessageReceived(message);
+	}
+
+private:
+	const char*	fConnected;
 };
 
 
@@ -934,10 +1184,52 @@ command_line(int argc, char** argv)
 		tuning.Clamp();
 		return GamepadTuning::Save(pad.GUID(), tuning) == B_OK ? 0 : 1;
 	}
+	if (argc == 3 && strcmp(argv[1], "--mapping") == 0) {
+		// batch 11: the Mapping tab's master switch
+		if (strcmp(argv[2], "get") == 0) {
+			printf("%s\n", MappingView::ReadEnabled() ? "on" : "off");
+			return 0;
+		}
+		if (strcmp(argv[2], "on") != 0 && strcmp(argv[2], "off") != 0)
+			return 2;
+		return MappingView::SetEnabledSetting(strcmp(argv[2], "on") == 0)
+			== B_OK ? 0 : 1;
+	}
+	if (argc == 3 && strcmp(argv[1], "--identify") == 0)
+		return identify_gamepad(argv[2]) == B_OK ? 0 : 1;
+	if (argc == 3 && strcmp(argv[1], "--family") == 0) {
+		BGamepad pad;
+		if (pad.Open(argv[2]) != B_OK)
+			return 1;
+		layout_family family = gamepad_layout_family(pad.VendorID(),
+			pad.ProductID(), pad.Name());
+		printf("%s %s %s %s %s\n", kLayoutNames[family],
+			kFaceLabels[family][0], kFaceLabels[family][1],
+			kFaceLabels[family][2], kFaceLabels[family][3]);
+		return 0;
+	}
+	if (argc == 3 && strcmp(argv[1], "--silenced") == 0) {
+		BGamepad pad;
+		if (pad.Open(argv[2]) != B_OK)
+			return 1;
+		printf("%s\n", settings.silenced.HasString(pad.GUID()) ? "yes"
+			: "no");
+		return 0;
+	}
+	if (argc == 3 && strcmp(argv[1], "--unsilence") == 0) {
+		BGamepad pad;
+		if (pad.Open(argv[2]) != B_OK)
+			return 1;
+		settings.silenced.Remove(pad.GUID());
+		return settings.Save() == B_OK ? 0 : 1;
+	}
 	fprintf(stderr, "usage: %s [--agent | --get <setting> | "
 		"--set <setting> on|off | --learn <device> | --get-tuning <device> "
 		"| --tune <device> <dead zone %%> <curve> <trigger %%> <swap 0|1>]\n"
-		"settings: overlay, low_battery, raw_access, connect_notice\n",
+		"settings: overlay, low_battery, raw_access, connect_notice, "
+		"quiet_mode\n"
+		"also: --identify <device>, --family <device>, --connected <device>, "
+		"--silenced <device>, --unsilence <device>, --mapping on|off|get\n",
 		argv[0]);
 	return 2;
 }
@@ -952,6 +1244,12 @@ main(int argc, char** argv)
 		status_t status = be_roster->Launch(
 			"application/x-vnd.Renga-GamepadAgent");
 		return status == B_OK || status == B_ALREADY_RUNNING ? 0 : 1;
+	}
+	if (argc == 3 && strcmp(argv[1], "--connected") == 0) {
+		// batch 11: the connect notice's actions
+		GamepadsApp app(argv[2]);
+		app.Run();
+		return 0;
 	}
 	if (argc >= 2)
 		return command_line(argc, argv);

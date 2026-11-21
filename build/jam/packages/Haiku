@@ -468,6 +468,7 @@ AddSymlinkToPackage add-ons Tracker
 	: /boot/system/apps/DiskUsage : DiskUsage ;
 
 AddFilesToPackage add-ons input_server devices :
+	<input>gamepad_keys
 	<input>keyboard
 	<input>mouse
 	<input>tablet
