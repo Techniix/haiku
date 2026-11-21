@@ -717,6 +717,15 @@ of a 1 GiB guest was, so the bounce path went untested.
   cache, and Defaults turns it on. Starts Tracker if it is not running
   (renga-* images) and quits it again at the end, so later suites run on
   the same desktop as before. Build times are INFO only.
+- **screen_outputs** (every image, `screen_outputs_test`; batch 9
+  regression test): one thread asks app_server for the screen's outputs
+  (`get_screen_outputs()`, `AS_GET_SCREEN_OUTPUTS`) as fast as it can
+  while the main thread switches workspaces 40 times and the mode between
+  the current one and 800x600 ten times; every request must be answered
+  with an output and app_server must still be the same team. Guards the
+  crash seen in the batch 9 sweep (the request read the virtual screen's
+  HWInterface without the screen lock while a configuration change had
+  reset it); the race did not show in two runs of the old code in QEMU.
 - **tracker_modern** (every image, `tracker_modern_test`; F-66, F-60,
   batch 9): a folder of 10 000 files opens and shows all of them while
   Tracker keeps answering (window, all-shown and longest-answer times as

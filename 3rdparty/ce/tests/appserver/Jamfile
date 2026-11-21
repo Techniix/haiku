@@ -46,10 +46,17 @@ Application front_copy_test :
 	: be [ TargetLibstdc++ ]
 ;
 
+# The screen's outputs asked for during mode changes (batch 9 regression
+# test: app_server crashed in AS_GET_SCREEN_OUTPUTS), see the source.
+Application screen_outputs_test :
+	screen_outputs_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : appserver_fd_test
 		hw_cursor_test screen_read_test capture_privacy_test
-		snap_layouts_test front_copy_test ;
+		snap_layouts_test front_copy_test screen_outputs_test ;
 	AddFilesToHaikuImage system non-packaged bin : screen_read_direct ;
 }
 

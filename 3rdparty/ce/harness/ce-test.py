@@ -284,7 +284,8 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"SoundRecorder", "media_addon_server", "crash_collector",
 	"crashlog_test", "SystemLogs", "debug_server",
 	"webpositive_test", "WebPositive", "deskbar_test", "Deskbar",
-	"ControlPanel", "libtracker.so", "tracker_modern_test"]
+	"ControlPanel", "libtracker.so", "tracker_modern_test",
+	"screen_outputs_test"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can

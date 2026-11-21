@@ -37,6 +37,8 @@
 #include <AppDefs.h>
 #include <Autolock.h>
 #include <AutoLocker.h>
+
+#include <algorithm>
 #include <Debug.h>
 #include <List.h>
 #include <ScrollBar.h>
@@ -3168,8 +3170,26 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 		{
 			// Renga (batch 6): the outputs the desktop is spread over; with
 			// one screen, one output that is the whole screen
-			HWInterface* interface = fDesktop->HWInterface();
-			int32 count = interface->CountOutputs();
+			//
+			// Batch 9: read under the screen lock. A screen configuration
+			// change (Desktop::_SetCurrentWorkspaceConfiguration(), a mode
+			// change) resets the virtual screen under the write lock, and
+			// its HWInterface is NULL in between: the Deskbar asking for
+			// its output then crashed app_server (seen in the batch 9
+			// sweep during pointer_test's mode changes).
+			static const int32 kMaxOutputs = 16;
+			screen_output_info outputs[kMaxOutputs];
+			int32 count = 0;
+			{
+				AutoReadLocker _(fDesktop->ScreenLocker());
+				HWInterface* interface = fDesktop->HWInterface();
+				if (interface != NULL)
+					count = std::min(interface->CountOutputs(), kMaxOutputs);
+				for (int32 i = 0; i < count; i++) {
+					if (!interface->GetOutputInfo(i, outputs[i]))
+						outputs[i] = screen_output_info();
+				}
+			}
 			fLink.StartMessage(B_OK);
 			if (count <= 0) {
 				screen_output_info info;
@@ -3184,12 +3204,8 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 				fLink.Attach(&info, sizeof(info));
 			} else {
 				fLink.Attach<int32>(count);
-				for (int32 i = 0; i < count; i++) {
-					screen_output_info info;
-					if (!interface->GetOutputInfo(i, info))
-						info = screen_output_info();
-					fLink.Attach(&info, sizeof(info));
-				}
+				for (int32 i = 0; i < count; i++)
+					fLink.Attach(&outputs[i], sizeof(outputs[i]));
 			}
 			fLink.Flush();
 			break;
