@@ -33,6 +33,7 @@ run without crashing, and every check passed.
 """
 
 import argparse
+import array
 import datetime
 import glob
 import hashlib
@@ -3419,8 +3420,14 @@ def read_wav(path):
 		raise ValueError("unsupported WAV format (%s bits)" % bits)
 
 	frame_count = len(payload) // (2 * channels)
-	values = struct.unpack("<%dh" % (frame_count * channels),
-		payload[:frame_count * channels * 2])
+	# array('h') keeps 2 bytes a sample; a tuple of Python ints took about
+	# 30 times that, and a full renga-raw recording (190 MB, batch 8) made
+	# the analysis run out of the host's 7 GB.
+	values = array.array("h")
+	values.frombytes(payload[:frame_count * channels * 2])
+	if sys.byteorder != "little":
+		values.byteswap()
+	del data, payload
 	samples = [values[c::channels] for c in range(channels)]
 	return rate, channels, samples
 
