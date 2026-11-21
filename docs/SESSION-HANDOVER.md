@@ -71,7 +71,7 @@ Later: bundled apps `F-44`, Secure Boot `F-53`, NVIDIA-hardware GPU features `F-
 9. Tracker and Deskbar: `F-60` review of both first, then `F-66` Tracker and `F-41` Deskbar, every feature switchable; start-button designs shown to the maintainer before implementing.
 10. Renguin (`F-27`): multi-process Linux Chrome; Linux-programs integration (Open with, Renguin badge, AppImage, Flatpak); the rest of the Renguin Manager; syscall coverage per `COVERAGE.md`; vDSO and shared futexes; gamepad evdev and webcam V4L2 bridges; matching GTK/Qt themes; Linux home and xattr mapping; Wine/Proton under Renguin; the harness ladder.
 11. The rest of audio routing, the rest of the gamepad configurator, the Wi-Fi data path once `lkpictl wifi-stats` numbers arrive.
-12. Installer wizard `F-23`, partition manager `F-24`, graphical themed boot menu `F-22`.
+12. Installer wizard `F-23`, partition manager `F-24`, graphical themed boot menu `F-22`, and Renga Depot (maintainer, 2026-11-21: HaikuDepot renamed and refaced, stock-compatible, one catalogue over every source with badges and a choose-source menu, richer app pages, Update all with scheduled updates and restore points, repository manager, developer side, pkgman multi-source search, every feature switchable; held off: curated front page, signed sources; roadmap decisions log).
 
 Later: `F-44`, `F-53`, `F-47`/`F-35`.
 
@@ -160,3 +160,7 @@ Batch 10 ended 2026-11-21 with image `2026.11.21-batch10` (Renga `139bba14`); th
 - **Harness:** renga-raw hit the 2700 s guest timeout before crashlog_test finished (4 checks); sound_settings.output_device_menu and media_latency.device_continuous failed once (no media code changed).
 - This session's result directories: 20261121-042301 onward (images removed).
 
+
+## Batch 11: continue from here
+
+Batch 11 started 2026-11-21 (audio routing, gamepad configurator, Renguin leftovers, harness health). In progress; see the roadmap's batch-11 status when it lands.
