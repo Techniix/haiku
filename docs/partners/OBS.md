@@ -2,9 +2,16 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 15:00 UTC. Newest entries first.
+Updated: 2026-11-21 18:00 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-21: batch 11: virtual devices, ducking, microphone processing ([`35ce7b3b`](https://github.com/Techniix/haiku/commit/35ce7b3b))
+
+- Virtual devices: a stream routed to `renga:virtual:<name>` is heard nowhere and left out of "What you hear"; a loopback started for the signature `renga:virtual:<name>` records exactly those streams. Useful for OBS submixes (for example a "Stream" bus the user routes chosen applications to). Users create them on the Audio preferences' Mixing page; `AudioStreamControl::GetVirtualDevices()` lists them, `VirtualRoute()` builds the route. Details: PORTING.md, "Virtual devices, ducking, several inputs, microphone processing".
+- Microphone processing (mute, noise gate, automatic gain, 80 Hz high-pass) happens in the sound card's node, so OBS's microphone source gets it without changes; push-to-talk and a mute key mute every input. If OBS applies its own filters, users may want Renga's off for that microphone.
+- Ducking lowers other applications while a chosen one plays (switchable, off by default); it does not touch loopbacks of single applications.
+- Not yet: several inputs combined into one virtual device (open in Renga).
 
 ### 2026-11-20: batch 5: Hide from capture and streamer mode
 
