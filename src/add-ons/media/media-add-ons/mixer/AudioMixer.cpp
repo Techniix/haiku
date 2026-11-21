@@ -130,8 +130,27 @@
 // and devices that are not there are kept in the list and skipped. Saved
 // in ~/config/settings/Media/mirror_outputs.
 #define PARAM_ETC_MIRRORS					112
+// Batch 11 (F-31 routing): ducking and virtual devices, hidden text
+// parameters (AudioStreamControl.h: RENGA_DUCKING_KIND,
+// RENGA_VIRTUAL_DEVICES_KIND), each kept in ~/config/settings/Media.
+#define PARAM_ETC_DUCKING					113
+#define RENGA_DUCKING_KIND					"renga:ducking"
+#define PARAM_ETC_VIRTUAL_DEVICES			114
+#define RENGA_VIRTUAL_DEVICES_KIND			"renga:virtual_devices"
+// Batch 11: several inputs at once. Hidden text, read and write as a whole:
+// lines "<virtual device>\t<input device>". The router connects each
+// input device's recording into the mixer as a stream routed to the
+// virtual device, so the virtual device's loopback records them mixed
+// (with each device's own microphone processing), and nothing of them
+// plays on a sound card.
+#define PARAM_ETC_COMBINED_INPUTS			115
+#define RENGA_COMBINED_INPUTS_KIND			"renga:combined_inputs"
+#define RENGA_VIRTUAL_ROUTE_PREFIX_TEXT		"renga:virtual:"
 #define RENGA_MIRROR_OUTPUTS_KIND			"renga:mirror_outputs"
 static BString normalize_mirrors(const BString& text);
+static BString normalize_ducking(const BString& text);
+static BString normalize_virtual_devices(const BString& text);
+static BString normalize_combined_inputs(const BString& text);
 #define RENGA_LOOPBACK_ONLY_TEAMS_KIND		"renga:loopback_only_teams"
 // How long the default output keeps short periods after the last
 // low-latency stream went (a program that closes and opens its player again
@@ -215,6 +234,9 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 	fDefaultFormat.u.raw_audio.valid_bits = 0;
 	fDefaultFormat.u.raw_audio.matrix_mask = 0;
 
+	fPendingCombinedPort = -1;
+		// batch 11, see _ConnectCombinedInput()
+
 	if (isSystemMixer) {
 		// to get persistent settings, assign a settings file
 		BPath path;
@@ -229,6 +251,11 @@ AudioMixer::AudioMixer(BMediaAddOn *addOn, bool isSystemMixer)
 		// Renga (audio routing): the devices that also play the default
 		// output
 		_LoadMirrors();
+		// batch 11
+		_LoadRengaText("Media/ducking", fDucking);
+		_ApplyDucking();
+		_LoadRengaText("Media/virtual_devices", fVirtualDevices);
+		_LoadRengaText("Media/combined_inputs", fCombinedInputs);
 
 		BAutolock locker(sSystemMixerLock);
 		sSystemMixer = this;
@@ -459,6 +486,22 @@ AudioMixer::BufferReceived(BBuffer *buffer)
 	if (fCore->TimeSource() == NULL
 			|| buffer->Header()->time_source != TimeSource()->ID()
 			|| buffer->Header()->time_source != fCore->TimeSource()->ID()) {
+		// Renga (batch 11): a sound card's recording (several inputs at
+		// once) runs on the card's own clock; MixerInput places it in
+		// the mix by its arrival, so it is taken now
+		bool live = false;
+		if (fCore->TimeSource() != NULL) {
+			fCore->Lock();
+			for (int32 i = 0; MixerInput* input = fCore->Input(i); i++) {
+				if (input->ID() == buffer->Header()->destination) {
+					live = input->IsLive();
+					break;
+				}
+			}
+			fCore->Unlock();
+		}
+		if (live)
+			HandleInputBuffer(buffer, 0);
 		buffer->Recycle();
 		return;
 	}
@@ -713,6 +756,11 @@ AudioMixer::Connected(const media_source &producer,
 	// remembered by signature.
 	_IdentifyApplication(input, producer);
 	fCore->Settings()->LoadConnectionSettings(input);
+	// batch 11: a combined input the router is connecting right now
+	if (fPendingCombinedPort >= 0 && producer.port == fPendingCombinedPort) {
+		input->SetRoute(fPendingCombinedRoute.String());
+		input->SetLive(true);
+	}
 	// F-58 batch 2 (O-18): loopback only from its first buffer if its team
 	// asked for it; not part of the settings just loaded or saved later.
 	_PruneLoopbackOnlyTeams();
@@ -1638,6 +1686,25 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 				*ioSize = fMirrors.Length() + 1;
 				break;
 			}
+			case PARAM_ETC_DUCKING:
+			case PARAM_ETC_VIRTUAL_DEVICES:
+			case PARAM_ETC_COMBINED_INPUTS:
+			{
+				BString text = ETC(id) == PARAM_ETC_DUCKING ? fDucking
+					: ETC(id) == PARAM_ETC_VIRTUAL_DEVICES ? fVirtualDevices
+					: fCombinedInputs;
+				if (ETC(id) == PARAM_ETC_COMBINED_INPUTS)
+					text << fCombinedStatus;
+				if (ETC(id) == PARAM_ETC_DUCKING) {
+					text << "active " << (fCore->DuckingActive() ? 1 : 0)
+						<< "\n";
+				}
+				if (*ioSize < (size_t)text.Length() + 1)
+					goto err;
+				memcpy(value, text.String(), text.Length() + 1);
+				*ioSize = text.Length() + 1;
+				break;
+			}
 			case PARAM_ETC_ROUTES:
 			{
 				BString list;
@@ -1929,6 +1996,34 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 				_SaveMirrors();
 				wakeRouter = true;
 				update = true;
+				break;
+			}
+			case PARAM_ETC_DUCKING:
+			{
+				BString text((const char*)value,
+					strnlen((const char*)value, min_c(size, (size_t)4096)));
+				fDucking = normalize_ducking(text);
+				_SaveRengaText("Media/ducking", fDucking);
+				_ApplyDucking();
+				break;
+			}
+			case PARAM_ETC_VIRTUAL_DEVICES:
+			{
+				BString text((const char*)value,
+					strnlen((const char*)value, min_c(size, (size_t)4096)));
+				fVirtualDevices = normalize_virtual_devices(text);
+				_SaveRengaText("Media/virtual_devices", fVirtualDevices);
+				// the "Output" menus offer them
+				update = true;
+				break;
+			}
+			case PARAM_ETC_COMBINED_INPUTS:
+			{
+				BString text((const char*)value,
+					strnlen((const char*)value, min_c(size, (size_t)4096)));
+				fCombinedInputs = normalize_combined_inputs(text);
+				_SaveRengaText("Media/combined_inputs", fCombinedInputs);
+				wakeRouter = true;
 				break;
 			}
 			case PARAM_ETC_ROUTES:
@@ -2476,6 +2571,15 @@ AudioMixer::UpdateParameterWeb()
 	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_MIRRORS),
 		B_MEDIA_RAW_AUDIO, "Also play on", RENGA_MIRROR_OUTPUTS_KIND,
 		4096)->SetFlags(B_HIDDEN_PARAMETER);
+	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_DUCKING),
+		B_MEDIA_RAW_AUDIO, "Ducking", RENGA_DUCKING_KIND,
+		4096)->SetFlags(B_HIDDEN_PARAMETER);
+	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_VIRTUAL_DEVICES),
+		B_MEDIA_RAW_AUDIO, "Virtual devices", RENGA_VIRTUAL_DEVICES_KIND,
+		4096)->SetFlags(B_HIDDEN_PARAMETER);
+	group->MakeTextParameter(PARAM_ETC(PARAM_ETC_COMBINED_INPUTS),
+		B_MEDIA_RAW_AUDIO, "Combined inputs", RENGA_COMBINED_INPUTS_KIND,
+		4096)->SetFlags(B_HIDDEN_PARAMETER);
 
 	dp = group->MakeDiscreteParameter(PARAM_ETC(70), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Resampling algorithm:"), B_INPUT_MUX);
@@ -2814,6 +2918,168 @@ AudioMixer::_SaveMirrors()
 }
 
 
+/*!	Batch 11: the ducking settings, normalized: "on", "amount" and
+	"trigger" lines in that order, blanks trimmed, unknown lines and the
+	read-only "active" dropped.
+*/
+static BString
+normalize_ducking(const BString& text)
+{
+	BStringList lines;
+	text.Split("\n", true, lines);
+	bool on = false;
+	float amount = -12.0f;
+	BStringList triggers;
+	for (int32 i = 0; i < lines.CountStrings(); i++) {
+		BString line = lines.StringAt(i);
+		line.ReplaceAll('\r', ' ').Trim();
+		int32 space = line.FindFirst(' ');
+		if (space < 0)
+			continue;
+		BString key, rest;
+		line.CopyInto(key, 0, space);
+		line.CopyInto(rest, space + 1, line.Length() - space - 1);
+		rest.Trim();
+		if (key == "on")
+			on = atoi(rest.String()) != 0;
+		else if (key == "amount")
+			amount = max_c(-40.0f, min_c(0.0f, (float)atof(rest.String())));
+		else if (key == "trigger" && rest.Length() > 0
+			&& rest.Length() < B_MIME_TYPE_LENGTH && !triggers.HasString(rest))
+			triggers.Add(rest);
+	}
+	BString result;
+	result << "on " << (on ? 1 : 0) << "\n";
+	char number[32];
+	snprintf(number, sizeof(number), "%g", amount);
+	result << "amount " << number << "\n";
+	for (int32 i = 0; i < triggers.CountStrings(); i++)
+		result << "trigger " << triggers.StringAt(i) << "\n";
+	return result;
+}
+
+
+/*!	Batch 11: the combined inputs, "<virtual device>\t<input device>"
+	lines, both names trimmed and non-empty, no duplicates, at most 16.
+*/
+static BString
+normalize_combined_inputs(const BString& text)
+{
+	BStringList lines, kept;
+	text.Split("\n", true, lines);
+	for (int32 i = 0; i < lines.CountStrings() && kept.CountStrings() < 16;
+			i++) {
+		BStringList fields;
+		lines.StringAt(i).Split("\t", false, fields);
+		if (fields.CountStrings() != 2)
+			continue;
+		BString target = fields.StringAt(0), device = fields.StringAt(1);
+		target.ReplaceAll('\r', ' ').Trim();
+		device.ReplaceAll('\r', ' ').Trim();
+		if (target.IsEmpty() || device.IsEmpty() || target.Length() >= 64
+			|| device.Length() >= B_MEDIA_NAME_LENGTH) {
+			continue;
+		}
+		BString line;
+		line << target << "\t" << device;
+		if (!kept.HasString(line))
+			kept.Add(line);
+	}
+	BString result;
+	for (int32 i = 0; i < kept.CountStrings(); i++)
+		result << kept.StringAt(i) << "\n";
+	return result;
+}
+
+
+/*!	Batch 11: the virtual devices' names, one per line, trimmed, without
+	duplicates or empty lines, at most 16 names of 63 bytes.
+*/
+static BString
+normalize_virtual_devices(const BString& text)
+{
+	BStringList lines, names;
+	text.Split("\n", true, lines);
+	for (int32 i = 0; i < lines.CountStrings() && names.CountStrings() < 16;
+			i++) {
+		BString name = lines.StringAt(i);
+		name.ReplaceAll('\r', ' ').Trim();
+		if (name.Length() > 0 && name.Length() < 64 && !names.HasString(name))
+			names.Add(name);
+	}
+	BString result;
+	for (int32 i = 0; i < names.CountStrings(); i++)
+		result << names.StringAt(i) << "\n";
+	return result;
+}
+
+
+void
+AudioMixer::_ApplyDucking()
+{
+	BStringList lines, triggers;
+	fDucking.Split("\n", true, lines);
+	bool on = false;
+	float amount = -12.0f;
+	for (int32 i = 0; i < lines.CountStrings(); i++) {
+		const BString& line = lines.StringAt(i);
+		if (line.StartsWith("on "))
+			on = atoi(line.String() + 3) != 0;
+		else if (line.StartsWith("amount "))
+			amount = atof(line.String() + 7);
+		else if (line.StartsWith("trigger "))
+			triggers.Add(line.String() + 8);
+	}
+	// the caller may hold the core's lock (SetParameterValue()) or not
+	// (the constructor)
+	bool held = fCore->IsLocked();
+	if (!held && !fCore->Lock())
+		return;
+	fCore->SetDucking(on, amount, triggers);
+	if (!held)
+		fCore->Unlock();
+}
+
+
+void
+AudioMixer::_LoadRengaText(const char* leaf, BString& text)
+{
+	BPath path;
+	BFile file;
+	off_t size;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK
+		|| path.Append(leaf) != B_OK
+		|| file.SetTo(path.Path(), B_READ_ONLY) != B_OK
+		|| file.GetSize(&size) != B_OK || size <= 0 || size > 4096)
+		return;
+	char* buffer = text.LockBuffer(size + 1);
+	ssize_t bytes = file.Read(buffer, size);
+	text.UnlockBuffer(bytes > 0 ? bytes : 0);
+	if (strcmp(leaf, "Media/ducking") == 0)
+		text = normalize_ducking(text);
+	else if (strcmp(leaf, "Media/combined_inputs") == 0)
+		text = normalize_combined_inputs(text);
+	else
+		text = normalize_virtual_devices(text);
+}
+
+
+void
+AudioMixer::_SaveRengaText(const char* leaf, const BString& text)
+{
+	BPath path;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK
+		|| path.Append(leaf) != B_OK)
+		return;
+	BPath parent;
+	path.GetParent(&parent);
+	create_directory(parent.Path(), 0755);
+	BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+	if (file.InitCheck() == B_OK)
+		file.Write(text.String(), text.Length());
+}
+
+
 void
 AudioMixer::_RouteOnce()
 {
@@ -2944,8 +3210,209 @@ AudioMixer::_RouteOnce()
 
 	_UpdatePeriodRequest(primaryNode);
 
+	// batch 11: several inputs at once
+	_RouteCombinedInputs();
+
 	if (webChanged)
 		UpdateParameterWeb();
+}
+
+
+/*!	Batch 11: keeps the combined inputs connected: each input device
+	listed in fCombinedInputs records into the mixer as a stream routed to
+	its virtual device; connections no longer listed are taken down, and
+	devices that went away are connected again when they return. Runs in
+	the router thread.
+*/
+void
+AudioMixer::_RouteCombinedInputs()
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+
+	BStringList lines;
+	fCore->Lock();
+	fCombinedInputs.Split("\n", true, lines);
+	// connections whose mixer input is gone (device unplugged, its node
+	// released) are forgotten, those no longer wanted are disconnected
+	BList disconnect;
+	for (int32 i = fCombined.CountItems() - 1; i >= 0; i--) {
+		combined_input* entry = (combined_input*)fCombined.ItemAt(i);
+		bool present = false;
+		for (int32 j = 0; MixerInput* input = fCore->Input(j); j++) {
+			if (input->ID() == entry->destination.id) {
+				present = true;
+				break;
+			}
+		}
+		BString line;
+		line << entry->target << "\t" << entry->device;
+		if (present && lines.HasString(line))
+			continue;
+		fCombined.RemoveItem(i);
+		if (present)
+			disconnect.AddItem(entry);
+		else
+			delete entry;
+	}
+	fCore->Unlock();
+
+	for (int32 i = 0; i < disconnect.CountItems(); i++) {
+		combined_input* entry = (combined_input*)disconnect.ItemAt(i);
+		roster->Disconnect(entry->source.port == -1 ? -1
+				: roster->NodeIDFor(entry->source.port), entry->source,
+			Node().node, entry->destination);
+		delete entry;
+	}
+
+	BString statusText;
+	for (int32 i = 0; i < lines.CountStrings(); i++) {
+		BStringList fields;
+		lines.StringAt(i).Split("\t", false, fields);
+		if (fields.CountStrings() != 2)
+			continue;
+		bool have = false;
+		for (int32 j = 0; j < fCombined.CountItems(); j++) {
+			combined_input* entry = (combined_input*)fCombined.ItemAt(j);
+			if (entry->target == fields.StringAt(0)
+				&& entry->device == fields.StringAt(1)) {
+				have = true;
+				break;
+			}
+		}
+		status_t status = B_OK;
+		if (!have)
+			status = _ConnectCombinedInput(fields.StringAt(0), fields.StringAt(1));
+		// read back after the list: "# <virtual>/<device>: <state>"
+		statusText << "# " << fields.StringAt(0) << "/" << fields.StringAt(1)
+			<< ": " << (status == B_OK ? "connected" : strerror(status));
+		// for diagnosis: what reached the mixer
+		fCore->Lock();
+		for (int32 j = 0; j < fCombined.CountItems(); j++) {
+			combined_input* entry = (combined_input*)fCombined.ItemAt(j);
+			if (entry->target != fields.StringAt(0)
+				|| entry->device != fields.StringAt(1)) {
+				continue;
+			}
+			for (int32 k = 0; MixerInput* input = fCore->Input(k); k++) {
+				if (input->ID() == entry->destination.id) {
+					statusText << ", " << input->BuffersReceived()
+						<< " buffers, offset " << input->LiveOffset()
+						<< " us, route " << input->Route();
+				}
+			}
+		}
+		fCore->Unlock();
+		statusText << "\n";
+	}
+	fCore->Lock();
+	fCombinedStatus = statusText;
+	fCore->Unlock();
+}
+
+
+status_t
+AudioMixer::_ConnectCombinedInput(const BString& target,
+	const BString& deviceName)
+{
+	BMediaRoster* roster = BMediaRoster::Roster();
+
+	dormant_node_info infos[32];
+	int32 count = 32;
+	media_format format;
+	format.type = B_MEDIA_RAW_AUDIO;
+	format.u.raw_audio = media_raw_audio_format::wildcard;
+	if (roster->GetDormantNodes(infos, &count, NULL, &format, NULL,
+			B_BUFFER_PRODUCER | B_PHYSICAL_INPUT, 0) != B_OK) {
+		return B_ERROR;
+	}
+	int32 index = 0;
+	while (index < count && deviceName != infos[index].name)
+		index++;
+	if (index == count)
+		return B_ENTRY_NOT_FOUND;
+
+	media_node device;
+	media_node_id instances[4];
+	int32 instanceCount = 4;
+	status_t status;
+	if (roster->GetInstancesFor(infos[index].addon, infos[index].flavor_id,
+			instances, &instanceCount) == B_OK && instanceCount > 0) {
+		status = roster->GetNodeFor(instances[0], &device);
+	} else {
+		status = roster->InstantiateDormantNode(infos[index], &device,
+			B_FLAVOR_IS_GLOBAL);
+	}
+	if (status != B_OK)
+		return status;
+
+	media_output output;
+	int32 outputCount = 0;
+	status = roster->GetFreeOutputsFor(device, &output, 1, &outputCount,
+		B_MEDIA_RAW_AUDIO);
+	media_input input;
+	int32 inputCount = 0;
+	if (status == B_OK && outputCount == 1) {
+		status = roster->GetFreeInputsFor(Node(), &input, 1, &inputCount,
+			B_MEDIA_RAW_AUDIO);
+	}
+	if (status != B_OK || outputCount != 1 || inputCount != 1) {
+		// a recorder has the device's output: try again later
+		roster->ReleaseNode(device);
+		return B_BUSY;
+	}
+
+	// Connected() routes the new stream before its first buffer
+	BString route(RENGA_VIRTUAL_ROUTE_PREFIX_TEXT);
+	route << target;
+	fCore->Lock();
+	fPendingCombinedPort = output.source.port;
+	fPendingCombinedRoute = route;
+	fCore->Unlock();
+
+	format = output.format;
+	media_output newOutput;
+	media_input newInput;
+	status = roster->Connect(output.source, input.destination, &format,
+		&newOutput, &newInput);
+
+	fCore->Lock();
+	fPendingCombinedPort = -1;
+	fPendingCombinedRoute = "";
+	if (status == B_OK) {
+		combined_input* entry = new(std::nothrow) combined_input;
+		if (entry != NULL) {
+			entry->target = target;
+			entry->device = deviceName;
+			entry->source = newOutput.source;
+			entry->destination = newInput.destination;
+			fCombined.AddItem(entry);
+		}
+		// in case Connected() did not see it (another source port)
+		for (int32 j = 0; MixerInput* in = fCore->Input(j); j++) {
+			if (in->ID() == newInput.destination.id) {
+				in->SetRoute(route.String());
+				in->SetTransientLoopbackOnly(false);
+				in->SetLive(true);
+			}
+		}
+		fCore->UpdateRouting();
+	}
+	fCore->Unlock();
+
+	if (status == B_OK) {
+		// as BMediaRecorder starts a card: a sound card is its own time
+		// source, and starting that does not start it producing; it keeps
+		// its own clock (the live input's offset in MixerInput follows it)
+		if ((device.kind & B_TIME_SOURCE) != 0)
+			roster->StartTimeSource(device, BTimeSource::RealTime());
+		BTimeSource* timeSource = roster->MakeTimeSourceFor(device);
+		if (timeSource != NULL) {
+			roster->StartNode(device, timeSource->Now());
+			timeSource->Release();
+		}
+	}
+	roster->ReleaseNode(device);
+	return status;
 }
 
 

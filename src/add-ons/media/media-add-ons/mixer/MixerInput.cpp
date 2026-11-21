@@ -44,6 +44,9 @@ MixerInput::MixerInput(MixerCore* core, const media_input& input,
 	fUserOverridesChannelDestinations(false),
 	fTeam(-1),
 	fTransientLoopbackOnly(false),
+	fLive(false),
+	fLiveOffset(-1),
+	fBuffersReceived(0),
 	fSink(NULL),
 	fLowLatency(false),
 	fPreviousSink(NULL)
@@ -143,6 +146,7 @@ MixerInput::BufferReceived(BBuffer* buffer)
 		return;
 	}
 
+	fBuffersReceived++;
 	data = buffer->Data();
 	size = buffer->SizeUsed();
 	start = buffer->Header()->start_time;
@@ -152,6 +156,26 @@ MixerInput::BufferReceived(BBuffer* buffer)
 		ERROR("MixerInput::BufferReceived: buffer with negative start time of "
 			"%lld dropped\n", start);
 		return;
+	}
+
+	// Renga (batch 11, several inputs at once): a sound card's recording
+	// carries the time it was captured, which the mix has passed already;
+	// it is moved forward by a fixed offset to land just ahead of the mix,
+	// and the offset is set again only if a buffer would come late.
+	if (fLive && fCore->fTimeSource != NULL) {
+		bigtime_t mixDuration = fMixBufferFrameRate > 0
+			? duration_for_frames(fMixBufferFrameRate, fMixBufferFrameCount)
+			: 10000;
+		bigtime_t now = fCore->fTimeSource->Now();
+		bigtime_t earliest = now + fCore->fDownstreamLatency + mixDuration;
+		// late, or (a card clock faster than the mixer's) so early that
+		// the mix buffer would wrap: placed again
+		if (fLiveOffset < 0 || start + fLiveOffset < earliest
+			|| start + fLiveOffset > earliest + 4 * mixDuration) {
+			fLiveOffset = earliest + mixDuration - start;
+			fLastDataFrameWritten = -1;
+		}
+		start += fLiveOffset;
 	}
 
 	// swap the byte order of this buffer, if necessary
@@ -802,7 +826,19 @@ MixerInput::SetRoute(const char* deviceName)
 bool
 MixerInput::LoopbackOnly() const
 {
-	return fTransientLoopbackOnly || fRoute == RENGA_LOOPBACK_ONLY_ROUTE;
+	return fTransientLoopbackOnly || fRoute == RENGA_LOOPBACK_ONLY_ROUTE
+		|| IsVirtualRoute();
+}
+
+
+/*!	Batch 11: routed to a virtual device (RENGA_VIRTUAL_ROUTE_PREFIX): on
+	no sound card, like a loopback-only stream, and recorded by that
+	device's loopback.
+*/
+bool
+MixerInput::IsVirtualRoute() const
+{
+	return fRoute.StartsWith(RENGA_VIRTUAL_ROUTE_PREFIX);
 }
 
 

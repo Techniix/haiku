@@ -20,7 +20,8 @@
 	- 'AuCt' "control" <view name> with "value" <int32> (a checkbox, slider
 	  or button: set and invoked, as a click does), "item" <label> (a menu
 	  field: that item chosen) or "select" <index> (a list): replies
-	  "error" <status_t>;
+	  "error" <status_t>; a text field takes "text" <string> (set, then
+	  invoked as Enter does);
 	- 'AuSt': replies with the state (page, advanced, sidebar pages, devices
 	  and what is listed, default output and input, input level);
 	- 'AuPg' "page", 'AuAv' "advanced", 'AuSe' "text".
@@ -38,6 +39,7 @@
 #include <MenuField.h>
 #include <MenuItem.h>
 #include <Path.h>
+#include <TextControl.h>
 #include <Screen.h>
 #include <Window.h>
 
@@ -150,6 +152,15 @@ private:
 			item->SetMarked(true);
 			// (BMenuItem::Invoke() is protected; through BInvoker)
 			return static_cast<BInvoker*>(item)->Invoke();
+		}
+
+		// batch 11: a text field: "text" set, then invoked (Enter)
+		if (BTextControl* text = dynamic_cast<BTextControl*>(view)) {
+			const char* string;
+			if (message->FindString("text", &string) != B_OK)
+				return B_BAD_VALUE;
+			text->SetText(string);
+			return text->Invoke();
 		}
 
 		int32 value;

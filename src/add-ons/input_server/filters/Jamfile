@@ -5,3 +5,4 @@ SubInclude HAIKU_TOP src add-ons input_server filters screen_saver ;
 SubInclude HAIKU_TOP src add-ons input_server filters shortcut_catcher ;
 SubInclude HAIKU_TOP src add-ons input_server filters switch_workspace ;
 SubInclude HAIKU_TOP src add-ons input_server filters padblocker ;
+SubInclude HAIKU_TOP src add-ons input_server filters audio_keys ;

@@ -991,6 +991,17 @@ of a 1 GiB guest was, so the bounce path went untested.
   `html5_mp4` (`html5_media.screenshots`). WebPositive's own sound is
   logged, not checked: the packaged HaikuWebKit 1.10.0 plays it with gaps
   (WebM) or not at all (MP4), see the roadmap (F-57).
+- **media_mixing** (`media_mixing_test`, renga-* images; batch 11): the
+  rest of audio routing. Virtual devices (a stream routed to one is heard
+  nowhere, left out of "What you hear", recorded by the virtual device's
+  loopback), ducking (B lowered by the amount set while trigger A plays,
+  released afterwards, off when switched off), microphone processing on
+  the input the harness feeds (mute, noise gate with `CE-HOST audio_in` at
+  -47 dBFS, automatic gain, 80 Hz high-pass with a 40 Hz/1 kHz tone pair,
+  kept per device and removed when all off), several inputs at once (the
+  fed input through a virtual device, not played back) and push-to-talk
+  and the mute key with `CE-HOST key_hold f9|f10` through input_server's
+  audio_keys filter and the audio device agent.
 - **media_routing** (`media_routing_test`, renga-* images): the mixer
   interfaces of roadmap F-58 (OBS Studio's O-1 to O-4). Two child
   applications play 5100 Hz on the left and 5300 Hz on the right;

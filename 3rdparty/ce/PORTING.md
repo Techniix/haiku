@@ -27,7 +27,7 @@ updates this file in the same commit.
 | USB Audio Class 1 and 2 devices (headsets, DACs) | (driver `usb_audio`, hmulti) | | UAC1 only, broken at 44.1 kHz on xhci | Available (UAC2 not yet tried on hardware) |
 | UVC webcams (YUY2, MJPEG) as Media Kit video sources | (Media Kit, `usb_webcam` add-on) | libmedia (nothing extra) | Missing (UVC class not built) | Available (not yet tried on hardware) |
 | Screen, window or region capture (damage-based, timestamped, with the user's permission and an indicator); a capture session with system audio, one application's audio and the microphone, writing a file or feeding the port | `<ScreenCapture.h>`, `<CaptureSession.h>` (private headers) | libbe, libmedia (nothing extra) | Only `BScreen::ReadBitmap()` (whole frames, no damage, no consent) | Available |
-| Leaving applications out of a loopback; a "loopback only" output; loopbacks of one process (team); routing a stream to a device by name, kept while it is absent; each stream's team; loopback only by team, not remembered | (mixer parameters `renga:loopback_exclude`, `renga:loopback_team`, `renga:routes`, `renga:app_team`, `renga:loopback_only_teams`; `AudioStreamControl.h`, private header) | libmedia (nothing extra) | Missing | Available |
+| Leaving applications out of a loopback; a "loopback only" output; loopbacks of one process (team); routing a stream to a device by name, kept while it is absent; each stream's team; loopback only by team, not remembered; virtual devices, several inputs at once, ducking, microphone processing (batch 11) | (mixer parameters `renga:loopback_exclude`, `renga:loopback_team`, `renga:routes`, `renga:app_team`, `renga:loopback_only_teams`, `renga:virtual_devices`, `renga:combined_inputs`, `renga:ducking`; multi_audio's `renga:input_processing`; `AudioStreamControl.h`, private header) | libmedia (nothing extra) | Missing | Available |
 | Camera mode lists (sizes, rates, encodings); `field_rate` honoured | (parameter `renga:video_modes`) | libmedia (nothing extra) | Missing; UVC always 30 fps | Available (UVC side not yet tried on hardware) |
 | A virtual camera fed by one program (OBS's "Start Virtual Camera") | `<VirtualCamera.h>` (private header) | libmedia, `-lgnu`, libnetwork | Missing | Available |
 | Screen capture: asynchronous permission request, `B_TIMED_OUT`, frame notification, window visibility flags | `<ScreenCapture.h>` (private header) | libbe (nothing extra) | Missing | Available |
@@ -935,6 +935,25 @@ plain Media Kit calls:
   sources): with the team of each stream known (above), there is no need
   for a second application signature to keep their sound off the
   speakers. (F-58 batch 2, O-18.)
+- **Virtual devices, ducking, several inputs, microphone processing**
+  (batch 11; `AudioStreamControl.h` documents each format). A stream
+  routed to `renga:virtual:<name>` (`AudioStreamControl::VirtualRoute()`)
+  plays on no sound card and is left out of "What you hear"; a loopback
+  started for the "signature" `renga:virtual:<name>` records exactly the
+  streams routed there (a PulseAudio null sink and its monitor). The
+  names users created: the mixer's `renga:virtual_devices` text
+  (`GetVirtualDevices()`). `renga:combined_inputs` ("<virtual>\t<input
+  device>" lines) connects sound card inputs into the mixer routed to a
+  virtual device, so that one loopback records several microphones mixed
+  (open: the connection is made, but the recordings do not reach the mix
+  yet; not in the Audio preferences until they do);
+  `renga:ducking` ("on", "amount", "trigger <signature>" lines) lowers
+  every other stream while a trigger application is heard. A sound
+  card's multi_audio node has `renga:input_processing` ("mute", "gate",
+  "agc", "highpass"), applied to what it records, kept per device;
+  push-to-talk and the mute key set "mute" on every input. For OBS-style
+  programs: record a virtual device to get a submix without the
+  speakers hearing it.
 - **Routes by device name.** The system mixer's hidden text parameter of
   kind `renga:routes` lists "<input id> <device name>" per stream;
   writing one such line routes that stream to the device of that flavor

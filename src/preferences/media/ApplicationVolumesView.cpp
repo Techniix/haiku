@@ -194,6 +194,14 @@ ApplicationVolumesView::MessageReceived(BMessage* message)
 			if (row == NULL)
 				break;
 			row->changed = system_time();
+			const char* virtualName;
+			if (message->FindString("virtual", &virtualName) == B_OK) {
+				BString route
+					= BPrivate::AudioStreamControl::VirtualRoute(virtualName);
+				for (size_t i = 0; i < row->ids.size(); i++)
+					fControl.SetRoute(row->ids[i], route.String());
+				break;
+			}
 			for (size_t i = 0; i < row->ids.size(); i++)
 				fControl.SetOutput(row->ids[i], message->GetInt32("index", 0));
 			break;
@@ -259,6 +267,11 @@ ApplicationVolumesView::_Refresh()
 	key << "|";
 	for (int32 i = 0; i < fControl.Outputs().CountStrings(); i++)
 		key << fControl.Outputs().StringAt(i) << ";";
+	// batch 11: the virtual devices are in the "Output" menus too
+	fControl.GetVirtualDevices(fVirtualDevices);
+	key << "|";
+	for (int32 i = 0; i < fVirtualDevices.CountStrings(); i++)
+		key << fVirtualDevices.StringAt(i) << ";";
 
 	if (key != fLayoutKey) {
 		fLayoutKey = key;
@@ -334,7 +347,8 @@ ApplicationVolumesView::_Rebuild()
 		row->mute->SetTarget(this);
 
 		row->output = NULL;
-		if (stream->hasOutput && fControl.Outputs().CountStrings() > 1) {
+		if (stream->hasOutput && (fControl.Outputs().CountStrings() > 1
+				|| (stream->hasRoute && !fVirtualDevices.IsEmpty()))) {
 			BPopUpMenu* menu = new BPopUpMenu("output");
 			for (int32 j = 0; j < fControl.Outputs().CountStrings(); j++) {
 				BMessage* choice = new BMessage(kMsgOutput);
@@ -344,6 +358,21 @@ ApplicationVolumesView::_Rebuild()
 					fControl.Outputs().StringAt(j).String(), choice);
 				item->SetTarget(this);
 				menu->AddItem(item);
+			}
+			if (stream->hasRoute && !fVirtualDevices.IsEmpty()) {
+				menu->AddSeparatorItem();
+				for (int32 j = 0; j < fVirtualDevices.CountStrings(); j++) {
+					BMessage* choice = new BMessage(kMsgOutput);
+					choice->AddInt32("id", stream->id);
+					choice->AddString("virtual",
+						fVirtualDevices.StringAt(j));
+					BString label(B_TRANSLATE("%name% (virtual)"));
+					label.ReplaceFirst("%name%",
+						fVirtualDevices.StringAt(j));
+					BMenuItem* item = new BMenuItem(label, choice);
+					item->SetTarget(this);
+					menu->AddItem(item);
+				}
 			}
 			row->output = new BMenuField(
 				(BString("output") << suffix).String(), NULL, menu);
@@ -421,6 +450,14 @@ ApplicationVolumesView::_UpdateValues()
 		}
 		if (row->output != NULL) {
 			BMenuItem* item = row->output->Menu()->ItemAt(stream->output);
+			const char* virtualName = BPrivate::AudioStreamControl::VirtualName(
+				stream->route.String());
+			if (virtualName != NULL) {
+				// batch 11: after the outputs and the separator
+				int32 index = fVirtualDevices.IndexOf(virtualName);
+				item = index >= 0 ? row->output->Menu()->ItemAt(
+					fControl.Outputs().CountStrings() + 1 + index) : NULL;
+			}
 			if (item != NULL && !item->IsMarked())
 				item->SetMarked(true);
 		}

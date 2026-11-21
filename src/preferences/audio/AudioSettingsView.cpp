@@ -7,6 +7,7 @@
 #include "AudioSettingsView.h"
 
 #include "AudioDevicePolicy.h"
+#include "AudioMixingPages.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1739,8 +1740,15 @@ AudioSettingsView::AudioSettingsView()
 	fDevicesPage = new DevicesPage(fDevices);
 	fPages.AddItem(fOutputPage);
 	fPages.AddItem(fInputPage);
+	// batch 11 (F-31 routing): Microphone, Mixing, Presets
+	fMicrophonePage = new MicrophonePage(fDevices);
+	fMixingPage = new MixingPage(fDevices);
+	fPresetsPage = new PresetsPage(fDevices);
+	fPages.AddItem(fMicrophonePage);
 	fPages.AddItem(new ApplicationsPage());
+	fPages.AddItem(fMixingPage);
 	fPages.AddItem(fDevicesPage);
+	fPages.AddItem(fPresetsPage);
 
 	fSearch = new BTextControl("search", B_TRANSLATE("Search:"), "",
 		new BMessage(kMsgSearch));
@@ -2069,4 +2077,7 @@ AudioSettingsView::GetState(BMessage* state)
 	state->AddString("default_output", fDevices.DefaultOutputName());
 	state->AddString("default_input", fDevices.DefaultInputName());
 	state->AddInt32("input_level", fInputPage->Meter()->Value());
+	fMicrophonePage->GetState(state);
+	fMixingPage->GetState(state);
+	fPresetsPage->GetState(state);
 }

@@ -55,6 +55,7 @@ private:
 			Row*				_FindRow(int32 id) const;
 
 			BPrivate::AudioStreamControl fControl;
+			BStringList			fVirtualDevices;
 			BGridView*			fGrid;
 			BStringView*		fEmptyLabel;
 			BObjectList<Row, true> fRows;

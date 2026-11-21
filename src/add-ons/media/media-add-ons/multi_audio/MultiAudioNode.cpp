@@ -19,12 +19,18 @@
 #include <BufferGroup.h>
 #include <Catalog.h>
 #include <ParameterWeb.h>
+#include <Directory.h>
+#include <Entry.h>
+#include <File.h>
+#include <FindDirectory.h>
+#include <Path.h>
 #include <String.h>
 
 #include <Referenceable.h>
 
 #include <LowLatencyAudio.h>
 
+#include "InputProcessing.h"
 #include "MultiAudioUtility.h"
 #ifdef DEBUG
 #	define PRINTING
@@ -47,6 +53,10 @@
 #define PARAMETER_ID_BUFFER_FRAMES		0x52474e02
 #define PARAMETER_ID_PERIOD_REQUEST		0x52474e03
 #define PARAMETER_ID_CLOCK_SKEW			0x52474e04
+// batch 11: microphone processing (AudioStreamControl.h,
+// RENGA_INPUT_PROCESSING_KIND), a hidden text parameter
+#define PARAMETER_ID_INPUT_PROCESSING	0x52474e05
+#define RENGA_INPUT_PROCESSING_KIND		"renga:input_processing"
 static const int32 kBufferFrameChoices[] = { 128, 256, 512, 1024, 2048, 4096 };
 static const float kMinInputGain = -40.0f;
 static const float kMaxInputGain = 20.0f;
@@ -172,6 +182,7 @@ public:
 	volatile uint32 	fBufferCycle;
 	int32				fOldBufferCycle;
 	Resampler*			fResampler;
+	InputProcessor		fProcessor;		// batch 11: microphone processing
 };
 
 
@@ -293,6 +304,7 @@ MultiAudioNode::MultiAudioNode(BMediaAddOn* addon, const char* name,
 	fInputGainDB(0.0f),
 	fInputGain(1.0f),
 	fInputGainChanged(0),
+	fInputProcessingChanged(0),
 	fBufferFramesSetting(0),
 	fPeriodRequest(0),
 	fClockSkew(0),
@@ -484,6 +496,9 @@ MultiAudioNode::NodeRegistered()
 		ReportError(B_NODE_IN_DISTRESS);
 		return;
 	}
+
+	// batch 11: the device's microphone processing, kept by name
+	_LoadInputProcessing();
 
 	node_input *currentInput = NULL;
 	int32 currentId = 0;
@@ -1449,6 +1464,15 @@ MultiAudioNode::GetParameterValue(int32 id, bigtime_t* lastChange, void* value,
 		*lastChange = fInputGainChanged;
 		return B_OK;
 	}
+	if (id == PARAMETER_ID_INPUT_PROCESSING) {
+		BString text = fInputProcessing.Format();
+		if (*size < (size_t)text.Length() + 1)
+			return B_NO_MEMORY;
+		memcpy(value, text.String(), text.Length() + 1);
+		*size = text.Length() + 1;
+		*lastChange = fInputProcessingChanged;
+		return B_OK;
+	}
 	if (id == PARAMETER_ID_CLOCK_SKEW) {
 		if (*size < sizeof(int32))
 			return B_NO_MEMORY;
@@ -1578,6 +1602,21 @@ MultiAudioNode::SetParameterValue(int32 id, bigtime_t performanceTime,
 		fInputGainChanged = TimeSource() != NULL ? TimeSource()->Now() : 0;
 		BroadcastNewParameterValue(performanceTime, id, &fInputGainDB,
 			sizeof(float));
+		return;
+	}
+
+	if (id == PARAMETER_ID_INPUT_PROCESSING) {
+		BString text((const char*)value, strnlen((const char*)value,
+			min_c(size, (size_t)1024)));
+		input_processing_settings settings = fInputProcessing;
+		settings.Parse(text.String());
+		fInputProcessing = settings;
+		fInputProcessingChanged = TimeSource() != NULL
+			? TimeSource()->Now() : 0;
+		_SaveInputProcessing();
+		BString formatted = fInputProcessing.Format();
+		BroadcastNewParameterValue(performanceTime, id,
+			(void*)formatted.String(), formatted.Length() + 1);
 		return;
 	}
 
@@ -1837,6 +1876,9 @@ MultiAudioNode::MakeParameterWeb()
 		group->MakeContinuousParameter(PARAMETER_ID_INPUT_GAIN,
 			B_MEDIA_RAW_AUDIO, B_TRANSLATE("Recording gain"), B_GAIN,
 			B_TRANSLATE("dB"), kMinInputGain, kMaxInputGain, 0.5);
+		group->MakeTextParameter(PARAMETER_ID_INPUT_PROCESSING,
+			B_MEDIA_RAW_AUDIO, "Microphone processing",
+			RENGA_INPUT_PROCESSING_KIND, 1024)->SetFlags(B_HIDDEN_PARAMETER);
 	}
 
 	multi_mix_control* controls = fDevice->MixControlInfo().controls;
@@ -2427,6 +2469,8 @@ MultiAudioNode::_FillNextBuffer(multi_buffer_info& info, node_output& output)
 		}
 
 		_ApplyInputGain(buffer, output.fOutput.format.u.raw_audio);
+		output.fProcessor.Process(buffer->Data(),
+			output.fOutput.format.u.raw_audio, fInputProcessing);
 	}
 
 	// fill in the buffer header
@@ -2765,6 +2809,63 @@ MultiAudioNode::_UpdateInternalLatency(const media_format& format)
 	PRINT(("  internal latency = %" B_PRIdBIGTIME "\n", fInternalLatency));
 
 	SetEventLatency(fInternalLatency);
+}
+
+
+/*!	Batch 11: where the microphone processing of this device is kept:
+	~/config/settings/Media/input_processing/<node name> (slashes in the
+	name replaced).
+*/
+static status_t
+input_processing_path(const char* name, BPath& path)
+{
+	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &path);
+	if (status == B_OK)
+		status = path.Append("Media/input_processing");
+	BString leaf(name);
+	leaf.ReplaceAll('/', '-');
+	if (status == B_OK)
+		status = path.Append(leaf.String());
+	return status;
+}
+
+
+void
+MultiAudioNode::_LoadInputProcessing()
+{
+	BPath path;
+	if (input_processing_path(Name(), path) != B_OK)
+		return;
+	BFile file(path.Path(), B_READ_ONLY);
+	char text[1025];
+	ssize_t bytes = file.InitCheck() == B_OK
+		? file.Read(text, sizeof(text) - 1) : -1;
+	if (bytes <= 0)
+		return;
+	text[bytes] = '\0';
+	input_processing_settings settings;
+	settings.Parse(text);
+	fInputProcessing = settings;
+}
+
+
+void
+MultiAudioNode::_SaveInputProcessing()
+{
+	BPath path;
+	if (input_processing_path(Name(), path) != B_OK)
+		return;
+	if (fInputProcessing.IsNeutral()) {
+		BEntry(path.Path()).Remove();
+		return;
+	}
+	BPath parent;
+	path.GetParent(&parent);
+	create_directory(parent.Path(), 0755);
+	BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+	BString text = fInputProcessing.Format();
+	if (file.InitCheck() == B_OK)
+		file.Write(text.String(), text.Length());
 }
 
 

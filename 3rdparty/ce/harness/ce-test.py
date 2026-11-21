@@ -277,6 +277,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"media_resample_test", "media_drift_test", "media_html5_test",
 	"media_teardown_test",
 	"media_routing_test", "media_vcam_test", "virtual_camera.media_addon",
+	"media_mixing_test", "audio_keys", "audio_device_agent",
 	"seqpacket_test", "app_server", "libbe.so", "appserver_fd_test",
 	"software_video_accelerator",
 	"sound_latency_test", "libmedia.so", "media_codec_test", "ffmpeg",
@@ -2695,7 +2696,7 @@ def host_request_allowed(words):
 		return words[1] in POINTER_DEVICES and words[2] in ("down", "up",
 			"right_down", "right_up")
 	if len(words) == 3 and words[0] == "key_hold":
-		return words[1] in ("shift", "ctrl", "alt") \
+		return words[1] in ("shift", "ctrl", "alt", "f9", "f10", "scroll_lock") \
 			and words[2] in ("down", "up")
 	if len(words) == 3 and words[0] == "pointer_rel":
 		return all(re.fullmatch(r"-?\d{1,3}", w) is not None

@@ -156,3 +156,15 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
 		: media_app_rows_test ;
 }
+
+# The rest of audio routing (batch 11): virtual devices, ducking, several
+# inputs at once, microphone processing, push-to-talk and the mute key.
+Application media_mixing_test :
+	media_mixing_test.cpp
+	: be media [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: media_mixing_test ;
+}

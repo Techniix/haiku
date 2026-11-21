@@ -19,6 +19,7 @@
 
 #include "hmulti_audio.h"
 #include "MultiAudioDevice.h"
+#include "InputProcessing.h"
 #include "TimeComputer.h"
 
 
@@ -27,6 +28,7 @@ class BParameterGroup;
 
 class node_input;
 class node_output;
+
 
 
 class MultiAudioNode : public BBufferConsumer, public BBufferProducer,
@@ -229,6 +231,8 @@ private:
 									const char* name, int32 parameterID,
 									uint32 rateMask);
 
+			void				_LoadInputProcessing();
+			void				_SaveInputProcessing();
 			void				_ApplyInputGain(BBuffer* buffer,
 									const media_raw_audio_format& format);
 			status_t			_SetNodeInputFrameRate(float frameRate);
@@ -270,6 +274,8 @@ private:
 			float				fInputGainDB;
 			volatile float		fInputGain;
 			bigtime_t			fInputGainChanged;
+			input_processing_settings fInputProcessing;
+			bigtime_t			fInputProcessingChanged;
 
 			// Renga: low-latency mode (headers/private/media/
 			// LowLatencyAudio.h). The user's "Buffer size" (0 automatic)

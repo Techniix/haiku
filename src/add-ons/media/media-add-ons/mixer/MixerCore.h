@@ -14,6 +14,7 @@
 #include <Buffer.h>
 #include <Locker.h>
 #include <String.h>
+#include <StringList.h>
 #include <TimeSource.h>
 
 
@@ -30,6 +31,9 @@ struct loopback_selection;
 // device name any device can have (devices are named after their flavor,
 // and no flavor name has the "renga:" prefix).
 #define RENGA_LOOPBACK_ONLY_ROUTE	"renga:loopback-only"
+// Batch 11: a virtual device's route (AudioStreamControl.h): on no sound
+// card, recorded by the loopback whose signature is the same string.
+#define RENGA_VIRTUAL_ROUTE_PREFIX	"renga:virtual:"
 class Resampler;
 struct chan_info;
 template<class value> class RtList;
@@ -107,6 +111,17 @@ public:
 			const char*			PrimaryDeviceName() const
 									{ return fPrimaryDeviceName.String(); }
 			void				UpdateRouting();
+
+	// Batch 11 (F-31 routing): ducking. While a stream of one of
+	// \a triggers is heard (above -50 dBFS, held 0.5 s), every other
+	// stream goes down by \a amountDB (at 120 dB/s, back at 24 dB/s, so
+	// the change is a fade, not a step). Call with the lock held.
+			void				SetDucking(bool on, float amountDB,
+									const BStringList& triggers);
+			bool				DuckingActive() const
+									{ return fDuckActive; }
+			float				DuckingLevel() const
+									{ return fDuckLevelDB; }
 
 	static	MixerTap* const	kNowhere;
 
@@ -189,6 +204,17 @@ private:
 			float*				fAllBuffer;		// sum of every target
 			loopback_selection*	fSelection;		// the mix thread's copy of a
 												// loopback's (F-58)
+
+			// batch 11: ducking (SetDucking())
+			bool				fDuckOn;
+			float				fDuckAmountDB;
+			BStringList			fDuckTriggers;
+			float				fDuckLevelDB;	// now, 0 to fDuckAmountDB
+			bool				fDuckActive;
+			bigtime_t			fDuckLastHeard;
+			bool				_IsDuckTrigger(MixerInput* input) const;
+			bool				_Heard(MixerInput* input, int64 framePos,
+									bigtime_t eventTime);
 
 	friend class MixerInput;
 		// NOTE: debug only

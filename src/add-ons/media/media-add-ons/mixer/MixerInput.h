@@ -87,6 +87,14 @@ public:
 	// plays on no output and is left out of loopbacks of every stream, but
 	// recorded by loopbacks of its application or team.
 			bool				LoopbackOnly() const;
+			bool				IsVirtualRoute() const;
+	// Renga (batch 11): a sound card's recording (several inputs at once),
+	// moved forward in time to be mixed (BufferReceived())
+			void				SetLive(bool live) { fLive = live; }
+			bool				IsLive() const { return fLive; }
+			int64				BuffersReceived() const
+									{ return fBuffersReceived; }
+			bigtime_t			LiveOffset() const { return fLiveOffset; }
 	// F-58 batch 2 (OBS Studio's O-18): loopback only for now, because the
 	// stream's team was asked for that (AudioMixer's
 	// "renga:loopback_only_teams"); not saved with the stream's settings,
@@ -171,6 +179,9 @@ private:
 			team_id				fTeam;
 			BString				fRoute;
 			bool				fTransientLoopbackOnly;
+			bool				fLive;
+			bigtime_t			fLiveOffset;
+			int64				fBuffersReceived;
 			MixerTap*			fSink;
 			bool				fLowLatency;
 			MixerTap*			fPreviousSink;

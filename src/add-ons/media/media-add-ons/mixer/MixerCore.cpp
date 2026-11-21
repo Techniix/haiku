@@ -10,6 +10,7 @@
 
 #include "MixerCore.h"
 
+#include <math.h>
 #include <string.h>
 
 #include <Buffer.h>
@@ -90,7 +91,12 @@ MixerCore::MixerCore(AudioMixer *node)
 	fTaps(new BList),
 	fTapBuffer(NULL),
 	fAllBuffer(NULL),
-	fSelection(new loopback_selection)
+	fSelection(new loopback_selection),
+	fDuckOn(false),
+	fDuckAmountDB(-12.0f),
+	fDuckLevelDB(0.0f),
+	fDuckActive(false),
+	fDuckLastHeard(0)
 {
 }
 
@@ -820,6 +826,12 @@ MixerCore::_InputFade(MixerInput* input, int mode, MixerTap* tap,
 			// F-58 (O-3): a team's streams, or an application's
 			if (selection->team > 0)
 				return input->Team() == selection->team;
+			// batch 11: a virtual device's loopback records the streams
+			// routed to it, whichever application they come from
+			if (strncmp(selection->signature, RENGA_VIRTUAL_ROUTE_PREFIX,
+					strlen(RENGA_VIRTUAL_ROUTE_PREFIX)) == 0) {
+				return strcmp(input->Route(), selection->signature) == 0;
+			}
 			return selection->signature[0] != '\0'
 				&& strcmp(input->AppSignature(), selection->signature) == 0;
 	}
@@ -968,7 +980,35 @@ MixerCore::_Mix(float* destination, int mode, MixerTap* tap,
 void
 MixerCore::_StartMixCycle(int64 framePos, bigtime_t eventTime)
 {
+	// batch 11: ducking, decided once per cycle for every target
+	float duck = 1.0f;
+	if (fDuckOn || fDuckLevelDB < 0) {
+		bool heard = false;
+		if (fDuckOn) {
+			for (int i = 0; MixerInput* input = Input(i); i++) {
+				if (_IsDuckTrigger(input)
+					&& _Heard(input, framePos, eventTime)) {
+					heard = true;
+					break;
+				}
+			}
+		}
+		if (heard)
+			fDuckLastHeard = system_time();
+		fDuckActive = fDuckOn && fDuckLastHeard > 0
+			&& system_time() - fDuckLastHeard < 500000;
+		float target = fDuckActive ? fDuckAmountDB : 0.0f;
+		float seconds = fMixBufferFrameRate > 0
+			? (float)fMixBufferFrameCount / fMixBufferFrameRate : 0.01f;
+		if (fDuckLevelDB > target)
+			fDuckLevelDB = max_c(target, fDuckLevelDB - 120.0f * seconds);
+		else if (fDuckLevelDB < target)
+			fDuckLevelDB = min_c(target, fDuckLevelDB + 24.0f * seconds);
+		duck = powf(10.0f, fDuckLevelDB / 20.0f);
+	}
+
 	for (int i = 0; MixerInput* input = Input(i); i++) {
+		float factor = duck != 1.0f && !_IsDuckTrigger(input) ? duck : 1.0f;
 		int count = input->GetMixerChannelCount();
 		for (int channel = 0; channel < count; channel++) {
 			int type;
@@ -977,10 +1017,62 @@ MixerCore::_StartMixCycle(int64 framePos, bigtime_t eventTime)
 			float gain;
 			if (input->GetMixerChannelInfo(channel, framePos, eventTime,
 					&base, &sampleOffset, &type, &gain, true)) {
-				input->SetCycleMixerChannelGain(channel, gain);
+				input->SetCycleMixerChannelGain(channel, gain * factor);
 			}
 		}
 	}
+}
+
+
+void
+MixerCore::SetDucking(bool on, float amountDB, const BStringList& triggers)
+{
+	ASSERT_LOCKED();
+	fDuckOn = on;
+	fDuckAmountDB = max_c(-40.0f, min_c(0.0f, amountDB));
+	fDuckTriggers = triggers;
+	if (!on)
+		fDuckActive = false;
+}
+
+
+bool
+MixerCore::_IsDuckTrigger(MixerInput* input) const
+{
+	const char* signature = input->AppSignature();
+	if (signature == NULL || signature[0] == '\0')
+		return false;
+	for (int32 i = 0; i < fDuckTriggers.CountStrings(); i++) {
+		if (fDuckTriggers.StringAt(i).ICompare(signature) == 0)
+			return true;
+	}
+	return false;
+}
+
+
+/*!	Whether \a input carries sound this cycle: data, not muted, and a
+	sample of its first channel above -50 dBFS.
+*/
+bool
+MixerCore::_Heard(MixerInput* input, int64 framePos, bigtime_t eventTime)
+{
+	if (input->GetMixerChannelCount() < 1)
+		return false;
+	int type;
+	const float* base;
+	uint32 sampleOffset;
+	float gain;
+	if (!input->GetMixerChannelInfo(0, framePos, eventTime, &base,
+			&sampleOffset, &type, &gain, false) || gain <= 0) {
+		return false;
+	}
+	const char* sample = (const char*)base;
+	for (int32 frame = 0; frame < fMixBufferFrameCount; frame++) {
+		if (fabsf(*(const float*)sample) > 0.00316f)
+			return true;
+		sample += sampleOffset;
+	}
+	return false;
 }
 
 

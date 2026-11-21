@@ -240,6 +240,9 @@ private:
 			OutputPage*			fOutputPage;
 			InputPage*			fInputPage;
 			DevicesPage*		fDevicesPage;
+			class MicrophonePage* fMicrophonePage;
+			class MixingPage*	fMixingPage;
+			class PresetsPage*	fPresetsPage;
 };
 
 

@@ -29,6 +29,8 @@ Application ControlPanel :
 	WaylandSwitch.cpp
 	AudioDevices.cpp
 	AudioSettingsView.cpp
+	AudioMixingPages.cpp
+	MicrophoneProcessing.cpp
 	AudioDevicePolicy.cpp
 	OutputMenuField.cpp
 	ApplicationVolumesView.cpp

@@ -79,6 +79,40 @@ namespace BPrivate {
 // the id is given for completeness.
 #define RENGA_LOOPBACK_EXCLUDE_KIND		"renga:loopback_exclude"
 #define RENGA_LOOPBACK_EXCLUDE_ID		4
+// Batch 11 (F-31 routing): virtual devices. A stream routed to
+// RENGA_VIRTUAL_ROUTE_PREFIX "<name>" plays on no sound card and is not
+// part of "What you hear"; a loopback started for the "signature"
+// RENGA_VIRTUAL_ROUTE_PREFIX "<name>" records exactly the streams routed
+// there (a PipeWire/PulseAudio null sink and its monitor). The mixer's
+// hidden text parameter RENGA_VIRTUAL_DEVICES_KIND holds the names the
+// user created, one per line (read and write, the whole list), so every
+// "Output" menu can offer them.
+#define RENGA_VIRTUAL_ROUTE_PREFIX		"renga:virtual:"
+#define RENGA_VIRTUAL_DEVICES_KIND		"renga:virtual_devices"
+// Batch 11 (F-31 routing): ducking. The mixer's hidden text parameter,
+// read and write as a whole, "key value" lines:
+//   on 0|1          ducking switched on (default off)
+//   amount <dB>     how far other streams go down, -40 to 0 (default -12)
+//   trigger <sig>   an application whose sound ducks the others (any
+//                   number of lines; none: nothing ducks)
+// Read also gives "active 0|1": whether streams are ducked right now.
+#define RENGA_DUCKING_KIND				"renga:ducking"
+// Batch 11 (F-31 routing): several inputs at once. The mixer's hidden text
+// parameter, read and write as a whole: lines "<virtual device>\t<input
+// device>"; each input device records into the mixer, routed to that
+// virtual device (heard nowhere, recorded by the virtual device's
+// loopback, each with its own microphone processing).
+#define RENGA_COMBINED_INPUTS_KIND		"renga:combined_inputs"
+// Batch 11 (F-31 routing): microphone processing in the multi_audio node
+// of a sound card with inputs. A hidden text parameter, read and write as
+// a whole, "key value" lines (unknown keys are ignored, missing ones keep
+// their value):
+//   mute 0|1        recording muted (silence, faded over one buffer)
+//   gate <dB>       noise gate threshold, -80 to -20; 0 off (default)
+//   agc 0|1         automatic gain towards -20 dBFS, at most +20 dB
+//   highpass 0|1    an 80 Hz high-pass filter against rumble and hum
+// Kept per device in ~/config/settings/Media/input_processing/<device>.
+#define RENGA_INPUT_PROCESSING_KIND		"renga:input_processing"
 
 
 struct AudioStream {
@@ -307,6 +341,64 @@ public:
 			}
 		}
 		return B_OK;
+	}
+
+	/*!	Batch 11: reads the mixer's hidden text parameter of \a kind
+		(RENGA_VIRTUAL_DEVICES_KIND, RENGA_DUCKING_KIND). Needs Update().
+	*/
+	status_t GetMixerText(const char* kind, BString& text)
+	{
+		BParameter* parameter = _FindKind(kind);
+		if (parameter == NULL)
+			return B_ENTRY_NOT_FOUND;
+		char buffer[4097];
+		size_t size = sizeof(buffer) - 1;
+		bigtime_t when;
+		status_t status = parameter->GetValue(buffer, &size, &when);
+		if (status != B_OK)
+			return status;
+		buffer[min_c(size, sizeof(buffer) - 1)] = '\0';
+		text = buffer;
+		return B_OK;
+	}
+
+	//!	Batch 11: writes the mixer's hidden text parameter of \a kind.
+	status_t SetMixerText(const char* kind, const char* text)
+	{
+		BParameter* parameter = _FindKind(kind);
+		if (parameter == NULL)
+			return B_ENTRY_NOT_FOUND;
+		return parameter->SetValue(text, strlen(text) + 1, system_time());
+	}
+
+	//!	Batch 11: the virtual devices' names (RENGA_VIRTUAL_DEVICES_KIND).
+	status_t GetVirtualDevices(BStringList& names)
+	{
+		BString text;
+		status_t status = GetMixerText(RENGA_VIRTUAL_DEVICES_KIND, text);
+		names.MakeEmpty();
+		if (status == B_OK)
+			text.Split("\n", true, names);
+		return status;
+	}
+
+	//!	Batch 11: the route of the virtual device \a name.
+	static BString VirtualRoute(const char* name)
+	{
+		BString route(RENGA_VIRTUAL_ROUTE_PREFIX);
+		route << name;
+		return route;
+	}
+
+	//!	Batch 11: the virtual device a route names, NULL for other routes.
+	static const char* VirtualName(const char* route)
+	{
+		size_t length = strlen(RENGA_VIRTUAL_ROUTE_PREFIX);
+		if (route == NULL || strncmp(route, RENGA_VIRTUAL_ROUTE_PREFIX,
+				length) != 0) {
+			return NULL;
+		}
+		return route + length;
 	}
 
 	/*!	F-58 batch 2 (O-18): the teams set with SetTeamLoopbackOnly() that
@@ -597,8 +689,10 @@ private:
 						continue;
 					stream->hasRoute = true;
 					stream->route = space != NULL ? space + 1 : "";
+					// batch 11: a virtual device is heard nowhere either
 					stream->loopbackOnly
-						= stream->route == RENGA_LOOPBACK_ONLY_ROUTE;
+						= stream->route == RENGA_LOOPBACK_ONLY_ROUTE
+							|| VirtualName(stream->route.String()) != NULL;
 				}
 				line = next;
 			}

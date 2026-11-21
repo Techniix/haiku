@@ -1,0 +1,9 @@
+SubDir HAIKU_TOP src add-ons input_server filters audio_keys ;
+
+# Push-to-talk and the microphone mute key (batch 11, roadmap F-31): reads
+# ~/config/settings/Media/audio_keys and tells the audio device agent.
+
+Addon audio_keys
+	: AudioKeysFilter.cpp
+	: be input_server [ TargetLibsupc++ ]
+	;

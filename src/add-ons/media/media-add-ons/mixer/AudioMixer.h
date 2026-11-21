@@ -15,6 +15,8 @@
 #include <MediaEventLooper.h>
 #include <MediaNode.h>
 #include <Message.h>
+#include <List.h>
+#include <String.h>
 #include <StringList.h>
 
 #include <set>
@@ -159,6 +161,15 @@ private:
 			void				_RouteOnce();
 			void				_LoadMirrors();
 			void				_SaveMirrors();
+			// batch 11: ducking and virtual devices
+			void				_ApplyDucking();
+			void				_LoadRengaText(const char* leaf,
+									BString& text);
+			void				_SaveRengaText(const char* leaf,
+									const BString& text);
+			void				_RouteCombinedInputs();
+			status_t			_ConnectCombinedInput(const BString& target,
+									const BString& deviceName);
 			status_t			_CreateSink(const char* deviceName,
 									media_node_id primaryNode);
 			void				_RemoveSink(MixerTap* tap);
@@ -195,6 +206,20 @@ private:
 			// switching to it).
 			BMessage			fLostDevices;	// name: int64 time
 			BString				fMirrors;
+			BString				fDucking;
+			BString				fVirtualDevices;
+			// batch 11: several inputs at once (_RouteCombinedInputs())
+			struct combined_input {
+				BString				target;
+				BString				device;
+				media_source		source;
+				media_destination	destination;
+			};
+			BString				fCombinedInputs;
+			BString				fCombinedStatus;
+			BList				fCombined;
+			port_id				fPendingCombinedPort;
+			BString				fPendingCombinedRoute;
 				// Renga (audio routing): devices that also play the default
 				// output, "<name>\t<volume dB>\t<delay ms>" per line
 				// (renga:mirror_outputs, saved in Media/mirror_outputs)

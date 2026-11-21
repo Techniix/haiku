@@ -15,6 +15,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 		Addon [ MultiArchDefaultGristFiles hmulti_audio.media_addon ] :
 			MultiAudioAddOn.cpp
 			MultiAudioDevice.cpp
+			InputProcessing.cpp
 			MultiAudioNode.cpp
 			MultiAudioUtility.cpp
 			Resampler.cpp

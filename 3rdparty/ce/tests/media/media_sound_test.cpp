@@ -1154,9 +1154,11 @@ static void
 check_search()
 {
 	BMessage result = search("microphone");
+	// batch 11: the Microphone and Mixing pages match too; the Input page
+	// stays first
 	report("search_input", strcmp(result.GetString("page", ""), "input") == 0
 			&& !result.GetBool("advanced", true)
-			&& strings(result, "sidebar") == "input",
+			&& strings(result, "sidebar") == "input, microphone, mixing",
 		"\"microphone\": page %s, sidebar [%s], advanced %s",
 		result.GetString("page", ""), strings(result, "sidebar").String(),
 		result.GetBool("advanced", false) ? "on" : "off");
@@ -1173,7 +1175,8 @@ check_search()
 
 	result = search("");
 	report("search_cleared", strings(result, "sidebar")
-			== "output, input, applications, devices",
+			== "output, input, microphone, applications, mixing, devices, "
+				"presets",
 		"sidebar [%s]", strings(result, "sidebar").String());
 	set_advanced(false);
 }
