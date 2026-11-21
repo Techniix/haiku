@@ -49,6 +49,7 @@
 #include <Path.h>
 #include <TranslatorRoster.h>
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -96,6 +97,23 @@ run(const char* command, int* _status = NULL)
 	if (_status != NULL)
 		*_status = status;
 	return output;
+}
+
+
+//!	At most 256 bytes of \a path (in this process: a native cat polling the
+//!	file in a loop was found spinning in full renga-raw runs).
+static std::string
+read_small(const char* path)
+{
+	char buffer[257];
+	int fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return "";
+	ssize_t length = read(fd, buffer, sizeof(buffer) - 1);
+	close(fd);
+	if (length <= 0)
+		return "";
+	return std::string(buffer, length);
 }
 
 
@@ -318,7 +336,7 @@ main()
 	std::string ran;
 	for (int i = 0; i < 300 && ran.empty(); i++) {
 		snooze(100000);
-		ran = run("cat /tmp/ce-appimage-ran 2>/dev/null");
+		ran = read_small("/tmp/ce-appimage-ran");
 	}
 	std::string direct;
 	if (ran.empty()) {
@@ -327,7 +345,7 @@ main()
 			+ "' </dev/null >/dev/null 2>&1; echo rc=$?").c_str());
 		for (int i = 0; i < 200 && ran.empty(); i++) {
 			snooze(100000);
-			ran = run("cat /tmp/ce-appimage-ran 2>/dev/null");
+			ran = read_small("/tmp/ce-appimage-ran");
 		}
 		direct += " direct: " + ran;
 		ran.clear();
