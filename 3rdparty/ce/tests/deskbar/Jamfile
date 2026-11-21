@@ -1,0 +1,13 @@
+SubDir HAIKU_TOP 3rdparty ce tests deskbar ;
+
+# The Deskbar's batch 9 features (F-41) and its F-60 numbers, see the
+# source.
+UsePrivateHeaders shared ;
+Application deskbar_test :
+	deskbar_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests : deskbar_test ;
+}

@@ -62,6 +62,9 @@ class TRecentsMenu : public BNavMenu {
 		int32			RecentsCount();
 		bool			RecentsEnabled();
 
+		//! Renga (batch 9), harness: builds the items as showing does.
+		void			BuildForTest();
+
 	private:
 		virtual	bool	StartBuildingItemList();
 		virtual	bool	AddNextItem();
@@ -108,6 +111,11 @@ class TDeskbarMenu : public BNavMenu {
 
 		static BMessenger DefaultTarget();
 
+		//!	Renga (F-60/F-41, batch 9), harness: builds the menu as
+		//	opening it does; "time", "item" labels, "shutdown" labels and
+		//	"restart" labels (the "Restart into" submenu) into \a reply.
+		static void		BuildForTest(TBarView* bar, BMessage* reply);
+
 	private:
 		enum State {
 			kStart,
@@ -119,6 +127,7 @@ class TDeskbarMenu : public BNavMenu {
 		BPoint			ScreenLocation();
 
 		bool			AddStandardDeskbarMenuItems();
+		BMenu*			_BuildRestartIntoMenu();
 
 	private:
 		virtual bool	StartBuildingItemList();

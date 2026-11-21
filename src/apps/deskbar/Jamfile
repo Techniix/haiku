@@ -2,6 +2,7 @@ SubDir HAIKU_TOP src apps deskbar ;
 
 UsePrivateHeaders app interface locale shared tracker ;
 UsePrivateHeaders private shared ;
+UsePrivateSystemHeaders ;
 SubDirHdrs $(HAIKU_TOP) src kits tracker ;
 
 AddResources Deskbar : Deskbar.rdef icons.rdef ;
@@ -28,6 +29,7 @@ Application Deskbar :
 	DeskbarUtils.cpp
 	ExpandoMenuBar.cpp
 	InlineScrollView.cpp
+	MenuSearch.cpp
 	PreferencesWindow.cpp
 	ScreenCornerSelector.cpp
 	ShowHideMenuItem.cpp
@@ -40,9 +42,11 @@ Application Deskbar :
 	WindowMenu.cpp
 	WindowMenuItem.cpp
 	ResourceSet.cpp
+	SearchWindow.cpp
 	Switcher.cpp
 	$(targetSource)
-	: be localestub tracker $(targetLib) [ TargetLibstdc++ ] [ TargetLibsupc++ ]
+	: be localestub tracker $(targetLib) libexpression_parser.a libmapm.a
+		[ TargetLibstdc++ ] [ TargetLibsupc++ ]
 ;
 
 DoCatalogs Deskbar :
@@ -51,7 +55,9 @@ DoCatalogs Deskbar :
 	BarWindow.cpp
 	DeskbarMenu.cpp
 	LocalizedFolders.h
+	MenuSearch.cpp
 	PreferencesWindow.cpp
+	SearchWindow.cpp
 	StatusView.cpp
 	TimeView.cpp
 	WindowMenu.cpp

@@ -36,6 +36,9 @@ All rights reserved.
 
 #include "BarApp.h"
 
+#include <stdio.h>
+#include <unistd.h>
+
 #include <locale.h>
 #include <strings.h>
 
@@ -58,10 +61,15 @@ All rights reserved.
 #include <Roster.h>
 
 #include <DeskbarPrivate.h>
+#include <boot_state_file.h>
 #include <RosterPrivate.h>
 #include "tracker_private.h"
 
 #include "BarView.h"
+#include "DeskbarMenu.h"
+#include "MenuSearch.h"
+#include "SearchWindow.h"
+#include "WindowMenu.h"
 #include "BarWindow.h"
 #include "DeskbarUtils.h"
 #include "FSUtils.h"
@@ -99,7 +107,8 @@ TBarApp::TBarApp()
 	BServer(kDeskbarSignature, true, NULL),
 	fSettingsFile(NULL),
 	fClockSettingsFile(NULL),
-	fPreferencesWindow(NULL)
+	fPreferencesWindow(NULL),
+	fSearchWindow(NULL)
 {
 	InitSettings();
 	InitIconPreloader();
@@ -224,6 +233,12 @@ TBarApp::SaveSettings()
 		prefs.AddBool("alwaysOnTop", fSettings.alwaysOnTop);
 		prefs.AddBool("autoRaise", fSettings.autoRaise);
 		prefs.AddBool("autoHide", fSettings.autoHide);
+		// Renga (F-41, batch 9)
+		prefs.AddBool("showSearch", fSettings.showSearch);
+		prefs.AddBool("searchCalculator", fSettings.searchCalculator);
+		prefs.AddBool("searchFiles", fSettings.searchFiles);
+		prefs.AddBool("showRestartInto", fSettings.showRestartInto);
+		prefs.AddBool("appRecentDocuments", fSettings.appRecentDocuments);
 
 		prefs.Flatten(fSettingsFile);
 	}
@@ -290,6 +305,12 @@ TBarApp::InitSettings()
 	settings.alwaysOnTop = fDefaultSettings.alwaysOnTop = false;
 	settings.autoRaise = fDefaultSettings.autoRaise = false;
 	settings.autoHide = fDefaultSettings.autoHide = false;
+	// Renga (F-41, batch 9)
+	settings.showSearch = fDefaultSettings.showSearch = true;
+	settings.searchCalculator = fDefaultSettings.searchCalculator = true;
+	settings.searchFiles = fDefaultSettings.searchFiles = true;
+	settings.showRestartInto = fDefaultSettings.showRestartInto = true;
+	settings.appRecentDocuments = fDefaultSettings.appRecentDocuments = true;
 
 	clock_settings clock;
 	clock.showSeconds = false;
@@ -364,6 +385,17 @@ TBarApp::InitSettings()
 				fDefaultSettings.autoRaise);
 			settings.autoHide = prefs.GetBool("autoHide",
 				fDefaultSettings.autoHide);
+			// Renga (F-41, batch 9)
+			settings.showSearch = prefs.GetBool("showSearch",
+				fDefaultSettings.showSearch);
+			settings.searchCalculator = prefs.GetBool("searchCalculator",
+				fDefaultSettings.searchCalculator);
+			settings.searchFiles = prefs.GetBool("searchFiles",
+				fDefaultSettings.searchFiles);
+			settings.showRestartInto = prefs.GetBool("showRestartInto",
+				fDefaultSettings.showRestartInto);
+			settings.appRecentDocuments = prefs.GetBool("appRecentDocuments",
+				fDefaultSettings.appRecentDocuments);
 		}
 
 		// constrain width setting within limits
@@ -711,6 +743,136 @@ TBarApp::MessageReceived(BMessage* message)
 			run_be_about();
 			break;
 
+		// Renga (F-41, batch 9)
+		case kShowSearchWindow:
+			_ShowSearchWindow(message);
+			break;
+
+		case kToggleSearch:
+		case kToggleSearchCalculator:
+		case kToggleSearchFiles:
+		case kToggleRestartInto:
+		case kToggleAppRecentDocuments:
+		{
+			bool* setting = message->what == kToggleSearch
+				? &fSettings.showSearch
+				: message->what == kToggleSearchCalculator
+					? &fSettings.searchCalculator
+				: message->what == kToggleSearchFiles
+					? &fSettings.searchFiles
+				: message->what == kToggleRestartInto
+					? &fSettings.showRestartInto
+				: &fSettings.appRecentDocuments;
+			int32 value;
+			if (message->FindInt32("be:value", &value) == B_OK)
+				*setting = value != B_CONTROL_OFF;
+			else
+				*setting = !*setting;
+			if (fSearchWindow != NULL && fSearchWindow->Lock()) {
+				fSearchWindow->SetCalculatorEnabled(
+					fSettings.searchCalculator);
+				fSearchWindow->SetFilesEnabled(fSettings.searchFiles);
+				if (!fSettings.showSearch && !fSearchWindow->IsHidden())
+					fSearchWindow->Hide();
+				fSearchWindow->Unlock();
+			}
+			if (fPreferencesWindow != NULL)
+				fPreferencesWindow->PostMessage(kUpdatePreferences);
+			SaveSettings();
+			break;
+		}
+
+		case kRestartInto:
+			_RestartInto(message);
+			break;
+
+		case kTestDeskbarMenu:
+			// harness images only: builds the Deskbar menu as opening it
+			// does and replies with the time and the entries
+			if (_IsHarness()) {
+				BMessage reply(B_REPLY);
+				TDeskbarMenu::BuildForTest(fBarView, &reply);
+				message->SendReply(&reply);
+			}
+			break;
+
+		case kTestSearch:
+			// harness images only: what the search finds for "query",
+			// files included (when switched on), and how long it took
+			if (_IsHarness()) {
+				BMessage reply(B_REPLY);
+				MenuSearch search;
+				search.SetCalculatorEnabled(fSettings.searchCalculator);
+				SearchResultList results(20);
+				bigtime_t start = system_time();
+				search.SearchQuick(message->GetString("query", ""), results);
+				bigtime_t quick = system_time() - start;
+				int32 quickCount = results.CountItems();
+				start = system_time();
+				if (fSettings.searchFiles) {
+					MenuSearch::SearchFiles(message->GetString("query", ""),
+						20, results);
+				}
+				reply.AddInt64("quick_time", quick);
+				reply.AddInt64("file_time", system_time() - start);
+				reply.AddInt32("quick_count", quickCount);
+				reply.AddInt32("applications", search.CountApplications());
+				for (int32 i = 0; i < results.CountItems(); i++) {
+					SearchResult* result = results.ItemAt(i);
+					reply.AddString("title", result->title);
+					reply.AddString("detail", result->detail);
+					reply.AddInt32("kind", result->kind);
+					reply.AddString("value", result->value);
+				}
+				message->SendReply(&reply);
+			}
+			break;
+
+		case kTestSearchWindow:
+			// harness images only: "show" (with "text"), "results", "open"
+			// (the selected result, as Return does) or "hide"
+			if (_IsHarness()) {
+				BMessage reply(B_REPLY);
+				BString action = message->GetString("action", "");
+				if (action == "show") {
+					BMessage show(kShowSearchWindow);
+					show.AddString("text", message->GetString("text", ""));
+					show.AddBool("test", true);
+					_ShowSearchWindow(&show);
+				}
+				reply.AddBool("exists", fSearchWindow != NULL);
+				if (fSearchWindow != NULL && fSearchWindow->Lock()) {
+					if (action == "hide")
+						fSearchWindow->Hide();
+					else if (action == "open")
+						fSearchWindow->PostMessage('DSop');
+					fSearchWindow->GetResults(reply);
+					reply.AddRect("frame", fSearchWindow->Frame());
+					fSearchWindow->Unlock();
+				}
+				message->SendReply(&reply);
+			}
+			break;
+
+		case kTestAppRecentDocuments:
+			// harness images only: the "Recent documents" submenu that an
+			// application's window menu gets, built, for "signature"
+			if (_IsHarness()) {
+				BMessage reply(B_REPLY);
+				BMenu* menu = TWindowMenu::RecentDocumentsMenu(
+					message->GetString("signature", ""));
+				reply.AddBool("menu", menu != NULL);
+				if (TRecentsMenu* recents
+						= dynamic_cast<TRecentsMenu*>(menu)) {
+					recents->BuildForTest();
+					for (int32 i = 0; i < recents->CountItems(); i++)
+						reply.AddString("item", recents->ItemAt(i)->Label());
+				}
+				delete menu;
+				message->SendReply(&reply);
+			}
+			break;
+
 		case B_LOCALE_CHANGED:
 		{
 			BLocaleRoster::Default()->Refresh();
@@ -1025,6 +1187,74 @@ TBarApp::ShowPreferencesWindow()
 
 		fPreferencesWindow->Unlock();
 	}
+}
+
+
+bool
+TBarApp::_IsHarness() const
+{
+	return access("/boot/system/non-packaged/data/ce-harness", F_OK) == 0;
+}
+
+
+/*!	The Deskbar menu's "Search..." (F-41, batch 9): the search window next
+	to the Deskbar, created on first use. "text" fills the field.
+*/
+void
+TBarApp::_ShowSearchWindow(BMessage* message)
+{
+	if (!fSettings.showSearch && !message->GetBool("test", false))
+		return;
+	if (fSearchWindow == NULL)
+		fSearchWindow = new TSearchWindow();
+	BRect deskbarFrame;
+	if (fBarWindow->Lock()) {
+		deskbarFrame = fBarWindow->Frame();
+		fBarWindow->Unlock();
+	}
+	if (fSearchWindow->Lock()) {
+		fSearchWindow->SetCalculatorEnabled(fSettings.searchCalculator);
+		fSearchWindow->SetFilesEnabled(fSettings.searchFiles);
+		fSearchWindow->ShowNear(deskbarFrame, fSettings.vertical,
+			message->GetString("text", NULL),
+			message->GetBool("test", false));
+		fSearchWindow->Unlock();
+	}
+}
+
+
+/*!	"Restart into" in the Shutdown menu (boot loader A): the boot state's
+	one-shot choice for the next start ("menu" shows the boot menu,
+	"state:<directory>" a restore point), as the Boot menu preferences set
+	it (src/preferences/bootmenu/BootMenu.cpp), then a restart. The boot
+	loader clears the choice when it uses it.
+*/
+void
+TBarApp::_RestartInto(BMessage* message)
+{
+	const char* next = message->GetString("next", "menu");
+	char path[B_PATH_NAME_LENGTH];
+	BootState::file_path(path, sizeof(path));
+	BootState::Record record;
+	int slot = BootState::read_file(path, record);
+	status_t status = B_ENTRY_NOT_FOUND;
+	if (slot != -2) {
+		BootState::set_name(record.nextOnce, sizeof(record.nextOnce), next);
+		status = BootState::write_file(path, record, slot);
+	}
+	fprintf(stderr, "Deskbar: restart into \"%s\": %s\n", next,
+		strerror(status));
+
+	if (message->GetBool("test", false) && _IsHarness()) {
+		BMessage reply(B_REPLY);
+		reply.AddInt32("status", status);
+		message->SendReply(&reply);
+		return;
+	}
+	if (status != B_OK)
+		return;
+	BRoster roster;
+	BRoster::Private(roster).ShutDown(true, false, false);
 }
 
 

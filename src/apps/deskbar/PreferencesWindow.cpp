@@ -74,6 +74,23 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	fMenuRecentFolderCount = new BSpinner("recent folders", NULL,
 		new BMessage(kUpdateRecentCounts));
 
+	// Renga (F-41, batch 9)
+	fMenuSearch = new BCheckBox("search", B_TRANSLATE("Search at the top "
+		"of the menu"), new BMessage(kToggleSearch));
+	fMenuSearch->SetToolTip(B_TRANSLATE("Applications, settings, recent "
+		"items and files from one text field."));
+	fMenuSearchCalculator = new BCheckBox("searchCalculator",
+		B_TRANSLATE("Calculate and convert units"),
+		new BMessage(kToggleSearchCalculator));
+	fMenuSearchFiles = new BCheckBox("searchFiles",
+		B_TRANSLATE("Find files by name"),
+		new BMessage(kToggleSearchFiles));
+	fMenuRestartInto = new BCheckBox("restartInto", B_TRANSLATE("\"Restart "
+		"into\" in the Shutdown menu"), new BMessage(kToggleRestartInto));
+	fAppsRecentDocuments = new BCheckBox("appRecentDocuments",
+		B_TRANSLATE("Recent documents in each application's menu"),
+		new BMessage(kToggleAppRecentDocuments));
+
 	// Applications controls
 	fAppsSort = new BCheckBox(B_TRANSLATE("Sort applications by name"),
 		new BMessage(kSortRunningApps));
@@ -123,6 +140,12 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	fMenuRecentFolderCount->SetRange(0, 50);
 	fMenuRecentFolderCount->SetValue(fSettings.recentFoldersCount);
 
+	fMenuSearch->SetValue(fSettings.showSearch);
+	fMenuSearchCalculator->SetValue(fSettings.searchCalculator);
+	fMenuSearchFiles->SetValue(fSettings.searchFiles);
+	fMenuRestartInto->SetValue(fSettings.showRestartInto);
+	fAppsRecentDocuments->SetValue(fSettings.appRecentDocuments);
+
 	// Applications settings
 	fAppsSort->SetValue(fSettings.sortRunningApps);
 	fAppsSortTrackerFirst->SetValue(fSettings.trackerAlwaysFirst);
@@ -139,6 +162,11 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	_EnableDisableDependentItems();
 
 	// Targets
+	fMenuSearch->SetTarget(be_app);
+	fMenuSearchCalculator->SetTarget(be_app);
+	fMenuSearchFiles->SetTarget(be_app);
+	fMenuRestartInto->SetTarget(be_app);
+	fAppsRecentDocuments->SetTarget(be_app);
 	fAppsSort->SetTarget(be_app);
 	fAppsSortTrackerFirst->SetTarget(be_app);
 	fAppsShowExpanders->SetTarget(be_app);
@@ -166,6 +194,7 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 				.Add(fAppsExpandNew)
 				.End()
 			.Add(fAppsHideLabels)
+			.Add(fAppsRecentDocuments)
 			.AddGlue()
 			.Add(BSpaceLayoutItem::CreateVerticalStrut(B_USE_SMALL_SPACING))
 			.Add(fAppsIconSizeSlider)
@@ -191,6 +220,17 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 					.Add(fMenuRecentApplicationCount)
 					.End()
 				.End()
+				.Add(BSpaceLayoutItem::CreateVerticalStrut(
+					B_USE_SMALL_SPACING))
+				.Add(fMenuSearch)
+				.AddGroup(B_HORIZONTAL, 0)
+					.Add(BSpaceLayoutItem::CreateHorizontalStrut(spacing))
+					.AddGroup(B_VERTICAL, 0)
+						.Add(fMenuSearchCalculator)
+						.Add(fMenuSearchFiles)
+						.End()
+					.End()
+				.Add(fMenuRestartInto)
 				.Add(BSpaceLayoutItem::CreateVerticalStrut(
 					B_USE_SMALL_SPACING))
 				.Add(new BButton(B_TRANSLATE("Edit in Tracker"
@@ -360,6 +400,18 @@ PreferencesWindow::_EnableDisableDependentItems()
 	fMenuRecentApplicationCount->SetEnabled(fMenuRecentApplications->Value() != B_CONTROL_OFF);
 
 	fWindowAutoRaise->SetEnabled(fWindowAlwaysOnTop->Value() == B_CONTROL_OFF);
+
+	// Renga (F-41, batch 9): also after a change from elsewhere (BDeskbar
+	// scripting, the tests, Defaults and Revert)
+	if (settings != NULL) {
+		fMenuSearch->SetValue(settings->showSearch);
+		fMenuSearchCalculator->SetValue(settings->searchCalculator);
+		fMenuSearchFiles->SetValue(settings->searchFiles);
+		fMenuRestartInto->SetValue(settings->showRestartInto);
+		fAppsRecentDocuments->SetValue(settings->appRecentDocuments);
+	}
+	fMenuSearchCalculator->SetEnabled(fMenuSearch->Value() != B_CONTROL_OFF);
+	fMenuSearchFiles->SetEnabled(fMenuSearch->Value() != B_CONTROL_OFF);
 }
 
 
@@ -384,7 +436,12 @@ PreferencesWindow::_IsDefaultable()
 		|| defaults->recentFoldersCount != settings->recentFoldersCount
 		|| defaults->alwaysOnTop != settings->alwaysOnTop
 		|| defaults->autoRaise != settings->autoRaise
-		|| defaults->autoHide != settings->autoHide;
+		|| defaults->autoHide != settings->autoHide
+		|| defaults->showSearch != settings->showSearch
+		|| defaults->searchCalculator != settings->searchCalculator
+		|| defaults->searchFiles != settings->searchFiles
+		|| defaults->showRestartInto != settings->showRestartInto
+		|| defaults->appRecentDocuments != settings->appRecentDocuments;
 }
 
 
@@ -408,7 +465,12 @@ PreferencesWindow::_IsRevertable()
 		|| fSettings.recentFoldersCount != settings->recentFoldersCount
 		|| fSettings.alwaysOnTop != settings->alwaysOnTop
 		|| fSettings.autoRaise != settings->autoRaise
-		|| fSettings.autoHide != settings->autoHide;
+		|| fSettings.autoHide != settings->autoHide
+		|| fSettings.showSearch != settings->showSearch
+		|| fSettings.searchCalculator != settings->searchCalculator
+		|| fSettings.searchFiles != settings->searchFiles
+		|| fSettings.showRestartInto != settings->showRestartInto
+		|| fSettings.appRecentDocuments != settings->appRecentDocuments;
 }
 
 
@@ -590,6 +652,28 @@ PreferencesWindow::_UpdatePreferences(desk_settings* settings)
 	if (current->autoHide != settings->autoHide) {
 		fWindowAutoHide->SetValue(settings->autoHide);
 		fWindowAutoHide->Invoke();
+	}
+
+	// Renga (F-41, batch 9)
+	struct {
+		bool current;
+		bool wanted;
+		BCheckBox* box;
+	} renga[] = {
+		{ current->showSearch, settings->showSearch, fMenuSearch },
+		{ current->searchCalculator, settings->searchCalculator,
+			fMenuSearchCalculator },
+		{ current->searchFiles, settings->searchFiles, fMenuSearchFiles },
+		{ current->showRestartInto, settings->showRestartInto,
+			fMenuRestartInto },
+		{ current->appRecentDocuments, settings->appRecentDocuments,
+			fAppsRecentDocuments },
+	};
+	for (size_t i = 0; i < sizeof(renga) / sizeof(renga[0]); i++) {
+		if (renga[i].current != renga[i].wanted) {
+			renga[i].box->SetValue(renga[i].wanted);
+			renga[i].box->Invoke();
+		}
 	}
 
 	if (updateRecentCounts)

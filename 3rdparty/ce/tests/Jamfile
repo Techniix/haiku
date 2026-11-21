@@ -10,6 +10,7 @@ SubInclude HAIKU_TOP 3rdparty ce tests bootstate ;
 SubInclude HAIKU_TOP 3rdparty ce tests controlpanel ;
 SubInclude HAIKU_TOP 3rdparty ce tests crashlog ;
 SubInclude HAIKU_TOP 3rdparty ce tests dbus ;
+SubInclude HAIKU_TOP 3rdparty ce tests deskbar ;
 SubInclude HAIKU_TOP 3rdparty ce tests devel ;
 SubInclude HAIKU_TOP 3rdparty ce tests gamepad ;
 SubInclude HAIKU_TOP 3rdparty ce tests harness_support ;

@@ -87,6 +87,22 @@ const uint32 kUpdatePreferences = 'Pref';
 // realign replicants message constant
 const uint32 kRealignReplicants = 'Algn';
 
+// Renga (F-41, batch 9): settings switches (PreferencesWindow), "Restart
+// into" ("next": "menu" or "state:<directory>"; "test" in harness images
+// sets the choice and replies instead of restarting) and the harness hooks
+// (harness images only, see TBarApp::MessageReceived())
+const uint32 kToggleSearch = 'DStS';
+const uint32 kToggleSearchCalculator = 'DStC';
+const uint32 kToggleSearchFiles = 'DStF';
+const uint32 kToggleRestartInto = 'DStR';
+const uint32 kToggleAppRecentDocuments = 'DStJ';
+const uint32 kRestartInto = 'DSri';
+const uint32 kTestDeskbarMenu = 'Tdmn';
+const uint32 kTestSearch = 'Tsrq';
+const uint32 kTestSearchWindow = 'Tsrw';
+const uint32 kTestAppRecentDocuments = 'Tjmp';
+const uint32 kTestShowPreferences = 'Tdpf';
+
 /* --------------------------------------------- */
 
 class BBitmap;
@@ -94,6 +110,7 @@ class BFile;
 class BList;
 class PreferencesWindow;
 class TBarView;
+class TSearchWindow;
 class TBarWindow;
 
 
@@ -172,6 +189,9 @@ private:
 			void					QuitPreferencesWindow();
 
 			void					ResizeTeamIcons();
+			void					_ShowSearchWindow(BMessage* message);
+			void					_RestartInto(BMessage* message);
+			bool					_IsHarness() const;
 			status_t				_CacheTeamIcon(BarTeamInfo* barInfo);
 			status_t				_CacheTeamIcon(BarTeamInfo* barInfo, int32 size);
 			status_t				_CacheWindowIcon(WindowIconCache* winCache);
@@ -187,6 +207,7 @@ private:
 			desk_settings			fDefaultSettings;
 			clock_settings			fClockSettings;
 			PreferencesWindow*		fPreferencesWindow;
+			TSearchWindow*			fSearchWindow;
 
 	static	BLocker					sSubscriberLock;
 	static	BList					sBarTeamInfoList;

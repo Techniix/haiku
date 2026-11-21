@@ -73,6 +73,13 @@ private:
 			BSpinner*		fMenuRecentApplicationCount;
 			BSpinner*		fMenuRecentFolderCount;
 
+			// Renga (F-41, batch 9)
+			BCheckBox*		fMenuSearch;
+			BCheckBox*		fMenuSearchCalculator;
+			BCheckBox*		fMenuSearchFiles;
+			BCheckBox*		fMenuRestartInto;
+			BCheckBox*		fAppsRecentDocuments;
+
 			BCheckBox*		fAppsSort;
 			BCheckBox*		fAppsSortTrackerFirst;
 			BCheckBox*		fAppsShowExpanders;

@@ -62,6 +62,17 @@ struct desk_settings {
 	bool alwaysOnTop;
 	bool autoRaise;
 	bool autoHide;
+	// Renga (F-41, batch 9), each on by default; see BarApp.cpp
+	bool showSearch;
+		// "Search..." at the top of the Deskbar menu (SearchWindow.h)
+	bool searchCalculator;
+		// the search also calculates and converts units
+	bool searchFiles;
+		// the search also finds files by name (a query on the boot volume)
+	bool showRestartInto;
+		// "Restart into" in the Shutdown menu (boot loader A)
+	bool appRecentDocuments;
+		// "Recent documents" in each application's window menu
 };
 
 struct clock_settings {

@@ -717,6 +717,21 @@ of a 1 GiB guest was, so the bounce path went untested.
   cache, and Defaults turns it on. Starts Tracker if it is not running
   (renga-* images) and quits it again at the end, so later suites run on
   the same desktop as before. Build times are INFO only.
+- **deskbar** (every image, `deskbar_test`; F-41, F-60, batch 9): the
+  Deskbar's harness hooks (harness images only, `BarApp.h`) build the
+  Deskbar menu as opening it does: "Search..." heads it, it builds in
+  under 2 s (cold and warm times as INFO); Shutdown has "Restart into"
+  with "Boot menu" and "Other systems..." when the boot state file is
+  writable, and choosing "Boot menu" writes "menu" as the next start's
+  one-shot choice (reset at once). The menu search: "2*(3+4)" gives 14
+  first, "sqrt(2)^2" 2, "10%3" 1; four unit conversions; "terminal" and
+  "5" give no calculation and "terminal" finds the Terminal; "wallpaper"
+  finds the Control Panel's Backgrounds page; a new file is found by part
+  of its name and, once a recent document, as one; StyledEdit's window
+  menu gets "Recent documents" with it. The search window shows
+  "2*21 = 42" first (screenshot `deskbar_search`) and opens the Terminal
+  as Return does; each of the five switches turns its feature off and on;
+  the Deskbar preferences show them (screenshot `deskbar_preferences`).
 - **devnotify** (renga-* images, `media_devnotify_test`, before
   media_usb; F-59): the audio device agent. First run records the devices
   and asks nothing; QEMU's `usb-audio` plugged in brings the prompt

@@ -38,10 +38,12 @@ All rights reserved.
 
 #include <Catalog.h>
 #include <Locale.h>
+#include <Roster.h>
 #include <Window.h>
 
 #include "BarApp.h"
 #include "BarView.h"
+#include "DeskbarMenu.h"
 #include "ShowHideMenuItem.h"
 #include "TeamMenu.h"
 #include "TeamMenuItem.h"
@@ -215,6 +217,15 @@ TWindowMenu::AttachedToWindow()
 		}
 	}
 
+	// Renga (F-41, batch 9): the application's recent documents
+	if (!dragging && !fExpanded) {
+		BMenu* recent = RecentDocumentsMenu(fApplicationSignature);
+		if (recent != NULL) {
+			AddSeparatorItem();
+			AddItem(recent);
+		}
+	}
+
 	BMenu::AttachedToWindow();
 }
 
@@ -234,6 +245,29 @@ TWindowMenu::DetachedFromWindow()
 	}
 
 	BMenu::DetachedFromWindow();
+}
+
+
+/*static*/ BMenu*
+TWindowMenu::RecentDocumentsMenu(const char* signature)
+{
+	TBarApp* app = dynamic_cast<TBarApp*>(be_app);
+	if (app == NULL || !app->Settings()->appRecentDocuments
+		|| !app->Settings()->recentDocsEnabled || signature == NULL
+		|| signature[0] == '\0') {
+		return NULL;
+	}
+	BMessage documents;
+	be_roster->GetRecentDocuments(&documents, 1, NULL, signature);
+	if (documents.CountNames(B_REF_TYPE) == 0)
+		return NULL;
+	entry_ref appRef;
+	if (be_roster->FindApp(signature, &appRef) != B_OK)
+		return NULL;
+	TRecentsMenu* menu = new TRecentsMenu(B_TRANSLATE("Recent documents"),
+		app->BarView(), kRecentAppDocuments, signature, &appRef);
+	menu->SetTarget(TDeskbarMenu::DefaultTarget());
+	return menu;
 }
 
 

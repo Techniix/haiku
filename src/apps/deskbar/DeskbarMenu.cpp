@@ -42,8 +42,15 @@ All rights reserved.
 #include <Dragger.h>
 #include <Locale.h>
 #include <Menu.h>
+#include <FindDirectory.h>
 #include <MenuItem.h>
+#include <Path.h>
 #include <Roster.h>
+
+#include <driver_settings.h>
+#include <unistd.h>
+
+#include <boot_state_file.h>
 
 #include <distro_name.h>
 
@@ -53,6 +60,7 @@ All rights reserved.
 #include "IconMenuItem.h"
 #include "MountMenu.h"
 #include "RecentItems.h"
+#include "SearchWindow.h"
 #include "StatusView.h"
 
 #include "tracker_private.h"
@@ -242,6 +250,19 @@ TDeskbarMenu::AddStandardDeskbarMenuItems()
 
 	BMenuItem* item;
 
+	TBarApp* barApp = dynamic_cast<TBarApp*>(be_app);
+	desk_settings* settings = barApp != NULL ? barApp->Settings() : NULL;
+
+	// Renga (F-41, batch 9): the search, first
+	if (settings != NULL && settings->showSearch) {
+		item = new BMenuItem(B_TRANSLATE("Search" B_UTF8_ELLIPSIS),
+			new BMessage(kShowSearchWindow));
+		item->SetEnabled(!dragging);
+		item->SetTarget(be_app);
+		AddItem(item);
+		AddSeparatorItem();
+	}
+
 // One of them is used if HAIKU_DISTRO_COMPATIBILITY_OFFICIAL, and the other if
 // not. However, we want both of them to end up in the catalog, so we have to
 // make them visible to collectcatkeys in either case.
@@ -320,6 +341,15 @@ B_TRANSLATE_MARK_VOID("About this system")
 	}
 #endif
 
+	// Renga (boot loader A, batch 9): "Restart into"
+	if (settings != NULL && settings->showRestartInto) {
+		BMenu* restartMenu = _BuildRestartIntoMenu();
+		if (restartMenu != NULL) {
+			restartMenu->SetEnabled(!dragging);
+			shutdownMenu->AddItem(restartMenu, 2);
+		}
+	}
+
 	shutdownMenu->SetTargetForItems(be_app);
 
 	BMessage* message = new BMessage(kShutdownSystem);
@@ -329,6 +359,119 @@ B_TRANSLATE_MARK_VOID("About this system")
 	fAddState = kAddingRecents;
 
 	return true;
+}
+
+
+/*!	"Restart into" (boot loader A, batch 9): the boot menu, and the
+	restore points, for the next start only; "Other systems..." opens the
+	Boot menu preferences, which find them (that reads every disk, too slow
+	for a menu). NULL when there is no boot state file (a read-only boot
+	volume) or the boot loader keeps no choices ("boot_state false",
+	Boot menu preferences "Count starts and keep restore choices...").
+*/
+BMenu*
+TDeskbarMenu::_BuildRestartIntoMenu()
+{
+	char path[B_PATH_NAME_LENGTH];
+	BootState::file_path(path, sizeof(path));
+	if (access(path, W_OK) != 0)
+		return NULL;
+
+	BPath settingsPath;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &settingsPath) == B_OK
+		&& settingsPath.Append("kernel/drivers/kernel") == B_OK) {
+		void* handle = load_driver_settings(settingsPath.Path());
+		if (handle != NULL) {
+			bool bootState = get_driver_boolean_parameter(handle,
+				"boot_state", true, true);
+			unload_driver_settings(handle);
+			if (!bootState)
+				return NULL;
+		}
+	}
+
+	BMenu* menu = new BMenu(B_TRANSLATE("Restart into"));
+	BMessage* message = new BMessage(kRestartInto);
+	message->AddString("next", "menu");
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Boot menu"), message));
+
+	static char names[16][BootState::kNameLength];
+	int count = BootState::list_restore_points(names, 16);
+	if (count > 0)
+		menu->AddSeparatorItem();
+	for (int i = 0; i < count; i++) {
+		char label[160];
+		BootState::restore_point_label(names[i], label, sizeof(label));
+		message = new BMessage(kRestartInto);
+		BString next("state:");
+		next << names[i];
+		message->AddString("next", next);
+		menu->AddItem(new BMenuItem(label, message));
+	}
+
+	menu->AddSeparatorItem();
+	BMessage* refs = new BMessage(B_REFS_RECEIVED);
+	entry_ref ref;
+	if (get_ref_for_path("/boot/system/preferences/BootMenu", &ref) == B_OK)
+		refs->AddRef("refs", &ref);
+	BMenuItem* other = new BMenuItem(B_TRANSLATE("Other systems"
+		B_UTF8_ELLIPSIS), refs);
+	other->SetTarget(DefaultTarget());
+	menu->AddItem(other);
+	menu->SetTargetForItems(be_app);
+	other->SetTarget(DefaultTarget());
+	return menu;
+}
+
+
+/*static*/ void
+TDeskbarMenu::BuildForTest(TBarView* bar, BMessage* reply)
+{
+	TDeskbarMenu* menu = new TDeskbarMenu(bar);
+	// the menu's folder, as TBarWindow::MenusBeginning() sets it
+	BPath path;
+	BEntry entry;
+	entry_ref ref;
+	if ((GetDeskbarSettingsDirectory(path) == B_OK
+			&& path.Append(kDeskbarMenuEntriesFileName) == B_OK
+			&& entry.SetTo(path.Path(), true) == B_OK && entry.Exists()
+			&& entry.GetRef(&ref) == B_OK)
+		|| (GetDeskbarDataDirectory(path) == B_OK
+			&& path.Append(kDeskbarMenuEntriesFileName) == B_OK
+			&& entry.SetTo(path.Path(), true) == B_OK && entry.Exists()
+			&& entry.GetRef(&ref) == B_OK)) {
+		menu->SetNavDir(&ref);
+	}
+	bigtime_t start = system_time();
+	if (menu->StartBuildingItemList()) {
+		while (menu->AddNextItem())
+			;
+		menu->DoneBuildingItemList();
+	}
+	reply->AddInt64("time", system_time() - start);
+	for (int32 i = 0; i < menu->CountItems(); i++) {
+		BMenuItem* item = menu->ItemAt(i);
+		reply->AddString("item", item->Label() != NULL ? item->Label() : "");
+		BMenu* submenu = item->Submenu();
+		if (submenu == NULL
+			|| strcmp(item->Label(), B_TRANSLATE("Shutdown" B_UTF8_ELLIPSIS))
+				!= 0) {
+			continue;
+		}
+		for (int32 j = 0; j < submenu->CountItems(); j++) {
+			BMenuItem* shutdownItem = submenu->ItemAt(j);
+			reply->AddString("shutdown", shutdownItem->Label());
+			BMenu* restart = shutdownItem->Submenu();
+			if (restart == NULL)
+				continue;
+			for (int32 k = 0; k < restart->CountItems(); k++) {
+				if (restart->ItemAt(k)->Label() != NULL)
+					reply->AddString("restart", restart->ItemAt(k)->Label());
+			}
+		}
+	}
+	menu->ClearMenuBuildingState();
+	delete menu;
 }
 
 
@@ -612,6 +755,17 @@ TRecentsMenu::AddRecents(int32 count)
 
 	// return false if we are done with this list
 	return false;
+}
+
+
+void
+TRecentsMenu::BuildForTest()
+{
+	if (StartBuildingItemList()) {
+		while (AddNextItem())
+			;
+		DoneBuildingItemList();
+	}
 }
 
 

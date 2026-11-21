@@ -57,6 +57,11 @@ class TWindowMenu : public BMenu {
 		void			SetExpanded(bool status, int addAtIndex);
 		static bool		WindowShouldBeListed(client_window_info* info);
 
+		//!	Renga (F-41, batch 9): the application's recent documents as a
+		//	submenu ("jump list"), NULL when it has none or the setting is
+		//	off. The caller owns it.
+		static BMenu*	RecentDocumentsMenu(const char* signature);
+
 	private:
 		const BList		*fTeam;
 		BString			fApplicationSignature;
