@@ -1,0 +1,158 @@
+#!/bin/sh
+# renga-abi-check: the system libraries' exported symbols are add-only.
+#
+# Usage:
+#   tools/renga/renga-abi-check --dump [<file>]
+#   tools/renga/renga-abi-check [<base>] [--base-file <file> | --base-output <dir>]
+#
+# Renga's ABI is add-only (roadmap 1.2): a symbol that a system library
+# exported must stay exported. This compares the exported (defined, dynamic)
+# symbols of libroot, libbe, libmedia, libnetwork, libbnetapi, libtracker,
+# libtranslation, libdevice, libgame, libpackage, libtextencoding, libmail,
+# libmidi, libmidi2 and libscreensaver between two builds, and fails if one
+# was removed. Added symbols are counted, not listed.
+#
+# It reads existing build outputs only and never builds anything itself:
+#
+#   --dump [<file>]       write the current build's symbol list. Default
+#                         file: <output>/renga-abi/<HEAD commit>.syms (with
+#                         "-dirty" when the tree has local changes). Run it
+#                         right after building the libraries of a commit,
+#                         e.g. on ce/main before starting a branch.
+#   [<base>]              compare the current build with the list stored
+#                         for <base> (default origin/ce/main), i.e.
+#                         <output>/renga-abi/<base commit>.syms.
+#   --base-file <file>    compare with that list instead.
+#   --base-output <dir>   compare with another configured output directory
+#                         built from the base (e.g. a git worktree's
+#                         generated.x86_64).
+#
+# The libraries must be built first (tools/renga/renga-build libroot.so
+# libbe.so ... or any image). The script cannot tell whether the build
+# output matches the checked-out commit; it records HEAD and the "dirty"
+# state at dump time, so build before dumping. Only symbol names are
+# compared: changed class sizes, vtable order or semantics are not
+# detected (review still covers those).
+#
+# Exit status: 0 no removals; 1 removals (listed); 2 usage or missing input;
+# 3 no stored list for the base (says how to make one).
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+# Library -> its path below <output>/objects/haiku/x86_64/release/.
+LIBS='libroot     system/libroot/libroot.so
+libbe           kits/libbe.so
+libmedia        kits/media/libmedia.so
+libnetwork      system/libnetwork/libnetwork.so
+libbnetapi      kits/network/libnetapi/ssl/libbnetapi.so
+libtracker      kits/tracker/libtracker.so
+libtranslation  kits/translation/libtranslation.so
+libdevice       kits/device/libdevice.so
+libgame         kits/game/libgame.so
+libpackage      kits/package/libpackage.so
+libtextencoding kits/textencoding/libtextencoding.so
+libmail         kits/mail/libmail.so
+libmidi         kits/midi/libmidi.so
+libmidi2        kits/midi2/libmidi2.so
+libscreensaver  kits/screensaver/libscreensaver.so'
+
+mode=compare
+base=origin/ce/main
+base_file=
+base_output=
+dump_file=
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h|--help) renga_usage; exit 0 ;;
+	--dump) mode=dump; if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then dump_file=$2; shift; fi ;;
+	--base-file) [ $# -ge 2 ] || { renga_note "--base-file needs a file"; exit 2; }; base_file=$2; shift ;;
+	--base-output) [ $# -ge 2 ] || { renga_note "--base-output needs a directory"; exit 2; }; base_output=$2; shift ;;
+	-*) renga_note "unknown option $1 (see --help)"; exit 2 ;;
+	*) base=$1 ;;
+	esac
+	shift
+done
+
+nm="nm"
+for candidate in "$RENGA_OUTPUT/cross-tools-x86_64/bin/x86_64-unknown-haiku-nm" \
+		"$(dirname "$RENGA_OUTPUT")/generated.x86_64/cross-tools-x86_64/bin/x86_64-unknown-haiku-nm"; do
+	if [ -x "$candidate" ]; then nm=$candidate; break; fi
+done
+command -v "$nm" >/dev/null 2>&1 || { renga_note "no nm found (install binutils)"; exit 2; }
+
+# Prints "<lib> <symbol>" for every defined dynamic symbol, sorted.
+symbols() {
+	# $1: output directory
+	objects=$1/objects/haiku/x86_64/release
+	printf '%s\n' "$LIBS" | while read -r lib path; do
+		file=$objects/$path
+		if [ ! -f "$file" ]; then
+			echo "MISSING $lib $path"
+			continue
+		fi
+		"$nm" -D --defined-only "$file" | awk -v lib="$lib" 'NF >= 3 { print lib " " $3 }'
+	done | LC_ALL=C sort -u
+}
+
+check_complete() {
+	# $1: symbol list file; $2: what it is
+	if grep -q '^MISSING ' "$1"; then
+		renga_note "$2 lacks libraries (build them first):"
+		grep '^MISSING ' "$1" | sed 's/^MISSING /  /' >&2
+		return 1
+	fi
+}
+
+if [ $mode = dump ]; then
+	if [ -z "$dump_file" ]; then
+		suffix=
+		[ -z "$(git status --porcelain --untracked-files=no)" ] || suffix=-dirty
+		mkdir -p "$RENGA_OUTPUT/renga-abi"
+		dump_file=$RENGA_OUTPUT/renga-abi/$(git rev-parse HEAD)$suffix.syms
+	fi
+	symbols "$RENGA_OUTPUT" > "$dump_file"
+	check_complete "$dump_file" "the build" || exit 2
+	echo "renga-abi-check: $(wc -l < "$dump_file" | tr -d ' ') symbols in $dump_file"
+	exit 0
+fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/renga-abi.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+if [ -n "$base_output" ]; then
+	symbols "$base_output" > "$tmp/base"
+	what="build in $base_output"
+elif [ -n "$base_file" ]; then
+	[ -f "$base_file" ] || { renga_note "no file $base_file"; exit 2; }
+	cp "$base_file" "$tmp/base"
+	what=$base_file
+else
+	sha=$(git rev-parse -q --verify "$base^{commit}") || { renga_note "unknown base $base"; exit 2; }
+	stored=$RENGA_OUTPUT/renga-abi/$sha.syms
+	if [ ! -f "$stored" ]; then
+		renga_note "no stored symbol list for $base ($sha)."
+		echo "  Make one: check out $base, build the libraries (or any image), then run" >&2
+		echo "  tools/renga/renga-abi-check --dump; or pass --base-output <dir> of a build of $base." >&2
+		exit 3
+	fi
+	cp "$stored" "$tmp/base"
+	what="$base ($stored)"
+fi
+check_complete "$tmp/base" "the base" || exit 2
+
+symbols "$RENGA_OUTPUT" > "$tmp/new"
+check_complete "$tmp/new" "the current build" || exit 2
+
+LC_ALL=C comm -23 "$tmp/base" "$tmp/new" > "$tmp/removed"
+LC_ALL=C comm -13 "$tmp/base" "$tmp/new" > "$tmp/added"
+removed=$(wc -l < "$tmp/removed" | tr -d ' ')
+added=$(wc -l < "$tmp/added" | tr -d ' ')
+echo "renga-abi-check: against $what: $added added, $removed removed"
+if [ "$removed" -gt 0 ]; then
+	echo "renga-abi-check: FAIL, removed symbols (the ABI is add-only):"
+	head -n 30 "$tmp/removed" | sed 's/^/  /'
+	[ "$removed" -le 30 ] || echo "  ... and $((removed - 30)) more"
+	exit 1
+fi
+exit 0

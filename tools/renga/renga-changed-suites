@@ -1,0 +1,97 @@
+#!/bin/sh
+# renga-changed-suites: the harness suites that cover a branch's changes.
+#
+# Usage: tools/renga/renga-changed-suites [--explain] [--status] [<base>]
+#
+# Takes the paths changed by "git diff --name-only <base>...HEAD" (default
+# base: origin/ce/main), plus uncommitted changes in the working tree, and
+# maps them through tools/renga/suite-map. Prints the suites on one line on
+# standard output, ready for renga-test:
+#
+#   tools/renga/renga-test $(tools/renga/renga-changed-suites) --profile renga-raw
+#
+# On standard error it says whether the full four-way set is required as
+# well (a shared foundation changed, or a path the map does not cover:
+# "unknown means full", roadmap section 1.2). --explain also lists each
+# changed path with the suites it selected.
+#
+# Exit status: 0, or 1 on errors. With --status it is 3 when the full
+# four-way set is required (the suites are still printed).
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+explain=no
+status=no
+base=origin/ce/main
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h|--help) renga_usage; exit 0 ;;
+	--explain) explain=yes ;;
+	--status) status=yes ;;
+	-*) renga_die "unknown option $1 (see --help)" ;;
+	*) base=$1 ;;
+	esac
+	shift
+done
+
+git rev-parse -q --verify "$base^{commit}" >/dev/null \
+	|| renga_die "unknown base $base (fetch it first: git fetch origin ce/main)"
+
+map=$RENGA_TOOLS/suite-map
+[ -f "$map" ] || renga_die "missing $map"
+
+changed=$( {
+	git diff --name-only "$base...HEAD"
+	git diff --name-only HEAD
+	git ls-files --others --exclude-standard
+} | sort -u)
+
+if [ -z "$changed" ]; then
+	renga_note "no changes against $base"
+	exit 0
+fi
+
+# For every path: all matching lines add their suites; "@full" and "@none"
+# count only from the longest matching prefix, so a broad catch-all such as
+# "src/kits/ @full" is the default only for paths without a narrower line.
+result=$(printf '%s\n' "$changed" | awk -v explain="$explain" '
+	FNR == NR {
+		if ($0 ~ /^[ \t]*(#|$)/) next
+		n++; prefix[n] = $1; words[n] = ""
+		for (i = 2; i <= NF; i++) words[n] = words[n] " " $i
+		next
+	}
+	{
+		path = $0; best = 0; bestlen = -1; got = ""
+		for (i = 1; i <= n; i++) {
+			if (substr(path, 1, length(prefix[i])) != prefix[i]) continue
+			if (length(prefix[i]) > bestlen) { bestlen = length(prefix[i]); best = i }
+			m = split(words[i], w, " ")
+			for (j = 1; j <= m; j++)
+				if (w[j] !~ /^@/) { suites[w[j]] = 1; got = got " " w[j] }
+		}
+		if (best == 0) {
+			full = 1; why[path] = "not in suite-map"; got = got " @full(unmapped)"
+		} else if (words[best] ~ /@full/) {
+			full = 1; why[path] = "shared foundation (" prefix[best] ")"; got = got " @full"
+		}
+		if (explain == "yes") print "E " path ":" (got == "" ? " (none)" : got)
+	}
+	END {
+		line = ""
+		for (s in suites) line = line " " s
+		print "S" line
+		if (full) for (p in why) print "F " p ": " why[p]
+	}' "$map" -)
+
+printf '%s\n' "$result" | sed -n 's/^E /  /p' >&2
+suites=$(printf '%s\n' "$result" | sed -n 's/^S *//p' | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')
+printf '%s\n' "$suites"
+
+if printf '%s\n' "$result" | grep -q '^F '; then
+	renga_note "full four-way set also required (renga-gate), because of:"
+	printf '%s\n' "$result" | sed -n 's/^F /  /p' | sort | head -15 >&2
+	[ $status = yes ] && exit 3
+fi
+exit 0

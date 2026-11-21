@@ -1,0 +1,87 @@
+#!/bin/sh
+# renga-test: run some harness suites as a partial run, then summarise.
+#
+# Usage: tools/renga/renga-test [--print] <suite> [<suite> ...] [<ce-test.py options>]
+#
+# Each <suite> is a directory under 3rdparty/ce/tests/ (welcome,
+# controlpanel, largefont, media, ...), expanded to that directory's test
+# programs, or a test program name as "ce-test.py --list-tests" prints it
+# (with or without "_test"). Comma-separated lists work too. The first
+# argument that starts with "-" and everything after it go to ce-test.py
+# unchanged, for example:
+#
+#   tools/renga/renga-test welcome controlpanel largefont --profile renga-raw
+#   tools/renga/renga-test epoll,signalfd --smp 2
+#   tools/renga/renga-test $(tools/renga/renga-changed-suites) --profile renga-raw
+#
+# Runs "3rdparty/ce/harness/ce-test.py --only <programs> <options>" with its
+# output in <output>/ce-test-results/<timestamp>/build-and-run.log (not on
+# the terminal), then prints tools/renga/renga-summary for that run.
+# Renga's own programs are only in the renga-* images: pass
+# "--profile renga-raw" for them (roadmap 1.2: per piece, on renga-raw and
+# on default).
+#
+# --print only prints the ce-test.py command it would run.
+#
+# Exit status: ce-test.py's. A partial run is never a full pass: 2 means
+# the selection passed, 1 that it failed (3rdparty/ce/README.md).
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+print_only=no
+if [ "${1:-}" = --print ]; then
+	print_only=yes
+	shift
+fi
+case ${1:-} in
+-h|--help) renga_usage; exit 0 ;;
+''|-*) renga_usage >&2; exit 2 ;;
+esac
+
+tests=$renga_root/3rdparty/ce/tests
+programs=
+while [ $# -gt 0 ]; do
+	case $1 in -*) break ;; esac
+	for word in $(printf '%s' "$1" | tr ',' ' '); do
+		if [ -f "$tests/$word/Jamfile" ]; then
+			# The suite's test programs: its Jamfile's "Application x_test".
+			found=$(sed -n 's/^[[:space:]]*Application[[:space:]]\{1,\}\([A-Za-z0-9_]*_test\)\([[:space:]].*\)\{0,1\}$/\1/p' \
+				"$tests/$word/Jamfile" | sort -u | tr '\n' ',')
+			[ -n "$found" ] || renga_die "suite $word has no test programs in its Jamfile"
+			programs="$programs$found"
+		else
+			programs="$programs$word,"
+		fi
+	done
+	shift
+done
+programs=${programs%,}
+[ -n "$programs" ] || renga_die "no suites given"
+if [ $print_only = yes ]; then
+	echo "3rdparty/ce/harness/ce-test.py --only $programs $*"
+	exit 0
+fi
+
+[ -f "$RENGA_OUTPUT/build/BuildConfig" ] \
+	|| renga_die "$RENGA_OUTPUT is not configured; run tools/renga/renga-build first"
+
+mkdir -p "$RENGA_RESULTS"
+log=$(mktemp "${TMPDIR:-/tmp}/renga-test.XXXXXX")
+echo "renga-test: ce-test.py --only $programs $*"
+echo "renga-test: running (log: $log); this takes a while"
+before=$(readlink -f "$RENGA_RESULTS/latest" 2>/dev/null || true)
+status=0
+python3 3rdparty/ce/harness/ce-test.py --only "$programs" "$@" > "$log" 2>&1 || status=$?
+
+latest=$(readlink -f "$RENGA_RESULTS/latest" 2>/dev/null || true)
+if [ -n "$latest" ] && [ "$latest" != "$before" ] && [ -f "$latest/summary.md" ]; then
+	mv "$log" "$latest/build-and-run.log"
+	log=$latest/build-and-run.log
+	"$RENGA_TOOLS/renga-summary" "$latest" || true
+else
+	echo "renga-test: ce-test.py wrote no new results (status $status); last lines of $log:"
+	tail -n 15 "$log"
+fi
+echo "renga-test: exit status $status (2 = partial run, selection passed)"
+exit "$status"

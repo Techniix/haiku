@@ -1,0 +1,152 @@
+#!/bin/sh
+# renga-guard: process checks for a branch before it is pushed or merged.
+#
+# Usage: tools/renga/renga-guard [--pr-body <file>] [--committed-only]
+#                                [--head <rev>] [<base>]
+#
+# Compares <base>...HEAD (default base: origin/ce/main) and, unless
+# --committed-only, the uncommitted changes too. --head <rev> checks that
+# commit instead of HEAD (committed changes only; the pre-push hook uses
+# it). Checks:
+#
+# 1. Protected paths (tools/renga/protected-paths): if the branch touches
+#    any of them, it fails unless an architect approved it. Approval is the
+#    line "Architect-Approved: yes" in the pull request description (given
+#    with --pr-body <file> or RENGA_PR_BODY_FILE=<file>), or, for a local
+#    push the architect approved, RENGA_ARCHITECT_APPROVED=yes. The special
+#    entry RENGA_MASTER_ROADMAP.md#decisions means the roadmap's decisions
+#    log (section 10.3); other roadmap edits are not protected.
+# 2. "git diff --check": whitespace errors and leftover conflict markers in
+#    the changed lines fail.
+# 3. Commits in <base>..HEAD without a "Co-Authored-By:" trailer get a
+#    warning (expected on every Claude-written commit; the maintainer's own
+#    commits do not need it). Warnings never fail.
+#
+# A process control that stops accidents, not a security boundary.
+# Exit status: 0 when the checks pass, 1 when one fails, 2 on usage errors.
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+base=origin/ce/main
+body=${RENGA_PR_BODY_FILE:-}
+committed_only=no
+head=HEAD
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h|--help) renga_usage; exit 0 ;;
+	--pr-body) [ $# -ge 2 ] || renga_die "--pr-body needs a file"; body=$2; shift ;;
+	--committed-only) committed_only=yes ;;
+	--head) [ $# -ge 2 ] || renga_die "--head needs a revision"; head=$2; committed_only=yes; shift ;;
+	-*) echo "renga-guard: unknown option $1 (see --help)" >&2; exit 2 ;;
+	*) base=$1 ;;
+	esac
+	shift
+done
+
+git rev-parse -q --verify "$base^{commit}" >/dev/null || {
+	echo "renga-guard: unknown base $base (git fetch origin ce/main)" >&2
+	exit 2
+}
+git rev-parse -q --verify "$head^{commit}" >/dev/null || renga_die "unknown revision $head"
+mergebase=$(git merge-base "$base" "$head")
+list=$RENGA_TOOLS/protected-paths
+[ -f "$list" ] || renga_die "missing $list"
+
+failed=0
+
+changed=$(git diff --name-only "$mergebase" "$head")
+if [ $committed_only = no ]; then
+	changed=$(printf '%s\n%s\n%s\n' "$changed" "$(git diff --name-only HEAD)" \
+		"$(git ls-files --others --exclude-standard)" | sed '/^$/d' | sort -u)
+fi
+
+# --- 1. protected paths ----------------------------------------------------
+# The roadmap's decisions log: from its heading to the next "---" rule.
+decisions() {
+	# $1: a tree-ish, or "WORKTREE"
+	if [ "$1" = WORKTREE ]; then
+		cat RENGA_MASTER_ROADMAP.md 2>/dev/null || true
+	else
+		git show "$1:RENGA_MASTER_ROADMAP.md" 2>/dev/null || true
+	fi | awk '/^### 10\.3 Decisions log/ { on = 1 } on && /^---/ { exit } on'
+}
+
+hits=$(printf '%s\n' "$changed" | awk '
+	FNR == NR {
+		if ($0 ~ /^[ \t]*(#|$)/) next
+		if ($1 ~ /#/) next          # special entries are checked separately
+		p[++n] = $1; next
+	}
+	$0 != "" {
+		for (i = 1; i <= n; i++)
+			if (substr($0, 1, length(p[i])) == p[i]) { print $0 "  (" p[i] ")"; break }
+	}' "$list" -)
+
+if grep -q '^RENGA_MASTER_ROADMAP\.md#decisions' "$list" \
+		&& printf '%s\n' "$changed" | grep -qx 'RENGA_MASTER_ROADMAP.md'; then
+	new=$head
+	[ $committed_only = no ] && new=WORKTREE
+	if [ "$(decisions "$mergebase" | sha256sum)" != "$(decisions "$new" | sha256sum)" ]; then
+		hits=$(printf '%s\n%s' "$hits" "RENGA_MASTER_ROADMAP.md  (decisions log, section 10.3)" | sed '/^$/d')
+	fi
+fi
+
+approved=no
+approval_source=
+if [ "${RENGA_ARCHITECT_APPROVED:-}" = yes ]; then
+	approved=yes; approval_source="RENGA_ARCHITECT_APPROVED=yes"
+elif [ -n "$body" ]; then
+	[ -f "$body" ] || renga_die "PR body file $body not found"
+	if tr -d '\r' < "$body" | grep -Eq '^[[:space:]]*Architect-Approved:[[:space:]]*yes[[:space:]]*$'; then
+		approved=yes; approval_source="PR description"
+	fi
+fi
+
+if [ -n "$hits" ]; then
+	count=$(printf '%s\n' "$hits" | wc -l | tr -d ' ')
+	if [ $approved = yes ]; then
+		echo "protected paths: $count changed, approved ($approval_source)"
+	else
+		echo "protected paths: FAIL, $count changed without \"Architect-Approved: yes\":"
+		failed=1
+	fi
+	printf '%s\n' "$hits" | head -20 | sed 's/^/  /'
+	[ "$count" -gt 20 ] && echo "  ... and $((count - 20)) more"
+else
+	echo "protected paths: none changed"
+fi
+
+# --- 2. git diff --check ---------------------------------------------------
+check_out=$(git diff --check "$mergebase" "$head" 2>&1 || true)
+if [ $committed_only = no ]; then
+	check_out=$(printf '%s\n%s' "$check_out" "$(git diff --check HEAD 2>&1 || true)" | sed '/^$/d')
+fi
+if [ -n "$check_out" ]; then
+	echo "diff --check: FAIL"
+	printf '%s\n' "$check_out" | grep -v '^[+-]' | head -15 | sed 's/^/  /'
+	failed=1
+else
+	echo "diff --check: clean"
+fi
+
+# --- 3. Co-Authored-By trailers (warning only) -------------------------------
+missing=
+for c in $(git rev-list --no-merges "$mergebase..$head"); do
+	git log -1 --format=%B "$c" | grep -qi '^Co-Authored-By:' && continue
+	missing="$missing
+  $(git log -1 --format='%h %<(70,trunc)%s' "$c" | sed 's/ *$//')"
+done
+missing=$(printf '%s\n' "$missing" | sed '/^$/d')
+if [ -n "$missing" ]; then
+	echo "trailers: warning, commits without Co-Authored-By (expected on Claude-written commits):"
+	printf '%s\n' "$missing" | head -10
+else
+	echo "trailers: ok"
+fi
+
+if [ $failed = 1 ]; then
+	echo "renga-guard: FAILED against $base"
+	exit 1
+fi
+echo "renga-guard: passed against $base"

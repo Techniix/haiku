@@ -1,0 +1,49 @@
+# Protected paths (docs/HYBRID-WORKFLOW.md; approved plan, section 5).
+#
+# A branch that changes any of these needs an architect approval: the line
+#   Architect-Approved: yes
+# in the pull request description (or, locally, RENGA_ARCHITECT_APPROVED=yes).
+# tools/renga/renga-guard enforces it in the pre-push hook and the PR check.
+# This is a process control against accidents, not a security boundary.
+#
+# Format: one repository-relative path prefix per line. A prefix ending in
+# "/" matches everything below that directory; any other entry matches that
+# exact file or anything that starts with it. "#" starts a comment.
+# Special entry: "RENGA_MASTER_ROADMAP.md#decisions" protects only the
+# decision entries of the roadmap (section 10.3 "Decisions log"), not the
+# rest of the file.
+
+# Kernel, boot path, runtime loader
+src/system/kernel/
+src/system/boot/
+src/system/runtime_loader/
+
+# Public ABI
+headers/os/
+headers/posix/
+
+# app_server and kernel drivers
+src/servers/app/
+src/add-ons/kernel/drivers/
+
+# LinuxKPI and Renguin kernel modules
+src/libs/compat/linuxkpi
+src/add-ons/kernel/personalities/
+
+# Build system
+build/jam/
+
+# Harness core
+3rdparty/ce/harness/ce-test.py
+3rdparty/ce/harness/ce-gates.sh
+3rdparty/ce/harness/selftest.py
+3rdparty/ce/harness/guest/
+
+# Roadmap decision entries
+RENGA_MASTER_ROADMAP.md#decisions
+
+# The guard itself, its data and the CI checks (architect review, 2026-11-21):
+# a branch must not be able to loosen its own gates.
+tools/renga/
+.github/workflows/
+CLAUDE.md

@@ -1,0 +1,61 @@
+#!/bin/sh
+# renga-gate: the standard four-way sweep through ce-gates.sh.
+#
+# Usage: tools/renga/renga-gate [<label>] [-- <extra run> ...]
+#
+# Runs, from the root of the tree:
+#
+#   3rdparty/ce/harness/ce-gates.sh <label> "" "--smp 2" "--firmware uefi" \
+#       "--profile renga-raw"
+#
+# the full four-way set of roadmap section 1.2 (default, --smp 2,
+# --firmware uefi, --profile renga-raw), plus selftest.py once per tree.
+# ce-gates.sh is resumable: run the same command again and configurations
+# that already passed on the exact same tree are skipped. Known-flaky
+# failures (KNOWN_FLAKY in ce-gates.sh) are retried once, as the rule says.
+# Extra runs after "--" are added as further quoted configurations.
+#
+# The label defaults to the current branch name. The full ce-gates.sh output
+# goes to <output>/ce-gates/renga-gate-<label>.log; the terminal gets only
+# the gate summary (tools/renga/renga-summary on the gate directory).
+#
+# Required once per batch before its image and before a batch branch merges
+# to ce/main; also on commits that touch shared foundations
+# (tools/renga/renga-changed-suites says when).
+#
+# Exit status: ce-gates.sh's (0 only if selftest and every run passed).
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+case ${1:-} in
+-h|--help) renga_usage; exit 0 ;;
+esac
+
+label=$(git rev-parse --abbrev-ref HEAD | tr '/' '-')
+if [ $# -gt 0 ] && [ "$1" != -- ]; then
+	label=$1
+	shift
+fi
+[ "${1:-}" = -- ] && shift
+
+[ -f "$RENGA_OUTPUT/build/BuildConfig" ] \
+	|| renga_die "$RENGA_OUTPUT is not configured; run tools/renga/renga-build first"
+
+mkdir -p "$RENGA_OUTPUT/ce-gates"
+log=$RENGA_OUTPUT/ce-gates/renga-gate-$(printf %s "$label" | tr -c "A-Za-z0-9._-" _).log
+echo "renga-gate: $label, four-way set; log $log (several hours without KVM)"
+status=0
+sh 3rdparty/ce/harness/ce-gates.sh "$label" "" "--smp 2" "--firmware uefi" \
+	"--profile renga-raw" "$@" > "$log" 2>&1 || status=$?
+
+key=$(sed -n 's/^ce-gates: .*, tree key \([0-9a-f]*\)$/\1/p' "$log" | head -n 1)
+if [ -n "$key" ] && [ -f "$RENGA_OUTPUT/ce-gates/$key/summary.txt" ]; then
+	"$RENGA_TOOLS/renga-summary" "$RENGA_OUTPUT/ce-gates/$key" || true
+	# The failing checks of a failed configuration, one line each.
+	grep '| \*\*FAIL\*\*' "$log" | cut -c1-180 | head -n 20 || true
+else
+	echo "renga-gate: no gate summary; last lines of the log:"
+	tail -n 15 "$log"
+fi
+exit "$status"

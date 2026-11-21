@@ -1,0 +1,141 @@
+#!/bin/sh
+# renga-image: build the anyboot image and prepare it for renga-builds.
+#
+# Usage: tools/renga/renga-image [options] <name>
+#
+#   <name>             build name, e.g. 2026.11.22-batch12. Without a
+#                      leading YYYY.MM.DD- the current date is added.
+#   --push             push the build/<name> branch to renga-builds' origin
+#                      (without it, everything stays local)
+#   --no-build         use the existing <output>/renga-anyboot.iso
+#   --builds <dir>     renga-builds clone (default ../renga-builds next to
+#                      this tree, or RENGA_BUILDS_DIR)
+#   --sweep <text>     a "sweep:" line for build.txt (the gate summary)
+#   --notes <file>     release notes for build.txt's "notes:" section
+#
+# Steps (docs/claude/build-and-release.md):
+#   1. 3rdparty/ce/build/build-handover-image renga-anyboot (refuses a tree
+#      that is not clean, so the image names exactly one commit);
+#   2. in renga-builds: fetch, update main, and cut build/<name> from it
+#      (main carries tools/join.sh and the Publish workflow);
+#   3. split -b 95M -d -a 3 into parts/<iso>.partNNN, write <iso>.sha256 and
+#      build.txt, whose FIRST line is "iso: <iso>" with
+#      <iso> = renga-<name>-anyboot.iso (Publish fails without it);
+#   4. commit those files with explicit paths; push only with --push;
+#   5. switch renga-builds back to main.
+#
+# The maintainer then publishes it: Actions -> "Publish build" -> <name>.
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+push=no
+build=yes
+builds=${RENGA_BUILDS_DIR:-$(dirname "$renga_root")/renga-builds}
+sweep=
+notes=
+name=
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h|--help) renga_usage; exit 0 ;;
+	--push) push=yes ;;
+	--no-build) build=no ;;
+	--builds) [ $# -ge 2 ] || renga_die "--builds needs a directory"; builds=$2; shift ;;
+	--sweep) [ $# -ge 2 ] || renga_die "--sweep needs text"; sweep=$2; shift ;;
+	--notes) [ $# -ge 2 ] || renga_die "--notes needs a file"; notes=$2; shift ;;
+	-*) renga_die "unknown option $1 (see --help)" ;;
+	*) [ -z "$name" ] || renga_die "only one name"; name=$1 ;;
+	esac
+	shift
+done
+[ -n "$name" ] || { renga_usage >&2; exit 2; }
+case $name in
+[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]-*) ;;
+*) name=$(date +%Y.%m.%d)-$name ;;
+esac
+printf '%s' "$name" | grep -Eq '^[A-Za-z0-9._-]+$' || renga_die "name may only use A-Z a-z 0-9 . _ -"
+[ -z "$notes" ] || [ -f "$notes" ] || renga_die "notes file $notes not found"
+
+iso=renga-$name-anyboot.iso
+branch=build/$name
+
+[ -d "$builds/.git" ] || renga_die "no renga-builds clone at $builds (see --help)"
+[ -z "$(git -C "$builds" status --porcelain)" ] || renga_die "$builds has local changes; clean it first"
+git -C "$builds" rev-parse -q --verify "refs/heads/$branch" >/dev/null \
+	&& renga_die "$builds already has a branch $branch"
+
+# 1. The image, from a clean tree.
+if [ $build = yes ]; then
+	echo "renga-image: building renga-anyboot (log: $RENGA_OUTPUT/renga-image.log)"
+	if ! 3rdparty/ce/build/build-handover-image renga-anyboot > "$RENGA_OUTPUT/renga-image.log" 2>&1; then
+		tail -n 20 "$RENGA_OUTPUT/renga-image.log" >&2
+		renga_die "image build failed"
+	fi
+else
+	[ -z "$(git status --porcelain)" ] || renga_note "warning: the tree is not clean; the image may not match HEAD"
+fi
+image=$RENGA_OUTPUT/renga-anyboot.iso
+[ -f "$image" ] || renga_die "no image at $image"
+
+revision=$(cat "$RENGA_OUTPUT/build/haiku-revision" 2>/dev/null || echo unknown)
+commit=$(git rev-parse --short=8 HEAD)
+day=$(git log -1 --format=%cd --date=short HEAD)
+
+# Disk: the parts need about the image's size again in renga-builds.
+need=$(( $(stat -c %s "$image") / 1024 + 102400 ))
+free=$(df -Pk "$builds" | awk 'NR == 2 { print $4 }')
+[ "$free" -gt "$need" ] || renga_die "not enough disk for the parts in $builds (need ${need} KiB, free ${free} KiB)"
+
+# 2. The branch, cut from current main.
+cd "$builds"
+git fetch -q origin main
+git switch -q main
+git merge -q --ff-only origin/main
+git switch -q -c "$branch"
+back_to_main() { git -C "$builds" switch -q main 2>/dev/null || true; }
+trap back_to_main EXIT
+
+# 3. Parts, checksum, build.txt.
+mkdir -p parts
+split -b 95M -d -a 3 "$image" "parts/$iso.part"
+hash=$(sha256sum < "$image" | cut -d ' ' -f 1)
+printf '%s  %s\n' "$hash" "$iso" > "$iso.sha256"
+{
+	echo "iso: $iso"
+	echo "name: $name"
+	echo "title: Renga $name"
+	echo "profile: renga-anyboot"
+	echo "revision: $revision (Renga $commit $day)"
+	[ -z "$sweep" ] || echo "sweep: $sweep"
+	if [ -n "$notes" ]; then
+		echo "notes:"
+		cat "$notes"
+	fi
+} > build.txt
+[ "$(head -n 1 build.txt)" = "iso: $iso" ] || renga_die "build.txt does not start with the iso line"
+
+# The parts must join back to the image (tools/join.sh's check, without
+# writing a second copy of the image).
+[ "$(cat "parts/$iso".part* | sha256sum | cut -d ' ' -f 1)" = "$hash" ] \
+	|| renga_die "the parts do not join to the image"
+
+# 4. Commit with explicit paths.
+git add -- build.txt "$iso.sha256" parts
+git commit -q -m "Build $name (Renga $commit)" \
+	-m "renga-anyboot, $revision. split -b 95M -d -a 3; sha256 and build.txt (first line \"iso:\")." \
+	-- build.txt "$iso.sha256" parts
+parts=$(find parts -name "$iso.part*" | wc -l | tr -d ' ')
+echo "renga-image: $branch committed in $builds: $iso, $parts parts"
+echo "  sha256 $hash"
+echo "  revision $revision (Renga $commit)"
+
+if [ $push = yes ]; then
+	git push -q -u origin "$branch"
+	echo "renga-image: pushed $branch. Publish: Actions -> \"Publish build\" -> $name"
+else
+	echo "renga-image: not pushed (use --push, or: git -C $builds push -u origin $branch)"
+fi
+
+# 5. Back to main (also done by the trap on errors).
+git switch -q main
+trap - EXIT

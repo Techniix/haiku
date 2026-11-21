@@ -1,0 +1,182 @@
+# Path prefix -> harness suites (docs/claude/testing.md).
+#
+# Used by tools/renga/renga-changed-suites. A suite is a directory under
+# 3rdparty/ce/tests/; tools/renga/renga-test expands it to that directory's
+# test programs for ce-test.py --only.
+#
+# Format: "<path prefix> <suite> [<suite> ...]". Every matching line counts
+# (a path under src/apps/controlpanel/ also matches src/apps/), so the
+# selection is the union. Two special suite words:
+#   @full   shared foundation: the full four-way set is required on that
+#           commit (roadmap section 1.2, "Tiered test gates")
+#   @none   notes only: no suite needed (ce-gates.sh keeps the tree key for
+#           the roadmap and docs/partners/)
+# A changed path that matches no line also means @full ("unknown means
+# full", roadmap 1.2). The map is deliberately conservative: when in doubt
+# it lists more suites, not fewer. Add a line when a new area appears.
+
+# --- Notes and project documents -----------------------------------------
+RENGA_MASTER_ROADMAP.md               @none
+docs/                                 @none
+CLAUDE.md                             @none
+ReadMe.md                             @none
+ReadMe.Compiling.md                   @none
+3rdparty/ce/README.md                 @none
+3rdparty/ce/PORTING.md                @none
+.github/                              @none
+tools/renga/                          @none
+
+# --- Shared foundations: full four-way set -------------------------------
+src/system/kernel/                    @full
+src/system/boot/                      @full
+src/system/runtime_loader/            @full
+src/system/libroot/                   @full posix_compat
+src/system/libnetwork/                @full posix_compat
+src/system/glue/                      @full
+headers/                              @full
+build/                                @full
+Jamrules                              @full
+Jamfile                               @full
+configure                             @full
+src/servers/app/                      @full appserver largefont
+src/add-ons/kernel/drivers/           @full
+src/add-ons/kernel/bus_managers/      @full
+src/add-ons/kernel/busses/            @full
+src/add-ons/kernel/generic/           @full syncobj
+src/add-ons/kernel/network/           @full posix_compat wifi
+src/add-ons/kernel/file_systems/      @full
+src/add-ons/kernel/partitioning_systems/ @full installer storage
+src/add-ons/kernel/debugger/          @full kdl
+src/add-ons/kernel/personalities/     @full renguin renguinmanager
+src/libs/compat/                      @full linuxkpi wifi
+src/kits/app/                         @full largefont
+src/kits/interface/                   @full largefont
+src/kits/support/                     @full
+src/kits/storage/                     @full
+src/kits/shared/                      @full largefont
+3rdparty/ce/harness/                  @full
+3rdparty/ce/Jamfile                   @full
+3rdparty/ce/build/                    @full
+3rdparty/ce/tests/Jamfile             @full
+3rdparty/ce/tests/harness_support/    @full
+
+# --- Harness suites themselves -------------------------------------------
+3rdparty/ce/tests/agents/             agents
+3rdparty/ce/tests/appserver/          appserver
+3rdparty/ce/tests/bootmenu/           bootmenu
+3rdparty/ce/tests/bootstate/          bootstate
+3rdparty/ce/tests/controlpanel/       controlpanel
+3rdparty/ce/tests/crashlog/           crashlog
+3rdparty/ce/tests/dbus/               dbus
+3rdparty/ce/tests/deskbar/            deskbar
+3rdparty/ce/tests/devel/              devel
+3rdparty/ce/tests/gamepad/            gamepad
+3rdparty/ce/tests/hda_eld/            hda_eld
+3rdparty/ce/tests/installer/          installer
+3rdparty/ce/tests/kdl/                kdl
+3rdparty/ce/tests/largefont/          largefont
+3rdparty/ce/tests/linuxkpi/           linuxkpi
+3rdparty/ce/tests/media/              media
+3rdparty/ce/tests/nvme/               nvme
+3rdparty/ce/tests/package_priority/   package_priority
+3rdparty/ce/tests/pointer/            pointer
+3rdparty/ce/tests/posix_compat/       posix_compat
+3rdparty/ce/tests/rengadoctor/        rengadoctor
+3rdparty/ce/tests/renguin/            renguin
+3rdparty/ce/tests/renguinmanager/     renguinmanager
+3rdparty/ce/tests/shortcut_keys/      shortcut_keys
+3rdparty/ce/tests/storage/            storage
+3rdparty/ce/tests/stress/             @full
+3rdparty/ce/tests/syncobj/            syncobj
+3rdparty/ce/tests/toolchain/          toolchain
+3rdparty/ce/tests/tracker/            tracker
+3rdparty/ce/tests/usb_audio/          usb_audio
+3rdparty/ce/tests/uvc/                uvc
+3rdparty/ce/tests/virtio_block/       virtio_block
+3rdparty/ce/tests/virtio_sound/       virtio_sound
+3rdparty/ce/tests/wayland/            wayland
+3rdparty/ce/tests/webpositive/        webpositive
+3rdparty/ce/tests/welcome/            welcome
+3rdparty/ce/tests/wifi/               wifi
+3rdparty/ce/artwork/                  welcome installer largefont
+3rdparty/ce/repositories/             package_priority
+
+# --- Applications (every GUI change also runs largefont) ----------------
+src/apps/                             largefont
+src/apps/controlpanel/                controlpanel
+src/apps/deskbar/                     deskbar
+src/apps/drivesetup/                  storage
+src/apps/installer/                   installer
+src/apps/haikudepot/                  package_priority
+src/apps/linuxkpimanager/             linuxkpi
+src/apps/linuxshell/                  renguin renguinmanager
+src/apps/networkstatus/               wifi
+src/apps/rengadoctor/                 rengadoctor
+src/apps/renguinmanager/              renguinmanager
+src/apps/screenshot/                  appserver media
+src/apps/soundrecorder/               media
+src/apps/systemlogs/                  crashlog
+src/apps/webpositive/                 webpositive
+src/apps/welcome/                     welcome
+src/apps/workspaces/                  appserver deskbar
+src/apps/aboutsystem/                 welcome
+src/apps/terminal/                    shortcut_keys
+src/apps/codycam/                     uvc media
+src/apps/firstbootprompt/             welcome installer
+
+# --- Preferences ---------------------------------------------------------
+src/preferences/                      largefont controlpanel
+src/preferences/audio/                media
+src/preferences/media/                media
+src/preferences/bootmenu/             bootmenu bootstate
+src/preferences/gamepads/             gamepad
+src/preferences/input/                pointer shortcut_keys
+src/preferences/keymap/               shortcut_keys
+src/preferences/network/              wifi
+src/preferences/screen/               appserver wayland
+src/preferences/screenrecording/      appserver media
+src/preferences/screensaver/          appserver
+src/preferences/notifications/        agents
+
+# --- Kits ----------------------------------------------------------------
+src/kits/tracker/                     tracker largefont
+src/kits/media/                       media
+src/kits/device/                      gamepad
+src/kits/game/                        media
+src/kits/network/                     posix_compat wifi
+src/kits/package/                     package_priority installer
+src/kits/screensaver/                 appserver
+src/kits/                             @full
+
+# --- Servers -------------------------------------------------------------
+src/servers/wayland/                  wayland renguin
+src/servers/dbus/                     dbus
+src/servers/media/                    media
+src/servers/media_addon/              media
+src/servers/input/                    pointer shortcut_keys gamepad
+src/servers/notification/             agents
+src/servers/package/                  package_priority installer bootstate
+src/servers/keystore/                 dbus
+src/servers/debug/                    crashlog
+src/servers/                          @full
+
+# --- Add-ons, libraries, command-line tools, data ------------------------
+src/add-ons/media/                    media
+src/add-ons/accelerants/              appserver
+src/add-ons/input_server/             pointer shortcut_keys gamepad
+src/add-ons/translators/              largefont
+src/add-ons/                          @full
+src/libs/wayland/                     wayland renguin
+src/libs/gnu/                         posix_compat
+src/libs/bsd/                         posix_compat
+src/libs/                             @full
+src/bin/bootstate/                    bootstate
+src/bin/crash_collector/              crashlog
+src/bin/desklink/                     media deskbar
+src/bin/linux/                        renguin renguinmanager
+src/bin/lkpictl/                      linuxkpi wifi
+src/bin/network/                      posix_compat
+src/bin/pkgman/                       package_priority
+src/bin/                              @full
+src/data/                             @full
+data/                                 @full

@@ -1,0 +1,115 @@
+# Renga: checks on pull requests to ce/main (docs/HYBRID-WORKFLOW.md).
+#
+# Job "cheap" runs on GitHub's runners for every pull request to ce/main:
+#   - tools/renga/renga-guard against the PR's base, reading the PR
+#     description for "Architect-Approved: yes" when protected paths change
+#     (tools/renga/protected-paths), plus "git diff --check";
+#   - shellcheck on the tools/renga scripts.
+# It needs no build and finishes in about a minute.
+#
+# Job "build-and-suites" builds and runs the suites mapped from the changed
+# paths on the maintainer's self-hosted runner (labels: self-hosted, renga).
+# It is enabled only when the repository variable RENGA_SELF_HOSTED is
+# 'true', so without a runner nothing queues forever. It runs only for pull
+# requests from branches of this repository, never from forks, because it
+# executes the pull request's code on that machine.
+
+name: Renga PR checks
+
+on:
+  pull_request:
+    branches: [ce/main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renga-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cheap:
+    name: Guard, diff check, shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request with history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: renga-guard (protected paths, diff --check, trailers)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # The description goes through the environment, never into the
+          # script text, so its content cannot run as shell code.
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.txt"
+          tools/renga/renga-guard --committed-only \
+            --pr-body "$RUNNER_TEMP/pr-body.txt" "origin/$BASE_REF"
+
+      - name: shellcheck tools/renga
+        # Runs even when the guard failed, so both results show.
+        if: ${{ !cancelled() }}
+        run: |
+          command -v shellcheck >/dev/null || sudo apt-get install -y shellcheck
+          shellcheck -x tools/renga/renga-* tools/renga/install-hooks \
+            tools/renga/hooks/pre-push tools/renga/lib.sh
+
+  build-and-suites:
+    name: Build and changed-path suites (self-hosted)
+    needs: cheap
+    if: >-
+      vars.RENGA_SELF_HOSTED == 'true' &&
+      github.event.action != 'edited' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, renga]
+    timeout-minutes: 360
+    steps:
+      - name: Check out the pull request with history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Keep generated.x86_64 (cross-tools, objects) between runs.
+          clean: false
+
+      - name: Fetch the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Build (configure if needed)
+        run: tools/renga/renga-build --image renga-raw
+
+      - name: Suites for the changed paths
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          suites=$(tools/renga/renga-changed-suites "origin/$BASE_REF")
+          if [ -z "$suites" ]; then
+            echo "No suites cover the changed paths (notes only)."
+            exit 0
+          fi
+          status=0
+          tools/renga/renga-test $suites --profile renga-raw || status=$?
+          tools/renga/renga-summary >> "$GITHUB_STEP_SUMMARY" || true
+          # 2 = partial run whose selection passed (3rdparty/ce/README.md).
+          [ "$status" = 2 ] || [ "$status" = 0 ]
+
+      - name: ABI check (exported symbols, add-only)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          status=0
+          tools/renga/renga-abi-check "origin/$BASE_REF" || status=$?
+          if [ "$status" = 3 ]; then
+            echo "::warning::No stored symbol list for the base; see tools/renga/renga-abi-check --help"
+            exit 0
+          fi
+          exit "$status"
