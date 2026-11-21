@@ -170,3 +170,27 @@ Batch 11 (2026-11-21) is finished. Commits: Renga Depot decision (`f3b1ae0c`), b
 - **Batch 12** gets the Renguin display-scale setting the maintainer asked for at the end of batch 11 (not started).
 
 Open, queued by the coordinator in batch 11 and not done: the large-font UI audit of every Renga window with a harness mode (Control Panel sidebar width, resizable window, minimum size; only the Windows page menus done); Linux Chromium zygote and separate GPU process (flags work around it); the initial-size mismatch of Linux Chromium's window (needs a hardware retest with the scale fix); several inputs at once (no buffers reach the mixer); AppImage through the roster; Open with copy flaky; ptrace, sysfs/udev, V4L2, Debian/Arch roots, Renguin badge on window tab/list; Chrome 10 of 10; system bus socket in the Linux root.
+
+## Batch 12: continue from here
+
+Paused by the maintainer on 2026-11-21 (evening). Committed: Quasar note and R-16 record (`74c31ad5`), large-font audit suite with window fixes (`1f5a9d57`), compositor side of the Renguin display scale (`de6e7d71`). No sweep and no image yet.
+
+Uncommitted in the working tree (`/home/claude/haiku`), file by file:
+
+- **Renguin Manager display scale and large-font fit** (builds; partly tested):
+  - `src/apps/renguinmanager/RenguinView.cpp`, `RenguinView.h`: Settings tab "Display scale for Linux programs" menu (100% off to 300%), Programs tab per-program "Display scale" (saved with Apply, keyed by the Exec line's program name), writes `~/config/settings/Renga/renguin_display_scale` and sends 'RgSc' to the compositor; `SetDisplayScale()`, `SetProgramDisplayScale()`, `DisplayScale()`, `ProgramOfExec()`. Notes changed to `BPrivate::WrappingNote`.
+  - `src/apps/renguinmanager/RenguinManager.cpp`: window wrapped with `fit_to_screen()`/`size_window_to_screen()`; new `--display-scale [<S> [<program>]]` command line.
+  - `src/apps/renguinmanager/Jamfile`: `UsePrivateHeaders shared`.
+  - `3rdparty/ce/tests/renguinmanager/renguin_manager_test.cpp`: new `renguin_manager.display_scale` check.
+  - State: the window menus exist (test sees them). Remaining: (1) `--display-scale` fails: the CLI's BApplication uses the signature `application/x-vnd.Renga-RenguinManager-cli`, which does not match the resource signature, so the program stops ("Signature in rsrc doesn't match constructor arg"); `--status` has the same pattern, so check how it avoids that (or use the app signature without launching a window); (2) the large-font audit still flags `programNote`, `processNote` (WrappingNote placed in a vertical group directly: its explicit min 892x30 is set before the width is known; the measured height (60) is not applied while the tab is hidden) — give WrappingNote a min width from the font only and re-measure in `AllAttached`/on show, or keep those two as BStringView with truncation; (3) rerun `ui_large_font_test`, `renguin_manager_test`, `control_panel_ui_test`.
+- **Renga Depot, first part** (builds not checked, untested):
+  - `src/apps/haikudepot/HaikuDepotConstants.h` (`RENGA_DEPOT_NAME`), `ui/App.cpp`, `ui/MainWindow.cpp`, `ui/ShuttingDownWindow.cpp`, `ui/UserUsageConditionsWindow.cpp`: shown name "Renga Depot" (file name, signature, settings and server protocol unchanged); `MainWindow.cpp` also "Update all…" (Terminal with `pkgman full-sync`; the package daemon keeps the previous state as a restore point).
+  - `ui/PackageListView.cpp`: the Repository column is "Source" with labels Haiku / HaikuPorts / RengaPorts.
+  - `build/jam/packages/Haiku`: Deskbar link for HaikuDepot named "Renga Depot".
+  - Remaining: build (`jam -q HaikuDepot`), a test (window title, Update all item, Source column), then the rest of Renga Depot per the decisions log (one catalogue with apk/Flatpak, choose-source menu, richer pages, scheduled updates, repository manager with priorities, developer side, pkgman multi-source search, switches, HVIF icon).
+
+Open, not started in batch 12: Linux Chrome leftovers (SIGBUS when a mapped shared-memory file grows: the batch 11 beyond-end mapping panicked in VMCache commitment and was reverted; zygote and GPU process error 1002), installer wizard `F-23`, partition manager `F-24`, graphical boot menu `F-22`, batch 11 carry-overs. The compositor's scale does not yet convert cursor surfaces, pointer-constraint regions or text-input rectangles.
+
+Known test state (QEMU Tested, partial runs): `large_font` passes for Control Panel pages except `control_panel_renguin` (Renguin fix uncommitted) and one `control_panel_time` run without a report (not reproduced); `renguin_manager` window too big until the uncommitted fix lands. `linux_apps.appimage` fails as in batch 11. This session's result directories: 20261121-163726 onward (raw captures removed).
+
+Next steps: finish the Renguin Manager items above, commit; build and test Renga Depot's first part; then the four-way sweep and the image `build/<date>-batch12` (build.txt starts with `iso: renga-<name>-anyboot.iso`).
