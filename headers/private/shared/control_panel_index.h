@@ -229,6 +229,14 @@ static const SettingInfo kSettings[] = {
 		"restore point windows" },
 	{ "deskbar", "Recent documents in application menus", "jump list "
 		"recent files" },
+	// batch 9 (F-66)
+	{ "tracker", "Show folder sizes", "size column disk usage" },
+	{ "tracker", "Keep both when names collide", "replace copy conflict "
+		"duplicate" },
+	{ "tracker", "Open Terminal here", "shell command line folder" },
+	{ "tracker", "Quick Look with the space bar", "preview space" },
+	{ "tracker", "Rename several items at once", "batch rename multiple" },
+	{ "tracker", "Type to filter", "type ahead filtering search" },
 };
 
 

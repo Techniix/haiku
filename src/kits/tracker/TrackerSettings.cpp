@@ -81,6 +81,8 @@ private:
 	BooleanValueSetting* fShowFolderSizes;
 	BooleanValueSetting* fKeepBothOnConflict;
 	BooleanValueSetting* fOpenTerminalHere;
+	BooleanValueSetting* fQuickLook;
+	BooleanValueSetting* fBatchRename;
 
 	ScalarValueSetting* fRecentApplicationsCount;
 	ScalarValueSetting* fRecentDocumentsCount;
@@ -147,6 +149,8 @@ TTrackerState::TTrackerState()
 	fShowFolderSizes(NULL),
 	fKeepBothOnConflict(NULL),
 	fOpenTerminalHere(NULL),
+	fQuickLook(NULL),
+	fBatchRename(NULL),
 	fRecentApplicationsCount(NULL),
 	fRecentDocumentsCount(NULL),
 	fRecentFoldersCount(NULL),
@@ -181,6 +185,8 @@ TTrackerState::TTrackerState(const TTrackerState&)
 	fShowFolderSizes(NULL),
 	fKeepBothOnConflict(NULL),
 	fOpenTerminalHere(NULL),
+	fQuickLook(NULL),
+	fBatchRename(NULL),
 	fRecentApplicationsCount(NULL),
 	fRecentDocumentsCount(NULL),
 	fRecentFoldersCount(NULL),
@@ -252,6 +258,8 @@ TTrackerState::LoadSettingsIfNeeded()
 	Add(fShowFolderSizes = new BooleanValueSetting("ShowFolderSizes", kDefaultShowFolderSizes));
 	Add(fKeepBothOnConflict = new BooleanValueSetting("KeepBothOnConflict", kDefaultKeepBothOnConflict));
 	Add(fOpenTerminalHere = new BooleanValueSetting("OpenTerminalHere", kDefaultOpenTerminalHere));
+	Add(fQuickLook = new BooleanValueSetting("QuickLook", kDefaultQuickLook));
+	Add(fBatchRename = new BooleanValueSetting("BatchRename", kDefaultBatchRename));
 
 	Add(fRecentApplicationsCount
 		= new ScalarValueSetting("RecentApplications", kDefaultRecentApplications, "", ""));
@@ -550,6 +558,34 @@ void
 TrackerSettings::SetOpenTerminalHere(bool enabled)
 {
 	gTrackerState.fOpenTerminalHere->SetValue(enabled);
+}
+
+
+bool
+TrackerSettings::QuickLook()
+{
+	return gTrackerState.fQuickLook->Value();
+}
+
+
+void
+TrackerSettings::SetQuickLook(bool enabled)
+{
+	gTrackerState.fQuickLook->SetValue(enabled);
+}
+
+
+bool
+TrackerSettings::BatchRename()
+{
+	return gTrackerState.fBatchRename->Value();
+}
+
+
+void
+TrackerSettings::SetBatchRename(bool enabled)
+{
+	gTrackerState.fBatchRename->SetValue(enabled);
 }
 
 

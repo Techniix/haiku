@@ -208,7 +208,8 @@ DESKBAR_SCREENSHOTS = ["deskbar_search", "deskbar_preferences"]
 # Tracker's folder sizes, the name-conflict question and the preferences
 # (F-66, batch 9).
 TRACKER_MODERN_SCREENSHOTS = ["tracker_folder_sizes",
-	"tracker_preferences_batch9", "tracker_conflict_dialog"]
+	"tracker_preferences_batch9", "tracker_conflict_dialog",
+	"tracker_quick_look", "tracker_batch_rename"]
 # The low-latency mode (F-31): the audio settings with a game's "Low
 # latency" switch on, and the default output's page with "Buffer size".
 LATENCY_SCREENSHOTS = ["media_low_latency", "media_buffer_size"]

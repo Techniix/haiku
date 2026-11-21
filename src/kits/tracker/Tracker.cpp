@@ -84,6 +84,7 @@ All rights reserved.
 #include "OpenWithWindow.h"
 #include "PoseView.h"
 #include "QueryContainerWindow.h"
+#include "QuickLookWindow.h"
 #include "StatusWindow.h"
 #include "TaskLoop.h"
 #include "Thread.h"
@@ -635,6 +636,10 @@ TTracker::MessageReceived(BMessage* message)
 				}
 				if (message->FindBool("set_OpenTerminalHere", &value) == B_OK)
 					settings.SetOpenTerminalHere(value);
+				if (message->FindBool("set_QuickLook", &value) == B_OK)
+					settings.SetQuickLook(value);
+				if (message->FindBool("set_BatchRename", &value) == B_OK)
+					settings.SetBatchRename(value);
 
 				int32 page;
 				if (message->FindInt32("show_page", &page) == B_OK) {
@@ -659,6 +664,14 @@ TTracker::MessageReceived(BMessage* message)
 				reply.AddInt32("queued",
 					FolderSizeCache::Default()->CountQueued());
 
+				reply.AddBool("QuickLook", settings.QuickLook());
+				reply.AddBool("BatchRename", settings.BatchRename());
+				reply.AddBool("TypeAheadFiltering",
+					settings.TypeAheadFiltering());
+				BMessage quickLook;
+				QuickLookWindow::GetState(&quickLook);
+				reply.AddMessage("quick_look", &quickLook);
+
 				entry_ref ref;
 				BString action = message->GetString("action", "");
 				if (message->FindRef("refs", &ref) == B_OK) {
@@ -666,6 +679,14 @@ TTracker::MessageReceived(BMessage* message)
 						BContainerWindow* window = FindContainerWindow(&ref);
 						if (window != NULL && window->Lock()) {
 							window->WindowContextMenuForTest(&reply);
+							window->Unlock();
+						}
+						reply.AddBool("window", window != NULL);
+					} else if (action == "press_space") {
+						// the space bar in that folder's window, as typed
+						BContainerWindow* window = FindContainerWindow(&ref);
+						if (window != NULL && window->Lock()) {
+							window->PoseView()->KeyDown(" ", 1);
 							window->Unlock();
 						}
 						reply.AddBool("window", window != NULL);

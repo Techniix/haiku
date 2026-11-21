@@ -145,6 +145,8 @@ const uint32 kPrefetchFolderMenusChanged = 'PFMc';
 const uint32 kShowFolderSizesChanged = 'SFSc';
 const uint32 kKeepBothOnConflictChanged = 'KBCc';
 const uint32 kOpenTerminalHereChanged = 'OTHc';
+const uint32 kQuickLookChanged = 'QLkc';
+const uint32 kBatchRenameChanged = 'BRnc';
 const uint32 kOpenTerminalHere = 'OTrm';
 	// "refs": the folder
 const uint32 kTestTrackerState = 'Tsta';

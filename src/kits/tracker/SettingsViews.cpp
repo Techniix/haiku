@@ -453,6 +453,8 @@ WindowsSettingsView::WindowsSettingsView()
 	fShowFolderSizesCheckBox(NULL),
 	fKeepBothOnConflictCheckBox(NULL),
 	fOpenTerminalHereCheckBox(NULL),
+	fQuickLookCheckBox(NULL),
+	fBatchRenameCheckBox(NULL),
 	fShowFullPathInTitleBar(kDefaultShowFullPathInTitleBar),
 	fSingleWindowBrowse(kDefaultSingleWindowBrowse),
 	fShowNavigator(kDefaultShowNavigator),
@@ -463,7 +465,9 @@ WindowsSettingsView::WindowsSettingsView()
 	fGenerateImageThumbnails(kDefaultGenerateImageThumbnails),
 	fShowFolderSizes(kDefaultShowFolderSizes),
 	fKeepBothOnConflict(kDefaultKeepBothOnConflict),
-	fOpenTerminalHere(kDefaultOpenTerminalHere)
+	fOpenTerminalHere(kDefaultOpenTerminalHere),
+	fQuickLook(kDefaultQuickLook),
+	fBatchRename(kDefaultBatchRename)
 {
 	fShowFullPathInTitleBarCheckBox = new BCheckBox("",
 		B_TRANSLATE("Show folder location in title tab"),
@@ -513,6 +517,18 @@ WindowsSettingsView::WindowsSettingsView()
 	fOpenTerminalHereCheckBox = new BCheckBox("openTerminal",
 		B_TRANSLATE("\"Open Terminal here\" in folder menus"),
 		new BMessage(kOpenTerminalHereChanged));
+	fQuickLookCheckBox = new BCheckBox("quickLook",
+		B_TRANSLATE("Quick Look with the space bar"),
+		new BMessage(kQuickLookChanged));
+	fQuickLookCheckBox->SetToolTip(B_TRANSLATE("Space shows the selected "
+		"item (pictures, text, folders) in a small window; Space again or "
+		"Escape closes it."));
+	fBatchRenameCheckBox = new BCheckBox("batchRename",
+		B_TRANSLATE("Rename several items at once"),
+		new BMessage(kBatchRenameChanged));
+	fBatchRenameCheckBox->SetToolTip(B_TRANSLATE("\"Edit name\" with more "
+		"than one item selected opens a window to find and replace, add "
+		"text or number the names."));
 
 	const float spacing = be_control_look->DefaultItemSpacing();
 
@@ -534,6 +550,8 @@ WindowsSettingsView::WindowsSettingsView()
 			.Add(fShowFolderSizesCheckBox)
 			.Add(fKeepBothOnConflictCheckBox)
 			.Add(fOpenTerminalHereCheckBox)
+			.Add(fQuickLookCheckBox)
+			.Add(fBatchRenameCheckBox)
 			.End()
 		.AddGlue()
 		.SetInsets(spacing);
@@ -554,6 +572,8 @@ WindowsSettingsView::AttachedToWindow()
 	fShowFolderSizesCheckBox->SetTarget(this);
 	fKeepBothOnConflictCheckBox->SetTarget(this);
 	fOpenTerminalHereCheckBox->SetTarget(this);
+	fQuickLookCheckBox->SetTarget(this);
+	fBatchRenameCheckBox->SetTarget(this);
 }
 
 
@@ -664,11 +684,17 @@ WindowsSettingsView::MessageReceived(BMessage* message)
 		case kShowFolderSizesChanged:
 		case kKeepBothOnConflictChanged:
 		case kOpenTerminalHereChanged:
+		case kQuickLookChanged:
+		case kBatchRenameChanged:
 		{
 			BCheckBox* box = message->what == kShowFolderSizesChanged
 				? fShowFolderSizesCheckBox
 				: message->what == kKeepBothOnConflictChanged
-					? fKeepBothOnConflictCheckBox : fOpenTerminalHereCheckBox;
+					? fKeepBothOnConflictCheckBox
+				: message->what == kOpenTerminalHereChanged
+					? fOpenTerminalHereCheckBox
+				: message->what == kQuickLookChanged
+					? fQuickLookCheckBox : fBatchRenameCheckBox;
 			bool value;
 			if (message->FindBool("renga:value", &value) == B_OK)
 				box->SetValue(value);
@@ -681,8 +707,12 @@ WindowsSettingsView::MessageReceived(BMessage* message)
 					enabled);
 			} else if (message->what == kKeepBothOnConflictChanged)
 				settings.SetKeepBothOnConflict(enabled);
-			else
+			else if (message->what == kOpenTerminalHereChanged)
 				settings.SetOpenTerminalHere(enabled);
+			else if (message->what == kQuickLookChanged)
+				settings.SetQuickLook(enabled);
+			else
+				settings.SetBatchRename(enabled);
 			Window()->PostMessage(kSettingsContentsModified);
 			break;
 		}
@@ -755,6 +785,8 @@ WindowsSettingsView::SetDefaults()
 	}
 	settings.SetKeepBothOnConflict(kDefaultKeepBothOnConflict);
 	settings.SetOpenTerminalHere(kDefaultOpenTerminalHere);
+	settings.SetQuickLook(kDefaultQuickLook);
+	settings.SetBatchRename(kDefaultBatchRename);
 
 	ShowCurrentSettings();
 }
@@ -775,7 +807,9 @@ WindowsSettingsView::IsDefaultable() const
 		|| settings.GenerateImageThumbnails() != kDefaultGenerateImageThumbnails
 		|| settings.ShowFolderSizes() != kDefaultShowFolderSizes
 		|| settings.KeepBothOnConflict() != kDefaultKeepBothOnConflict
-		|| settings.OpenTerminalHere() != kDefaultOpenTerminalHere;
+		|| settings.OpenTerminalHere() != kDefaultOpenTerminalHere
+		|| settings.QuickLook() != kDefaultQuickLook
+		|| settings.BatchRename() != kDefaultBatchRename;
 }
 
 
@@ -843,6 +877,8 @@ WindowsSettingsView::Revert()
 	}
 	settings.SetKeepBothOnConflict(fKeepBothOnConflict);
 	settings.SetOpenTerminalHere(fOpenTerminalHere);
+	settings.SetQuickLook(fQuickLook);
+	settings.SetBatchRename(fBatchRename);
 
 	ShowCurrentSettings();
 }
@@ -868,6 +904,8 @@ WindowsSettingsView::ShowCurrentSettings()
 	fShowFolderSizesCheckBox->SetValue(settings.ShowFolderSizes());
 	fKeepBothOnConflictCheckBox->SetValue(settings.KeepBothOnConflict());
 	fOpenTerminalHereCheckBox->SetValue(settings.OpenTerminalHere());
+	fQuickLookCheckBox->SetValue(settings.QuickLook());
+	fBatchRenameCheckBox->SetValue(settings.BatchRename());
 }
 
 
@@ -887,6 +925,8 @@ WindowsSettingsView::RecordRevertSettings()
 	fShowFolderSizes = settings.ShowFolderSizes();
 	fKeepBothOnConflict = settings.KeepBothOnConflict();
 	fOpenTerminalHere = settings.OpenTerminalHere();
+	fQuickLook = settings.QuickLook();
+	fBatchRename = settings.BatchRename();
 }
 
 
@@ -905,7 +945,9 @@ WindowsSettingsView::IsRevertable() const
 		|| fGenerateImageThumbnails != settings.GenerateImageThumbnails()
 		|| fShowFolderSizes != settings.ShowFolderSizes()
 		|| fKeepBothOnConflict != settings.KeepBothOnConflict()
-		|| fOpenTerminalHere != settings.OpenTerminalHere();
+		|| fOpenTerminalHere != settings.OpenTerminalHere()
+		|| fQuickLook != settings.QuickLook()
+		|| fBatchRename != settings.BatchRename();
 }
 
 

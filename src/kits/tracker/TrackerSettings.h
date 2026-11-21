@@ -107,6 +107,10 @@ public:
 	void SetKeepBothOnConflict(bool enabled);
 	bool OpenTerminalHere();
 	void SetOpenTerminalHere(bool enabled);
+	bool QuickLook();
+	void SetQuickLook(bool enabled);
+	bool BatchRename();
+	void SetBatchRename(bool enabled);
 
 	bool ShowSelectionWhenInactive();
 	void SetShowSelectionWhenInactive(bool);

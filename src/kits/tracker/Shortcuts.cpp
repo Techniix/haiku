@@ -1091,6 +1091,10 @@ TShortcuts::UpdateEditNameItem(BMenuItem* item)
 	if (fInWindow) {
 		item->SetEnabled(PoseView()->CanEditName());
 		item->SetTarget(PoseView());
+		// Renga (F-66, batch 9): several items open the batch rename
+		item->SetLabel(PoseView()->CountSelected() > 1
+				&& TrackerSettings().BatchRename()
+			? B_TRANSLATE("Rename" B_UTF8_ELLIPSIS) : EditNameLabel());
 	}
 }
 

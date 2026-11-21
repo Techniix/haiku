@@ -85,7 +85,9 @@ All rights reserved.
 #include "DesktopPoseView.h"
 #include "FSClipboard.h"
 #include "FSUndoRedo.h"
+#include "BatchRenameWindow.h"
 #include "FolderSizeCache.h"
+#include "QuickLookWindow.h"
 #include "FSUtils.h"
 #include "FilePanelPriv.h"
 #include "FunctionObject.h"
@@ -2545,10 +2547,34 @@ BPoseView::MessageReceived(BMessage* message)
 			IdentifySelection(message->GetBool("force", false));
 			break;
 
+		case kQuickLook:
+		{
+			// Renga (F-66, batch 9)
+			BPose* pose = fSelectionList->FirstItem();
+			if (pose == NULL)
+				QuickLookWindow::Close();
+			else
+				QuickLookWindow::Toggle(*pose->TargetModel()->EntryRef());
+			break;
+		}
+
 		case kEditName:
 		{
 			if (ActivePose() != NULL)
 				break;
+
+			// Renga (F-66, batch 9): several items at once
+			if (CountSelected() > 1 && TrackerSettings().BatchRename()) {
+				if (!CanEditName())
+					break;
+				BObjectList<entry_ref, true> refs(CountSelected());
+				for (int32 i = 0; i < CountSelected(); i++) {
+					refs.AddItem(new entry_ref(
+						*fSelectionList->ItemAt(i)->TargetModel()->EntryRef()));
+				}
+				(new BatchRenameWindow(refs))->Show();
+				break;
+			}
 
 			BPose* pose = fSelectionList->FirstItem();
 			if (pose == NULL)
@@ -6940,6 +6966,26 @@ BPoseView::KeyDown(const char* bytes, int32 count)
 
 		default:
 		{
+			// Renga (F-66, batch 9): Quick Look on Space, unless a name is
+			// being typed (type-ahead selection within the double-click
+			// time, or a type-ahead filter with text)
+			if (key == ' ' && (modifiers() & (B_SHIFT_KEY | B_COMMAND_KEY
+					| B_CONTROL_KEY | B_OPTION_KEY)) == 0
+				&& TrackerSettings().QuickLook() && CountSelected() > 0) {
+				bigtime_t clickSpeed;
+				get_click_speed(&clickSpeed);
+				bool filtering = ViewMode() == kListMode
+					&& TrackerSettings().TypeAheadFiltering()
+					&& fFilterStrings.LastItem() != NULL
+					&& fFilterStrings.LastItem()->Length() > 0;
+				bool typing = system_time() - fLastKeyTime < clickSpeed * 2
+					&& sMatchString.Length() > 0;
+				if (!filtering && !typing) {
+					Window()->PostMessage(kQuickLook, this);
+					break;
+				}
+			}
+
 			// handle typeahead selection / filtering
 
 			if (ViewMode() == kListMode && TrackerSettings().TypeAheadFiltering()) {
@@ -9085,6 +9131,20 @@ BPoseView::TargetVolumeIsReadOnly() const
 bool
 BPoseView::CanEditName() const
 {
+	if (CountSelected() > 1 && TrackerSettings().BatchRename()) {
+		// Renga (F-66, batch 9): several items, BatchRenameWindow
+		if (ActivePose() != NULL || SelectedVolumeIsReadOnly())
+			return false;
+		for (int32 i = 0; i < CountSelected(); i++) {
+			Model* model = fSelectionList->ItemAt(i)->TargetModel();
+			if (model == NULL || model->IsDesktop() || model->IsRoot()
+				|| model->IsTrash() || model->IsVolume()) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	if (CountSelected() != 1)
 		return false;
 

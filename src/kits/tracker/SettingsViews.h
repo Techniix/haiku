@@ -130,6 +130,8 @@ private:
 	BCheckBox* fShowFolderSizesCheckBox;
 	BCheckBox* fKeepBothOnConflictCheckBox;
 	BCheckBox* fOpenTerminalHereCheckBox;
+	BCheckBox* fQuickLookCheckBox;
+	BCheckBox* fBatchRenameCheckBox;
 
 	bool fShowFullPathInTitleBar;
 	bool fSingleWindowBrowse;
@@ -142,6 +144,8 @@ private:
 	bool fShowFolderSizes;
 	bool fKeepBothOnConflict;
 	bool fOpenTerminalHere;
+	bool fQuickLook;
+	bool fBatchRename;
 
 	typedef SettingsView _inherited;
 };

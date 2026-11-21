@@ -30,6 +30,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			BackgroundImage.cpp
 			Bitmaps.cpp
 			ContainerWindow.cpp
+			BatchRenameWindow.cpp
 			ConflictDialog.cpp
 			CountView.cpp
 			DeskWindow.cpp
@@ -73,6 +74,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			PoseViewScripting.cpp
 			QueryContainerWindow.cpp
 			QueryPoseView.cpp
+			QuickLookWindow.cpp
 			RecentItems.cpp
 			RegExp.cpp
 			SelectionWindow.cpp
@@ -119,6 +121,8 @@ DoCatalogs libtracker.so :
 	Tracker.cpp
 	AttributesView.cpp
 	AutoMounterSettings.cpp
+	BatchRenameWindow.cpp
+	ConflictDialog.cpp
 	ContainerWindow.cpp
 	CountView.cpp
 	DeskWindow.cpp
@@ -140,6 +144,7 @@ DoCatalogs libtracker.so :
 	PoseView.cpp
 	QueryContainerWindow.cpp
 	QueryPoseView.cpp
+	QuickLookWindow.cpp
 	RegExp.cpp
 	SelectionWindow.cpp
 	SettingsViews.cpp

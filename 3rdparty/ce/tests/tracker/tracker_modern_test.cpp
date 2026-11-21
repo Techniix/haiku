@@ -41,6 +41,20 @@
 	                                   both and removes the source
 	  tracker_modern.classic           with the switch off the classic
 	                                   question comes instead
+	  tracker_modern.quick_look_image  Quick Look shows a picture (screenshot
+	                                   tracker_quick_look) and closes again
+	  tracker_modern.quick_look_text   and a text file
+	  tracker_modern.quick_look_space  the space bar opens and closes it;
+	                                   nothing with the switch off
+	  tracker_modern.rename_names      the batch rename's names: numbers as
+	                                   wide as the largest, the extension
+	                                   kept
+	  tracker_modern.batch_rename      "Edit name" with three items selected
+	                                   opens the batch rename (screenshot
+	                                   tracker_batch_rename); a name that
+	                                   exists is refused; Rename renames all
+	  tracker_modern.batch_switch      with the switch off it does not open
+	  tracker_modern.type_filter       type to filter is on for new installs
 	  tracker_modern.prefs_revert      Revert in the Tracker preferences
 	                                   restores "Hide dotfiles" and leaves
 	                                   "List folders first" alone (an upstream
@@ -58,6 +72,7 @@
 #include <File.h>
 #include <FindDirectory.h>
 #include <Messenger.h>
+#include <NodeInfo.h>
 #include <ObjectList.h>
 #include <Path.h>
 #include <Roster.h>
@@ -71,6 +86,8 @@
 #include <unistd.h>
 
 #include "Commands.h"
+#include "QuickLookWindow.h"
+#include "BatchRenameWindow.h"
 #include "ConflictDialog.h"
 #include "FSUtils.h"
 #include "TrackerSettings.h"
@@ -482,6 +499,292 @@ test_conflicts()
 }
 
 
+// #pragma mark - Quick Look and batch rename
+
+
+static void
+write_bmp(const char* path, int width, int height)
+{
+	int rowSize = (width * 3 + 3) & ~3;
+	int dataSize = rowSize * height;
+	uint8 header[54] = { 'B', 'M' };
+	uint32 fileSize = 54 + dataSize;
+	memcpy(header + 2, &fileSize, 4);
+	uint32 offset = 54;
+	memcpy(header + 10, &offset, 4);
+	uint32 infoSize = 40;
+	memcpy(header + 14, &infoSize, 4);
+	int32 w = width, h = height;
+	memcpy(header + 18, &w, 4);
+	memcpy(header + 22, &h, 4);
+	uint16 planes = 1, bits = 24;
+	memcpy(header + 26, &planes, 2);
+	memcpy(header + 28, &bits, 2);
+	memcpy(header + 34, &dataSize, 4);
+	BFile file(path, B_CREATE_FILE | B_ERASE_FILE | B_WRITE_ONLY);
+	file.Write(header, sizeof(header));
+	uint8* row = (uint8*)calloc(1, rowSize);
+	for (int y = 0; y < height; y++) {
+		for (int x = 0; x < width; x++) {
+			// a leaf-green to sky-blue gradient with a light band
+			row[x * 3 + 0] = (uint8)(255 * x / width);
+			row[x * 3 + 1] = (uint8)(160 + 60 * y / height);
+			row[x * 3 + 2] = (y > height / 3 && y < height / 2) ? 240 : 60;
+		}
+		file.Write(row, rowSize);
+	}
+	free(row);
+	BNodeInfo info(&file);
+	info.SetType("image/bmp");
+}
+
+
+static status_t
+to_poses(const char* windowTitle, BMessage& message, BMessage* reply = NULL)
+{
+	message.AddSpecifier("Poses");
+	message.AddSpecifier("Window", windowTitle);
+	BMessage dummy;
+	return BMessenger(kTrackerAppSignature).SendMessage(&message,
+		reply != NULL ? reply : &dummy, 2000000, 2000000);
+}
+
+
+static void
+select_entry(const char* windowTitle, const char* path)
+{
+	BMessage select(B_SET_PROPERTY);
+	entry_ref ref;
+	get_ref_for_path(path, &ref);
+	select.AddRef("data", &ref);
+	select.AddSpecifier("Selection");
+	to_poses(windowTitle, select);
+	snooze(300000);
+}
+
+
+static BMessage
+quick_look_state()
+{
+	BMessage reply = state();
+	BMessage quickLook;
+	reply.FindMessage("quick_look", &quickLook);
+	return quickLook;
+}
+
+
+static void
+press_space(const char* folder)
+{
+	// through Tracker's hook: a scripted B_KEY_DOWN keeps its specifiers
+	// and never reaches KeyDown()
+	state(folder, "press_space");
+	snooze(1000000);
+}
+
+
+static bool
+window_exists(const char* title)
+{
+	BMessage get(B_GET_PROPERTY);
+	get.AddSpecifier("Title");
+	get.AddSpecifier("Window", title);
+	BMessage reply;
+	if (BMessenger(kTrackerAppSignature).SendMessage(&get, &reply, 1000000,
+			1000000) != B_OK) {
+		return false;
+	}
+	return reply.what == B_REPLY && reply.GetInt32("error", B_OK) == B_OK;
+}
+
+
+static void
+test_quick_look_and_rename(const BPath& home)
+{
+	BPath folder(home.Path(), "ce-quicklook");
+	remove_tree(folder.Path());
+	create_directory(folder.Path(), 0755);
+	BPath picture(folder.Path(), "leaf.bmp");
+	write_bmp(picture.Path(), 320, 200);
+	BPath text(folder.Path(), "notes.txt");
+	write_file(text.Path(), "Renga Quick Look\nA text file, shown read "
+		"only.\n");
+	{
+		BNode node(text.Path());
+		BNodeInfo(&node).SetType("text/plain");
+	}
+	open_folder(folder.Path());
+	snooze(2500000);
+
+	select_entry("ce-quicklook", picture.Path());
+	BMessage look(kQuickLook);
+	to_poses("ce-quicklook", look);
+	snooze(2000000);
+	BMessage shown = quick_look_state();
+	printf("CE-HOST screenshot tracker_quick_look\n");
+	fflush(stdout);
+	snooze(500000);
+	BMessage again(kQuickLook);
+	to_poses("ce-quicklook", again);
+	snooze(1000000);
+	BMessage closed = quick_look_state();
+	// minimum-* images have no image translators: the picture is then
+	// shown as its icon and information, as designed
+	bool translator = access(
+		"/boot/system/add-ons/Translators/BMPTranslator", F_OK) == 0;
+	report("quick_look_image", shown.GetBool("open", false)
+			&& strcmp(shown.GetString("kind", ""),
+				translator ? "image" : "info") == 0
+			&& strcmp(shown.GetString("title", ""), "leaf.bmp") == 0
+			&& !closed.GetBool("open", true),
+		"open %d, kind \"%s\" (BMP translator %d), title \"%s\"; closed "
+		"again %d", shown.GetBool("open", false), shown.GetString("kind", ""),
+		translator, shown.GetString("title", ""),
+		!closed.GetBool("open", true));
+
+	select_entry("ce-quicklook", text.Path());
+	BMessage lookText(kQuickLook);
+	to_poses("ce-quicklook", lookText);
+	snooze(1500000);
+	BMessage textShown = quick_look_state();
+	BMessage lookTextAgain(kQuickLook);
+	to_poses("ce-quicklook", lookTextAgain);
+	snooze(800000);
+	report("quick_look_text", textShown.GetBool("open", false)
+			&& strcmp(textShown.GetString("kind", ""), "text") == 0,
+		"open %d, kind \"%s\"", textShown.GetBool("open", false),
+		textShown.GetString("kind", ""));
+
+	press_space(folder.Path());
+	BMessage spaceOpen = quick_look_state();
+	press_space(folder.Path());
+	BMessage spaceClosed = quick_look_state();
+	BMessage off;
+	off.AddBool("set_QuickLook", false);
+	state(NULL, NULL, &off);
+	press_space(folder.Path());
+	BMessage spaceOff = quick_look_state();
+	BMessage on;
+	on.AddBool("set_QuickLook", true);
+	state(NULL, NULL, &on);
+	if (spaceOff.GetBool("open", false)) {
+		BMessage close(kQuickLook);
+		to_poses("ce-quicklook", close);
+	}
+	report("quick_look_space", spaceOpen.GetBool("open", false)
+			&& !spaceClosed.GetBool("open", true)
+			&& !spaceOff.GetBool("open", true),
+		"space opens %d, closes %d, with the switch off opens %d",
+		spaceOpen.GetBool("open", false), !spaceClosed.GetBool("open", true),
+		spaceOff.GetBool("open", false));
+	close_window("ce-quicklook");
+
+	// Batch rename
+	BString numbered = BatchRenameWindow::NewName("photo.jpg", "", "", "",
+		"", true, 7, 3);
+	BString archive = BatchRenameWindow::NewName("IMG_1.tar.gz", "IMG_",
+		"Trip-", "", " (old)", false, 0, 1);
+	report("rename_names", numbered == "photo 007.jpg"
+			&& archive == "Trip-1.tar (old).gz",
+		"\"%s\" (want \"photo 007.jpg\"), \"%s\" (want \"Trip-1.tar "
+		"(old).gz\")", numbered.String(), archive.String());
+
+	BPath batch(home.Path(), "ce-batch");
+	remove_tree(batch.Path());
+	create_directory(batch.Path(), 0755);
+	for (int i = 1; i <= 3; i++) {
+		BString name;
+		name.SetToFormat("%s/IMG_%03d.jpg", batch.Path(), i);
+		write_file(name.String(), "jpg");
+	}
+	open_folder(batch.Path());
+	snooze(2500000);
+	BMessage selectAll(B_SELECT_ALL);
+	to_poses("ce-batch", selectAll);
+	snooze(500000);
+	// a name the rename would take, outside the selection
+	BString blocker;
+	blocker.SetToFormat("%s/Beach-002.jpg", batch.Path());
+	write_file(blocker.String(), "other");
+	snooze(500000);
+
+	BMessage edit(kEditName);
+	to_poses("ce-batch", edit);
+	snooze(1500000);
+	bool opened = window_exists("Rename 3 items");
+
+	BMessage set(kBatchRenameSet);
+	set.AddString("find", "IMG_");
+	set.AddString("replace", "Beach-");
+	set.AddSpecifier("Window", "Rename 3 items");
+	BMessage refused;
+	BMessenger(kTrackerAppSignature).SendMessage(&set, &refused, 2000000,
+		2000000);
+
+	BMessage set2(kBatchRenameSet);
+	set2.AddString("find", "IMG_");
+	set2.AddString("replace", "");
+	set2.AddString("prefix", "Trip-");
+	set2.AddSpecifier("Window", "Rename 3 items");
+	BMessage accepted;
+	BMessenger(kTrackerAppSignature).SendMessage(&set2, &accepted, 2000000,
+		2000000);
+	printf("CE-HOST screenshot tracker_batch_rename\n");
+	fflush(stdout);
+	snooze(500000);
+	BMessage apply(kBatchRenameApply);
+	apply.AddSpecifier("Window", "Rename 3 items");
+	BMessage applied;
+	BMessenger(kTrackerAppSignature).SendMessage(&apply, &applied, 5000000,
+		5000000);
+	snooze(1000000);
+	BPath trip1(batch.Path(), "Trip-001.jpg"), trip3(batch.Path(),
+		"Trip-003.jpg"), img1(batch.Path(), "IMG_001.jpg");
+	report("batch_rename", opened && !refused.GetBool("valid", true)
+			&& accepted.GetBool("valid", false)
+			&& strcmp(accepted.GetString("name", 0, ""), "Trip-001.jpg") == 0
+			&& applied.GetInt32("status", -1) == B_OK
+			&& access(trip1.Path(), F_OK) == 0
+			&& access(trip3.Path(), F_OK) == 0
+			&& access(img1.Path(), F_OK) != 0,
+		"window %d; \"Beach-\" refused %d (%s); \"Trip-\" valid %d, first "
+		"\"%s\"; status 0x%x; Trip-001 %d, Trip-003 %d, IMG_001 gone %d",
+		opened, !refused.GetBool("valid", true),
+		refused.GetString("status", ""), accepted.GetBool("valid", false),
+		accepted.GetString("name", 0, ""),
+		(unsigned)applied.GetInt32("status", -1),
+		access(trip1.Path(), F_OK) == 0, access(trip3.Path(), F_OK) == 0,
+		access(img1.Path(), F_OK) != 0);
+
+	BMessage renameOff;
+	renameOff.AddBool("set_BatchRename", false);
+	state(NULL, NULL, &renameOff);
+	BMessage selectAll2(B_SELECT_ALL);
+	to_poses("ce-batch", selectAll2);
+	snooze(500000);
+	BMessage edit2(kEditName);
+	to_poses("ce-batch", edit2);
+	snooze(1500000);
+	bool openedOff = window_exists("Rename 4 items");
+	BMessage renameOn;
+	renameOn.AddBool("set_BatchRename", true);
+	state(NULL, NULL, &renameOn);
+	report("batch_switch", !openedOff, "window with the switch off %d",
+		openedOff);
+	if (openedOff)
+		close_window("Rename 4 items");
+	close_window("ce-batch");
+
+	BMessage settings = state();
+	report("type_filter", settings.GetBool("TypeAheadFiltering", false),
+		"TypeAheadFiltering %d", settings.GetBool("TypeAheadFiltering",
+			false));
+
+	remove_tree(folder.Path());
+	remove_tree(batch.Path());
+}
+
+
 // #pragma mark - main
 
 
@@ -691,6 +994,8 @@ main(int argc, char** argv)
 		BMessenger(kTerminalSignature).SendMessage(B_QUIT_REQUESTED);
 
 	close_window("ce-sizes");
+
+	test_quick_look_and_rename(home);
 
 	// The preferences: Revert restores "Hide dotfiles"
 	BMessage before = state();

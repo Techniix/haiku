@@ -25,7 +25,9 @@ static const bool kDefaultShowNavigator = true;
 static const bool kDefaultTransparentSelection = true;
 static const bool kDefaultSortFolderNamesFirst = true;
 static const bool kDefaultHideDotFiles = false;
-static const bool kDefaultTypeAheadFiltering = false;
+static const bool kDefaultTypeAheadFiltering = true;
+	// Renga (F-66, batch 9): type to filter, for new installs; saved
+	// settings keep their value
 static const bool kDefaultGenerateImageThumbnails = true;
 static const bool kDefaultPrefetchFolderMenus = true;
 	// Renga (F-59), NavMenuPrefetch.h
@@ -36,6 +38,10 @@ static const bool kDefaultKeepBothOnConflict = true;
 	// "Apply to all" (FSUtils.cpp, ConflictDialog)
 static const bool kDefaultOpenTerminalHere = true;
 	// Renga (F-66, batch 9): "Open Terminal here" in folder windows' menus
+static const bool kDefaultQuickLook = true;
+	// Renga (F-66, batch 9): QuickLookWindow.h
+static const bool kDefaultBatchRename = true;
+	// Renga (F-66, batch 9): BatchRenameWindow.h
 
 static const int32 kDefaultRecentApplications = 10;
 static const int32 kDefaultRecentDocuments = 10;

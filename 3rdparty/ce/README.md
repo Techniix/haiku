@@ -735,7 +735,15 @@ of a 1 GiB guest was, so the bounce path went untested.
   messages: Keep both with "Apply to all" (screenshot
   `tracker_conflict_dialog`), Replace with "Apply to all", Skip then Keep
   both, Cancel, a folder kept as "d copy", a move that keeps both, and the
-  classic question with the switch off. Starts Tracker where it is not
+  classic question with the switch off. Quick Look shows a picture (`image`
+  on images with a BMP translator, otherwise its icon and information;
+  screenshot `tracker_quick_look`) and a text file and closes again, the
+  space bar opens and closes it (not with the switch off); the batch
+  rename's names (numbers as wide as the largest, the extension kept),
+  "Edit name" with three items opening it (screenshot
+  `tracker_batch_rename`), a name that exists refused, Rename renaming
+  all, nothing with the switch off; type to filter on for new installs.
+  Starts Tracker where it is not
   running and quits it again.
 - **deskbar** (every image, `deskbar_test`; F-41, F-60, batch 9): the
   Deskbar's harness hooks (harness images only, `BarApp.h`) build the
