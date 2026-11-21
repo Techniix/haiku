@@ -2,11 +2,18 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-21 UTC. Newest entries first.
+Updated: 2026-11-21 19:30 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-21: batch 11: Linux Chromium on real hardware, and what Renga changed
+
+- First hardware result (maintainer, batch 10 image): Alpine's Chromium 158 under Renguin opened a real window through Renga's Wayland compositor and browsed real sites, with `--no-sandbox --no-zygote --single-process --in-process-gpu --disable-gpu --ozone-platform=wayland`.
+- Renga now (`fba02669`, `238208d5`): Linux programs run as a normal user (uid 1000; `sudo`/`linux --root` for root), so Chromium no longer stops as root; `/etc/chromium/renguin.conf` gives Alpine's launcher `--no-sandbox --no-zygote --in-process-gpu --disable-gpu --ozone-platform=wayland` (switch "chromium_flags"); `mincore()` is implemented; hard links are copies on BFS (tzdata, so `apk add chromium` has no error); resizes reach a window that sets no window geometry, set_maximized works, and the preferred fractional scale is 1.0 (it followed Renga's font size before).
+- Still open in Renga: the zygote child never answers and the separate GPU process fails to launch (1002) under Renguin; mapping a shared file beyond its end (Renga refuses it); the window-larger-than-content report needs a retest with the scale change.
+- Nothing needed from the native port for this; it affects only Linux Chromium under Renguin.
 
 ### 2026-11-21: batch 10: Linux Chrome's process model under Renguin
 
