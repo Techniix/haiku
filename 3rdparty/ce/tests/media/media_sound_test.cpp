@@ -487,15 +487,23 @@ mixer_destination_name()
 	mixer to play on it (the media services reconnect the mixer some time
 	after the default changed).
 */
+static bigtime_t sLastWait = 0;
+	// how long the last wait_default_output() took, for the reports
+
+
 static bool
 wait_default_output(const char* name, bigtime_t timeout)
 {
-	bigtime_t deadline = system_time() + timeout;
+	bigtime_t start = system_time();
+	bigtime_t deadline = start + timeout;
 	while (system_time() < deadline) {
-		if (default_output_name() == name && mixer_destination_name() == name)
+		if (default_output_name() == name && mixer_destination_name() == name) {
+			sLastWait = system_time() - start;
 			return true;
+		}
 		snooze(200000);
 	}
+	sLastWait = system_time() - start;
 	return false;
 }
 
@@ -771,12 +779,14 @@ check_output(FILE* music, FILE* browser, const BString& first,
 	tone(browser, 0, 4450);
 	snooze(1600000);
 	current = state();
+	bigtime_t movedAfter = sLastWait;
 	report("output_device_menu", moved
 			&& second == current.GetString("default_output", ""),
-		"chose \"%s\": %s; the Media Kit's default output is \"%s\" (the "
-		"mixer plays on \"%s\"), the page shows \"%s\"", second.String(),
-		strerror(status), default_output_name().String(),
-		mixer_destination_name().String(),
+		"chose \"%s\": %s; %s after %.1f s (at most 45 s); the Media "
+		"Kit's default output is \"%s\" (the mixer plays on \"%s\"), the "
+		"page shows \"%s\"", second.String(), strerror(status),
+		moved ? "moved" : "not moved", movedAfter / 1e6,
+		default_output_name().String(), mixer_destination_name().String(),
 		current.GetString("default_output", ""));
 	screenshot("sound_output_second");
 
@@ -787,8 +797,9 @@ check_output(FILE* music, FILE* browser, const BString& first,
 	tone(music, 4500, 0);
 	tone(browser, 0, 4550);
 	snooze(1600000);
-	report("output_device_back", moved, "chose \"%s\" again: %s; the mixer "
-		"plays on \"%s\"", first.String(), strerror(status),
+	report("output_device_back", moved, "chose \"%s\" again: %s; moved "
+		"after %.1f s (at most 45 s); the mixer plays on \"%s\"",
+		first.String(), strerror(status), sLastWait / 1e6,
 		mixer_destination_name().String());
 
 	// The test sound plays through the mixer as the Audio preferences'

@@ -4871,8 +4871,9 @@ def main():
 		help="list the test programs harness images carry and exit")
 	parser.add_argument("--timeout", type=int, default=None,
 		help="seconds before the guest is considered hung (default 1800; "
-			"2700 for the renga-* profiles, whose media checks and three "
-			"boots outgrew 1800 s: crashlog_test's last boot was cut off)")
+			"3600 for the renga-* profiles, whose media checks and three "
+			"boots outgrew 1800 s and then 2700 s: crashlog_test runs last "
+			"and its reboots were cut off both times)")
 	parser.add_argument("--memory", type=int, default=1024)
 	parser.add_argument("--smp", type=int, default=1,
 		help="number of virtual CPUs (2 or more to exercise SMP code)")
@@ -4911,7 +4912,7 @@ def main():
 		parser.error("--loader-writes picks its own media and boots only "
 			"as far as the boot loader")
 	if args.timeout is None:
-		args.timeout = 2700 if args.profile.startswith("renga-") else 1800
+		args.timeout = 3600 if args.profile.startswith("renga-") else 1800
 	available = installed_tests(args.profile,
 		final=not (args.other_systems or args.installer_upgrade
 			or args.restore_points))

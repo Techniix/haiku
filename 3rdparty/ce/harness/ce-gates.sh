@@ -46,7 +46,16 @@ set -u
 #  sound_audio.mirror_second              the full renga-raw load (passes alone)
 #  media_latency.clock_steady             a >20 ms clock step when the loaded guest
 #                                         misses its low-latency ticks
-KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|media\.click_free_mute|sound_settings\.test_sound|media_routing\.loopback_only_cleared|media_routing\.transient_in_own_team|media_usb\.unplug_fallback|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared|media_latency\.low_latency_mix_continuous|media_latency\.device_continuous|media_usb_audio\.back_on_usb|sound_audio\.default_output_second|sound_audio\.mirror_second|media_latency\.clock_steady'
+#  media_routing.exclude_beside_plain     one impure 100 ms window (purity < 0.95
+#  media_routing.exclude_normalized       with the right amplitudes) under the
+#  media_routing.transient_live_switch    full renga-raw load, as the routing
+#                                         entries above (batches 9-10; the
+#                                         details now print the purity)
+#  sound_settings.output_device_menu      the default-output move outlasts its
+#                                         45 s wait under the full renga-raw
+#                                         load, as output_device_back (F-31;
+#                                         the detail now prints the time)
+KNOWN_FLAKY='media_latency\.low_latency_latency|media\.click_free_volume|media\.click_free_mute|sound_settings\.test_sound|media_routing\.loopback_only_cleared|media_routing\.transient_in_own_team|media_usb\.unplug_fallback|sound_settings\.output_device_back|media_drift\.skew_|media_audio\.route_click_free|media_routing\.exclude_cleared|media_latency\.low_latency_mix_continuous|media_latency\.device_continuous|media_usb_audio\.back_on_usb|sound_audio\.default_output_second|sound_audio\.mirror_second|media_latency\.clock_steady|media_routing\.exclude_beside_plain|media_routing\.exclude_normalized|media_routing\.transient_live_switch|sound_settings\.output_device_menu'
 
 [ $# -ge 2 ] || { sed -n '2,12p' "$0" >&2; exit 2; }
 label=$1; shift

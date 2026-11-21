@@ -521,11 +521,12 @@ test_exclusions()
 		right = check_channel(loopback.recording, true, 0.3, 5300);
 		report("exclude_normalized", status == B_OK && readBack == expected
 				&& absent(left) && present(right),
-			"%s; read back \"%s\" (want \"%s\"); L (A) %.4f, R (B) %.3f",
+			"%s; read back \"%s\" (want \"%s\"); L (A) %.4f, R (B) %.3f "
+			"purity >= %.3f",
 			strerror(status), BString(readBack).ReplaceAll("\n", "\\n")
 				.String(),
 			BString(expected).ReplaceAll("\n", "\\n").String(),
-			left.amplitude, right.amplitude);
+			left.amplitude, right.amplitude, right.minPurity);
 	}
 
 	// Two applications left out.
@@ -575,9 +576,11 @@ test_exclusions()
 		right = check_channel(excluding.recording, true, 0.3, 5300);
 		report("exclude_beside_plain", status == B_OK && present(plainLeft)
 				&& present(plainRight) && present(left) && absent(right),
-			"%s; plain: L %.3f, R %.3f; less B: L %.3f, R %.4f",
+			"%s; plain: L %.3f, R %.3f (purity >= %.3f, %.3f); less B: "
+			"L %.3f (purity >= %.3f), R %.4f",
 			strerror(status), plainLeft.amplitude, plainRight.amplitude,
-			left.amplitude, right.amplitude);
+			plainLeft.minPurity, plainRight.minPurity, left.amplitude,
+			left.minPurity, right.amplitude);
 	}
 
 	// An empty list records everything again, on the same loopback.
@@ -1076,8 +1079,9 @@ test_transient(const char* self, Player& a, Player& b)
 	report("transient_live_switch", status == B_OK && cleared == B_OK
 			&& recordedOn == B_OK && recordedOff == B_OK && absent(onLeft)
 			&& present(left),
-		"on: %s, every stream L %.4f; off: %s, L %.3f", strerror(status),
-		onLeft.amplitude, strerror(cleared), left.amplitude);
+		"on: %s, every stream L %.4f; off: %s, L %.3f purity >= %.3f",
+		strerror(status), onLeft.amplitude, strerror(cleared),
+		left.amplitude, left.minPurity);
 	stop_player(d2);
 
 	status = control.SetTeamLoopbackOnly(0x7ffffff0, true);
