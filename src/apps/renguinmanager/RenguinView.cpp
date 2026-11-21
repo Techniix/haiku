@@ -86,10 +86,17 @@ static const renguin_switch kSwitches[] = {
 	{ "theme", false, B_TRANSLATE_MARK("Give Linux programs Renga's colours, "
 		"light or dark look and font (GTK 3/4, Qt 5/6)") },
 	// batch 11
+	{ "hardlink_copy", true, B_TRANSLATE_MARK("Hard links on BFS are made "
+		"as copies (Linux packages need them; BFS has none)") },
+	{ "linux_user", true, B_TRANSLATE_MARK("Linux programs run as a normal "
+		"user, not as root (\"linux --root\" and \"sudo\" for root)") },
+	{ "chromium_flags", false, B_TRANSLATE_MARK("Start Linux Chromium with "
+		"the flags Renguin needs (no sandbox, zygote or GPU process yet)") },
 	{ "hidpi", false, B_TRANSLATE_MARK("Scale Linux programs like Renga "
 		"(HiDPI from the font size: GTK and Qt)") },
 };
 static const int32 kSwitchCount = sizeof(kSwitches) / sizeof(kSwitches[0]);
+static_assert(kSwitchCount <= 16, "RenguinView::fSwitches holds 16");
 
 
 static std::string

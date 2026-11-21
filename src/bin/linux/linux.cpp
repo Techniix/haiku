@@ -582,14 +582,136 @@ update_theme()
 }
 
 
+/*!	Batch 11: Linux programs run as a normal user ("user", uid and gid
+	1000, home /boot/home); Renguin shows Renga's uid 0 as 1000 to them
+	(switch "linux_user"). The root's passwd and group files get that user,
+	and a "sudo" that runs a command as root (RENGUIN_ROOT=1), which apk
+	needs; "linux --root" starts the shell or a command as root.
+*/
+static void
+ensure_linux_user()
+{
+	const char* home = getenv("HOME") != NULL ? getenv("HOME") : "/boot/home";
+	struct {
+		const char* file;
+		std::string line;
+	} entries[] = {
+		{ "/etc/passwd", std::string("user:x:1000:1000:Renga user:") + home
+			+ ":/bin/sh\n" },
+		{ "/etc/group", "user:x:1000:\n" },
+	};
+	for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
+		std::string path = root_path(entries[i].file);
+		FILE* file = fopen(path.c_str(), "r");
+		if (file == NULL)
+			continue;
+		bool found = false;
+		char line[512];
+		while (fgets(line, sizeof(line), file) != NULL) {
+			if (strncmp(line, "user:", 5) == 0)
+				found = true;
+		}
+		fclose(file);
+		if (found)
+			continue;
+		file = fopen(path.c_str(), "a");
+		if (file != NULL) {
+			fputs(entries[i].line.c_str(), file);
+			fclose(file);
+		}
+	}
+	std::string sudo = root_path("/usr/local/bin/sudo");
+	if (!exists(sudo) && !exists(root_path("/usr/bin/sudo"))) {
+		mkdir(root_path("/usr/local/bin").c_str(), 0755);
+		FILE* file = fopen(sudo.c_str(), "w");
+		if (file != NULL) {
+			fputs("#!/bin/sh\n"
+				"# Written by Renga's \"linux\" command: runs a command as root\n"
+				"# under Renguin (Linux programs otherwise run as \"user\").\n"
+				"while [ \"${1#-}\" != \"$1\" ]; do shift; done\n"
+				"export RENGUIN_ROOT=1\n"
+				"exec \"$@\"\n", file);
+			fclose(file);
+			chmod(sudo.c_str(), 0755);
+		}
+	}
+}
+
+
+/*!	Batch 11: Chromium under Renguin. Renguin has no sandbox support yet,
+	and Chromium's zygote and separate GPU process do not start (the
+	zygote's child never answers, the GPU process launch fails with 1002;
+	F-27), so Alpine's Chromium launcher gets --no-sandbox --no-zygote
+	--in-process-gpu --disable-gpu --ozone-platform=wayland through
+	/etc/chromium/renguin.conf (its launcher reads /etc/chromium/*.conf),
+	which also says why, once, in the terminal. Switch "chromium_flags"
+	(on).
+*/
+static const char* kChromiumConf =
+	"# Written by Renga's \"linux\" command (switch \"chromium_flags\" in the\n"
+	"# Renguin Manager). Renguin has no sandbox support yet, and Chromium's\n"
+	"# zygote and separate GPU process do not start under it yet.\n"
+	"if [ ! -e \"$HOME/.config/renguin/chromium-noted\" ]; then\n"
+	"	echo \"Renguin: Chromium runs with --no-sandbox --no-zygote "
+		"--in-process-gpu --disable-gpu (no sandbox, zygote or GPU process "
+		"under Renguin yet).\" >&2\n"
+	"	mkdir -p \"$HOME/.config/renguin\" && : > "
+		"\"$HOME/.config/renguin/chromium-noted\"\n"
+	"fi\n"
+	"CHROMIUM_FLAGS=\"$CHROMIUM_FLAGS --no-sandbox --no-zygote "
+		"--in-process-gpu --disable-gpu --ozone-platform=wayland\"\n";
+
+
+static bool
+linux_setting(const char* name, bool fallback)
+{
+	const char* home = getenv("HOME") != NULL ? getenv("HOME") : "/boot/home";
+	FILE* file = fopen((std::string(home)
+		+ "/config/settings/Renguin/settings").c_str(), "r");
+	if (file == NULL)
+		return fallback;
+	bool value = fallback;
+	char line[256];
+	size_t length = strlen(name);
+	while (fgets(line, sizeof(line), file) != NULL) {
+		if (strncmp(line, name, length) == 0 && line[length] == ' ')
+			value = strncmp(line + length + 1, "false", 5) != 0;
+	}
+	fclose(file);
+	return value;
+}
+
+
+static void
+ensure_chromium_flags()
+{
+	std::string conf = root_path("/etc/chromium/renguin.conf");
+	if (!linux_setting("chromium_flags", true)) {
+		unlink(conf.c_str());
+		return;
+	}
+	if (!exists(root_path("/usr/lib/chromium")))
+		return;
+	mkdir(root_path("/etc/chromium").c_str(), 0755);
+	FILE* file = fopen(conf.c_str(), "w");
+	if (file != NULL) {
+		fputs(kChromiumConf, file);
+		fclose(file);
+	}
+}
+
+
 static void
 usage()
 {
 	printf("Usage: linux [<command> [<argument>...]]\n"
 		"       linux --setup\n"
+		"       linux --root [<command> [<argument>...]]\n"
 		"Starts the Linux root's shell, or runs one Linux command, under\n"
 		"Renguin with a clean Linux environment (PATH and the rest).\n"
-		"--setup gets a Linux root (Alpine Linux %s) if there is none.\n",
+		"--setup gets a Linux root (Alpine Linux %s) if there is none.\n"
+		"Linux programs run as \"user\" (Renga's user, uid 1000 to them);\n"
+		"--root runs as root (inside, \"sudo <command>\" does the same).\n",
 		kAlpineRelease);
 }
 
@@ -614,15 +736,25 @@ main(int argc, char** argv)
 		// "--setup --shell" (the Linux shell's Deskbar entry): go on
 		argc = 1;
 	}
+	bool asRoot = false;
+	if (argc > 1 && strcmp(argv[1], "--root") == 0) {
+		asRoot = true;
+		argv++;
+		argc--;
+	}
 	if (!root_installed()) {
 		print_missing_root();
 		return 1;
 	}
 
 	write_profile_script();
+	ensure_linux_user();
+	ensure_chromium_flags();
 	std::string shell = login_shell();
 	update_theme();
 	std::vector<std::string> environment = linux_environment(shell);
+	if (asRoot)
+		environment.push_back("RENGUIN_ROOT=1");
 	std::vector<char*> envp;
 	for (size_t i = 0; i < environment.size(); i++)
 		envp.push_back((char*)environment[i].c_str());

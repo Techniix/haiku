@@ -163,6 +163,9 @@ struct renguin_team {
 	image_id app_image;			// registered B_APP_IMAGE, or -1
 	addr_t	vdso_base;			// the vDSO's address (vdso.cpp), or 0
 	bool	have_linux_root;	// RENGUIN_LINUX_ROOT existed at exec time
+	bool	as_user;			// batch 11: uid/gid 0 shown as 1000 (the Renga
+								// user as a normal Linux user; switch
+								// "linux_user", RENGUIN_ROOT=1 keeps root)
 	uint32	umask;				// file creation mask. Haiku's kernel does not
 								// apply one (libroot does, in userland), so
 								// Renguin applies it for Linux programs
@@ -437,6 +440,14 @@ status_t	renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
 				size_t pathSize);
 	// copies a path from userland and translates absolute paths into the
 	// Linux root where they exist there
+void		renguin_hardlink_settings(bool copy);
+void		renguin_user_settings(bool asUser);
+bool		renguin_user_default();
+uint32		renguin_linux_id(uint32 hostID);
+	// process.cpp, batch 11: an owner as the Linux program sees it
+uint32		renguin_host_id(uint32 linuxID);
+	// and back, for chown()
+	// fsops.cpp, batch 11: hard links as copies on BFS (switch)
 uint64		renguin_user_path(struct renguin_scratch* scratch, uint64 userPath,
 				uint32 flags, status_t* _status);
 	// like renguin_get_user_path(), but returns a user-space copy of the
@@ -517,6 +528,7 @@ int64		renguin_sys_mremap(uint64 oldAddr, uint64 oldSize, uint64 newSize,
 				uint64 flags, uint64 newAddr);
 int64		renguin_sys_msync(uint64 addr, uint64 length, uint64 flags);
 int64		renguin_sys_madvise(uint64 addr, uint64 length, uint64 advice);
+int64		renguin_sys_mincore(uint64 addr, uint64 length, uint64 vector);
 
 // file.cpp
 uint32		renguin_current_umask();

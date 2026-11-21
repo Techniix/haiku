@@ -59,6 +59,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <initializer_list>
 #include <string>
 
 
@@ -430,6 +431,73 @@ main()
 		"scale file \"%s\"; at 2.00: [%s]; at 1.00: %s variables; switch "
 		"off removes the file %d", scale.c_str(), scaled.c_str(),
 		unscaled.c_str(), hidpiOff);
+	// batch 11: a normal user, root on request
+	auto oneLine = [](std::string text) {
+		for (size_t i = 0; i < text.size(); i++) {
+			if (text[i] == '\n')
+				text[i] = '/';
+		}
+		return text;
+	};
+	std::string uid = run("/bin/linux id -u 2>&1");
+	std::string fileOwner = run("/bin/linux stat -c %u /boot/home 2>&1");
+	std::string rootUid = run("/bin/linux --root id -u 2>&1");
+	std::string sudoUid = run("/bin/linux sudo id -u 2>&1");
+	std::string passwd = run("grep '^user:' "
+		"/boot/system/non-packaged/compat/linux/etc/passwd");
+	write_text(settings, "linux_user false\n");
+	std::string switchedOff = run("/bin/linux id -u 2>&1");
+	unlink(settings.c_str());
+	for (std::string* text : { &uid, &fileOwner, &rootUid, &sudoUid,
+			&switchedOff }) {
+		for (size_t i = 0; i < text->size(); i++) {
+			if ((*text)[i] == '\n')
+				(*text)[i] = ' ';
+		}
+	}
+	report("linux_user", uid == "1000 " && fileOwner == "1000 "
+			&& rootUid == "0 " && sudoUid == "0 "
+			&& passwd.find("user:x:1000:1000:") != std::string::npos,
+		"id -u %s, home's owner %s, --root %s, sudo %s, passwd entry %d "
+		"(switch off in the user settings: %s)",
+		uid.c_str(), fileOwner.c_str(), rootUid.c_str(), sudoUid.c_str(),
+		passwd.find("user:x:1000:1000:") != std::string::npos,
+		switchedOff.c_str());
+
+	// batch 11: Chromium's flags under Renguin (no sandbox, zygote or GPU
+	// process yet), for the root's Chromium launcher
+	const char* chromiumDir
+		= "/boot/system/non-packaged/compat/linux/usr/lib/chromium";
+	bool madeDir = mkdir(chromiumDir, 0755) == 0;
+	run((std::string("rm -f ") + home.Path()
+		+ "/.config/renguin/chromium-noted").c_str());
+	run("/bin/linux true 2>&1");
+	std::string first = run("/bin/linux sh -c '. /etc/chromium/renguin.conf; "
+		"echo $CHROMIUM_FLAGS' 2>&1");
+	std::string second = run("/bin/linux sh -c '. /etc/chromium/renguin.conf;"
+		" echo $CHROMIUM_FLAGS' 2>&1");
+	write_text(settings, "chromium_flags false\n");
+	run("/bin/linux true 2>&1");
+	bool confGone = access(
+		"/boot/system/non-packaged/compat/linux/etc/chromium/renguin.conf",
+		F_OK) != 0;
+	unlink(settings.c_str());
+	if (madeDir) {
+		rmdir(chromiumDir);
+		run("/bin/linux true 2>&1");
+	}
+	bool flags = first.find("--no-sandbox --no-zygote --in-process-gpu "
+		"--disable-gpu --ozone-platform=wayland") != std::string::npos;
+	report("chromium_flags", flags
+			&& first.find("Renguin: Chromium runs with") != std::string::npos
+			&& second.find("Renguin: Chromium runs") == std::string::npos
+			&& confGone,
+		"flags %d, note once %d/%d, switch off removes the file %d [%s]",
+		flags,
+		first.find("Renguin: Chromium runs with") != std::string::npos,
+		second.find("Renguin: Chromium runs") == std::string::npos,
+		confGone, oneLine(first).c_str());
+
 	run("/bin/linux-apps theme 2>&1");
 	if (savedSettings.empty())
 		unlink(settings.c_str());

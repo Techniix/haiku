@@ -402,6 +402,44 @@ renguin_sys_msync(uint64 addr, uint64 length, uint64 flags)
 }
 
 
+/*!	Batch 11: mincore(). Chromium's memory dumps call it for every
+	mapping (a flood of "CountResidentBytes: Function not implemented" on
+	the maintainer's machine). Haiku keeps no per-page residency a program
+	could ask for, so every page of a mapped range is reported resident;
+	a range with an unmapped page is ENOMEM, as on Linux.
+*/
+int64
+renguin_sys_mincore(uint64 addr, uint64 length, uint64 vector)
+{
+	if ((addr % B_PAGE_SIZE) != 0)
+		return -LX_EINVAL;
+	if (length == 0)
+		return 0;
+	uint64 pages = (length + B_PAGE_SIZE - 1) / B_PAGE_SIZE;
+	if (addr + pages * B_PAGE_SIZE < addr)
+		return -LX_ENOMEM;
+	// every page must lie in an area of the team
+	for (uint64 page = 0; page < pages;) {
+		area_id area = _user_area_for((void*)(addr_t)(addr + page * B_PAGE_SIZE));
+		if (area < 0)
+			return -LX_ENOMEM;
+		area_info info;
+		if (get_area_info(area, &info) != B_OK)
+			return -LX_ENOMEM;
+		addr_t end = (addr_t)info.address + info.size;
+		page = (end - addr + B_PAGE_SIZE - 1) / B_PAGE_SIZE;
+	}
+	uint8 resident[256];
+	memset(resident, 1, sizeof(resident));
+	for (uint64 done = 0; done < pages; done += sizeof(resident)) {
+		size_t chunk = (size_t)min_c((uint64)sizeof(resident), pages - done);
+		if (renguin_copy_out(vector + done, resident, chunk) != B_OK)
+			return -LX_EFAULT;
+	}
+	return 0;
+}
+
+
 /*!	madvise: accepted as a hint and ignored.
 	TODO: MADV_DONTNEED on private anonymous memory must make the pages read
 	back as zero (jemalloc and Go rely on it). FreeBSD emulates this in

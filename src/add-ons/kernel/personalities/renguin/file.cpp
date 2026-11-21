@@ -163,8 +163,8 @@ stat_to_linux(const struct stat& source, linux_stat& dest)
 	// The S_IF* type bits and permission bits match Linux. Drop Haiku's
 	// attribute/index type bits, which Linux has no room for.
 	dest.st_mode = source.st_mode & 0177777;
-	dest.st_uid = source.st_uid;
-	dest.st_gid = source.st_gid;
+	dest.st_uid = renguin_linux_id(source.st_uid);
+	dest.st_gid = renguin_linux_id(source.st_gid);
 	dest.st_rdev = (uint32)source.st_rdev;
 	dest.st_size = source.st_size;
 	dest.st_blksize = source.st_blksize;

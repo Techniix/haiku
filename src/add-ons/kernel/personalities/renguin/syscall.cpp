@@ -82,6 +82,7 @@ enum {
 	LINUX_mremap			= 25,
 	LINUX_msync				= 26,
 	LINUX_madvise			= 28,
+	LINUX_mincore			= 27,
 	LINUX_dup				= 32,
 	LINUX_dup2				= 33,
 	LINUX_pause				= 34,
@@ -448,9 +449,15 @@ renguin_reload_trace_settings()
 	bool process = false;
 	bool buffer = false;
 	bool xattrs = true;
+	bool hardlinkCopy = true;
+	bool linuxUser = true;
 	if (void* handle = load_driver_settings("renguin")) {
 		// not trace settings, but read as often (at every exec)
 		xattrs = get_driver_boolean_parameter(handle, "xattrs", true, true);
+		hardlinkCopy = get_driver_boolean_parameter(handle, "hardlink_copy",
+			true, true);
+		linuxUser = get_driver_boolean_parameter(handle, "linux_user", true,
+			true);
 		buffer = get_driver_boolean_parameter(handle, "trace_buffer", false,
 			true);
 		const char* value = get_driver_parameter(handle, "trace_all", NULL,
@@ -468,6 +475,8 @@ renguin_reload_trace_settings()
 		unload_driver_settings(handle);
 	}
 	renguin_xattr_settings(xattrs);
+	renguin_hardlink_settings(hardlinkCopy);
+	renguin_user_settings(linuxUser);
 	if (strcmp(pattern, sTracePattern) != 0 || all != sTraceAll
 		|| process != sTraceProcess || buffer != sTraceBuffer) {
 		dprintf("renguin: system call trace %s%s%s\n",
@@ -1079,6 +1088,9 @@ renguin_syscall(struct iframe* frame)
 			break;
 		case LINUX_madvise:
 			result = renguin_sys_madvise(a1, a2, a3);
+			break;
+		case LINUX_mincore:
+			result = renguin_sys_mincore(a1, a2, a3);
 			break;
 
 		// --- Time, TLS, misc (misc.cpp) ---

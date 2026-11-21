@@ -28,7 +28,7 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `13 rt_sigaction`, `14 rt_sigprocmask`, `15 rt_sigreturn`, `16 ioctl`
 `17 pread64`, `18 pwrite64`, `19 readv`, `20 writev`, `21 access`
 `22 pipe`, `23 select`, `24 sched_yield`, `25 mremap`, `26 msync`
-`28 madvise`, `32 dup`, `33 dup2`, `34 pause`, `35 nanosleep`
+`27 mincore` (all pages of a mapping reported resident; batch 11), `28 madvise`, `32 dup`, `33 dup2`, `34 pause`, `35 nanosleep`
 `36 getitimer`, `37 alarm`, `38 setitimer`, `39 getpid`, `40 sendfile`
 `41 socket`, `42 connect`, `43 accept`, `44 sendto`, `45 recvfrom`
 `46 sendmsg`, `47 recvmsg`, `48 shutdown`, `49 bind`, `50 listen`
@@ -91,7 +91,7 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 
 ## Missing
 
-`27 mincore`, `78 getdents`, `101 ptrace`, `103 syslog`, `125 capget`
+`78 getdents`, `101 ptrace`, `103 syslog`, `125 capget`
 `126 capset`, `136 ustat`, `139 sysfs`, `153 vhangup`, `154 modify_ldt`
 `155 pivot_root`, `156 sysctl`, `159 adjtimex`, `163 acct`
 `164 settimeofday`, `165 mount`, `166 umount`, `167 swapon`, `168 swapoff`
@@ -129,6 +129,18 @@ message queues (`mq_*`), which Renga has natively and only need mapping; `copy_f
 (sandboxes, Flatpak; later); `io_uring` only if F-52 adds it.
 
 ## Beyond system calls
+
+- **Hard links on BFS are copies** (batch 11, switch `hardlink_copy` in the
+  renguin driver settings and the Renguin Manager, on): BFS has no hard
+  links, so `link()`/`linkat()` there copy the file (contents, mode, owner,
+  times, BFS attributes) instead of failing. The names are separate files
+  afterwards: a change through one is not seen through the other and
+  `st_nlink` stays 1. Enough for packages (tzdata's aliased zones, `apk`),
+  `ln` and git's object copies; not for programs that use link counts.
+  Logged once per program in the kernel log.
+- **IPv4-mapped IPv6** (batch 11): an unbound AF_INET6 socket used with
+  `::ffff:a.b.c.d` is replaced in place by an AF_INET socket and reports
+  mapped addresses (net.cpp); a socket bound to `[::]` stays IPv6-only.
 
 - **ioctl**: terminal requests (TCGETS/TCSETS*, TIOCGWINSZ/SWINSZ,
   TIOC[GS]PGRP, TIOCGSID, TIOCSCTTY, TIOCNOTTY), pseudo-terminals

@@ -24,7 +24,9 @@
 #include <KernelExport.h>
 #include <NodeMonitor.h>
 #include <OS.h>
+#include <fs_attr.h>
 #include <fs_info.h>
+#include <dirent.h>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -221,8 +223,8 @@ renguin_sys_statx(int dirfd, uint64 path, uint64 flags, uint64 mask,
 	out.stx_mask = LX_STATX_BASIC_STATS | LX_STATX_BTIME;
 	out.stx_blksize = st.st_blksize;
 	out.stx_nlink = st.st_nlink;
-	out.stx_uid = st.st_uid;
-	out.stx_gid = st.st_gid;
+	out.stx_uid = renguin_linux_id(st.st_uid);
+	out.stx_gid = renguin_linux_id(st.st_gid);
 	out.stx_mode = st.st_mode & 0177777;
 	out.stx_ino = st.st_ino;
 	out.stx_size = st.st_size;
@@ -405,11 +407,11 @@ renguin_sys_fchownat(int dirfd, uint64 path, uint64 owner, uint64 group,
 	memset(&st, 0, sizeof(st));
 	int mask = 0;
 	if ((uint32)owner != (uint32)-1) {
-		st.st_uid = (uid_t)owner;
+		st.st_uid = (uid_t)renguin_host_id((uint32)owner);
 		mask |= B_STAT_UID;
 	}
 	if ((uint32)group != (uint32)-1) {
-		st.st_gid = (gid_t)group;
+		st.st_gid = (gid_t)renguin_host_id((uint32)group);
 		mask |= B_STAT_GID;
 	}
 	bool traverse = (flags & LX_AT_SYMLINK_NOFOLLOW) == 0;
@@ -433,11 +435,11 @@ renguin_sys_fchown(int fd, uint64 owner, uint64 group)
 	memset(&st, 0, sizeof(st));
 	int mask = 0;
 	if ((uint32)owner != (uint32)-1) {
-		st.st_uid = (uid_t)owner;
+		st.st_uid = (uid_t)renguin_host_id((uint32)owner);
 		mask |= B_STAT_UID;
 	}
 	if ((uint32)group != (uint32)-1) {
-		st.st_gid = (gid_t)group;
+		st.st_gid = (gid_t)renguin_host_id((uint32)group);
 		mask |= B_STAT_GID;
 	}
 	if (mask == 0) {
@@ -568,6 +570,119 @@ renguin_sys_utime(uint64 path, uint64 times)
 // #pragma mark - links and special files
 
 
+/*!	Batch 11: hard links on volumes without them (BFS). Linux packages
+	carry hard links (tzdata's aliased zones: "failed to extract
+	usr/share/zoneinfo/...: Not supported" made "apk add" end with an
+	error); with the switch "hardlink_copy" (on) the new name gets a copy
+	of the file instead: contents, mode, owner, times and BFS attributes.
+	The two names are separate files afterwards (a change to one is not
+	seen through the other; st_nlink stays 1); COVERAGE.md says so.
+	Regular files only. Logged once per program.
+*/
+static bool sHardlinkCopy = true;
+
+
+void
+renguin_hardlink_settings(bool copy)
+{
+	sHardlinkCopy = copy;
+}
+
+
+static status_t
+copy_instead_of_link(renguin_scratch* scratch, int oldDirFD, uint64 hostOld,
+	bool follow, int newDirFD, uint64 hostNew)
+{
+	int source = _user_open(oldDirFD, (const char*)(addr_t)hostOld,
+		O_RDONLY | (follow ? 0 : O_NOTRAVERSE), 0);
+	if (source < 0)
+		return source;
+	struct stat st;
+	uint64 userStat = renguin_scratch_alloc(scratch, sizeof(st));
+	status_t status = userStat == 0 ? B_NO_MEMORY
+		: _user_read_stat(source, NULL, false, (struct stat*)(addr_t)userStat,
+			sizeof(st));
+	if (status == B_OK)
+		status = renguin_copy_in(&st, userStat, sizeof(st));
+	if (status == B_OK && !S_ISREG(st.st_mode))
+		status = B_NOT_SUPPORTED;
+	if (status != B_OK) {
+		dprintf("renguin: hard link copy: source stat: %s\n",
+			strerror(status));
+		_user_close(source);
+		return status;
+	}
+	int target = _user_open(newDirFD, (const char*)(addr_t)hostNew,
+		O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 07777);
+	if (target < 0) {
+		_user_close(source);
+		return target;
+	}
+
+	const size_t kChunk = 8192;
+	uint64 buffer = renguin_scratch_alloc(scratch, kChunk);
+	if (buffer == 0)
+		status = B_NO_MEMORY;
+	while (status == B_OK) {
+		ssize_t bytes = _user_read(source, -1, (void*)(addr_t)buffer, kChunk);
+		if (bytes < 0)
+			status = bytes;
+		if (bytes <= 0)
+			break;
+		ssize_t written = _user_write(target, -1, (void*)(addr_t)buffer,
+			bytes);
+		if (written != bytes)
+			status = written < 0 ? written : B_IO_ERROR;
+	}
+
+	// BFS attributes
+	int attributes = status == B_OK ? _user_open_attr_dir(source, NULL, true)
+		: -1;
+	if (attributes >= 0) {
+		uint64 entry = renguin_scratch_alloc(scratch,
+			sizeof(struct dirent) + B_ATTR_NAME_LENGTH);
+		uint64 info = renguin_scratch_alloc(scratch, sizeof(attr_info));
+		while (entry != 0 && info != 0 && _user_read_dir(attributes,
+				(struct dirent*)(addr_t)entry,
+				sizeof(struct dirent) + B_ATTR_NAME_LENGTH, 1) == 1) {
+			const char* name = ((struct dirent*)(addr_t)entry)->d_name;
+			attr_info attribute;
+			if (_user_stat_attr(source, name, (attr_info*)(addr_t)info)
+					!= B_OK
+				|| renguin_copy_in(&attribute, info, sizeof(attribute))
+					!= B_OK) {
+				continue;
+			}
+			for (off_t pos = 0; pos < attribute.size; pos += kChunk) {
+				size_t length = min_c((off_t)kChunk, attribute.size - pos);
+				ssize_t bytes = _user_read_attr(source, name, pos,
+					(void*)(addr_t)buffer, length);
+				if (bytes <= 0)
+					break;
+				_user_write_attr(target, name, attribute.type, pos,
+					(void*)(addr_t)buffer, bytes);
+			}
+		}
+		_user_close(attributes);
+	}
+
+	// owner and times last (writing changed the modification time)
+	if (status == B_OK) {
+		uint64 userStat = renguin_scratch_put(scratch, &st, sizeof(st));
+		if (userStat != 0) {
+			_user_write_stat(target, NULL, false, (struct stat*)(addr_t)userStat,
+				sizeof(st), B_STAT_UID | B_STAT_GID | B_STAT_ACCESS_TIME
+					| B_STAT_MODIFICATION_TIME);
+		}
+	}
+	_user_close(source);
+	_user_close(target);
+	if (status != B_OK)
+		_user_unlink(newDirFD, (const char*)(addr_t)hostNew);
+	return status;
+}
+
+
 int64
 renguin_sys_linkat(int oldDirFD, uint64 oldPath, int newDirFD,
 	uint64 newPath, uint64 flags)
@@ -597,9 +712,11 @@ renguin_sys_linkat(int oldDirFD, uint64 oldPath, int newDirFD,
 	// Haiku's argument order: the new link first, then what it links to.
 	status = _user_create_link(newDirFD, (const char*)(addr_t)hostNew,
 		oldDirFD, (const char*)(addr_t)hostOld, follow);
-	if (status == B_READ_ONLY_DEVICE) {
+	if (status == B_READ_ONLY_DEVICE || status == B_NOT_SUPPORTED
+		|| status == B_UNSUPPORTED || status == ENOTSUP) {
 		// Haiku says this both for a read-only volume and for a file system
-		// without hard links (BFS); Linux says EPERM for the latter.
+		// without hard links (BFS: B_NOT_SUPPORTED); Linux says EPERM for
+		// the latter.
 		char* oldPath = (char*)malloc(B_PATH_NAME_LENGTH);
 		fs_info* info = (fs_info*)malloc(sizeof(fs_info));
 		struct stat st;
@@ -611,8 +728,26 @@ renguin_sys_linkat(int oldDirFD, uint64 oldPath, int newDirFD,
 			&& (info->flags & B_FS_IS_READONLY) != 0;
 		free(oldPath);
 		free(info);
-		if (!readOnly)
-			return -LX_EPERM;
+		if (!readOnly) {
+			if (!sHardlinkCopy)
+				return -LX_EPERM;
+			status = copy_instead_of_link(&scratch, oldDirFD, hostOld,
+				follow, newDirFD, hostNew);
+			if (status == B_OK) {
+				Team* team = thread_get_current_thread()->team;
+				static team_id sLastLogged = -1;
+				if (sLastLogged != team->id) {
+					sLastLogged = team->id;
+					dprintf("renguin: team %" B_PRId32 " (%s): hard link "
+						"made as a copy (the volume has no hard links)\n",
+						team->id, team->Name());
+				}
+				return 0;
+			}
+			dprintf("renguin: hard link copy failed: %s\n", strerror(status));
+			return status == B_NOT_SUPPORTED ? -LX_EPERM
+				: renguin_encode(status);
+		}
 	}
 	return renguin_encode(status);
 }

@@ -37,16 +37,23 @@
 int64
 renguin_sys_setresuid(uint64 ruid, uint64 euid, uint64 suid, bool setAll)
 {
-	return renguin_encode(_user_setresuid((uid_t)ruid, (uid_t)euid,
-		(uid_t)suid, setAll));
+	// batch 11: the ids a program sees (1000 for Renga's uid 0) back to
+	// Haiku's; a program that dropped to "its own" uid became uid 1000 for
+	// real and lost access to everything (apk: "Unable to open log")
+	return renguin_encode(_user_setresuid(
+		(uid_t)renguin_host_id((uint32)ruid),
+		(uid_t)renguin_host_id((uint32)euid),
+		(uid_t)renguin_host_id((uint32)suid), setAll));
 }
 
 
 int64
 renguin_sys_setresgid(uint64 rgid, uint64 egid, uint64 sgid, bool setAll)
 {
-	return renguin_encode(_user_setresgid((gid_t)rgid, (gid_t)egid,
-		(gid_t)sgid, setAll));
+	return renguin_encode(_user_setresgid(
+		(gid_t)renguin_host_id((uint32)rgid),
+		(gid_t)renguin_host_id((uint32)egid),
+		(gid_t)renguin_host_id((uint32)sgid), setAll));
 }
 
 
@@ -58,14 +65,14 @@ renguin_sys_setresgid(uint64 rgid, uint64 egid, uint64 sgid, bool setAll)
 int64
 renguin_sys_setfsuid(uint64 uid)
 {
-	return thread_get_current_thread()->team->effective_uid;
+	return renguin_linux_id(thread_get_current_thread()->team->effective_uid);
 }
 
 
 int64
 renguin_sys_setfsgid(uint64 gid)
 {
-	return thread_get_current_thread()->team->effective_gid;
+	return renguin_linux_id(thread_get_current_thread()->team->effective_gid);
 }
 
 

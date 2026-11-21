@@ -4052,6 +4052,32 @@ vm_page_fault(addr_t address, addr_t faultAddress, bool isWrite, bool isExecute,
 			// foreign_personality.h).
 			struct sigaction action;
 			if ((thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0) {
+				// Renga (batch 11): Linux programs' faults in the system
+				// log with the address, instruction pointer and area, so
+				// a hardware report shows what was touched (Linux
+				// Chromium's SIGBUS and SIGSEGV); at most 64 per boot
+				static int32 sForeignFaultsLogged = 0;
+				if (atomic_add(&sForeignFaultsLogged, 1) < 64) {
+					VMArea* area = NULL;
+					VMArea* ipArea = NULL;
+					if (addressSpace != NULL) {
+						addressSpace->ReadLock();
+						area = addressSpace->LookupArea(address);
+						ipArea = addressSpace->LookupArea(faultAddress);
+					}
+					dprintf("vm_page_fault: Linux program \"%s\" (team %"
+						B_PRId32 ", thread %" B_PRId32 ") %s %#lx (%s: area "
+						"\"%s\" +%#lx), ip %#lx (\"%s\" +%#lx)\n",
+						thread->team->Name(), thread->team->id, thread->id,
+						isWrite ? "wrote" : (isExecute ? "executed" : "read"),
+						address, strerror(status),
+						area != NULL ? area->name : "none",
+						area != NULL ? address - area->Base() : 0,
+						faultAddress, ipArea != NULL ? ipArea->name : "???",
+						ipArea != NULL ? faultAddress - ipArea->Base() : 0);
+					if (addressSpace != NULL)
+						addressSpace->ReadUnlock();
+				}
 				foreign_personality_fault(thread, SIGSEGV,
 					status == B_PERMISSION_DENIED ? SEGV_ACCERR : SEGV_MAPERR,
 					EFAULT, (void*)address, B_SEGMENT_VIOLATION);

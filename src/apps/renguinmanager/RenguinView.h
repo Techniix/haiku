@@ -79,7 +79,8 @@ private:
 			BButton*			fEndProcess;
 			BMessageRunner*		fProcessRunner;
 
-			BCheckBox*			fSwitches[8];
+			BCheckBox*			fSwitches[16];
+				// batch 11: 16 (10 switches now; 8 overflowed)
 			int32				fSwitchCount;
 };
 

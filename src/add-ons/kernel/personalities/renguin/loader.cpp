@@ -651,6 +651,22 @@ build_stack(Thread* thread, const foreign_exec_args* args,
 	data->arg_end = envStart;
 	data->env_start = envStart;
 	data->env_end = envEnd;
+	// batch 11: a normal user unless RENGUIN_ROOT=1 asks for root
+	data->as_user = renguin_user_default();
+	for (uint32 i = 0; i < envCount; i++) {
+		if (strcmp(envp[i], "RENGUIN_ROOT=1") == 0)
+			data->as_user = false;
+	}
+	// package managers work on the root's system files and refuse to run
+	// as a normal user ("apk": "Unable to open log: Permission denied")
+	{
+		const char* name = strrchr(args->path, '/');
+		name = name != NULL ? name + 1 : args->path;
+		if (strcmp(name, "apk") == 0 || strcmp(name, "apt") == 0
+			|| strcmp(name, "apt-get") == 0 || strcmp(name, "dpkg") == 0
+			|| strcmp(name, "pacman") == 0)
+			data->as_user = false;
+	}
 
 	// The program's path as the Linux program sees it, for AT_EXECFN.
 	char* execfn = (char*)malloc(B_PATH_NAME_LENGTH);
@@ -690,10 +706,14 @@ build_stack(Thread* thread, const foreign_exec_args* args,
 		{ RENGUIN_AT_BASE,		data->interpreter_base },
 		{ RENGUIN_AT_FLAGS,		0 },
 		{ RENGUIN_AT_ENTRY,		data->entry },
-		{ RENGUIN_AT_UID,		(uint64)team->real_uid },
-		{ RENGUIN_AT_EUID,		(uint64)team->effective_uid },
-		{ RENGUIN_AT_GID,		(uint64)team->real_gid },
-		{ RENGUIN_AT_EGID,		(uint64)team->effective_gid },
+		{ RENGUIN_AT_UID,		(uint64)(data->as_user && team->real_uid == 0
+			? 1000 : team->real_uid) },
+		{ RENGUIN_AT_EUID,		(uint64)(data->as_user && team->effective_uid == 0
+			? 1000 : team->effective_uid) },
+		{ RENGUIN_AT_GID,		(uint64)(data->as_user && team->real_gid == 0
+			? 1000 : team->real_gid) },
+		{ RENGUIN_AT_EGID,		(uint64)(data->as_user && team->effective_gid == 0
+			? 1000 : team->effective_gid) },
 		{ RENGUIN_AT_SECURE,	0 },
 		{ RENGUIN_AT_CLKTCK,	100 },
 		{ RENGUIN_AT_HWCAP,		0 },

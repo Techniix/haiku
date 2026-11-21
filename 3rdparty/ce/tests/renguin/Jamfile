@@ -77,6 +77,12 @@ programs += [ RenguinLinuxProgram libc-xattr : libc-xattr.c : libc
 # IPv4-mapped IPv6 addresses (batch 11).
 programs += [ RenguinLinuxProgram libc-dualstack : libc-dualstack.c : libc
 	: -static ] ;
+# Growing a mapped memfd, as Wayland shm pools do (batch 11).
+programs += [ RenguinLinuxProgram libc-memgrow : libc-memgrow.c : libc
+	: -static ] ;
+# Hard links as copies on BFS (batch 11).
+programs += [ RenguinLinuxProgram libc-link : libc-link.c : libc
+	: -static ] ;
 # not run by renguin_test: linux_apps_test makes an AppImage of it
 programs += [ RenguinLinuxProgram appimage-fake : appimage-fake.c : libc
 	: -static ] ;

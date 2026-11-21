@@ -158,7 +158,12 @@ int main(void)
 	CHECK(lstat(pathL, &st) == 0 && S_ISLNK(st.st_mode), "lstat");
 	CHECK(stat(pathL, &st) == 0 && S_ISREG(st.st_mode), "stat via link");
 	if (link(pathA, pathH) == 0) {
-		CHECK(stat(pathA, &st) == 0 && st.st_nlink == 2, "nlink");
+		// a real hard link (two names), or Renguin's copy on BFS (batch
+		// 11, switch hardlink_copy: two files, one name each)
+		struct stat copy;
+		CHECK(stat(pathA, &st) == 0 && stat(pathH, &copy) == 0
+			&& (st.st_nlink == 2 || (st.st_nlink == 1
+				&& copy.st_size == st.st_size)), "nlink");
 	} else {
 		CHECK(errno == EPERM || errno == EOPNOTSUPP || errno == EXDEV,
 			"link error");

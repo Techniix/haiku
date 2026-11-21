@@ -180,31 +180,83 @@ renguin_sys_setsid()
 }
 
 
+/*!	Batch 11: Linux programs run as a normal user. Renga's user is uid 0
+	in Haiku; Linux programs that see uid 0 act as root (Chromium refuses
+	to run without --no-sandbox, others warn or change what they do). With
+	the switch "linux_user" (on), a team started without RENGUIN_ROOT=1
+	sees ids 0 as 1000 (the "user" entry "linux" writes into the root's
+	passwd and group files), for itself and for file owners; chown() to
+	1000 means 0 again. Access checks are Haiku's, so nothing is refused
+	that was allowed before. "linux --root" (and the root's "sudo")
+	start programs with RENGUIN_ROOT=1.
+*/
+static bool sLinuxUser = true;
+static const uint32 kLinuxUserID = 1000;
+
+
+void
+renguin_user_settings(bool asUser)
+{
+	sLinuxUser = asUser;
+}
+
+
+bool
+renguin_user_default()
+{
+	return sLinuxUser;
+}
+
+
+static bool
+as_user()
+{
+	renguin_team* data = renguin_current_team();
+	return data != NULL && data->as_user;
+}
+
+
+uint32
+renguin_linux_id(uint32 hostID)
+{
+	return hostID == 0 && as_user() ? kLinuxUserID : hostID;
+}
+
+
+uint32
+renguin_host_id(uint32 linuxID)
+{
+	return linuxID == kLinuxUserID && as_user() ? 0 : linuxID;
+}
+
+
 int64
 renguin_sys_getuid()
 {
-	return thread_get_current_thread()->team->real_uid;
+	return renguin_linux_id(thread_get_current_thread()->team->real_uid);
 }
 
 
 int64
 renguin_sys_geteuid()
 {
-	return thread_get_current_thread()->team->effective_uid;
+	return renguin_linux_id(
+		thread_get_current_thread()->team->effective_uid);
 }
 
 
 int64
 renguin_sys_getgid()
 {
-	return thread_get_current_thread()->team->real_gid;
+	return renguin_linux_id(thread_get_current_thread()->team->real_gid);
 }
 
 
 int64
 renguin_sys_getegid()
 {
-	return thread_get_current_thread()->team->effective_gid;
+	return renguin_linux_id(
+		thread_get_current_thread()->team->effective_gid);
 }
 
 
@@ -225,8 +277,9 @@ int64
 renguin_sys_getresuid(uint64 ruid, uint64 euid, uint64 suid)
 {
 	Team* team = thread_get_current_thread()->team;
-	return copy_out_ids(ruid, euid, suid, team->real_uid, team->effective_uid,
-		team->saved_set_uid);
+	return copy_out_ids(ruid, euid, suid, renguin_linux_id(team->real_uid),
+		renguin_linux_id(team->effective_uid),
+		renguin_linux_id(team->saved_set_uid));
 }
 
 
@@ -234,8 +287,9 @@ int64
 renguin_sys_getresgid(uint64 rgid, uint64 egid, uint64 sgid)
 {
 	Team* team = thread_get_current_thread()->team;
-	return copy_out_ids(rgid, egid, sgid, team->real_gid, team->effective_gid,
-		team->saved_set_gid);
+	return copy_out_ids(rgid, egid, sgid, renguin_linux_id(team->real_gid),
+		renguin_linux_id(team->effective_gid),
+		renguin_linux_id(team->saved_set_gid));
 }
 
 
