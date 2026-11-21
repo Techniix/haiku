@@ -9,6 +9,8 @@
 #include "AudioDevicePolicy.h"
 #include "AudioMixingPages.h"
 
+#include <ScreenFit.h>
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -318,6 +320,25 @@ notify_details_changed(BView* page)
 }
 
 
+// #pragma mark - FixedTextView
+
+
+//!	A read-only text view the layout sizes like any other view.
+class FixedTextView : public BTextView {
+public:
+	FixedTextView(const char* name)
+		:
+		BTextView(name)
+	{
+	}
+
+	virtual bool HasHeightForWidth()
+	{
+		return false;
+	}
+};
+
+
 // #pragma mark - LevelMeter
 
 
@@ -516,10 +537,10 @@ OutputPage::OutputPage(AudioDeviceList& devices)
 		new BPopUpMenu(B_TRANSLATE("None")));
 	fResampling->SetToolTip(B_TRANSLATE("How the mixer converts sound "
 		"recorded at another frame rate (44.1 kHz music on a 48 kHz card)"));
-	fBufferNote = new BStringView("bufferNote",
+	fBufferNote = new BPrivate::WrappingNote("bufferNote",
 		B_TRANSLATE("Applications set to \"Low latency\" get short buffers "
 			"automatically."));
-	fBufferNote->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
+	fBufferNote->SetTint(B_LIGHTEN_1_TINT);
 
 	BBox* deviceBox = new BBox("deviceBox");
 	deviceBox->SetLabel(B_TRANSLATE("Output device"));
@@ -1300,10 +1321,10 @@ ApplicationsPage::ApplicationsPage()
 
 	fApplications = new ApplicationVolumesView("applications", false);
 	fApplications->SetShowLowLatency(false);
-	fAdvancedNote = new BStringView("applicationsNote",
+	fAdvancedNote = new BPrivate::WrappingNote("applicationsNote",
 		B_TRANSLATE("Advanced: where each application plays, and \"Low "
 			"latency\" for games and emulators."));
-	fAdvancedNote->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
+	fAdvancedNote->SetTint(B_LIGHTEN_1_TINT);
 
 	BBox* box = new BBox("applicationsBox");
 	box->SetLabel(B_TRANSLATE("Applications playing sound"));
@@ -1394,14 +1415,21 @@ DevicesPage::DevicesPage(AudioDeviceList& devices)
 		true);
 	scroll->SetExplicitMinSize(BSize(B_SIZE_UNSET, 90));
 
-	fDetails = new BTextView("deviceDetails");
+	// batch 12 (large-font audit): five lines high and scrolling, not
+	// height-for-width (a read-only BTextView asks for its whole text's
+	// height, which the box around it did not give at a 20-point font: the
+	// box's content reached 12 pixels below it)
+	fDetails = new FixedTextView("deviceDetails");
 	fDetails->MakeEditable(false);
 	fDetails->MakeSelectable(false);
 	fDetails->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 	fDetails->SetLowUIColor(B_PANEL_BACKGROUND_COLOR);
 	float detailsHeight = ceilf(be_plain_font->Size() * 1.3f * 5);
-	fDetails->SetExplicitMinSize(BSize(B_SIZE_UNSET, detailsHeight));
-	fDetails->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, detailsHeight));
+	BScrollView* detailsScroll = new BScrollView("deviceDetailsScroll",
+		fDetails, 0, false, true, B_NO_BORDER);
+	detailsScroll->SetExplicitMinSize(BSize(B_SIZE_UNSET, detailsHeight));
+	detailsScroll->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED,
+		detailsHeight));
 
 	fBufferSize = new BMenuField("deviceBufferSize",
 		B_TRANSLATE("Buffer size:"), new BPopUpMenu(B_TRANSLATE("None")));
@@ -1449,7 +1477,7 @@ DevicesPage::DevicesPage(AudioDeviceList& devices)
 		.SetInsets(B_USE_DEFAULT_SPACING, B_USE_SMALL_SPACING,
 			B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING)
 		.Add(scroll)
-		.Add(fDetails)
+		.Add(detailsScroll)
 		.AddGroup(B_HORIZONTAL)
 			.AddGlue()
 			.Add(fMoreSettings)
@@ -1767,8 +1795,8 @@ AudioSettingsView::AudioSettingsView()
 	BFont font(be_bold_font);
 	font.SetSize(font.Size() * 1.3f);
 	fTitle->SetFont(&font);
-	fSearchNote = new BStringView("searchNote", "");
-	fSearchNote->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
+	fSearchNote = new BPrivate::WrappingNote("searchNote", "");
+	fSearchNote->SetTint(B_LIGHTEN_1_TINT);
 
 	BView* cards = new BView("pages", 0);
 	fCards = new BCardLayout();

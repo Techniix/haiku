@@ -4615,7 +4615,10 @@ def check_native_mode(args, results_dir, report):
 	try:
 		from PIL import Image
 		for name in sorted(os.listdir(results_dir)):
+			# (the large-font suite's screenshots are at the 1024x768
+			# it sets on purpose)
 			if name.startswith("screen-") and name.endswith(".png") \
+					and not name.startswith("screen-large_font_") \
 					and args.displays <= 1:
 				size = Image.open(os.path.join(results_dir, name)).size
 				check["detail"] += ", %s %dx%d" % (name, size[0], size[1])

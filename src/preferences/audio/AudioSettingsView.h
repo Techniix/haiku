@@ -24,6 +24,9 @@ class BMenuField;
 class BMessageRunner;
 class BSlider;
 class BStringView;
+namespace BPrivate {
+	class WrappingNote;
+}
 class BTextControl;
 class BTextView;
 class LevelMeter;
@@ -95,7 +98,7 @@ private:
 			BCheckBox*			fMute;
 			BButton*			fTestSound;
 			BMenuField*			fBufferSize;
-			BStringView*		fBufferNote;
+			BPrivate::WrappingNote*	fBufferNote;
 			BMenuField*			fResampling;
 			BView*				fAdvancedBox;
 			MixerControl*		fMixer;
@@ -152,7 +155,7 @@ public:
 
 private:
 			ApplicationVolumesView* fApplications;
-			BStringView*		fAdvancedNote;
+			BPrivate::WrappingNote*	fAdvancedNote;
 };
 
 
@@ -230,7 +233,7 @@ private:
 			BTextControl*		fSearch;
 			BListView*			fSidebar;
 			BStringView*		fTitle;
-			BStringView*		fSearchNote;
+			BPrivate::WrappingNote*	fSearchNote;
 			BCardLayout*		fCards;
 			BCheckBox*			fAdvanced;
 			BMessageRunner*		fRunner;

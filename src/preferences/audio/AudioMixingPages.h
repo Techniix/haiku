@@ -14,6 +14,9 @@
 class BListView;
 class BSlider;
 class BStringView;
+namespace BPrivate {
+	class WrappingNote;
+}
 class BTextControl;
 
 
@@ -98,7 +101,7 @@ private:
 			BGroupView*			fTriggerGroup;
 			BString				fTriggerKey;
 			BStringList			fTriggers;
-			BStringView*		fDuckState;
+			BPrivate::WrappingNote*	fDuckState;
 			bool				fDuckActive;
 			bigtime_t			fChanged;
 };
@@ -131,7 +134,7 @@ private:
 			BTextControl*		fName;
 			BButton*			fApply;
 			BButton*			fDelete;
-			BStringView*		fStatus;
+			BPrivate::WrappingNote*	fStatus;
 			BString				fLastApplied;
 };
 

@@ -21,6 +21,7 @@
 #include "GamepadsCommon.h"
 
 #include <GridView.h>
+#include <ScreenFit.h>
 #include <Roster.h>
 
 
@@ -100,10 +101,11 @@ public:
 		fMouseButtons = new BCheckBox("map_mouse_buttons",
 			"A and B click while a stick moves the pointer",
 			new BMessage(MSG_MAPPING_CHANGED));
-		BStringView* note = new BStringView("map_note", "Hold guide and "
+		// batch 12: wraps (as one line it made the window 1051 pixels
+		// wide at a 20-point font)
+		BView* note = new BPrivate::WrappingNote("map_note", "Hold guide and "
 			"start for 3 seconds to switch mapping off. Turbo and macros can "
-			"break some online games' rules.");
-		note->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
+			"break some online games' rules.", B_LIGHTEN_1_TINT);
 
 		BLayoutBuilder::Group<>(this)
 			.SetInsets(B_USE_WINDOW_SPACING)

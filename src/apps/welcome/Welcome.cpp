@@ -58,6 +58,8 @@
 #include <Url.h>
 #include <Window.h>
 
+#include <ScreenFit.h>
+
 #include <dirent.h>
 #include <math.h>
 #include <stdio.h>
@@ -350,6 +352,20 @@ in_terminal(const char* title, const char* command)
 	text view reports height-for-width, which, nested in the pages' groups
 	inside a card layout, made the window's layout loop for ever.
 */
+/*!	Batch 12 (large-font audit): a paragraph's width, 480 pixels at the
+	12-point default font and wider with a larger font (fewer lines, so
+	that the tallest page still fits the screen), but at most what the
+	screen leaves beside the window's insets.
+*/
+static float
+paragraph_width()
+{
+	float width = ceilf(480 * be_plain_font->Size() / 12);
+	return std::min(width,
+		BPrivate::screen_content_limit().width - 60);
+}
+
+
 /*!	A paragraph of wrapped text whose height follows its text: the number
 	of lines at the width it gets, times the font's line height. A fixed
 	pixel height cut text off on screens with a larger font (maintainer's
@@ -415,7 +431,8 @@ private:
 		BFont font;
 		GetFont(&font);
 		// words do not fill lines completely: a fifth more
-		float lines = ceilf(font.StringWidth(Text()) * 1.2f / 480);
+		float lines = ceilf(font.StringWidth(Text()) * 1.2f
+			/ paragraph_width());
 		for (const char* c = Text(); *c != '\0'; c++) {
 			if (*c == '\n')
 				lines++;
@@ -437,8 +454,8 @@ private:
 		if (fabsf(height - fHeight) < 1)
 			return;
 		fHeight = height;
-		SetExplicitMinSize(BSize(480, height));
-		SetExplicitPreferredSize(BSize(480, height));
+		SetExplicitMinSize(BSize(paragraph_width(), height));
+		SetExplicitPreferredSize(BSize(paragraph_width(), height));
 		SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, height));
 		InvalidateLayout();
 	}
@@ -776,6 +793,16 @@ private:
 			}
 			_ParagraphFit(child, reply);
 		}
+	}
+
+	/*!	Batch 12 (large-font audit): the window grows with a taller page
+		(B_AUTO_UPDATE_SIZE_LIMITS); keep it on the screen. At 20 points
+		the last page's window reached below a 768-line screen.
+	*/
+	virtual void FrameResized(float width, float height)
+	{
+		BWindow::FrameResized(width, height);
+		MoveOnScreen(B_MOVE_IF_PARTIALLY_OFFSCREEN);
 	}
 
 	void _Show(int32 index)

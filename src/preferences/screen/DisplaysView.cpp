@@ -6,6 +6,8 @@
 
 #include "DisplaysView.h"
 
+#include <ScreenFit.h>
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -233,12 +235,12 @@ DisplaysView::DisplaysView()
 			.AddMenuField(fResolutionField, 0, 1)
 			.AddMenuField(fRefreshField, 0, 2)
 			.AddMenuField(fScaleField, 0, 3)
-			.Add(new BStringView("scale_note", B_TRANSLATE(
+			.Add(new BPrivate::WrappingNote("scale_note", B_TRANSLATE(
 				"Follows the system font size (Appearance)")), 2, 3)
 			.AddMenuField(fRotationField, 0, 4)
-			.Add(new BStringView("rotation_note", driver), 2, 4)
+			.Add(new BPrivate::WrappingNote("rotation_note", driver), 2, 4)
 			.AddMenuField(fColorField, 0, 5)
-			.Add(new BStringView("color_note", B_TRANSLATE(
+			.Add(new BPrivate::WrappingNote("color_note", B_TRANSLATE(
 				"Colour management is not available yet")), 2, 5)
 			.AddMenuField(fPositionField, 0, 6)
 		.End()
@@ -278,8 +280,9 @@ DisplaysView::_Feature(const char* name, BView* control, const char* note)
 {
 	BString noteName(name);
 	noteName << "_note";
-	BStringView* noteView = new BStringView(noteName.String(), note);
-	noteView->SetHighUIColor(B_PANEL_TEXT_COLOR, B_DARKEN_2_TINT);
+	// batch 12: notes wrap (large-font audit)
+	BView* noteView = new BPrivate::WrappingNote(noteName.String(), note,
+		B_DARKEN_2_TINT);
 	return BLayoutBuilder::Group<>(B_HORIZONTAL)
 		.Add(control)
 		.Add(noteView)

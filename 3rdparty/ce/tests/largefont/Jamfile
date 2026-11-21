@@ -1,0 +1,22 @@
+SubDir HAIKU_TOP 3rdparty ce tests largefont ;
+
+UsePrivateHeaders interface ;
+
+# The large-font audit (batch 12): every Renga window at a 20-point system
+# font and 1024x768, checked by a library loaded into each program with
+# LD_PRELOAD. Needs the desktop of the renga-* images (second phase).
+SharedLibrary liblayout_audit.so :
+	layout_audit.cpp
+	: be [ TargetLibstdc++ ] [ TargetLibsupc++ ]
+;
+
+Application ui_large_font_test :
+	ui_large_font_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged lib : liblayout_audit.so ;
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: ui_large_font_test ;
+}

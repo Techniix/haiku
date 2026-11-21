@@ -39,6 +39,7 @@
 #include <CheckBox.h>
 #include <ColumnListView.h>
 #include <ColumnTypes.h>
+#include <ControlLook.h>
 #include <FindDirectory.h>
 #include <GroupView.h>
 #include <LayoutBuilder.h>
@@ -46,6 +47,7 @@
 #include <OutlineListView.h>
 #include <Path.h>
 #include <Roster.h>
+#include <Screen.h>
 #include <ScrollBar.h>
 #include <ScrollView.h>
 #include <SeparatorView.h>
@@ -55,6 +57,7 @@
 #include <TextView.h>
 #include <Window.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +77,7 @@
 #include <capture_privacy.h>
 #include <control_panel_index.h>
 #include <streamer_mode.h>
+#include <ScreenFit.h>
 
 #include "AudioSettingsView.h"
 #include "DisplaysView.h"
@@ -133,7 +137,8 @@ page_heading(const PageInfo* page)
 	BFont font(be_bold_font);
 	font.SetSize(font.Size() * 1.4f);
 	title->SetFont(&font);
-	BStringView* description = new BStringView("pageDescription",
+	// batch 12: the description wraps (large-font audit)
+	BView* description = new BPrivate::WrappingNote("pageDescription",
 		page->description);
 	BGroupView* group = new BGroupView(B_VERTICAL, 2);
 	BLayoutBuilder::Group<>(group)
@@ -633,13 +638,26 @@ public:
 /*!	Holds a page at its preferred size inside a BScrollView, so that tall
 	pages (Displays, Audio) fit on small screens: the window keeps a
 	modest minimum size and the page scrolls.
+
+	Batch 12 (large-font audit): the sizes come from the font and the page
+	instead of fixed pixels. The minimum width is the page's own minimum
+	width, so that nothing on it is cut off, but at most \a maxWidth (what
+	the screen leaves beside the sidebar); a page that needs more than that
+	gets a horizontal scroll bar too (see scrolling()). Before, the minimum
+	was a fixed 360x200 and the page was laid out wider than the visible
+	area with no way to reach its right side; an earlier attempt that
+	returned the page's minimum unbounded made the window's minimum (the
+	largest page's, through the card layout and B_AUTO_UPDATE_SIZE_LIMITS)
+	wider than a 1024-pixel screen at a 20-point font, which is why it was
+	reverted.
 */
 class PageScroller : public BView {
 public:
-	PageScroller(BView* page)
+	PageScroller(BView* page, float maxWidth)
 		:
 		BView(page->Name(), B_WILL_DRAW | B_FRAME_EVENTS),
-		fPage(page)
+		fPage(page),
+		fMaxWidth(maxWidth)
 	{
 		SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 		AddChild(page);
@@ -659,13 +677,17 @@ public:
 
 	virtual BSize MinSize()
 	{
-		return BSize(360, 200);
+		float plain = be_plain_font->Size();
+		return BSize(std::min(fPage->MinSize().width, fMaxWidth),
+			ceilf(plain * 16));
 	}
 
 	virtual BSize PreferredSize()
 	{
 		BSize size = fPage->PreferredSize();
-		return BSize(size.width, std::min(size.height, 520.0f));
+		BRect screen = BScreen().Frame();
+		return BSize(std::min(size.width, fMaxWidth),
+			std::min(size.height, floorf(screen.Height() * 0.75f)));
 	}
 
 	virtual BSize MaxSize()
@@ -683,24 +705,37 @@ private:
 			std::max(preferred.height, minimum.height));
 		fPage->MoveTo(0, 0);
 		fPage->ResizeTo(width, height);
+		float step = ceilf(be_plain_font->Size() * 1.6f);
 		if (BScrollBar* bar = ScrollBar(B_VERTICAL)) {
 			float range = std::max(0.0f, height - Bounds().Height());
 			bar->SetRange(0, range);
 			bar->SetProportion(range > 0
 				? Bounds().Height() / height : 1.0f);
-			bar->SetSteps(20, Bounds().Height());
+			bar->SetSteps(step, Bounds().Height());
+		}
+		if (BScrollBar* bar = ScrollBar(B_HORIZONTAL)) {
+			float range = std::max(0.0f, width - Bounds().Width());
+			bar->SetRange(0, range);
+			bar->SetProportion(range > 0
+				? Bounds().Width() / width : 1.0f);
+			bar->SetSteps(step, Bounds().Width());
 		}
 	}
 
 	BView*	fPage;
+	float	fMaxWidth;
 };
 
 
+/*!	A page in its scroll view; a horizontal scroll bar only for a page
+	wider than \a maxWidth (a very large font on a small screen).
+*/
 static BView*
-scrolling(BView* page)
+scrolling(BView* page, float maxWidth)
 {
+	bool horizontal = page->MinSize().width > maxWidth;
 	BScrollView* scroll = new BScrollView(page->Name(),
-		new PageScroller(page), 0, false, true, B_NO_BORDER);
+		new PageScroller(page, maxWidth), 0, horizontal, true, B_NO_BORDER);
 	return scroll;
 }
 
@@ -742,7 +777,6 @@ public:
 		fSearch = new BTextControl("search", NULL, "",
 			new BMessage(kMsgSearchChanged));
 		fSearch->SetModificationMessage(new BMessage(kMsgSearchChanged));
-		fSearch->TextView()->SetExplicitMinSize(BSize(180, B_SIZE_UNSET));
 
 		fSidebar = new BOutlineListView("sidebar");
 		fSidebar->SetSelectionMessage(new BMessage(kMsgPageSelected));
@@ -760,8 +794,40 @@ public:
 		}
 		BScrollView* sidebarScroll = new BScrollView("sidebarScroll",
 			fSidebar, 0, false, true);
-		sidebarScroll->SetExplicitMinSize(BSize(190, 300));
-		sidebarScroll->SetExplicitMaxSize(BSize(220, B_SIZE_UNLIMITED));
+
+		// batch 12: the sidebar as wide as its longest item at the current
+		// font (measured as BOutlineListView measures it: the text, the
+		// item's label spacing, the latch and one indentation per level),
+		// plus its scroll bar and frame; before, it was held to 190-220
+		// pixels and cut "Streaming and privacy" off at larger fonts
+		float sidebarWidth = 0;
+		float plain = be_plain_font->Size();
+		float spacing = be_control_look->DefaultItemSpacing();
+		for (int32 i = 0; i < fSidebar->FullListCountItems(); i++) {
+			PageItem* item = dynamic_cast<PageItem*>(
+				fSidebar->FullListItemAt(i));
+			if (item == NULL)
+				continue;
+			float width = be_plain_font->StringWidth(item->Text())
+				+ be_control_look->DefaultLabelSpacing() + plain
+				+ (item->OutlineLevel() + 1) * spacing;
+			sidebarWidth = std::max(sidebarWidth, width);
+		}
+		sidebarWidth = ceilf(sidebarWidth
+			+ be_control_look->GetScrollBarWidth(B_VERTICAL) + 4);
+		sidebarScroll->SetExplicitMinSize(BSize(sidebarWidth,
+			ceilf(plain * 16)));
+		sidebarScroll->SetExplicitMaxSize(BSize(sidebarWidth,
+			B_SIZE_UNLIMITED));
+		fSearch->SetExplicitMaxSize(BSize(sidebarWidth, B_SIZE_UNSET));
+
+		// what the screen leaves for a page beside the sidebar
+		BRect screen = BScreen().Frame();
+		float inset = be_control_look->ComposeSpacing(B_USE_WINDOW_SPACING);
+		float pageMaxWidth = std::max(ceilf(plain * 24),
+			screen.Width() - sidebarWidth - 3 * inset
+				- be_control_look->GetScrollBarWidth(B_VERTICAL)
+				- 20);
 
 		fResults = new BListView("results");
 		fResults->SetInvocationMessage(new BMessage(kMsgResultInvoked));
@@ -773,7 +839,7 @@ public:
 		fCards->AddView(new BScrollView("resultsScroll", fResults, 0, false,
 			true));
 		for (size_t i = 0; i < sizeof(kPages) / sizeof(kPages[0]); i++)
-			fCards->AddView(scrolling(_MakePage(&kPages[i])));
+			fCards->AddView(scrolling(_MakePage(&kPages[i]), pageMaxWidth));
 
 		BLayoutBuilder::Group<>(this, B_HORIZONTAL, 0)
 			.AddGroup(B_VERTICAL)
@@ -785,6 +851,16 @@ public:
 			.Add(cards, 1.0f);
 
 		_ShowPage(pageID != NULL ? pageID : "displays");
+
+		// batch 12: the window at its layout's preferred size, clamped to
+		// the screen (it stays resizable down to the layout's minimum)
+		BSize preferred = GetLayout()->PreferredSize();
+		BSize minimum = GetLayout()->MinSize();
+		float width = std::min(preferred.width, screen.Width() - 2 * inset);
+		float height = std::min(preferred.height,
+			screen.Height() - 2 * inset - 30);
+		ResizeTo(std::max(width, minimum.width),
+			std::max(height, minimum.height));
 		CenterOnScreen();
 	}
 

@@ -55,6 +55,7 @@
 #include "MappingView.h"
 
 #include <TabView.h>
+#include <ScreenFit.h>
 
 #include <Roster.h>
 
@@ -462,7 +463,8 @@ public:
 		fList->SetSelectionMessage(new BMessage(MSG_SELECT));
 		BScrollView* scroll = new BScrollView("pads scroll", fList, 0, false,
 			true);
-		scroll->SetExplicitMinSize(BSize(190, 150));
+		scroll->SetExplicitMinSize(BSize(ceilf(be_plain_font->Size() * 16),
+			ceilf(be_plain_font->Size() * 12)));
 
 		fTester = new TesterView;
 		fInfo = new BStringView("info", "");
@@ -518,7 +520,12 @@ public:
 		BGroupView* tuningGroup = new BGroupView(B_VERTICAL,
 			B_USE_SMALL_SPACING);
 		BLayoutBuilder::Group<>(tuningGroup)
-			.SetInsets(B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING * 1.5,
+			// batch 12: B_USE_DEFAULT_SPACING * 1.5 was not a spacing
+			// constant but a literal -1503 pixel inset, which made the
+			// box's minimum height negative and collapsed it (found by the
+			// large-font audit; the box was missing at every font size)
+			.SetInsets(B_USE_DEFAULT_SPACING,
+				ceilf(be_control_look->DefaultItemSpacing() * 1.5f),
 				B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING)
 			.Add(fDeadZone)
 			.Add(fTrigger)
@@ -527,8 +534,9 @@ public:
 				.AddGlue()
 			.End()
 			.Add(fSwap)
-			.Add(new BStringView("tuning_note", "Applies to native programs "
-				"(BGamepad); the mapping also to SDL games."))
+			.Add(new BPrivate::WrappingNote("tuning_note",
+				"Applies to native programs (BGamepad); the mapping also to "
+				"SDL games."))
 			.AddGroup(B_HORIZONTAL)
 				.Add(fMap)
 				.Add(fMapReset)
@@ -571,13 +579,19 @@ public:
 		tabs->SetBorder(B_NO_BORDER);
 		tabs->AddTab(padsTab);
 		tabs->AddTab(new MappingView);
+		// batch 12 (large-font audit): the tabs scroll when the screen is
+		// smaller than they need (859 lines at 20 points), and the window
+		// starts at its layout's size, clamped to the screen
+		BSize limit = BPrivate::screen_content_limit();
+		limit.height -= be_control_look->DefaultItemSpacing() / 2;
 		BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 			.AddStrut(B_USE_SMALL_SPACING)
-			.Add(tabs);
+			.Add(BPrivate::fit_to_screen(tabs, limit));
 
 		_UpdateCheckBoxes();
 		_Rescan();
 		BGamepad::StartWatching(BMessenger(this));
+		BPrivate::size_window_to_screen(this);
 		CenterOnScreen();
 	}
 

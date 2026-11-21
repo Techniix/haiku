@@ -29,6 +29,7 @@
 
 
 #include <Application.h>
+#include <ControlLook.h>
 #include <Button.h>
 #include <Catalog.h>
 #include <CheckBox.h>
@@ -46,6 +47,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <ScreenFit.h>
 
 #include "AudioSettingsView.h"
 
@@ -69,16 +72,29 @@ enum {
 
 class AudioWindow : public BWindow {
 public:
-	AudioWindow(BRect frame, bool advanced)
+	AudioWindow(BRect frame, bool advanced, bool savedFrame)
 		:
 		BWindow(frame, B_TRANSLATE_SYSTEM_NAME("Audio"), B_TITLED_WINDOW,
 			B_ASYNCHRONOUS_CONTROLS | B_AUTO_UPDATE_SIZE_LIMITS)
 	{
 		fView = new AudioSettingsView();
+		fView->SetAdvanced(advanced);
+
+		// batch 12 (large-font audit): the pages scroll when the screen is
+		// smaller than they need (the Devices page at 20 points on a
+		// 768-line screen), and the window starts at its layout's size,
+		// clamped to the screen, unless the user's saved frame is there
+		float inset = be_control_look->ComposeSpacing(B_USE_WINDOW_SPACING);
+		BSize limit = BPrivate::screen_content_limit();
+		limit.width -= 2 * inset;
+		limit.height -= 2 * inset;
 		BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 			.SetInsets(B_USE_WINDOW_SPACING)
-			.Add(fView);
-		fView->SetAdvanced(advanced);
+			.Add(BPrivate::fit_to_screen(fView, limit));
+		if (!savedFrame)
+			BPrivate::size_window_to_screen(this);
+		else
+			MoveOnScreen(B_MOVE_IF_PARTIALLY_OFFSCREEN);
 	}
 
 	virtual bool QuitRequested()
@@ -232,6 +248,7 @@ public:
 	{
 		BRect frame(100, 80, 100 + 720, 80 + 480);
 		bool advanced = false;
+		bool savedFrame = false;
 		BPath path;
 		if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) == B_OK) {
 			path.Append(kSettingsFile);
@@ -242,11 +259,12 @@ public:
 				if (settings.FindRect("frame", &saved) == B_OK
 					&& BScreen().Frame().Contains(saved.LeftTop())) {
 					frame = saved;
+					savedFrame = true;
 				}
 				advanced = settings.GetBool("advanced", false);
 			}
 		}
-		fWindow = new AudioWindow(frame, advanced);
+		fWindow = new AudioWindow(frame, advanced, savedFrame);
 		_Apply();
 		fWindow->Show();
 	}

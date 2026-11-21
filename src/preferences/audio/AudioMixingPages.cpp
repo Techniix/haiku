@@ -10,6 +10,8 @@
 
 #include "AudioMixingPages.h"
 
+#include <ScreenFit.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -90,12 +92,14 @@ make_box(const char* name, const char* label, BView* content)
 }
 
 
-static BStringView*
+/*!	Batch 12 (large-font audit): notes wrap (BPrivate::WrappingNote); as
+	one-line BStringViews the longest made the Audio window 1372 pixels
+	wide at a 20-point font.
+*/
+static BPrivate::WrappingNote*
 make_note(const char* name, const char* text)
 {
-	BStringView* note = new BStringView(name, text);
-	note->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
-	return note;
+	return new BPrivate::WrappingNote(name, text, B_LIGHTEN_1_TINT);
 }
 
 
@@ -136,7 +140,7 @@ MicrophonePage::MicrophonePage(AudioDeviceList& devices)
 	fHighPass = new BCheckBox("highPass",
 		B_TRANSLATE("Filter rumble and hum (below 80 Hz)"),
 		new BMessage(kMsgMicChanged));
-	BStringView* note = make_note("micNote", B_TRANSLATE("Echo cancellation "
+	BView* note = make_note("micNote", B_TRANSLATE("Echo cancellation "
 		"and spectral noise suppression are not available yet."));
 
 	BGroupView* group = new BGroupView(B_VERTICAL, B_USE_SMALL_SPACING);
