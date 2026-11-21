@@ -34,6 +34,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -494,7 +495,60 @@ linux_environment(const std::string& shell)
 	environment.push_back(
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/xdg-runtime/bus");
 	environment.push_back("SHELL=" + shell);
+	// Qt's colours from Renga's appearance (linux-apps theme) need the
+	// qt6ct or qt5ct platform theme; used when the root has one of them
+	if (exists(root_path("/usr/lib/qt6/plugins/platformthemes/libqt6ct.so")))
+		environment.push_back("QT_QPA_PLATFORMTHEME=qt6ct");
+	else if (exists(root_path(
+			"/usr/lib/qt5/plugins/platformthemes/libqt5ct.so"))) {
+		environment.push_back("QT_QPA_PLATFORMTHEME=qt5ct");
+	}
 	return environment;
+}
+
+
+/*!	Brings the GTK and Qt colours up to date with Renga's appearance
+	(linux-apps theme, F-27 "Matching look"), in the background: it needs
+	app_server and must not delay the program.
+*/
+static void
+update_theme()
+{
+	// only when Renga's appearance or the Renguin settings changed since
+	// the files were written
+	const char* home = getenv("HOME") != NULL ? getenv("HOME") : "/boot/home";
+	std::string written = std::string(home) + "/.config/gtk-3.0/settings.ini";
+	std::string appearance = std::string(home)
+		+ "/config/settings/system/app_server/appearance";
+	std::string settings = std::string(home)
+		+ "/config/settings/Renguin/settings";
+	struct stat writtenStat, other;
+	if (stat(written.c_str(), &writtenStat) == 0
+		&& (stat(appearance.c_str(), &other) != 0
+			|| other.st_mtime <= writtenStat.st_mtime)
+		&& (stat(settings.c_str(), &other) != 0
+			|| other.st_mtime <= writtenStat.st_mtime)) {
+		return;
+	}
+
+	// twice forked: the Linux program this process becomes must not get a
+	// child it does not know about (wait() would report it)
+	pid_t child = fork();
+	if (child < 0)
+		return;
+	if (child > 0) {
+		waitpid(child, NULL, 0);
+		return;
+	}
+	if (fork() != 0)
+		_exit(0);
+	int null = open("/dev/null", O_RDWR);
+	if (null >= 0) {
+		dup2(null, 1);
+		dup2(null, 2);
+	}
+	execl("/bin/linux-apps", "linux-apps", "theme", (char*)NULL);
+	_exit(127);
 }
 
 
@@ -537,6 +591,7 @@ main(int argc, char** argv)
 
 	write_profile_script();
 	std::string shell = login_shell();
+	update_theme();
 	std::vector<std::string> environment = linux_environment(shell);
 	std::vector<char*> envp;
 	for (size_t i = 0; i < environment.size(); i++)

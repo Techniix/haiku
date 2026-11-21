@@ -36,7 +36,7 @@ class RenguinWindow : public BWindow {
 public:
 	RenguinWindow()
 		:
-		BWindow(BRect(120, 100, 640, 420), B_TRANSLATE_SYSTEM_NAME(
+		BWindow(BRect(120, 100, 760, 560), B_TRANSLATE_SYSTEM_NAME(
 			"Renguin Manager"), B_TITLED_WINDOW, B_QUIT_ON_WINDOW_CLOSE
 				| B_NOT_ZOOMABLE | B_AUTO_UPDATE_SIZE_LIMITS)
 	{
@@ -64,6 +64,7 @@ print_status()
 			view->FindView(names[i]));
 		printf("%s\t%s\n", names[i], line != NULL ? line->Text() : "");
 	}
+	RenguinView::PrintSwitches();
 	window->Quit();
 }
 

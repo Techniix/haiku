@@ -13,4 +13,5 @@ Application linux :
 Application linux-apps :
 	linux_apps.cpp
 	: be translation [ TargetLibstdc++ ]
+	: linux-apps.rdef
 ;

@@ -124,10 +124,37 @@ main()
 					< 0)),
 		"%s", shown.String());
 
+	// batch 10: the switches, on by default, read back from the settings
+	// files (a kernel one and a user one)
+	report("switches", output.FindFirst("switch\tvdso\ton") >= 0
+			&& output.FindFirst("switch\txattrs\ton") >= 0
+			&& output.FindFirst("switch\tbadge\ton") >= 0
+			&& output.FindFirst("switch\topen_with\ton") >= 0
+			&& output.FindFirst("switch\tappimage\ton") >= 0
+			&& output.FindFirst("switch\ttheme\ton") >= 0,
+		"%s", shown.String());
+	BString kernelSettings = run("cat ~/config/settings/kernel/drivers/renguin "
+		"2>/dev/null", NULL);
+	BString userSettings = run("cat ~/config/settings/Renguin/settings "
+		"2>/dev/null", NULL);
+	run("mkdir -p ~/config/settings/kernel/drivers ~/config/settings/Renguin "
+		"&& echo 'vdso false' > ~/config/settings/kernel/drivers/renguin "
+		"&& echo 'badge false' > ~/config/settings/Renguin/settings", NULL);
+	BString changed = run("/boot/system/apps/RenguinManager --status "
+		"2>/dev/null", NULL);
+	report("switches_read", changed.FindFirst("switch\tvdso\toff") >= 0
+			&& changed.FindFirst("switch\tbadge\toff") >= 0
+			&& changed.FindFirst("switch\txattrs\ton") >= 0,
+		"after writing vdso false and badge false");
+	if (kernelSettings.IsEmpty())
+		run("rm -f ~/config/settings/kernel/drivers/renguin", NULL);
+	if (userSettings.IsEmpty())
+		run("rm -f ~/config/settings/Renguin/settings", NULL);
+
 	team_id team = -1;
 	BMessenger messenger = launch(kSignature, &team);
 	report("window", messenger.IsValid() && has_view(messenger, "openShell")
-			&& has_view(messenger, "trace"),
+			&& has_view(messenger, "renguinTabs"),
 		"team %" B_PRId32, team);
 	printf("CE-HOST screenshot renguin_manager\n");
 	fflush(stdout);
