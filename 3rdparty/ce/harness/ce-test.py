@@ -3229,8 +3229,13 @@ def parse_serial(results_dir, report):
 		# line means nothing; user-mode faults stay problems. Since batch 3
 		# the kernel logs these as "vm_page_fault: system call wrote to user
 		# address ... EFAULT to the program" (rate-limited per team).
+		# Since batch 11 a Linux program's own fault (delivered to it as
+		# SIGSEGV/SIGBUS, as the signal tests provoke on purpose) is logged
+		# as "vm_page_fault: Linux program ..." for hardware reports; the
+		# program's outcome is its test's business.
 		handled_fault = "vm_page_fault" in line and (", kernel," in line
 			or "vm_page_fault: system call " in line
+			or "vm_page_fault: Linux program " in line
 			or "further bad user addresses" in line)
 		if PANIC_PATTERN.search(line) or ("vm_page_fault" in line
 					and not handled_fault) \
