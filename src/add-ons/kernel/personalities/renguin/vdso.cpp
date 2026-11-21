@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include <arch_cpu.h>
+#include <commpage.h>
 #include <driver_settings.h>
 #include <team.h>
 #include <vm/vm.h>
@@ -105,18 +106,29 @@ addr_t
 renguin_map_vdso(Team* team)
 {
 	int32 dataOffset = vdso_data_offset();
-	if (dataOffset < 0 || team->commpage_address == NULL || !vdso_enabled())
+	if (dataOffset < 0 || !vdso_enabled())
 		return 0;
+
+	// The kernel maps the commpage only for native programs, after the
+	// personalities had their turn (team.cpp); exec has removed the old
+	// one, and team->commpage_address still names it. Map it for the vDSO.
+	area_id commPage = clone_commpage_area(team->id, &team->commpage_address);
+	if (commPage < 0) {
+		dprintf("renguin: commpage for the vDSO: %s\n", strerror(commPage));
+		return 0;
+	}
 
 	size_t size = ROUNDUP(kRenguinVdsoSize, B_PAGE_SIZE);
 	void* address = NULL;
 	virtual_address_restrictions addressRestrictions = {};
 	addressRestrictions.address_specification = B_RANDOMIZED_ANY_ADDRESS;
 	physical_address_restrictions physicalRestrictions = {};
-	// Made writable for the kernel to fill in, then read-only and
-	// executable (x86 refuses kernel-writable executable user areas).
+	// Made writable to fill it in, then read-only and executable: x86 has
+	// one write permission for user and kernel, so Haiku refuses a
+	// user-read-only area the kernel may write (arch_vm_supports_protection).
 	area_id area = vm_create_anonymous_area(team->id, "[vdso]", size,
-		B_FULL_LOCK, B_READ_AREA | B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
+		B_FULL_LOCK, B_READ_AREA | B_WRITE_AREA | B_KERNEL_READ_AREA
+			| B_KERNEL_WRITE_AREA,
 		0, 0, &addressRestrictions, &physicalRestrictions, false, &address);
 	if (area < 0) {
 		dprintf("renguin: vDSO area: %s\n", strerror(area));

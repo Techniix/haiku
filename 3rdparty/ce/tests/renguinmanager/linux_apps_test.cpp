@@ -44,6 +44,7 @@
 #include <File.h>
 #include <FindDirectory.h>
 #include <Node.h>
+#include <NodeInfo.h>
 #include <fs_attr.h>
 #include <Path.h>
 #include <TranslatorRoster.h>
@@ -195,11 +196,15 @@ main()
 	write_text(copier, "[Desktop Entry]\nType=Application\n"
 		"Name=CE Test Copier\nExec=cp %f /tmp/ce-openwith-copied\n"
 		"MimeType=text/x-ce-renguin-test;\n");
-	run("/bin/linux-apps sync 2>&1");
+	std::string registered = run("/bin/linux-apps sync -v 2>&1 | grep "
+		"'^open_with'");
 	std::string copierEntry = std::string(menu.Path()) + "/CE Test Copier";
 	char signature[B_MIME_TYPE_LENGTH] = "";
-	BNode copierNode(copierEntry.c_str());
-	copierNode.ReadAttr("BEOS:APP_SIG", B_MIME_STRING_TYPE, 0, signature,
+	BPath launcherPath;
+	find_directory(B_USER_NONPACKAGED_DATA_DIRECTORY, &launcherPath);
+	launcherPath.Append("renguin/launchers/ce-test-copier");
+	BNode launcherNode(launcherPath.Path());
+	launcherNode.ReadAttr("BEOS:APP_SIG", B_MIME_STRING_TYPE, 0, signature,
 		sizeof(signature) - 1);
 	BMessage supporting;
 	BMimeType("text/x-ce-renguin-test").GetSupportingApps(&supporting);
@@ -217,17 +222,26 @@ main()
 	BMessage refs(B_REFS_RECEIVED);
 	refs.AddRef("refs", &sourceRef);
 	status_t launched = be_roster->Launch(signature, &refs);
+	(void)copierEntry;
 	bool copied = false;
 	for (int i = 0; i < 300 && !copied; i++) {
 		snooze(100000);
 		copied = run("cat /tmp/ce-openwith-copied 2>/dev/null")
 			== "renguin open with\n";
 	}
+	// Tracker's "Open with" starts the application with a B_REFS_RECEIVED
+	// message; the application is the program's launcher
+	char appType[B_MIME_TYPE_LENGTH] = "";
+	entry_ref launcherRef;
+	BMimeType(signature).GetAppHint(&launcherRef);
+	BNodeInfo(&launcherNode).GetType(appType);
 	report("open_with", strcmp(signature,
 			"application/x-vnd.renguin-ce-test-copier") == 0 && supported
+			&& strcmp(appType, "application/x-vnd.Be-elfexecutable") == 0
 			&& launched == B_OK && copied,
-		"signature \"%s\", supported %d, launch %s, copied %d", signature,
-		supported, strerror(launched), copied);
+		"signature \"%s\", type %s, supported %d, launch %s, copied %d "
+		"[%s]", signature, appType, supported, strerror(launched), copied,
+		registered.c_str());
 	unlink(copier.c_str());
 	unlink("/tmp/ce-openwith-source");
 	unlink("/tmp/ce-openwith-copied");
@@ -281,22 +295,32 @@ main()
 	unlink("/tmp/ce-appimage-ran");
 	entry_ref fakeRef;
 	get_ref_for_path(fake.c_str(), &fakeRef);
-	BMessage appimageRefs(B_REFS_RECEIVED);
-	appimageRefs.AddRef("refs", &fakeRef);
-	status_t opened = be_roster->Launch(preferred, &appimageRefs);
+	// a double-click in Tracker: the document is launched
+	status_t opened = be_roster->Launch(&fakeRef);
 	std::string ran;
 	for (int i = 0; i < 300 && ran.empty(); i++) {
 		snooze(100000);
 		ran = run("cat /tmp/ce-appimage-ran 2>/dev/null");
+	}
+	std::string direct;
+	if (ran.empty()) {
+		// diagnosis: the same without the roster
+		direct = run(("/bin/linux-apps '" + fake + "' 2>&1").c_str());
+		for (int i = 0; i < 200 && ran.empty(); i++) {
+			snooze(100000);
+			ran = run("cat /tmp/ce-appimage-ran 2>/dev/null");
+		}
+		direct += " direct: " + ran;
+		ran.clear();
 	}
 	report("appimage", guessed.Type() != NULL
 			&& strcmp(guessed.Type(), "application/x-appimage") == 0
 			&& strcmp(preferred, "application/x-vnd.Renga-linux-apps") == 0
 			&& opened == B_OK && ran.find("extract=1 appimage=" + fake)
 				!= std::string::npos,
-		"type %s, preferred %s, open %s, ran [%s]",
+		"type %s, preferred %s, open %s, ran [%s]%s",
 		guessed.Type() != NULL ? guessed.Type() : "?", preferred,
-		strerror(opened), ran.c_str());
+		strerror(opened), ran.c_str(), direct.c_str());
 	unlink(fake.c_str());
 	unlink("/tmp/ce-appimage-ran");
 

@@ -348,38 +348,79 @@ program_signature(const std::string& id)
 /*!	Makes the entry at \a path an application Tracker's "Open with" offers
 	for \a entry's types (or takes that away again, \a enable false).
 */
-static void
-register_program(const char* path, const DesktopEntry& entry, bool enable)
+//!	Where the "Open with" launcher of the Linux program \a id lives.
+static std::string
+launcher_path(const std::string& id)
 {
-	BFile file(path, B_READ_WRITE);
-	if (file.InitCheck() != B_OK)
-		return;
+	BPath path;
+	find_directory(B_USER_NONPACKAGED_DATA_DIRECTORY, &path, true);
+	path.Append("renguin/launchers");
+	create_directory(path.Path(), 0755);
+	return std::string(path.Path()) + "/" + id;
+}
+
+
+/*!	"Open with" for \a entry (or its removal, \a enable false): a launcher,
+	a copy of this program whose attributes name the Linux program
+	(renga:linux, the .desktop file) and give it its own application
+	signature and supported types. Attributes come before resources when an
+	application's signature is read, so the copy is an application of its
+	own; started by the roster with files (B_REFS_RECEIVED, as Tracker's
+	"Open with" sends them), it runs the program with them (launcher
+	mode in main()). A script cannot receive those messages.
+*/
+static status_t
+register_program(const char* /*entryPath*/, const DesktopEntry& entry,
+	bool enable)
+{
 	std::string signature = program_signature(entry.id);
 	BMimeType type(signature.c_str());
+	std::string path = launcher_path(entry.id);
 	if (!enable || entry.mimeTypes.empty() || !entry.takesFiles) {
-		file.RemoveAttr("BEOS:APP_SIG");
-		file.RemoveAttr("BEOS:FILE_TYPES");
-		file.RemoveAttr("BEOS:APP_FLAGS");
+		unlink(path.c_str());
 		if (type.IsInstalled())
 			type.Delete();
-		return;
+		return B_OK;
 	}
+	std::string copy = "cp /bin/linux-apps '" + path + "'";
+	if (system(copy.c_str()) != 0)
+		return B_ERROR;
+	BFile file(path.c_str(), B_READ_WRITE);
+	if (file.InitCheck() != B_OK)
+		return file.InitCheck();
+	file.WriteAttr(kAttribute, B_STRING_TYPE, 0, entry.path.c_str(),
+		entry.path.size() + 1);
+	// The signature type is installed with itself as preferred application,
+	// as the registrar does for native applications; otherwise the roster
+	// takes it for a document type without a handler.
 	if (!type.IsInstalled())
 		type.Install();
 	type.SetShortDescription(entry.name.c_str());
+	type.SetPreferredApp(signature.c_str());
 	entry_ref ref;
-	if (get_ref_for_path(path, &ref) == B_OK)
+	if (get_ref_for_path(path.c_str(), &ref) == B_OK)
 		type.SetAppHint(&ref);
+	// the types it opens must exist for the MIME database to list it
+	for (size_t i = 0; i < entry.mimeTypes.size(); i++) {
+		BMimeType supported(entry.mimeTypes[i].c_str());
+		if (supported.IsValid() && !supported.IsInstalled())
+			supported.Install();
+	}
 
+	// Tracker's "Open with" query finds applications by BEOS:APP_SIG and
+	// this type
+	BNodeInfo(&file).SetType(B_APP_MIME_TYPE);
 	BAppFileInfo info(&file);
 	info.SetInfoLocation(B_USE_ATTRIBUTES);
 	info.SetSignature(signature.c_str());
-	info.SetAppFlags(B_MULTIPLE_LAUNCH | B_ARGV_ONLY);
+	info.SetAppFlags(B_MULTIPLE_LAUNCH);
 	BMessage types;
 	for (size_t i = 0; i < entry.mimeTypes.size(); i++)
 		types.AddString("types", entry.mimeTypes[i].c_str());
 	// syncAll: the MIME database learns that this program supports them
-	info.SetSupportedTypes(&types, true, true);
+	// (without syncAll: with it the registrar answered B_NAME_NOT_FOUND for
+	// a program it had not seen before and left the database unchanged)
+	return info.SetSupportedTypes(&types, true, false);
 }
 
 
@@ -458,7 +499,11 @@ sync(bool verbose)
 		}
 		delete bitmap;
 		node.Unset();
-		register_program(path.c_str(), entry, openWith);
+		status_t registered = register_program(path.c_str(), entry, openWith);
+		if (verbose && openWith && !entry.mimeTypes.empty()) {
+			printf("open_with\t%s\t%s\n", program_signature(entry.id).c_str(),
+				strerror(registered));
+		}
 		written.insert(fileName);
 		if (verbose) {
 			printf("%s\t%s\t%s\n", entry.id.c_str(), entry.name.c_str(),
@@ -476,16 +521,16 @@ sync(bool verbose)
 		char attribute[1024];
 		if (node.ReadAttr(kAttribute, B_STRING_TYPE, 0, attribute,
 				sizeof(attribute)) > 0 && written.count(name) == 0) {
-			char signature[B_MIME_TYPE_LENGTH];
-			if (node.ReadAttr("BEOS:APP_SIG", B_MIME_STRING_TYPE, 0, signature,
-					sizeof(signature)) > 0) {
-				signature[sizeof(signature) - 1] = '\0';
-				BMimeType type(signature);
-				if (strncmp(signature, kSignaturePrefix,
-						strlen(kSignaturePrefix)) == 0 && type.IsInstalled()) {
-					type.Delete();
-				}
-			}
+			// its "Open with" launcher and signature go with it
+			attribute[sizeof(attribute) - 1] = '\0';
+			const char* slash = strrchr(attribute, '/');
+			std::string id = slash != NULL ? slash + 1 : attribute;
+			if (id.size() > 8)
+				id.resize(id.size() - 8);
+			unlink(launcher_path(id).c_str());
+			BMimeType type(program_signature(id).c_str());
+			if (type.IsInstalled())
+				type.Delete();
 			item.Remove();
 			if (verbose)
 				printf("removed\t%s\n", name);
@@ -735,9 +780,130 @@ run_appimage(const char* path)
 }
 
 
+/*!	Launcher mode: this program copied as a Linux program's "Open with"
+	launcher (register_program()). Collects the files it is given and runs
+	the program's Exec line through "linux" with them as "$@".
+*/
+class ProgramLauncher : public BApplication {
+public:
+	ProgramLauncher(const char* signature, const DesktopEntry& entry)
+		:
+		BApplication(signature),
+		fEntry(entry)
+	{
+	}
+
+	virtual void RefsReceived(BMessage* message)
+	{
+		entry_ref ref;
+		for (int32 i = 0; message->FindRef("refs", i, &ref) == B_OK; i++) {
+			BPath path(&ref);
+			if (path.InitCheck() == B_OK)
+				fFiles.push_back(path.Path());
+		}
+	}
+
+	virtual void ArgvReceived(int32 argc, char** argv)
+	{
+		for (int32 i = 1; i < argc; i++)
+			fFiles.push_back(argv[i]);
+	}
+
+	virtual void ReadyToRun()
+	{
+		std::string command = "exec /bin/linux " + fEntry.exec;
+		std::vector<const char*> args;
+		args.push_back("/bin/sh");
+		args.push_back("-c");
+		args.push_back(command.c_str());
+		args.push_back(fEntry.id.c_str());
+		for (size_t i = 0; i < fFiles.size(); i++)
+			args.push_back(fFiles[i].c_str());
+		args.push_back(NULL);
+		pid_t child = fork();
+		if (child == 0) {
+			setsid();
+			execv("/bin/sh", (char* const*)args.data());
+			_exit(127);
+		}
+		Quit();
+	}
+
+private:
+	DesktopEntry				fEntry;
+	std::vector<std::string>	fFiles;
+};
+
+
+/*!	Opens AppImages handed over as a B_REFS_RECEIVED message (a launch
+	without B_ARGV_ONLY, or a running instance).
+*/
+class AppImageOpener : public BApplication {
+public:
+	AppImageOpener()
+		:
+		BApplication("application/x-vnd.Renga-linux-apps")
+	{
+	}
+
+	virtual void RefsReceived(BMessage* message)
+	{
+		entry_ref ref;
+		for (int32 i = 0; message->FindRef("refs", i, &ref) == B_OK; i++) {
+			BPath path(&ref);
+			if (path.InitCheck() == B_OK)
+				run_appimage(path.Path());
+		}
+	}
+
+	virtual void ArgvReceived(int32 argc, char** argv)
+	{
+		for (int32 i = 1; i < argc; i++)
+			run_appimage(argv[i]);
+	}
+
+	virtual void ReadyToRun()
+	{
+		Quit();
+	}
+};
+
+
 int
 main(int argc, char** argv)
 {
+	// a launcher copy names its Linux program in an attribute
+	app_info ownInfo;
+	image_info image;
+	int32 cookie = 0;
+	while (get_next_image_info(B_CURRENT_TEAM, &cookie, &image) == B_OK) {
+		if (image.type != B_APP_IMAGE)
+			continue;
+		BNode self(image.name);
+		char desktop[B_PATH_NAME_LENGTH];
+		char signature[B_MIME_TYPE_LENGTH];
+		ssize_t length = self.ReadAttr(kAttribute, B_STRING_TYPE, 0, desktop,
+			sizeof(desktop) - 1);
+		ssize_t signatureLength = self.ReadAttr("BEOS:APP_SIG",
+			B_MIME_STRING_TYPE, 0, signature, sizeof(signature) - 1);
+		if (length > 0 && signatureLength > 0) {
+			desktop[length] = '\0';
+			signature[signatureLength] = '\0';
+			DesktopEntry entry;
+			const char* slash = strrchr(desktop, '/');
+			std::string name = slash != NULL ? slash + 1 : desktop;
+			entry.id = name.size() > 8 ? name.substr(0, name.size() - 8)
+				: name;
+			if (!read_entry(desktop, entry))
+				return 1;
+			ProgramLauncher launcher(signature, entry);
+			launcher.Run();
+			return 0;
+		}
+		break;
+	}
+	(void)ownInfo;
+
 	if (argc == 2 && strcmp(argv[1], "theme") == 0) {
 		// ui_color() and be_plain_font come from app_server
 		BApplication app("application/x-vnd.Renga-linux-apps");
@@ -765,6 +931,12 @@ main(int argc, char** argv)
 		return sync(argc == 3 && strcmp(argv[2], "-v") == 0);
 	}
 
+	if (argc == 1) {
+		// started by the roster for a file (B_REFS_RECEIVED)
+		AppImageOpener opener;
+		opener.Run();
+		return 0;
+	}
 	fprintf(stderr, "usage: linux-apps sync [-v] | list | theme | "
 		"<AppImage>...\n");
 	return 1;
