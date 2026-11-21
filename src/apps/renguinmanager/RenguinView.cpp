@@ -16,6 +16,10 @@
 #include <LayoutBuilder.h>
 #include <ListItem.h>
 #include <ListView.h>
+#include <MenuField.h>
+#include <MenuItem.h>
+#include <Messenger.h>
+#include <PopUpMenu.h>
 #include <MessageRunner.h>
 #include <NodeInfo.h>
 #include <OS.h>
@@ -27,7 +31,9 @@
 #include <TabView.h>
 #include <TextControl.h>
 
+#include <ScreenFit.h>
 #include <driver_settings.h>
+#include <math.h>
 #include <signal.h>
 
 #include <stdio.h>
@@ -37,6 +43,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <map>
 #include <string>
 
 
@@ -58,6 +65,207 @@ static const uint32 kMsgSwitch = 'rswi';
 static const uint32 kMsgProgramSelected = 'rpsl';
 static const uint32 kMsgProgramApply = 'rpap';
 static const uint32 kMsgProcessesTick = 'rptk';
+static const uint32 kMsgDisplayScale = 'rdsc';
+static const uint32 kMsgProgramScale = 'rpsc';
+
+// what the Wayland compositor answers to (RengaProtocols.h)
+static const uint32 kMsgDisplayScaleChanged = 'RgSc';
+static const char* kCompositorSignature
+	= "application/x-vnd.Renga-WaylandCompositor";
+static const float kDisplayScales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f,
+	2.5f, 3.0f };
+
+
+// #pragma mark - display scale
+
+
+/*!	Renguin display scale (batch 12): ~/config/settings/Renga/
+	renguin_display_scale, "scale <S>" and "program <name> <S>" lines, read
+	by the Wayland compositor (RengaProtocols.cpp), which is told to read
+	it again after every change so that running programs follow at once.
+*/
+struct DisplayScaleSettings {
+	float							scale = 1.0f;
+	std::map<std::string, float>	programs;
+};
+
+
+static BPath
+display_scale_path()
+{
+	BPath path;
+	find_directory(B_USER_SETTINGS_DIRECTORY, &path, true);
+	path.Append("Renga");
+	create_directory(path.Path(), 0755);
+	path.Append("renguin_display_scale");
+	return path;
+}
+
+
+static DisplayScaleSettings
+read_display_scale()
+{
+	DisplayScaleSettings settings;
+	FILE* file = fopen(display_scale_path().Path(), "r");
+	if (file == NULL)
+		return settings;
+	char line[256];
+	while (fgets(line, sizeof(line), file) != NULL) {
+		char name[128];
+		float value;
+		if (sscanf(line, "scale %f", &value) == 1)
+			settings.scale = value;
+		else if (sscanf(line, "program %127s %f", name, &value) == 2)
+			settings.programs[name] = value;
+	}
+	fclose(file);
+	return settings;
+}
+
+
+static void
+write_display_scale(const DisplayScaleSettings& settings)
+{
+	BPath path = display_scale_path();
+	if (settings.scale == 1.0f && settings.programs.empty()) {
+		unlink(path.Path());
+	} else {
+		FILE* file = fopen(path.Path(), "w");
+		if (file == NULL)
+			return;
+		fprintf(file, "# Renguin Manager: display scale for Linux programs "
+			"(screen pixels per\n# logical pixel), and programs' own\n"
+			"scale %.3f\n", settings.scale);
+		for (auto& entry : settings.programs) {
+			fprintf(file, "program %s %.3f\n", entry.first.c_str(),
+				entry.second);
+		}
+		fclose(file);
+	}
+	// the compositor applies it to running programs (if it runs)
+	BMessenger compositor(kCompositorSignature);
+	if (compositor.IsValid()) {
+		BMessage request(kMsgDisplayScaleChanged);
+		BMessage reply;
+		compositor.SendMessage(&request, &reply, 2000000, 2000000);
+	}
+}
+
+
+static BString
+scale_label(float scale)
+{
+	BString label;
+	label.SetToFormat("%.0f%%", scale * 100);
+	return label;
+}
+
+
+static BPopUpMenu*
+scale_menu(uint32 what, bool withDefault)
+{
+	BPopUpMenu* menu = new BPopUpMenu("scale");
+	if (withDefault) {
+		BMessage* message = new BMessage(what);
+		message->AddFloat("scale", 0);
+		menu->AddItem(new BMenuItem(B_TRANSLATE("Same as all Linux programs"),
+			message));
+	}
+	for (size_t i = 0; i < sizeof(kDisplayScales) / sizeof(kDisplayScales[0]);
+			i++) {
+		BMessage* message = new BMessage(what);
+		message->AddFloat("scale", kDisplayScales[i]);
+		BString label = scale_label(kDisplayScales[i]);
+		if (kDisplayScales[i] == 1.0f && !withDefault)
+			label << " " << B_TRANSLATE("(off)");
+		menu->AddItem(new BMenuItem(label, message));
+	}
+	return menu;
+}
+
+
+static void
+mark_scale(BMenuField* field, float scale)
+{
+	BMenu* menu = field->Menu();
+	for (int32 i = 0; BMenuItem* item = menu->ItemAt(i); i++) {
+		float value = item->Message()->GetFloat("scale", -1);
+		if (fabsf(value - scale) < 0.001f) {
+			item->SetMarked(true);
+			return;
+		}
+	}
+	// a value the menu does not offer (written by hand): no item marked
+	if (BMenuItem* marked = menu->FindMarked())
+		marked->SetMarked(false);
+}
+
+
+/*static*/ float
+RenguinView::DisplayScale(const char* program)
+{
+	DisplayScaleSettings settings = read_display_scale();
+	if (program == NULL)
+		return settings.scale;
+	auto found = settings.programs.find(program);
+	return found != settings.programs.end() ? found->second : 0;
+}
+
+
+/*static*/ bool
+RenguinView::SetDisplayScale(float scale)
+{
+	if (scale < 0.5f || scale > 4.0f)
+		return false;
+	DisplayScaleSettings settings = read_display_scale();
+	settings.scale = scale;
+	write_display_scale(settings);
+	return true;
+}
+
+
+/*static*/ bool
+RenguinView::SetProgramDisplayScale(const char* program, float scale)
+{
+	if (program == NULL || program[0] == '\0'
+		|| (scale != 0 && (scale < 0.5f || scale > 4.0f)))
+		return false;
+	DisplayScaleSettings settings = read_display_scale();
+	if (scale == 0)
+		settings.programs.erase(program);
+	else
+		settings.programs[program] = scale;
+	write_display_scale(settings);
+	return true;
+}
+
+
+/*!	The program an Exec line runs, as the compositor names a client: the
+	file name of the first word that is not "env" or a variable setting.
+*/
+/*static*/ BString
+RenguinView::ProgramOfExec(const char* exec)
+{
+	BString line(exec);
+	int32 start = 0;
+	while (start < line.Length()) {
+		while (start < line.Length() && line[start] == ' ')
+			start++;
+		int32 end = line.FindFirst(' ', start);
+		if (end < 0)
+			end = line.Length();
+		BString word;
+		line.CopyInto(word, start, end - start);
+		start = end;
+		if (word.IsEmpty() || word == "env" || word.FindFirst('=') >= 0)
+			continue;
+		int32 slash = word.FindLast('/');
+		if (slash >= 0)
+			word.Remove(0, slash + 1);
+		return word;
+	}
+	return "";
+}
 static const uint32 kMsgEndProcess = 'rpen';
 
 
@@ -168,12 +376,19 @@ run_output(const char* command)
 //! A list row with an icon (a Linux program, from its Deskbar entry).
 class IconItem : public BStringItem {
 public:
-	IconItem(const char* text, const char* key, BBitmap* icon)
+	IconItem(const char* text, const char* key, BBitmap* icon,
+		const char* exec = "")
 		:
 		BStringItem(text),
 		fKey(key),
+		fExec(exec),
 		fIcon(icon)
 	{
+	}
+
+	const char* Exec() const
+	{
+		return fExec.String();
 	}
 
 	~IconItem()
@@ -218,6 +433,7 @@ public:
 
 private:
 	BString		fKey;
+	BString		fExec;
 	BBitmap*	fIcon;
 };
 
@@ -299,13 +515,13 @@ RenguinView::_SystemTab()
 			.AddGlue()
 		.End()
 		.AddGroup(B_HORIZONTAL)
-			.Add(new BStringView("deskbarNote", B_TRANSLATE("Linux programs "
+			.Add(new BPrivate::WrappingNote("deskbarNote", B_TRANSLATE("Linux programs "
 				"appear in the Deskbar under Applications, Linux.")))
 			.Add(fDeskbar)
 			.AddGlue()
 		.End()
 		.AddGroup(B_HORIZONTAL)
-			.Add(new BStringView("rootsNote", B_TRANSLATE("The Linux root is "
+			.Add(new BPrivate::WrappingNote("rootsNote", B_TRANSLATE("The Linux root is "
 				"Alpine Linux. Debian and Arch roots are planned.")))
 			.AddGlue()
 			.Add(fRemoveRoot)
@@ -326,14 +542,20 @@ RenguinView::_ProgramsTab()
 		B_TRANSLATE("Extra options:"), "", NULL);
 	fProgramApply = new BButton("programApply", B_TRANSLATE("Apply"),
 		new BMessage(kMsgProgramApply));
+	fProgramScale = new BMenuField("programScale",
+		B_TRANSLATE("Display scale:"), scale_menu(kMsgProgramScale, true));
 
 	BGroupView* view = new BGroupView(B_TRANSLATE("Programs"), B_VERTICAL);
 	BLayoutBuilder::Group<>(view)
 		.SetInsets(B_USE_WINDOW_SPACING)
 		.Add(new BScrollView("programScroll", fPrograms, 0, false, true))
-		.Add(new BStringView("programNote", B_TRANSLATE("For the selected "
+		.Add(new BPrivate::WrappingNote("programNote", B_TRANSLATE("For the selected "
 			"program (used by its Deskbar entry and \"Open with\"):")))
 		.Add(fProgramHidden)
+		.AddGroup(B_HORIZONTAL)
+			.Add(fProgramScale)
+			.AddGlue()
+		.End()
 		.AddGroup(B_HORIZONTAL)
 			.Add(fProgramOptions)
 			.Add(fProgramApply)
@@ -351,7 +573,7 @@ RenguinView::_RunningTab()
 	BGroupView* view = new BGroupView(B_TRANSLATE("Running"), B_VERTICAL);
 	BLayoutBuilder::Group<>(view)
 		.SetInsets(B_USE_WINDOW_SPACING)
-		.Add(new BStringView("processNote", B_TRANSLATE("Linux processes "
+		.Add(new BPrivate::WrappingNote("processNote", B_TRANSLATE("Linux processes "
 			"(updated every two seconds):")))
 		.Add(new BScrollView("processScroll", fProcesses, 0, false, true))
 		.AddGroup(B_HORIZONTAL)
@@ -377,8 +599,21 @@ RenguinView::_SettingsTab()
 		builder.Add(fSwitches[i]);
 	}
 	fSwitchCount = kSwitchCount;
-	builder.Add(new BStringView("switchNote", B_TRANSLATE("Changes apply to "
+	builder.Add(new BPrivate::WrappingNote("switchNote", B_TRANSLATE("Changes apply to "
 		"Linux programs started from now on.")));
+
+	// batch 12: the display scale (100% is off)
+	fDisplayScale = new BMenuField("displayScale",
+		B_TRANSLATE("Display scale for Linux programs:"),
+		scale_menu(kMsgDisplayScale, false));
+	builder.AddGroup(B_HORIZONTAL)
+			.Add(fDisplayScale)
+			.AddGlue()
+		.End();
+	builder.Add(new BPrivate::WrappingNote("displayScaleNote", B_TRANSLATE(
+		"Applies at once. Programs that support scaling draw sharply at the "
+		"new size; others are enlarged. A program can have its own scale "
+		"(Programs tab)."), B_LIGHTEN_1_TINT));
 	builder.AddGlue();
 	return view;
 }
@@ -420,6 +655,9 @@ RenguinView::AttachedToWindow()
 	for (int32 i = 0; i < fSwitchCount; i++)
 		fSwitches[i]->SetTarget(this);
 	fPrograms->SetTarget(this);
+	fDisplayScale->Menu()->SetTargetForItems(this);
+	fProgramScale->Menu()->SetTargetForItems(this);
+	_MarkDisplayScale();
 	Refresh();
 	_RefreshPrograms();
 	_RefreshProcesses();
@@ -490,6 +728,12 @@ RenguinView::MessageReceived(BMessage* message)
 			break;
 		case kMsgProgramApply:
 			_SaveProgram();
+			break;
+		case kMsgDisplayScale:
+			_SetDisplayScale(message->GetFloat("scale", 1.0f));
+			break;
+		case kMsgProgramScale:
+			// saved with the program's other settings (Apply)
 			break;
 		case kMsgProcessesTick:
 			_RefreshProcesses();
@@ -694,6 +938,7 @@ RenguinView::_RefreshPrograms()
 			continue;
 		std::string id = line.substr(0, tab);
 		std::string name = line.substr(tab + 1, tab2 - tab - 1);
+		std::string exec = line.substr(tab2 + 1);
 		BBitmap* icon = new BBitmap(BRect(0, 0, 31, 31), B_RGBA32);
 		BPath entry(menu);
 		entry.Append(name.c_str());
@@ -703,7 +948,8 @@ RenguinView::_RefreshPrograms()
 			delete icon;
 			icon = NULL;
 		}
-		fPrograms->AddItem(new IconItem(name.c_str(), id.c_str(), icon));
+		fPrograms->AddItem(new IconItem(name.c_str(), id.c_str(), icon,
+			exec.c_str()));
 	}
 	_ProgramSelected();
 }
@@ -729,6 +975,11 @@ RenguinView::_ProgramSelected()
 	}
 	fProgramHidden->SetValue(hidden);
 	fProgramOptions->SetText(options.String());
+	fSelectedExec = item != NULL ? item->Exec() : "";
+	BString program = ProgramOfExec(fSelectedExec.String());
+	mark_scale(fProgramScale, program.IsEmpty() ? 0
+		: DisplayScale(program.String()));
+	fProgramScale->SetEnabled(item != NULL && !program.IsEmpty());
 	fProgramHidden->SetEnabled(item != NULL);
 	fProgramOptions->SetEnabled(item != NULL);
 	fProgramApply->SetEnabled(item != NULL);
@@ -756,6 +1007,38 @@ RenguinView::_SaveProgram()
 		}
 	}
 	system("/bin/linux-apps sync >/dev/null 2>&1 &");
+
+	// batch 12: the program's own display scale
+	BString program = ProgramOfExec(fSelectedExec.String());
+	BMenuItem* marked = fProgramScale->Menu()->FindMarked();
+	if (!program.IsEmpty() && marked != NULL) {
+		float scale = marked->Message()->GetFloat("scale", 0);
+		DisplayScaleSettings settings = read_display_scale();
+		float old = settings.programs.count(program.String()) > 0
+			? settings.programs[program.String()] : 0;
+		if (fabsf(old - scale) > 0.001f) {
+			if (scale > 0)
+				settings.programs[program.String()] = scale;
+			else
+				settings.programs.erase(program.String());
+			write_display_scale(settings);
+		}
+	}
+}
+
+
+void
+RenguinView::_SetDisplayScale(float scale)
+{
+	SetDisplayScale(scale);
+	_MarkDisplayScale();
+}
+
+
+void
+RenguinView::_MarkDisplayScale()
+{
+	mark_scale(fDisplayScale, DisplayScale());
 }
 
 

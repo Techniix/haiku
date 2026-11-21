@@ -1,5 +1,7 @@
 SubDir HAIKU_TOP src apps renguinmanager ;
 
+UsePrivateHeaders shared ;
+
 # Renga (batch 5): Renguin Manager. RenguinView is also the Control Panel's
 # "Linux programs (Renguin)" page.
 

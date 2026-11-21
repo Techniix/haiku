@@ -528,8 +528,13 @@ local linkTarget ;
 AddDirectoryToPackage data deskbar menu Applications
 	: deskbar-applications.rdef ;
 for linkTarget in $(DESKBAR_APPLICATIONS) {
+	# Renga (batch 12): HaikuDepot is shown as Renga Depot
+	local linkName = $(linkTarget) ;
+	if $(linkTarget) = HaikuDepot {
+		linkName = "Renga Depot" ;
+	}
 	AddSymlinkToPackage data deskbar menu Applications
-		: ../../../../apps/$(linkTarget) : $(linkTarget) ;
+		: ../../../../apps/$(linkTarget) : $(linkName) ;
 }
 # Renga: Renguin's Linux shell, under a readable name (x86_64, like Renguin)
 if $(TARGET_ARCH) = x86_64 && LinuxShell in $(SYSTEM_APPS) {

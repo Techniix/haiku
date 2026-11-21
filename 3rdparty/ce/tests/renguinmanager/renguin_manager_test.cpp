@@ -13,6 +13,12 @@
 	                                same view (its "Open the Linux shell"
 	                                button is there)
 	  renguin_manager.screenshots   the window
+	  renguin_manager.display_scale (batch 12) the display scale for Linux
+	                                programs: the Settings tab's menu and the
+	                                Programs tab's are there; --display-scale
+	                                sets the file the compositor reads (scale
+	                                and a program's own) and removes it at
+	                                100% with no program scale left
 */
 
 
@@ -156,6 +162,30 @@ main()
 	report("window", messenger.IsValid() && has_view(messenger, "openShell")
 			&& has_view(messenger, "renguinTabs"),
 		"team %" B_PRId32, team);
+	{
+		bool menus = has_view(messenger, "displayScale")
+			&& has_view(messenger, "programScale");
+		const char* file = "~/config/settings/Renga/renguin_display_scale";
+		run("/boot/system/apps/RenguinManager --display-scale 1.5", NULL);
+		BString set = run(BString("cat ") << file << " 2>/dev/null", NULL);
+		BString printed = run("/boot/system/apps/RenguinManager "
+			"--display-scale", NULL);
+		run("/boot/system/apps/RenguinManager --display-scale 2 foot", NULL);
+		BString program = run(BString("cat ") << file << " 2>/dev/null",
+			NULL);
+		run("/boot/system/apps/RenguinManager --display-scale 0 foot", NULL);
+		run("/boot/system/apps/RenguinManager --display-scale 1", NULL);
+		int status = 0;
+		run(BString("test -e ") << file, &status);
+		report("display_scale", menus && set.FindFirst("scale 1.500") >= 0
+				&& printed.FindFirst("scale\t1.500") >= 0
+				&& program.FindFirst("program foot 2.000") >= 0
+				&& status != 0,
+			"menus %d, set: %s, printed: %s, program line %d, removed at "
+			"100%% %d", menus, set.FindFirst("scale 1.500") >= 0 ? "yes" : "no",
+			printed.Trim().String(),
+			program.FindFirst("program foot 2.000") >= 0, status != 0);
+	}
 	printf("CE-HOST screenshot renguin_manager\n");
 	fflush(stdout);
 	snooze(1500000);
