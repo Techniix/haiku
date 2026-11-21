@@ -55,6 +55,8 @@ jobs:
             --pr-body "$RUNNER_TEMP/pr-body.txt" "origin/$BASE_REF"
 
       - name: shellcheck tools/renga
+        # Runs even when the guard failed, so both results show.
+        if: ${{ !cancelled() }}
         run: |
           command -v shellcheck >/dev/null || sudo apt-get install -y shellcheck
           shellcheck -x tools/renga/renga-* tools/renga/install-hooks \
