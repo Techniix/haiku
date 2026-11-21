@@ -1112,6 +1112,11 @@ of a 1 GiB guest was, so the bounce path went untested.
   `<input>gamepad_keys` add-on: off by default, A/B and D-pad right as
   Space/Enter/Right in a focused window, the right stick moving the
   pointer, guide and start held 3 s switching it off.
+- **welcome** (renga-* images, `welcome_ui_test`): the first-boot
+  Welcome's eight pages, its findings, the Quasar offer and the shortcut
+  key choice; since batch 11 also a 20-point plain font, under which every
+  shown paragraph on all pages must be as high as its text (screenshot
+  `welcome_large_font`; the maintainer's larger font cut page 1 off).
 - **uvc**: the UVC payload code of the usb_webcam media add-on
   (`addons/uvc/UVCPayload.cpp`) with replayed payloads: frames split into
   1024-byte payloads with 12-byte headers, the FID toggling, EOF set or

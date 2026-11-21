@@ -59,12 +59,14 @@
 #include <Window.h>
 
 #include <dirent.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -97,6 +99,8 @@ static const char* kQuasarInstructions
 	= "https://github.com/Techniix/nvidia-haiku";
 // from other programs (tests): "id" -> replies "page"
 static const uint32 kMsgShowPage = 'wlPg';
+// harness: the shown page's paragraphs, text height against view height
+static const uint32 kMsgParagraphFit = 'wlFt';
 
 static bool sAssumeNvidia = false;
 	// "--test-assume-nvidia" (welcome_ui_test)
@@ -346,26 +350,101 @@ in_terminal(const char* title, const char* command)
 	text view reports height-for-width, which, nested in the pages' groups
 	inside a card layout, made the window's layout loop for ever.
 */
+/*!	A paragraph of wrapped text whose height follows its text: the number
+	of lines at the width it gets, times the font's line height. A fixed
+	pixel height cut text off on screens with a larger font (maintainer's
+	hardware, batch 10 image: page 1 showed two and a half lines). The
+	height is first estimated from the font and a 480-pixel line, then set
+	from the real line count whenever the width or the font changes
+	(FrameResized(), AttachedToWindow()). No height-for-width: that sent
+	the layout round in a loop; a change of height only re-lays out when
+	it really changed, and the width does not depend on it, so it settles.
+*/
 class Paragraph : public BTextView {
 public:
-	Paragraph(const char* name, const char* text, float height)
+	Paragraph(const char* name, const char* text)
 		:
-		BTextView(name)
+		BTextView(name),
+		fHeight(-1),
+		fWidth(-1)
 	{
 		SetText(text);
 		MakeEditable(false);
 		MakeSelectable(false);
 		SetWordWrap(true);
 		SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
-		SetExplicitMinSize(BSize(480, height));
-		SetExplicitPreferredSize(BSize(480, height));
-		SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, height));
+		_SetHeight(_Estimate());
 	}
 
 	virtual bool HasHeightForWidth()
 	{
 		return false;
 	}
+
+	virtual void AttachedToWindow()
+	{
+		BTextView::AttachedToWindow();
+		_Measure();
+	}
+
+	virtual void FrameResized(float width, float height)
+	{
+		BTextView::FrameResized(width, height);
+		if (width != fWidth)
+			_Measure();
+	}
+
+	//!	For the harness: the height the text needs, the view's height.
+	float TextNeeds()
+	{
+		return TextHeight(0, CountLines() - 1) + 2;
+	}
+
+private:
+	float _LineHeight()
+	{
+		BFont font;
+		GetFont(&font);
+		font_height metrics;
+		font.GetHeight(&metrics);
+		return ceilf(metrics.ascent + metrics.descent + metrics.leading);
+	}
+
+	float _Estimate()
+	{
+		BFont font;
+		GetFont(&font);
+		// words do not fill lines completely: a fifth more
+		float lines = ceilf(font.StringWidth(Text()) * 1.2f / 480);
+		for (const char* c = Text(); *c != '\0'; c++) {
+			if (*c == '\n')
+				lines++;
+		}
+		return std::max(1.0f, lines) * _LineHeight() + 2;
+	}
+
+	void _Measure()
+	{
+		fWidth = Bounds().Width();
+		if (fWidth < 10 || Window() == NULL)
+			return;
+		_SetHeight(TextNeeds());
+	}
+
+	void _SetHeight(float height)
+	{
+		height = ceilf(height);
+		if (fabsf(height - fHeight) < 1)
+			return;
+		fHeight = height;
+		SetExplicitMinSize(BSize(480, height));
+		SetExplicitPreferredSize(BSize(480, height));
+		SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, height));
+		InvalidateLayout();
+	}
+
+	float	fHeight;
+	float	fWidth;
 };
 
 
@@ -466,6 +545,18 @@ public:
 			case kMsgOpenQuasarInstructions:
 				BUrl(kQuasarInstructions, true).OpenWithPreferredApplication();
 				break;
+			case kMsgParagraphFit:
+			{
+				// harness: each shown paragraph's text height and view
+				// height on the current page, after a layout pass
+				Layout(true);
+				BMessage reply(B_REPLY);
+				BLayoutItem* page = fCards->ItemAt(fCurrent);
+				_ParagraphFit(page != NULL ? page->View() : NULL, reply);
+				reply.AddString("page", kPageIDs[fCurrent]);
+				message->SendReply(&reply);
+				break;
+			}
 			case kMsgShowPage:
 			{
 				const char* id = message->GetString("id", "");
@@ -486,7 +577,7 @@ public:
 private:
 	BView* _Text(const char* name, const char* text)
 	{
-		return new Paragraph(name, text, strlen(text) > 260 ? 130 : 70);
+		return new Paragraph(name, text);
 	}
 
 	BButton* _ActionButton(const char* name, const char* label,
@@ -672,6 +763,21 @@ private:
 				B_UTF8_ELLIPSIS), "controlpanel"));
 	}
 
+	void _ParagraphFit(BView* view, BMessage& reply)
+	{
+		if (view == NULL)
+			return;
+		for (int32 i = 0; BView* child = view->ChildAt(i); i++) {
+			Paragraph* paragraph = dynamic_cast<Paragraph*>(child);
+			if (paragraph != NULL && !paragraph->IsHidden(paragraph)) {
+				reply.AddString("name", paragraph->Name());
+				reply.AddFloat("needs", paragraph->TextNeeds());
+				reply.AddFloat("height", paragraph->Bounds().Height() + 1);
+			}
+			_ParagraphFit(child, reply);
+		}
+	}
+
 	void _Show(int32 index)
 	{
 		fCurrent = index;
@@ -781,7 +887,8 @@ public:
 
 	virtual void MessageReceived(BMessage* message)
 	{
-		if (message->what == kMsgShowPage && fWindow != NULL) {
+		if ((message->what == kMsgShowPage
+				|| message->what == kMsgParagraphFit) && fWindow != NULL) {
 			fWindow->PostMessage(message);
 			return;
 		}

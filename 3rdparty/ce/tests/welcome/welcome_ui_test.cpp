@@ -31,6 +31,7 @@
 
 
 #include <Application.h>
+#include <Font.h>
 #include <Messenger.h>
 #include <OS.h>
 #include <Roster.h>
@@ -281,6 +282,77 @@ quasar_checks()
 }
 
 
+// the private setter the Appearance preferences use (Font.cpp)
+extern void _set_system_font_(const char* which, font_family family,
+	font_style style, float size);
+
+
+/*!	Batch 11 (maintainer's hardware report, batch 10 image): with a larger
+	plain font the paragraphs cut their text off (fixed pixel heights).
+	Welcome runs with a 20-point plain font; on all eight pages every
+	shown paragraph's view must be as high as its text.
+*/
+static void
+large_font_check()
+{
+	font_family family;
+	font_style style;
+	be_plain_font->GetFamilyAndStyle(&family, &style);
+	float size = be_plain_font->Size();
+	_set_system_font_("plain", family, style, 20);
+	snooze(1000000);
+
+	team_id team = -1;
+	be_roster->Launch(kSignature, (BMessage*)NULL, &team);
+	BMessenger messenger;
+	for (int i = 0; i < 100 && !messenger.IsValid(); i++) {
+		snooze(100000);
+		messenger = BMessenger(kSignature);
+	}
+	snooze(2000000);
+
+	const char* pages[] = { "welcome", "network", "graphics", "software",
+		"linux", "gamepads", "setup", "tips" };
+	BString cut;
+	int32 paragraphs = 0;
+	for (size_t i = 0; i < 8; i++) {
+		show_page(messenger, pages[i]);
+		snooze(600000);
+		BMessage request('wlFt');
+		BMessage reply;
+		if (messenger.SendMessage(&request, &reply, 5000000, 5000000)
+				!= B_OK) {
+			cut << pages[i] << " (no answer) ";
+			continue;
+		}
+		float needs, height;
+		for (int32 j = 0; reply.FindFloat("needs", j, &needs) == B_OK
+				&& reply.FindFloat("height", j, &height) == B_OK; j++) {
+			paragraphs++;
+			if (needs > height + 1) {
+				cut << pages[i] << "/" << reply.GetString("name", j, "?")
+					<< " " << (int)needs << ">" << (int)height << " ";
+			}
+		}
+		if (i == 0) {
+			printf("CE-HOST screenshot welcome_large_font\n");
+			fflush(stdout);
+			snooze(1500000);
+		}
+	}
+	report("large_font", paragraphs > 8 && cut.IsEmpty(),
+		"20-point plain font: %" B_PRId32 " paragraphs on 8 pages, cut off: "
+		"%s", paragraphs, cut.IsEmpty() ? "none" : cut.String());
+
+	messenger.SendMessage(B_QUIT_REQUESTED);
+	snooze(500000);
+	if (team >= 0)
+		kill(team, SIGKILL);
+	_set_system_font_("plain", family, style, size);
+	snooze(500000);
+}
+
+
 int
 main()
 {
@@ -361,6 +433,7 @@ main()
 		kill(team, SIGKILL);
 
 	quasar_checks();
+	large_font_check();
 
 	printf("CE-SUITE %s DONE failures=%d\n", SUITE, sFailures);
 	return sFailures == 0 ? 0 : 1;
