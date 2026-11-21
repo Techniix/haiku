@@ -69,6 +69,7 @@
 #include <driver_settings.h>
 
 #include <ctype.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -771,6 +772,13 @@ run_appimage(const char* path)
 	pid_t child = fork();
 	if (child == 0) {
 		setsid();
+		// not the caller's pipes: a popen() caller would wait for the
+		// program to end
+		int null = open("/dev/null", O_RDWR);
+		if (null >= 0) {
+			dup2(null, 0);
+			dup2(null, 1);
+		}
 		std::string appimage = std::string("APPIMAGE=") + path;
 		execl("/bin/linux", "linux", "env", "APPIMAGE_EXTRACT_AND_RUN=1",
 			appimage.c_str(), path, (char*)NULL);

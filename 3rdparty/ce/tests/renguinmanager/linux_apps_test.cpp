@@ -305,7 +305,8 @@ main()
 	std::string direct;
 	if (ran.empty()) {
 		// diagnosis: the same without the roster
-		direct = run(("/bin/linux-apps '" + fake + "' 2>&1").c_str());
+		direct = run(("timeout 60 /bin/linux-apps '" + fake
+			+ "' </dev/null >/dev/null 2>&1; echo rc=$?").c_str());
 		for (int i = 0; i < 200 && ran.empty(); i++) {
 			snooze(100000);
 			ran = run("cat /tmp/ce-appimage-ran 2>/dev/null");
