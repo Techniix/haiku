@@ -85,6 +85,9 @@ static const renguin_switch kSwitches[] = {
 		"double-click") },
 	{ "theme", false, B_TRANSLATE_MARK("Give Linux programs Renga's colours, "
 		"light or dark look and font (GTK 3/4, Qt 5/6)") },
+	// batch 11
+	{ "hidpi", false, B_TRANSLATE_MARK("Scale Linux programs like Renga "
+		"(HiDPI from the font size: GTK and Qt)") },
 };
 static const int32 kSwitchCount = sizeof(kSwitches) / sizeof(kSwitches[0]);
 

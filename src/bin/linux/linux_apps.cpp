@@ -74,6 +74,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <spawn.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -631,6 +632,24 @@ write_theme()
 		"/gtk-4.0/settings.ini", "/gtk-4.0/gtk.css",
 		"/qt5ct/colors/Renga.conf", "/qt5ct/qt5ct.conf",
 		"/qt6ct/colors/Renga.conf", "/qt6ct/qt6ct.conf" };
+	// batch 11: HiDPI. Renga's plain font size against the default 12
+	// pixels is the scale; "linux" turns it into GDK_SCALE, GDK_DPI_SCALE
+	// and QT_SCALE_FACTOR for each program (switch "hidpi", on)
+	std::string scaleFile = config + "/renguin/scale";
+	if (renguin_setting("hidpi", true)) {
+		float scale = be_plain_font->Size() / 12.0f;
+		scale = (int)(scale * 4 + 0.5f) / 4.0f;
+		if (scale < 1.0f)
+			scale = 1.0f;
+		mkdir((config + "/renguin").c_str(), 0755);
+		FILE* file = fopen(scaleFile.c_str(), "w");
+		if (file != NULL) {
+			fprintf(file, "%.2f\n", scale);
+			fclose(file);
+		}
+	} else
+		unlink(scaleFile.c_str());
+
 	if (!renguin_setting("theme", true)) {
 		for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++)
 			write_marked(config + files[i], NULL);
@@ -746,6 +765,34 @@ write_theme()
 }
 
 
+/*!	Starts \a path with \a args in a session of its own, standard input
+	and output on /dev/null, without waiting for it. posix_spawn() rather
+	than fork(): this runs in a BApplication, whose other threads may hold
+	locks that fork()'s child handlers then wait for forever; in the harness
+	the forked launchers and AppImage runs sometimes never started their
+	program (batch 10's open items, batch 11). Returns 0 or an errno.
+*/
+static int
+spawn_detached(const char* path, const char* const* args)
+{
+	posix_spawn_file_actions_t actions;
+	posix_spawn_file_actions_init(&actions);
+	posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+	posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0);
+	posix_spawnattr_t attributes;
+	posix_spawnattr_init(&attributes);
+	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+	pid_t child;
+	int result = posix_spawn(&child, path, &actions, &attributes,
+		(char* const*)args, environ);
+	posix_spawnattr_destroy(&attributes);
+	posix_spawn_file_actions_destroy(&actions);
+	if (result != 0)
+		fprintf(stderr, "linux-apps: %s: %s\n", path, strerror(result));
+	return result;
+}
+
+
 // #pragma mark - AppImages
 
 
@@ -769,22 +816,12 @@ run_appimage(const char* path)
 	}
 	if ((st.st_mode & S_IXUSR) == 0)
 		chmod(path, st.st_mode | S_IXUSR);
-	pid_t child = fork();
-	if (child == 0) {
-		setsid();
-		// not the caller's pipes: a popen() caller would wait for the
-		// program to end
-		int null = open("/dev/null", O_RDWR);
-		if (null >= 0) {
-			dup2(null, 0);
-			dup2(null, 1);
-		}
-		std::string appimage = std::string("APPIMAGE=") + path;
-		execl("/bin/linux", "linux", "env", "APPIMAGE_EXTRACT_AND_RUN=1",
-			appimage.c_str(), path, (char*)NULL);
-		_exit(127);
-	}
-	return child > 0 ? 0 : 1;
+	// not the caller's pipes (a popen() caller would wait for the program
+	// to end), and a session of its own
+	std::string appimage = std::string("APPIMAGE=") + path;
+	const char* args[] = { "linux", "env", "APPIMAGE_EXTRACT_AND_RUN=1",
+		appimage.c_str(), path, NULL };
+	return spawn_detached("/bin/linux", args) == 0 ? 0 : 1;
 }
 
 
@@ -828,12 +865,7 @@ public:
 		for (size_t i = 0; i < fFiles.size(); i++)
 			args.push_back(fFiles[i].c_str());
 		args.push_back(NULL);
-		pid_t child = fork();
-		if (child == 0) {
-			setsid();
-			execv("/bin/sh", (char* const*)args.data());
-			_exit(127);
-		}
+		spawn_detached("/bin/sh", args.data());
 		Quit();
 	}
 

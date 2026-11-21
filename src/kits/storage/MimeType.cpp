@@ -1279,7 +1279,9 @@ BMimeType::SetSupportedTypes(const BMessage* types, bool fullSync)
 	if (err == B_OK)
 		err = message.AddInt32("which", B_REG_MIME_SUPPORTED_TYPES);
 
-	if (err != B_OK && types != NULL)
+	// Renga (batch 11): was "err != B_OK", so the types were never sent
+	// and the registrar answered B_NAME_NOT_FOUND (no "types" field)
+	if (err == B_OK && types != NULL)
 		err = message.AddMessage("types", types);
 
 	if (err == B_OK)

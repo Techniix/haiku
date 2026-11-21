@@ -495,6 +495,31 @@ linux_environment(const std::string& shell)
 	environment.push_back(
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/xdg-runtime/bus");
 	environment.push_back("SHELL=" + shell);
+	// batch 11: HiDPI from Renga's font size (linux-apps theme writes the
+	// scale); what the user set in the environment wins
+	FILE* scaleFile = fopen((std::string(home != NULL ? home : "/boot/home")
+		+ "/.config/renguin/scale").c_str(), "r");
+	float scale = 1.0f;
+	if (scaleFile != NULL) {
+		if (fscanf(scaleFile, "%f", &scale) != 1)
+			scale = 1.0f;
+		fclose(scaleFile);
+	}
+	if (scale >= 1.25f && scale <= 4.0f) {
+		int whole = scale >= 1.75f ? (int)(scale + 0.25f) : 1;
+		char value[32];
+		if (getenv("GDK_SCALE") == NULL) {
+			snprintf(value, sizeof(value), "GDK_SCALE=%d", whole);
+			environment.push_back(value);
+			snprintf(value, sizeof(value), "GDK_DPI_SCALE=%.3f",
+				scale / whole);
+			environment.push_back(value);
+		}
+		if (getenv("QT_SCALE_FACTOR") == NULL) {
+			snprintf(value, sizeof(value), "QT_SCALE_FACTOR=%.2f", scale);
+			environment.push_back(value);
+		}
+	}
 	// Qt's colours from Renga's appearance (linux-apps theme) need the
 	// qt6ct or qt5ct platform theme; used when the root has one of them
 	if (exists(root_path("/usr/lib/qt6/plugins/platformthemes/libqt6ct.so")))
@@ -522,8 +547,13 @@ update_theme()
 		+ "/config/settings/system/app_server/appearance";
 	std::string settings = std::string(home)
 		+ "/config/settings/Renguin/settings";
+	// batch 11: the font size sets the HiDPI scale
+	std::string fonts = std::string(home)
+		+ "/config/settings/system/app_server/fonts";
 	struct stat writtenStat, other;
 	if (stat(written.c_str(), &writtenStat) == 0
+		&& (stat(fonts.c_str(), &other) != 0
+			|| other.st_mtime <= writtenStat.st_mtime)
 		&& (stat(appearance.c_str(), &other) != 0
 			|| other.st_mtime <= writtenStat.st_mtime)
 		&& (stat(settings.c_str(), &other) != 0

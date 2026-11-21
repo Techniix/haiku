@@ -1699,6 +1699,271 @@ netlink_name_out(NetlinkSocket* socket, uint64 userAddress, uint64 userLength,
 // #pragma mark - socket calls
 
 
+// #pragma mark - IPv4-mapped IPv6 addresses (batch 11)
+
+
+/*!	Linux lets an AF_INET6 socket reach IPv4 peers through IPv4-mapped
+	addresses (::ffff:a.b.c.d; IPV6_V6ONLY off by default), and glibc and
+	musl resolvers, Node, Python and Java rely on it ("dual-stack"
+	lookups). Haiku's AF_INET6 sockets do not carry IPv4. So when a Linux
+	program binds, connects or sends to a mapped address on a fresh
+	AF_INET6 socket, the socket is replaced in place (same descriptor
+	number, flags, close-on-exec, reuse and keep-alive options) by an
+	AF_INET one, and from then on the addresses it reports (getsockname,
+	getpeername, accept, recvfrom, recvmsg) are given back mapped again,
+	as Linux reports them. Sockets accepted on such a socket are mapped
+	too. A socket already bound to an IPv6 address is not replaced (the
+	call then fails as Haiku's stack decides). Not done: one socket
+	bound to [::] receiving IPv4 as well (that needs two sockets).
+*/
+static const int kMaxMapped = 128;
+static file_descriptor* sMapped[kMaxMapped];
+static mutex sMappedLock = MUTEX_INITIALIZER("renguin v4-mapped");
+static int32 sMappedCount = 0;
+
+
+static bool
+is_v4_mapped(const sockaddr_storage& address)
+{
+	if (address.ss_family != AF_INET6)
+		return false;
+	const uint8* bytes = ((const sockaddr_in6&)address).sin6_addr.s6_addr;
+	for (int i = 0; i < 10; i++) {
+		if (bytes[i] != 0)
+			return false;
+	}
+	return bytes[10] == 0xff && bytes[11] == 0xff;
+}
+
+
+//!	::ffff:a.b.c.d (and port) as an AF_INET address.
+static void
+unmap_address(sockaddr_storage& address, socklen_t& length)
+{
+	sockaddr_in6 in6 = (sockaddr_in6&)address;
+	sockaddr_in in;
+	memset(&in, 0, sizeof(in));
+	in.sin_len = sizeof(in);
+	in.sin_family = AF_INET;
+	in.sin_port = in6.sin6_port;
+	memcpy(&in.sin_addr.s_addr, in6.sin6_addr.s6_addr + 12, 4);
+	memset(&address, 0, sizeof(address));
+	memcpy(&address, &in, sizeof(in));
+	length = sizeof(in);
+}
+
+
+//!	An AF_INET address as ::ffff:a.b.c.d, for a mapped socket.
+static void
+map_address(sockaddr_storage& address, socklen_t& length)
+{
+	if (address.ss_family != AF_INET)
+		return;
+	sockaddr_in in = (sockaddr_in&)address;
+	sockaddr_in6 in6;
+	memset(&in6, 0, sizeof(in6));
+	in6.sin6_len = sizeof(in6);
+	in6.sin6_family = AF_INET6;
+	in6.sin6_port = in.sin_port;
+	in6.sin6_addr.s6_addr[10] = 0xff;
+	in6.sin6_addr.s6_addr[11] = 0xff;
+	memcpy(in6.sin6_addr.s6_addr + 12, &in.sin_addr.s_addr, 4);
+	memset(&address, 0, sizeof(address));
+	memcpy(&address, &in6, sizeof(in6));
+	length = sizeof(in6);
+}
+
+
+static bool
+is_mapped_socket(int fd)
+{
+	if (atomic_get(&sMappedCount) == 0)
+		return false;
+	file_descriptor* descriptor = get_fd(get_current_io_context(false), fd);
+	if (descriptor == NULL)
+		return false;
+	bool found = false;
+	mutex_lock(&sMappedLock);
+	for (int i = 0; i < kMaxMapped; i++) {
+		if (sMapped[i] == descriptor) {
+			found = true;
+			break;
+		}
+	}
+	mutex_unlock(&sMappedLock);
+	put_fd(descriptor);
+	return found;
+}
+
+
+static void
+mark_mapped_socket(int fd)
+{
+	file_descriptor* descriptor = get_fd(get_current_io_context(false), fd);
+	if (descriptor == NULL)
+		return;
+	MutexLocker locker(sMappedLock);
+	int freeSlot = -1;
+	for (int i = 0; i < kMaxMapped; i++) {
+		// entries of closed descriptors are released here
+		if (sMapped[i] != NULL
+			&& atomic_get(&sMapped[i]->open_count) <= 0) {
+			put_fd(sMapped[i]);
+			sMapped[i] = NULL;
+			atomic_add(&sMappedCount, -1);
+		}
+		if (sMapped[i] == descriptor) {
+			put_fd(descriptor);
+			return;
+		}
+		if (sMapped[i] == NULL && freeSlot < 0)
+			freeSlot = i;
+	}
+	if (freeSlot < 0) {
+		put_fd(descriptor);
+		return;
+	}
+	sMapped[freeSlot] = descriptor;
+		// keeps get_fd()'s reference
+	atomic_add(&sMappedCount, 1);
+}
+
+
+static status_t
+socket_option(int fd, int level, int option, int32* value)
+{
+	renguin_scratch scratch;
+	renguin_scratch_init(&scratch);
+	socklen_t length = sizeof(int32);
+	uint64 userValue = renguin_scratch_alloc(&scratch, sizeof(int32));
+	uint64 userLength = renguin_scratch_put(&scratch, &length,
+		sizeof(length));
+	if (userValue == 0 || userLength == 0)
+		return B_BAD_ADDRESS;
+	status_t status = _user_getsockopt(fd, level, option,
+		(void*)(addr_t)userValue, (socklen_t*)(addr_t)userLength);
+	if (status == B_OK)
+		status = renguin_copy_in(value, userValue, sizeof(int32));
+	return status;
+}
+
+
+static void
+set_socket_option(int fd, int level, int option, int32 value)
+{
+	renguin_scratch scratch;
+	renguin_scratch_init(&scratch);
+	uint64 userValue = renguin_scratch_put(&scratch, &value, sizeof(value));
+	if (userValue != 0) {
+		_user_setsockopt(fd, level, option, (void*)(addr_t)userValue,
+			sizeof(value));
+	}
+}
+
+
+/*!	Replaces the fresh AF_INET6 socket \a fd by an AF_INET one for a mapped
+	address (see above). B_OK when \a fd is an IPv4 socket afterwards.
+*/
+static status_t
+convert_to_inet(int fd)
+{
+	if (is_mapped_socket(fd))
+		return B_OK;
+
+	// only unbound AF_INET6 sockets
+	renguin_scratch scratch;
+	renguin_scratch_init(&scratch);
+	sockaddr_storage local;
+	socklen_t length = sizeof(local);
+	uint64 userAddress = renguin_scratch_alloc(&scratch, sizeof(local));
+	uint64 userLength = renguin_scratch_put(&scratch, &length,
+		sizeof(length));
+	if (userAddress == 0 || userLength == 0)
+		return B_BAD_ADDRESS;
+	status_t status = _user_getsockname(fd, (sockaddr*)(addr_t)userAddress,
+		(socklen_t*)(addr_t)userLength);
+	if (status != B_OK)
+		return status;
+	if (renguin_copy_in(&local, userAddress, sizeof(local)) != B_OK)
+		return B_BAD_ADDRESS;
+	if (local.ss_family != AF_INET6)
+		return B_BAD_VALUE;
+	if (((sockaddr_in6&)local).sin6_port != 0)
+		return B_BUSY;
+
+	int32 type = 0;
+	status = socket_option(fd, SOL_SOCKET, SO_TYPE, &type);
+	if (status != B_OK)
+		return status;
+	int32 reuseAddress = 0, reusePort = 0, keepAlive = 0, broadcast = 0;
+	socket_option(fd, SOL_SOCKET, SO_REUSEADDR, &reuseAddress);
+	socket_option(fd, SOL_SOCKET, SO_REUSEPORT, &reusePort);
+	socket_option(fd, SOL_SOCKET, SO_KEEPALIVE, &keepAlive);
+	socket_option(fd, SOL_SOCKET, SO_BROADCAST, &broadcast);
+	status_t fileFlags = _user_fcntl(fd, F_GETFL, 0);
+	status_t descriptorFlags = _user_fcntl(fd, F_GETFD, 0);
+
+	int haikuType = type;
+	if (fileFlags >= 0 && (fileFlags & O_NONBLOCK) != 0)
+		haikuType |= SOCK_NONBLOCK;
+	int inet = _user_socket(AF_INET, haikuType, 0);
+	if (inet < 0)
+		return inet;
+	if (reuseAddress != 0)
+		set_socket_option(inet, SOL_SOCKET, SO_REUSEADDR, 1);
+	if (reusePort != 0)
+		set_socket_option(inet, SOL_SOCKET, SO_REUSEPORT, 1);
+	if (keepAlive != 0)
+		set_socket_option(inet, SOL_SOCKET, SO_KEEPALIVE, 1);
+	if (broadcast != 0)
+		set_socket_option(inet, SOL_SOCKET, SO_BROADCAST, 1);
+	int result = _user_dup2(inet, fd, descriptorFlags >= 0
+		&& (descriptorFlags & FD_CLOEXEC) != 0 ? O_CLOEXEC : 0);
+	_user_close(inet);
+	if (result < 0)
+		return result;
+	mark_mapped_socket(fd);
+	TRACE("socket %d: AF_INET6 replaced by AF_INET for a mapped address\n",
+		fd);
+	return B_OK;
+}
+
+
+/*!	For bind(), connect(), sendto() and sendmsg(): a mapped destination
+	turns the socket into an IPv4 one and the address into an IPv4
+	address. Returns 0 or a Linux error.
+*/
+static int64
+prepare_mapped(int fd, sockaddr_storage& address, socklen_t& length)
+{
+	if (!is_v4_mapped(address) && !(address.ss_family == AF_INET6
+			&& is_mapped_socket(fd))) {
+		return 0;
+	}
+	if (!is_v4_mapped(address)) {
+		// a real IPv6 address on a socket that became IPv4
+		return renguin_encode(ENETUNREACH);
+	}
+	status_t status = convert_to_inet(fd);
+	if (status != B_OK)
+		return 0;
+			// leave it to Haiku's stack (it refuses as before)
+	unmap_address(address, length);
+	return 0;
+}
+
+
+/*!	Addresses reported to the program on a mapped socket are mapped
+	again (Linux reports AF_INET6 for an AF_INET6 socket).
+*/
+static void
+report_mapped(int fd, sockaddr_storage& address, socklen_t& length)
+{
+	if (address.ss_family == AF_INET && is_mapped_socket(fd))
+		map_address(address, length);
+}
+
+
 int64
 renguin_sys_socket(int64 family, uint64 type, int64 protocol)
 {
@@ -1775,6 +2040,9 @@ renguin_sys_bind(int fd, uint64 address, uint64 length)
 		true);
 	if (result != 0)
 		return result;
+	result = prepare_mapped(fd, haiku, haikuLength);
+	if (result != 0)
+		return result;
 	renguin_scratch scratch;
 	renguin_scratch_init(&scratch);
 	uint64 user = renguin_scratch_put(&scratch, &haiku, haikuLength);
@@ -1848,6 +2116,9 @@ renguin_sys_connect(int fd, uint64 address, uint64 length)
 	socklen_t haikuLength;
 	int64 result = address_from_linux(address, length, &haiku, &haikuLength,
 		false);
+	if (result != 0)
+		return result;
+	result = prepare_mapped(fd, haiku, haikuLength);
 	if (result != 0)
 		return result;
 	renguin_scratch scratch;
@@ -1934,6 +2205,10 @@ renguin_sys_accept4(int fd, uint64 address, uint64 length, uint64 flags)
 		return result;
 	}
 
+	// batch 11: what a mapped listener accepts is mapped as well
+	if (is_mapped_socket(fd))
+		mark_mapped_socket(accepted);
+
 	if (address != 0) {
 		sockaddr_storage haiku;
 		if (renguin_copy_in(&haikuLength, userLength, sizeof(haikuLength))
@@ -1943,8 +2218,10 @@ renguin_sys_accept4(int fd, uint64 address, uint64 length, uint64 flags)
 			_user_close(accepted);
 			return -LX_EFAULT;
 		}
-		int64 result = address_to_linux((sockaddr*)&haiku,
-			min_c(haikuLength, sizeof(haiku)), address, length);
+		haikuLength = min_c(haikuLength, sizeof(haiku));
+		report_mapped(fd, haiku, haikuLength);
+		int64 result = address_to_linux((sockaddr*)&haiku, haikuLength,
+			address, length);
 		if (result != 0) {
 			_user_close(accepted);
 			return result;
@@ -1989,8 +2266,9 @@ get_name(int fd, uint64 address, uint64 length, name_function function,
 			min_c(haikuLength, sizeof(haiku))) != B_OK) {
 		return -LX_EFAULT;
 	}
-	return address_to_linux((sockaddr*)&haiku,
-		min_c(haikuLength, sizeof(haiku)), address, length);
+	haikuLength = min_c(haikuLength, sizeof(haiku));
+	report_mapped(fd, haiku, haikuLength);
+	return address_to_linux((sockaddr*)&haiku, haikuLength, address, length);
 }
 
 
@@ -2240,6 +2518,9 @@ do_sendmsg(int fd, const linux_msghdr& message, uint64 flags,
 			message.msg_namelen, &address, &addressLength, false);
 		if (result != 0)
 			return result;
+		result = prepare_mapped(fd, address, addressLength);
+		if (result != 0)
+			return result;
 		userAddress = renguin_scratch_put(&scratch, &address, addressLength);
 		if (userAddress == 0)
 			return -LX_EFAULT;
@@ -2355,6 +2636,7 @@ do_recvmsg(int fd, uint64 userLinuxMessage, linux_msghdr& message,
 			socklen_t length = min_c(haiku.msg_namelen, sizeof(address));
 			if (renguin_copy_in(&address, userAddress, length) != B_OK)
 				return -LX_EFAULT;
+			report_mapped(fd, address, length);
 			uint64 lengthCell = renguin_scratch_put(&scratch,
 				&message.msg_namelen, sizeof(uint32));
 			if (lengthCell == 0)
@@ -2437,6 +2719,9 @@ renguin_sys_sendto(int fd, uint64 buffer, uint64 length, uint64 flags,
 	socklen_t haikuLength;
 	int64 result = address_from_linux(address, addressLength, &haiku,
 		&haikuLength, false);
+	if (result != 0)
+		return result;
+	result = prepare_mapped(fd, haiku, haikuLength);
 	if (result != 0)
 		return result;
 	renguin_scratch scratch;

@@ -74,7 +74,9 @@
 	                           V IPC, abstract AF_UNIX names, the vDSO,
 	                           shared futexes between processes, gamepads
 	                           through evdev and uinput, extended
-	                           attributes on Haiku attributes
+	                           attributes on Haiku attributes;
+	                           libc-dualstack (batch 11): IPv4-mapped IPv6
+	                           (an AF_INET6 socket to ::ffff:127.0.0.1)
 	  xattr.native             what libc-xattr wrote is a BFS attribute
 	                           with the right type, seen by listattr
 	  dyn.ip                   busybox ip addr/route (netlink) and ifconfig

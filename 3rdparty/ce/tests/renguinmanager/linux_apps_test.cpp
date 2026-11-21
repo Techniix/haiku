@@ -28,6 +28,8 @@
 	                         application/x-appimage, whose preferred
 	                         application is linux-apps; opening it runs it
 	                         through linux with APPIMAGE_EXTRACT_AND_RUN=1
+	  linux_apps.hidpi       (batch 11) the scale from Renga's font size,
+	                         GDK_SCALE/GDK_DPI_SCALE/QT_SCALE_FACTOR from it
 	  linux_apps.theme       "theme" writes GTK 3/4 settings and colours and
 	                         qt5ct/qt6ct schemes into ~/.config with the
 	                         marker line, and "theme false" removes them
@@ -245,7 +247,9 @@ main()
 	bool copied = false;
 	for (int i = 0; i < 300 && !copied; i++) {
 		snooze(100000);
-		copied = run("cat /tmp/ce-openwith-copied 2>/dev/null")
+		// read in-process: a polling native cat spun in full renga-raw
+		// runs (batch 10)
+		copied = read_small("/tmp/ce-openwith-copied")
 			== "renguin open with\n";
 	}
 	// Tracker's "Open with" starts the application with a B_REFS_RECEIVED
@@ -324,6 +328,16 @@ main()
 		fwrite("AI\002", 1, 3, image);
 		fclose(image);
 	}
+	// batch 11: as a downloaded AppImage gets it: the type from sniffing,
+	// not the attribute cp copied from the test program (an ELF
+	// executable's type, which made the roster launch the file itself)
+	run(("rmattr BEOS:TYPE '" + fake + "' 2>/dev/null; mimeset -f '" + fake
+		+ "'").c_str());
+	char fileType[B_MIME_TYPE_LENGTH] = "";
+	{
+		BNode fakeNode(fake.c_str());
+		BNodeInfo(&fakeNode).GetType(fileType);
+	}
 	BMimeType guessed;
 	BMimeType::GuessMimeType(fake.c_str(), &guessed);
 	char preferred[B_MIME_TYPE_LENGTH] = "";
@@ -343,20 +357,32 @@ main()
 		// diagnosis: the same without the roster
 		direct = run(("timeout 60 /bin/linux-apps '" + fake
 			+ "' </dev/null >/dev/null 2>&1; echo rc=$?").c_str());
+		// batch 11: what the program itself says, run as linux-apps runs it
+		std::string said = run(("timeout 30 /bin/linux env "
+			"APPIMAGE_EXTRACT_AND_RUN=1 APPIMAGE='" + fake + "' '" + fake
+			+ "' </dev/null 2>&1 | head -c 200 | tr '\\n' ' '; echo "
+			"rc=$?").c_str());
+		direct += " linux env: " + said;
 		for (int i = 0; i < 200 && ran.empty(); i++) {
 			snooze(100000);
 			ran = read_small("/tmp/ce-appimage-ran");
 		}
 		direct += " direct: " + ran;
+		// one line: the harness keeps a check's first line only
+		for (size_t i = 0; i < direct.size(); i++) {
+			if (direct[i] == '\n')
+				direct[i] = ' ';
+		}
 		ran.clear();
 	}
 	report("appimage", guessed.Type() != NULL
 			&& strcmp(guessed.Type(), "application/x-appimage") == 0
+			&& strcmp(fileType, "application/x-appimage") == 0
 			&& strcmp(preferred, "application/x-vnd.Renga-linux-apps") == 0
 			&& opened == B_OK && ran.find("extract=1 appimage=" + fake)
 				!= std::string::npos,
-		"type %s, preferred %s, open %s, ran [%s]%s",
-		guessed.Type() != NULL ? guessed.Type() : "?", preferred,
+		"type %s (file %s), preferred %s, open %s, ran [%s]%s",
+		guessed.Type() != NULL ? guessed.Type() : "?", fileType, preferred,
 		strerror(opened), ran.c_str(), direct.c_str());
 	sAppImageDone = true;
 	pthread_join(watchdog, NULL);
@@ -385,6 +411,26 @@ main()
 		&& access((config + "/qt6ct/qt6ct.conf").c_str(), F_OK) != 0;
 	report("theme", written && removed, "written %d, removed with the "
 		"switch off %d", written, removed);
+
+	// batch 11: HiDPI. The scale from the font size (12 px is 1.00), and
+	// what "linux" makes of a scale of 2
+	unlink(settings.c_str());
+	run("/bin/linux-apps theme 2>&1");
+	std::string scale = read_small((config + "/renguin/scale").c_str());
+	write_text(config + "/renguin/scale", "2.00\n");
+	std::string scaled = run("/bin/linux env 2>&1 | grep -E "
+		"'^(GDK_SCALE|GDK_DPI_SCALE|QT_SCALE_FACTOR)=' | sort | tr '\\n' ' '");
+	write_text(config + "/renguin/scale", "1.00\n");
+	std::string unscaled = run("/bin/linux env 2>&1 | grep -c SCALE");
+	write_text(settings, "hidpi false\n");
+	run("/bin/linux-apps theme 2>&1");
+	bool hidpiOff = access((config + "/renguin/scale").c_str(), F_OK) != 0;
+	report("hidpi", !scale.empty() && scaled == "GDK_DPI_SCALE=1.000 "
+			"GDK_SCALE=2 QT_SCALE_FACTOR=2.00 " && unscaled == "0\n" && hidpiOff,
+		"scale file \"%s\"; at 2.00: [%s]; at 1.00: %s variables; switch "
+		"off removes the file %d", scale.c_str(), scaled.c_str(),
+		unscaled.c_str(), hidpiOff);
+	run("/bin/linux-apps theme 2>&1");
 	if (savedSettings.empty())
 		unlink(settings.c_str());
 	else

@@ -26,3 +26,4 @@ libc-vdso||0|auxv\nmonotonic\nrealtime\ngetcpu\nfaster\nok
 libc-pshared||0|futex\nmutex\nsemaphore\nshm\nmemfd\nok
 libc-evdev||0|uinput\nevdev\nevents\ngrab\nok
 libc-xattr||0|set_get\nlist\nflags\nfd\nremove\nerrors\nnative\nok
+libc-dualstack||0|tcp_connect\ntcp_listen\nudp\nsame_fd\nipv6_still\nok

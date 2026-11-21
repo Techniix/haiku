@@ -74,6 +74,9 @@ programs += [ RenguinLinuxProgram libc-evdev : libc-evdev.c : libc
 	: -static ] ;
 programs += [ RenguinLinuxProgram libc-xattr : libc-xattr.c : libc
 	: -static ] ;
+# IPv4-mapped IPv6 addresses (batch 11).
+programs += [ RenguinLinuxProgram libc-dualstack : libc-dualstack.c : libc
+	: -static ] ;
 # not run by renguin_test: linux_apps_test makes an AppImage of it
 programs += [ RenguinLinuxProgram appimage-fake : appimage-fake.c : libc
 	: -static ] ;
