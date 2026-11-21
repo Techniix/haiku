@@ -131,3 +131,13 @@ Batch 7 ended 2026-11-20 with image `2026.11.20-batch7`; the roadmap's batch-7 s
 - **Lumina leftovers:** snap assist (offering other windows for the empty zones), edge snapping without a key, the window overview, the panel, title-bar minimize button and double-click setting; window menu strings are not translated (libbe).
 - **Hardware results pending:** native mode at boot on the maintainer's PC (BIOS and UEFI), the changed-pixel copies' speed with the default driver and with Quasar (switch on the Displays page), snap layouts and the Deskbar switcher on a real screen.
 - **Harness:** `snap.deskbar_switcher` is only checked on minimum-* images (renga-* show the first-boot prompt in that phase). This session left its own result directories (20261120-143709 onward); the older ones are the earlier sessions'.
+
+## Batch 8: continue from here
+
+Batch 8 ended 2026-11-20 with image `2026.11.20-batch8`; the roadmap's batch-8 status lists what landed. Continue with:
+
+- **Maintainer builds on Renga (recipes only so far):** RengaPorts `mesa-26.3.0` revision 100 (Zink, Quasar R-20) and `haikuwebkit-1.10.0` revision 101 (HTML5 sound fix, user agent): `haikuporter -S mesa`, `haikuporter -S haikuwebkit`, then `tools/update-repo.sh` with the packages. After that: run `media_html5_test` (renga-raw) with the new haikuwebkit, and check virgl/Zink with the new Mesa; tell Quasar when Mesa 26.3 is in RengaPorts so it can drop its own Zink, libglvnd and libEGL_mesa.
+- **Not started (carry-overs):** snap assist, title-bar minimize button, the window overview and the panel (Lumina); several screens' `event_fd()` hot-plug (virtio-gpu offers no event_fd yet), Deskbar and workspaces per output, per-output cursor and mode lists; HaikuDepot with every source; replay buffer; Devices and drivers leftovers; boot loader A leftovers; virgl.
+- **HaikuWebKit on the Linux host:** configures with Renga's cross-tools (CMake toolchain file, a sysroot from `haiku`/`haiku_devel` plus the recipe's HaikuPorts packages); single files can be compile-checked; a full build is 5-7 hours on 2 cores (F-57).
+- **Harness:** the screen saver's timer is now off during runs (`b293b908`); `snap.s3_snap_drop` was racy (fixed in `74b3b0e8`). This session left its own result directories from 20261120-185437 on; the older ones are earlier sessions'.
+- **Next batch:** 9, Tracker and Deskbar (review first; start-button designs to the maintainer before implementing).
