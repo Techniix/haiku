@@ -4,6 +4,8 @@
  * Copyright 2026, Renga contributors. Distributed under the terms of the
  * MIT License.
  */
+#include <Path.h>
+#include <FindDirectory.h>
 #include "RengaProtocols.h"
 #include "HaikuCompositor.h"
 #include "HaikuSeat.h"
@@ -290,8 +292,35 @@ void HaikuFixesGlobal::Bind(struct wl_client *client, uint32_t version, uint32_t
 
 //#pragma mark - fractional scale
 
+/*!	Renga (batch 11): 1.0 unless fractional scaling is switched on
+	(~/config/settings/Renga/wayland_fractional_scale containing "on").
+	It used to follow the system font size; with a large font Linux
+	Chromium drew at 1.5x while its window was sized at 1x on the
+	maintainer's machine (content in the top left, the window larger).
+	Until surfaces are sized from the viewport end to end, clients draw at
+	1x and Renga's font size does not scale them.
+*/
+static bool
+fractional_scale_enabled()
+{
+	BPath path;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK
+		|| path.Append("Renga/wayland_fractional_scale") != B_OK)
+		return false;
+	FILE* file = fopen(path.Path(), "r");
+	if (file == NULL)
+		return false;
+	char text[16] = "";
+	fgets(text, sizeof(text), file);
+	fclose(file);
+	return strncmp(text, "on", 2) == 0;
+}
+
+
 uint32_t HaikuPreferredScale120()
 {
+	if (!fractional_scale_enabled())
+		return 120;
 	// Haiku scales its interface with the system font size (12 pt is 1.0).
 	float scale = be_plain_font->Size() / 12.0f;
 	if (scale < 1.0f || isnan(scale))

@@ -94,7 +94,13 @@ void WaylandWindow::FrameResized(float newWidth, float newHeight)
 		return;
 	}
 
-	if(!fToplevel->XdgSurface()->HasServerDecoration())
+	// Renga (batch 11): Renga draws the frame, so the user resizes the
+	// window and the client must hear of it, also when it set no window
+	// geometry (Linux Chromium does not: its page kept its old size and
+	// was cut off after a resize on the maintainer's machine)
+	if (fToplevel->XdgSurface() == NULL
+		|| fToplevel->XdgSurface()->Surface() == NULL
+		|| !fToplevel->XdgSurface()->Surface()->WantsServerFrame())
 		return;
 
 	if ((int32_t)newWidth + 1 == fToplevel->fWidth && (int32_t)newHeight + 1 == fToplevel->fHeight)
@@ -284,12 +290,49 @@ void HaikuXdgToplevel::HandleSetMinSize(int32_t width, int32_t height)
 	fMinHeight = height;
 }
 
+/*!	Renga (batch 11): maximize and restore from the client (Chromium's
+	title bar buttons, double clicks): the usable area of the window's
+	screen less Renga's frame, the old frame kept for the restore; the
+	configure carries the new size and the maximized state.
+*/
 void HaikuXdgToplevel::HandleSetMaximized()
 {
+	if (fState.maximized || fState.fullscreen || fWindow == NULL)
+		return;
+	fState.maximized = true;
+	fSavedPos = fWindow->Frame();
+	BRect usable = HaikuOutputUsableFrame(fWindow->Frame());
+	BRect decorator = fWindow->Look() == B_TITLED_WINDOW_LOOK
+		? fWindow->DecoratorFrame() : fWindow->Frame();
+	BRect frame = fWindow->Frame();
+	float left = frame.left - decorator.left, top = frame.top - decorator.top;
+	float right = decorator.right - frame.right;
+	float bottom = decorator.bottom - frame.bottom;
+	BRect target(usable.left + left, usable.top + top, usable.right - right,
+		usable.bottom - bottom);
+	fSizeChanged = true;
+	fWindow->MoveTo(target.LeftTop());
+	fWindow->ResizeTo(target.Width(), target.Height());
+	fWidth = (int32_t)target.Width() + 1;
+	fHeight = (int32_t)target.Height() + 1;
+	fResizeSerial = XdgSurface()->NextSerial();
+	DoSendConfigure();
+	XdgSurface()->SendConfigure(fResizeSerial);
 }
 
 void HaikuXdgToplevel::HandleUnsetMaximized()
 {
+	if (!fState.maximized || fWindow == NULL)
+		return;
+	fState.maximized = false;
+	fSizeChanged = true;
+	fWindow->MoveTo(fSavedPos.LeftTop());
+	fWindow->ResizeTo(fSavedPos.Width(), fSavedPos.Height());
+	fWidth = (int32_t)fSavedPos.Width() + 1;
+	fHeight = (int32_t)fSavedPos.Height() + 1;
+	fResizeSerial = XdgSurface()->NextSerial();
+	DoSendConfigure();
+	XdgSurface()->SendConfigure(fResizeSerial);
 }
 
 void HaikuXdgToplevel::HandleSetFullscreen(struct wl_resource *output)

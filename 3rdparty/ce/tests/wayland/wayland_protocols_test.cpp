@@ -31,8 +31,15 @@
 	                      server_side; the window has Renga's frame (a tab)
 	  decoration_client   after set_mode(client_side): configure
 	                      client_side, the window has no frame
-	  fractional_scale    preferred_scale is Renga's UI scale (system font
-	                      size / 12, in 1/120)
+	  fractional_scale    preferred_scale is 120 (1.0) unless fractional
+	                      scaling is on (batch 11)
+	  resize_*            (batch 11) a toplevel without window geometry
+	                      and with Renga's frame, as Linux Chromium makes
+	                      it: a resize from Renga's side configures the new
+	                      size, the window takes the client's next buffer
+	                      size; set_maximized configures the usable area
+	                      and the maximized state; the shm pool grows
+	                      (ftruncate, wl_shm_pool.resize) while mapped
 	  idle_inhibit        an inhibitor makes the screen saver's inhibit port
 	                      exist; destroying it removes the port
 	  cursor_shape        set_shape on a cursor shape device is accepted
@@ -62,7 +69,9 @@
 #include <Clipboard.h>
 #include <Font.h>
 #include <OS.h>
+#include <Messenger.h>
 #include <Roster.h>
+#include <String.h>
 #include <Screen.h>
 #include <WindowInfo.h>
 
@@ -71,6 +80,7 @@
 #include <math.h>
 #include <poll.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -723,12 +733,10 @@ test_window(Connection& connection)
 		"configure mode %u (%d configures), window tab height %.0f",
 		state.decorationMode, state.decorationConfigures, noTab);
 
+	// batch 11: 1.0 unless fractional scaling is switched on (a large
+	// system font made Linux Chromium draw at 1.5x into a window sized at
+	// 1x on the maintainer's machine)
 	uint32 expected = 120;
-	{
-		float factor = be_plain_font->Size() / 12.0f;
-		if (factor >= 1.0f && factor <= 4.0f)
-			expected = (uint32)lroundf(factor * 120);
-	}
 	report("fractional_scale", scale != NULL
 			&& state.preferredScale == expected,
 		"preferred_scale %u (want %u, font %.1f pt)", state.preferredScale,
@@ -798,6 +806,234 @@ static void kb_repeat(void* data, wl_keyboard*, int32_t rate, int32_t delay)
 static const wl_keyboard_listener kKeyboardListener = {
 	kb_keymap, kb_enter, kb_leave, kb_key, kb_modifiers, kb_repeat
 };
+
+
+// #pragma mark - resize (batch 11)
+
+
+struct ResizeState {
+	bool		configured = false;
+	uint32		serial = 0;
+	int32		width = 0, height = 0;
+	bool		maximized = false;
+	uint32		decorationMode = 0;
+};
+
+static void rs_configure(void* data, xdg_surface*, uint32_t serial)
+{
+	((ResizeState*)data)->configured = true;
+	((ResizeState*)data)->serial = serial;
+}
+static const xdg_surface_listener kResizeSurfaceListener = { rs_configure };
+
+static void rt_configure(void* data, xdg_toplevel*, int32_t width,
+	int32_t height, wl_array* states)
+{
+	ResizeState* state = (ResizeState*)data;
+	state->width = width;
+	state->height = height;
+	state->maximized = false;
+	const uint32_t* items = (const uint32_t*)states->data;
+	for (size_t i = 0; i < states->size / sizeof(uint32_t); i++) {
+		if (items[i] == XDG_TOPLEVEL_STATE_MAXIMIZED)
+			state->maximized = true;
+	}
+}
+static void rt_close(void*, xdg_toplevel*) {}
+static void rt_bounds(void*, xdg_toplevel*, int32_t, int32_t) {}
+static void rt_capabilities(void*, xdg_toplevel*, wl_array*) {}
+static const xdg_toplevel_listener kResizeToplevelListener = {
+	rt_configure, rt_close, rt_bounds, rt_capabilities
+};
+static void rd_configure(void* data, zxdg_toplevel_decoration_v1*,
+	uint32_t mode)
+{
+	((ResizeState*)data)->decorationMode = mode;
+}
+static const zxdg_toplevel_decoration_v1_listener kResizeDecorationListener
+	= { rd_configure };
+
+
+/*!	One growing shm pool, as clients keep it: ftruncate() and
+	wl_shm_pool.resize() while the old mapping stays, then a buffer at the
+	new size drawn through a new mapping.
+*/
+struct GrowingPool {
+	int			fd = -1;
+	size_t		size = 0;
+	wl_shm_pool* pool = NULL;
+	bool		ok = true;
+
+	wl_buffer* Buffer(wl_shm* shm, int32 width, int32 height)
+	{
+		size_t needed = (size_t)width * height * 4;
+		if (fd < 0) {
+			fd = memfd_create("resize-pool", MFD_CLOEXEC);
+			size = needed;
+			ok = fd >= 0 && ftruncate(fd, size) == 0;
+			pool = wl_shm_create_pool(shm, fd, size);
+		} else if (needed > size) {
+			// the old mapping stays while the file grows
+			void* old = mmap(NULL, size, PROT_READ | PROT_WRITE,
+				MAP_SHARED, fd, 0);
+			ok = ok && ftruncate(fd, needed) == 0;
+			if (old != MAP_FAILED) {
+				((volatile uint8*)old)[size - 1] = 1;
+				munmap(old, size);
+			}
+			size = needed;
+			wl_shm_pool_resize(pool, size);
+		}
+		uint32* pixels = (uint32*)mmap(NULL, needed, PROT_READ | PROT_WRITE,
+			MAP_SHARED, fd, 0);
+		if (pixels == MAP_FAILED) {
+			ok = false;
+			return NULL;
+		}
+		for (size_t i = 0; i < needed / 4; i++)
+			pixels[i] = 0x00205080;
+		munmap(pixels, needed);
+		return wl_shm_pool_create_buffer(pool, 0, width, height, width * 4,
+			WL_SHM_FORMAT_XRGB8888);
+	}
+};
+
+
+static const char* kResizeTitle = "Renga Wayland resize test";
+static BRect window_frame(const char* title);
+
+
+static bool
+set_window_frame(const char* title, BRect frame)
+{
+	BMessenger compositor(kCompositorSignature);
+	BMessage request(B_SET_PROPERTY);
+	request.AddRect("data", frame);
+	request.AddSpecifier("Frame");
+	request.AddSpecifier("Window", title);
+	BMessage reply;
+	return compositor.SendMessage(&request, &reply, 2000000, 2000000) == B_OK
+		&& reply.GetInt32("error", B_OK) == B_OK;
+}
+
+
+static void
+test_resize(Connection& connection)
+{
+	wl_compositor* compositor = (wl_compositor*)connection.Bind(
+		"wl_compositor", &wl_compositor_interface, 4);
+	wl_shm* shm = (wl_shm*)connection.Bind("wl_shm", &wl_shm_interface, 1);
+	xdg_wm_base* wmBase = (xdg_wm_base*)connection.Bind("xdg_wm_base",
+		&xdg_wm_base_interface, 6);
+	zxdg_decoration_manager_v1* decorations = (zxdg_decoration_manager_v1*)
+		connection.Bind("zxdg_decoration_manager_v1",
+			&zxdg_decoration_manager_v1_interface, 1);
+	if (compositor == NULL || shm == NULL || wmBase == NULL
+		|| decorations == NULL) {
+		report("resize_configure", false, "missing globals");
+		return;
+	}
+
+	ResizeState state;
+	wl_surface* surface = wl_compositor_create_surface(compositor);
+	xdg_surface* xdgSurface = xdg_wm_base_get_xdg_surface(wmBase, surface);
+	xdg_surface_add_listener(xdgSurface, &kResizeSurfaceListener, &state);
+	xdg_toplevel* toplevel = xdg_surface_get_toplevel(xdgSurface);
+	xdg_toplevel_add_listener(toplevel, &kResizeToplevelListener, &state);
+	xdg_toplevel_set_title(toplevel, kResizeTitle);
+	zxdg_toplevel_decoration_v1* decoration
+		= zxdg_decoration_manager_v1_get_toplevel_decoration(decorations,
+			toplevel);
+	zxdg_toplevel_decoration_v1_add_listener(decoration,
+		&kResizeDecorationListener, &state);
+	// no set_window_geometry, as Linux Chromium
+	wl_surface_commit(surface);
+	dispatch_until(connection.display, 10000000, &state.configured);
+
+	GrowingPool pool;
+	int32 width = 300, height = 200;
+	xdg_surface_ack_configure(xdgSurface, state.serial);
+	wl_surface_attach(surface, pool.Buffer(shm, width, height), 0, 0);
+	wl_surface_damage(surface, 0, 0, width, height);
+	wl_surface_commit(surface);
+	BRect frame;
+	for (int i = 0; i < 40 && !frame.IsValid(); i++) {
+		dispatch_until(connection.display, 100000, NULL);
+		frame = window_frame(kResizeTitle);
+	}
+
+	// Renga's side makes it bigger: the client hears the new size
+	bool rounds = true;
+	BString sizes;
+	for (int round = 0; round < 3; round++) {
+		BRect bigger = window_frame(kResizeTitle);
+		bigger.right += 120;
+		bigger.bottom += 80;
+		state.configured = false;
+		state.width = 0;
+		bool set = set_window_frame(kResizeTitle, bigger);
+		dispatch_until(connection.display, 3000000, &state.configured);
+		int32 wantWidth = bigger.IntegerWidth() + 1;
+		int32 wantHeight = bigger.IntegerHeight() + 1;
+		bool told = set && state.width == wantWidth
+			&& state.height == wantHeight;
+		// the client draws at that size; the window keeps it
+		xdg_surface_ack_configure(xdgSurface, state.serial);
+		wl_buffer* buffer = pool.Buffer(shm, state.width > 0 ? state.width
+			: width, state.height > 0 ? state.height : height);
+		wl_surface_attach(surface, buffer, 0, 0);
+		wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+		wl_surface_commit(surface);
+		for (int i = 0; i < 10; i++)
+			dispatch_until(connection.display, 100000, NULL);
+		BRect after = window_frame(kResizeTitle);
+		bool kept = after.IntegerWidth() + 1 == wantWidth
+			&& after.IntegerHeight() + 1 == wantHeight;
+		sizes << (round > 0 ? "; " : "") << wantWidth << "x" << wantHeight
+			<< " told " << state.width << "x" << state.height << ", window "
+			<< after.IntegerWidth() + 1 << "x" << after.IntegerHeight() + 1;
+		rounds = rounds && told && kept;
+	}
+	report("resize_configure", state.decorationMode
+			== ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE && rounds,
+		"server frame %d, no geometry; %s",
+		state.decorationMode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE,
+		sizes.String());
+	report("resize_shm_grow", pool.ok && connection_ok(connection),
+		"pool grown with ftruncate and wl_shm_pool.resize while mapped "
+		"to %zu bytes: %s", pool.size, pool.ok ? "no fault" : "failed");
+	printf("CE-HOST screenshot wayland_resized\n");
+	fflush(stdout);
+	snooze(1500000);
+
+	// set_maximized: the usable area, the maximized state
+	state.configured = false;
+	xdg_toplevel_set_maximized(toplevel);
+	dispatch_until(connection.display, 3000000, &state.configured);
+	bool maximized = state.maximized && state.width > 300;
+	xdg_surface_ack_configure(xdgSurface, state.serial);
+	wl_surface_attach(surface, pool.Buffer(shm, state.width, state.height),
+		0, 0);
+	wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_commit(surface);
+	for (int i = 0; i < 10; i++)
+		dispatch_until(connection.display, 100000, NULL);
+	BRect big = window_frame(kResizeTitle);
+	state.configured = false;
+	xdg_toplevel_unset_maximized(toplevel);
+	dispatch_until(connection.display, 3000000, &state.configured);
+	bool restored = !state.maximized && state.width < big.IntegerWidth();
+	report("resize_maximize", maximized && restored,
+		"maximized %d (window %dx%d), restored %d to %dx%d", maximized,
+		(int)big.IntegerWidth() + 1, (int)big.IntegerHeight() + 1, restored,
+		(int)state.width, (int)state.height);
+
+	zxdg_toplevel_decoration_v1_destroy(decoration);
+	xdg_toplevel_destroy(toplevel);
+	xdg_surface_destroy(xdgSurface);
+	wl_surface_destroy(surface);
+	wl_display_roundtrip(connection.display);
+}
 
 
 static void
@@ -1531,6 +1767,7 @@ main()
 	test_fixes(a);
 	test_fixes_v2(a, b);
 	test_window(a);
+	test_resize(a);
 	test_seat(a);
 	test_pointer_motion();
 	test_activation(a);

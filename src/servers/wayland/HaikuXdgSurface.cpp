@@ -81,6 +81,31 @@ void XdgSurfaceHook::HandleCommit()
 				fXdgSurface->Window()->ResizeTo(newSize.width, newSize.height);
 			}
 		}
+	} else if (fXdgSurface->fToplevel != NULL
+		&& fXdgSurface->Surface()->WantsServerFrame()) {
+		// Renga (batch 11): a server frame without window geometry (Linux
+		// Chromium): the size limits, and once the client has answered the
+		// last resize, the window takes the size of what it drew
+		HaikuXdgToplevel* toplevel = fXdgSurface->fToplevel;
+		if (toplevel->fSizeLimitsDirty) {
+			fXdgSurface->Window()->SetSizeLimits(
+				toplevel->fMinWidth == 0 ? 0 : toplevel->fMinWidth - 1,
+				toplevel->fMaxWidth == 0 ? 32768 : toplevel->fMaxWidth - 1,
+				toplevel->fMinHeight == 0 ? 0 : toplevel->fMinHeight - 1,
+				toplevel->fMaxHeight == 0 ? 32768 : toplevel->fMaxHeight - 1);
+			toplevel->fSizeLimitsDirty = false;
+		}
+		if ((int32_t)toplevel->fResizeSerial - (int32_t)fXdgSurface->fAckSerial
+				<= 0 && fXdgSurface->Surface()->Bitmap() != NULL) {
+			BSize oldSize = fXdgSurface->Window()->Size();
+			BSize newSize = fXdgSurface->Surface()->Size();
+			if (oldSize != newSize) {
+				toplevel->fSizeChanged = true;
+				toplevel->fWidth = (int32_t)newSize.width + 1;
+				toplevel->fHeight = (int32_t)newSize.height + 1;
+				fXdgSurface->Window()->ResizeTo(newSize.width, newSize.height);
+			}
+		}
 	} else {
 		if (
 			fXdgSurface->fPendingGeometry.x != fXdgSurface->fGeometry.x ||
