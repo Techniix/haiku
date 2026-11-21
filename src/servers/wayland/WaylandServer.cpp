@@ -94,6 +94,18 @@ void Application::MessageReceived(BMessage *msg)
 		}
 		return;
 	}
+	case kMsgDisplayScaleChanged: {
+		// Renga (batch 12): Renguin Manager changed the display scale
+		if (sDisplay == NULL) return;
+		{
+			WaylandEnv env(this);
+			HaikuDisplayScaleChanged(sDisplay);
+		}
+		BMessage reply(B_REPLY);
+		reply.AddBool("applied", true);
+		msg->SendReply(&reply);
+		return;
+	}
 	case 'RgTa':
 	case 'RgTr':
 	case 'RgTq': {

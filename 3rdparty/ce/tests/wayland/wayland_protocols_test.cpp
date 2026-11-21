@@ -40,6 +40,10 @@
 	                      size; set_maximized configures the usable area
 	                      and the maximized state; the shm pool grows
 	                      (ftruncate, wl_shm_pool.resize) while mapped
+	  display_scale.*     (batch 12) the Renguin display scale: output
+	                      scale, preferred fractional scale, window size
+	                      from logical size times the scale, configure in
+	                      logical pixels, live changes
 	  idle_inhibit        an inhibitor makes the screen saver's inhibit port
 	                      exist; destroying it removes the port
 	  cursor_shape        set_shape on a cursor shape device is accepted
@@ -1739,6 +1743,238 @@ test_egl_cursor(Connection& connection)
 }
 
 
+// #pragma mark - Renguin display scale (batch 12)
+
+
+/*!	Sets the Renguin display scale as Renguin Manager does: the settings
+	file, then the message that has the compositor read it again. NULL
+	removes the file (scale 1). True when the compositor answered.
+*/
+static bool
+set_display_scale(const char* settings)
+{
+	const char* home = getenv("HOME");
+	std::string directory = std::string(home != NULL ? home : "/boot/home")
+		+ "/config/settings/Renga";
+	mkdir(directory.c_str(), 0755);
+	std::string path = directory + "/renguin_display_scale";
+	if (settings == NULL)
+		unlink(path.c_str());
+	else {
+		FILE* file = fopen(path.c_str(), "w");
+		if (file == NULL)
+			return false;
+		fputs(settings, file);
+		fclose(file);
+	}
+	BMessage request('RgSc');
+	BMessage reply;
+	return BMessenger(kCompositorSignature).SendMessage(&request, &reply,
+		2000000, 2000000) == B_OK && reply.GetBool("applied", false);
+}
+
+
+struct ScaleState {
+	int32		outputScale = 0;
+	int32		outputDone = 0;
+	uint32		preferred = 0;
+	int32		preferredEvents = 0;
+	bool		configured = false;
+	uint32		serial = 0;
+	int32		width = 0, height = 0;
+};
+
+static void so_geometry(void*, wl_output*, int32_t, int32_t, int32_t,
+	int32_t, int32_t, const char*, const char*, int32_t) {}
+static void so_mode(void*, wl_output*, uint32_t, int32_t, int32_t,
+	int32_t) {}
+static void so_done(void* data, wl_output*)
+{
+	((ScaleState*)data)->outputDone++;
+}
+static void so_scale(void* data, wl_output*, int32_t scale)
+{
+	((ScaleState*)data)->outputScale = scale;
+}
+static void so_name(void*, wl_output*, const char*) {}
+static void so_description(void*, wl_output*, const char*) {}
+static const wl_output_listener kScaleOutputListener = { so_geometry,
+	so_mode, so_done, so_scale, so_name, so_description };
+
+static void sf_preferred(void* data, wp_fractional_scale_v1*, uint32_t scale)
+{
+	((ScaleState*)data)->preferred = scale;
+	((ScaleState*)data)->preferredEvents++;
+}
+static const wp_fractional_scale_v1_listener kScalePreferredListener = {
+	sf_preferred };
+
+static void ss_configure(void* data, xdg_surface*, uint32_t serial)
+{
+	((ScaleState*)data)->configured = true;
+	((ScaleState*)data)->serial = serial;
+}
+static const xdg_surface_listener kScaleSurfaceListener = { ss_configure };
+
+static void st_configure(void* data, xdg_toplevel*, int32_t width,
+	int32_t height, wl_array*)
+{
+	((ScaleState*)data)->width = width;
+	((ScaleState*)data)->height = height;
+}
+static void st_close(void*, xdg_toplevel*) {}
+static void st_bounds(void*, xdg_toplevel*, int32_t, int32_t) {}
+static void st_capabilities(void*, xdg_toplevel*, wl_array*) {}
+static const xdg_toplevel_listener kScaleToplevelListener = { st_configure,
+	st_close, st_bounds, st_capabilities };
+static void sd_configure(void*, zxdg_toplevel_decoration_v1*, uint32_t) {}
+static const zxdg_toplevel_decoration_v1_listener kScaleDecorationListener
+	= { sd_configure };
+
+
+/*!	Renguin display scale: with "scale 2" a client hears wl_output.scale 2
+	and a preferred fractional scale of 240; a 400x300 buffer at buffer
+	scale 2 (200x150 logical) gets a 400x300 window; making the window
+	520x380 tells the client 260x190, and its 520x380 buffer keeps that
+	size; 1.5 then reaches the running client at once (wl_output.scale 2,
+	preferred 180), and removing the setting gives 1 and 120. Before batch
+	12 the compositor always said 1 and sized windows from the buffer.
+*/
+static void
+test_display_scale()
+{
+	static const char* kScaleTitle = "Renga Wayland display scale test";
+	bool applied = set_display_scale("scale 2\n");
+
+	Connection connection;
+	if (!connect(connection)) {
+		report("display_scale.output", false, "no connection");
+		set_display_scale(NULL);
+		return;
+	}
+	wl_compositor* compositor = (wl_compositor*)connection.Bind(
+		"wl_compositor", &wl_compositor_interface, 4);
+	wl_shm* shm = (wl_shm*)connection.Bind("wl_shm", &wl_shm_interface, 1);
+	xdg_wm_base* wmBase = (xdg_wm_base*)connection.Bind("xdg_wm_base",
+		&xdg_wm_base_interface, 6);
+	zxdg_decoration_manager_v1* decorations = (zxdg_decoration_manager_v1*)
+		connection.Bind("zxdg_decoration_manager_v1",
+			&zxdg_decoration_manager_v1_interface, 1);
+	wp_fractional_scale_manager_v1* fractional
+		= (wp_fractional_scale_manager_v1*)connection.Bind(
+			"wp_fractional_scale_manager_v1",
+			&wp_fractional_scale_manager_v1_interface, 1);
+	wl_output* output = (wl_output*)connection.Bind("wl_output",
+		&wl_output_interface, 4);
+	if (compositor == NULL || shm == NULL || wmBase == NULL
+		|| decorations == NULL || fractional == NULL || output == NULL) {
+		report("display_scale.output", false, "missing globals");
+		set_display_scale(NULL);
+		wl_display_disconnect(connection.display);
+		return;
+	}
+
+	ScaleState state;
+	wl_output_add_listener(output, &kScaleOutputListener, &state);
+	wl_display_roundtrip(connection.display);
+	report("display_scale.output", applied && state.outputScale == 2,
+		"setting applied %d, wl_output.scale %d (want 2)", applied,
+		state.outputScale);
+
+	wl_surface* surface = wl_compositor_create_surface(compositor);
+	wp_fractional_scale_v1* scale
+		= wp_fractional_scale_manager_v1_get_fractional_scale(fractional,
+			surface);
+	wp_fractional_scale_v1_add_listener(scale, &kScalePreferredListener,
+		&state);
+	xdg_surface* xdgSurface = xdg_wm_base_get_xdg_surface(wmBase, surface);
+	xdg_surface_add_listener(xdgSurface, &kScaleSurfaceListener, &state);
+	xdg_toplevel* toplevel = xdg_surface_get_toplevel(xdgSurface);
+	xdg_toplevel_add_listener(toplevel, &kScaleToplevelListener, &state);
+	xdg_toplevel_set_title(toplevel, kScaleTitle);
+	zxdg_toplevel_decoration_v1* decoration
+		= zxdg_decoration_manager_v1_get_toplevel_decoration(decorations,
+			toplevel);
+	zxdg_toplevel_decoration_v1_add_listener(decoration,
+		&kScaleDecorationListener, &state);
+	wl_surface_commit(surface);
+	dispatch_until(connection.display, 10000000, &state.configured);
+	report("display_scale.fractional", state.preferred == 240,
+		"preferred_scale %u (want 240)", state.preferred);
+
+	// a client that follows wl_output.scale: 200x150 logical at 2x
+	GrowingPool pool;
+	xdg_surface_ack_configure(xdgSurface, state.serial);
+	wl_surface_set_buffer_scale(surface, 2);
+	wl_surface_attach(surface, pool.Buffer(shm, 400, 300), 0, 0);
+	wl_surface_damage_buffer(surface, 0, 0, 400, 300);
+	wl_surface_commit(surface);
+	BRect frame;
+	for (int i = 0; i < 40 && !frame.IsValid(); i++) {
+		dispatch_until(connection.display, 100000, NULL);
+		frame = window_frame(kScaleTitle);
+	}
+	for (int i = 0; i < 5; i++)
+		dispatch_until(connection.display, 100000, NULL);
+	frame = window_frame(kScaleTitle);
+	report("display_scale.window", frame.IntegerWidth() + 1 == 400
+			&& frame.IntegerHeight() + 1 == 300,
+		"window %dx%d for a 400x300 buffer at buffer scale 2 (want 400x300)",
+		frame.IntegerWidth() + 1, frame.IntegerHeight() + 1);
+
+	// Renga's side resizes: the client hears logical pixels
+	BRect bigger = frame;
+	bigger.right = bigger.left + 519;
+	bigger.bottom = bigger.top + 379;
+	state.configured = false;
+	state.width = 0;
+	bool set = set_window_frame(kScaleTitle, bigger);
+	dispatch_until(connection.display, 3000000, &state.configured);
+	bool told = set && state.width == 260 && state.height == 190;
+	int32 toldWidth = state.width, toldHeight = state.height;
+	xdg_surface_ack_configure(xdgSurface, state.serial);
+	wl_surface_attach(surface, pool.Buffer(shm, 520, 380), 0, 0);
+	wl_surface_damage_buffer(surface, 0, 0, 520, 380);
+	wl_surface_commit(surface);
+	for (int i = 0; i < 10; i++)
+		dispatch_until(connection.display, 100000, NULL);
+	BRect after = window_frame(kScaleTitle);
+	bool kept = after.IntegerWidth() + 1 == 520
+		&& after.IntegerHeight() + 1 == 380;
+	report("display_scale.configure", told && kept,
+		"window made 520x380: told %dx%d (want 260x190), window %dx%d after "
+		"the 520x380 buffer", toldWidth, toldHeight, after.IntegerWidth() + 1,
+		after.IntegerHeight() + 1);
+
+	// live: the running client hears the new scale
+	int32 doneBefore = state.outputDone;
+	bool applied15 = set_display_scale("scale 1.5\n");
+	for (int i = 0; i < 10; i++)
+		dispatch_until(connection.display, 100000, NULL);
+	bool live15 = applied15 && state.outputDone > doneBefore
+		&& state.outputScale == 2 && state.preferred == 180;
+	int32 output15 = state.outputScale;
+	uint32 preferred15 = state.preferred;
+	bool appliedOff = set_display_scale(NULL);
+	for (int i = 0; i < 10; i++)
+		dispatch_until(connection.display, 100000, NULL);
+	bool liveOff = appliedOff && state.outputScale == 1
+		&& state.preferred == 120;
+	report("display_scale.live", live15 && liveOff && connection_ok(connection),
+		"1.5: wl_output.scale %d, preferred %u (want 2, 180); off: %d, %u "
+		"(want 1, 120)", output15, preferred15, state.outputScale,
+		state.preferred);
+
+	zxdg_toplevel_decoration_v1_destroy(decoration);
+	xdg_toplevel_destroy(toplevel);
+	xdg_surface_destroy(xdgSurface);
+	wp_fractional_scale_v1_destroy(scale);
+	wl_surface_destroy(surface);
+	wl_display_roundtrip(connection.display);
+	wl_display_disconnect(connection.display);
+}
+
+
 int
 main()
 {
@@ -1768,6 +2004,7 @@ main()
 	test_fixes_v2(a, b);
 	test_window(a);
 	test_resize(a);
+	test_display_scale();
 	test_seat(a);
 	test_pointer_motion();
 	test_activation(a);

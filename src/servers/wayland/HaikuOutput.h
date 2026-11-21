@@ -36,6 +36,7 @@ public:
 	int32 Index() const {return fIndex;}
 	BRect Frame() const {return fFrame;}
 	void Update(BRect frame, float refresh);
+	void ResendState();
 	HaikuOutput *OutputFor(struct wl_client *client);
 };
 
@@ -46,6 +47,8 @@ public:
 	void Bind(struct wl_client *wl_client, uint32_t version, uint32_t id) override;
 };
 
+//! Every bound output's state again (the display scale changed).
+void HaikuOutputResendState(struct wl_display *display);
 //! Creates the globals for the screens there are now.
 void HaikuOutputCreateGlobals(struct wl_display *display);
 //! Screens added, removed or changed since the last check.

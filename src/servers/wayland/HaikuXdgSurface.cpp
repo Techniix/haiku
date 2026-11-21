@@ -1,4 +1,6 @@
 #include "HaikuXdgSurface.h"
+#include <math.h>
+#include "RengaProtocols.h"
 #include "HaikuXdgShell.h"
 #include "HaikuXdgToplevel.h"
 #include "HaikuXdgPopup.h"
@@ -46,11 +48,13 @@ void XdgSurfaceHook::HandleCommit()
 	if (fXdgSurface->HasServerDecoration()) {
 		// toplevel: window size limits
 		if (fXdgSurface->fToplevel != NULL && fXdgSurface->fToplevel->fSizeLimitsDirty) {
+			// Renga (batch 12): logical sizes times the display scale
+			float scale = HaikuClientScale(fXdgSurface->Client());
 			fXdgSurface->Window()->SetSizeLimits(
-				fXdgSurface->fToplevel->fMinWidth  == 0 ? 0     : fXdgSurface->fToplevel->fMinWidth  - 1,
-				fXdgSurface->fToplevel->fMaxWidth  == 0 ? 32768 : fXdgSurface->fToplevel->fMaxWidth  - 1,
-				fXdgSurface->fToplevel->fMinHeight == 0 ? 0     : fXdgSurface->fToplevel->fMinHeight - 1,
-				fXdgSurface->fToplevel->fMaxHeight == 0 ? 32768 : fXdgSurface->fToplevel->fMaxHeight - 1
+				fXdgSurface->fToplevel->fMinWidth  == 0 ? 0     : roundf(fXdgSurface->fToplevel->fMinWidth * scale) - 1,
+				fXdgSurface->fToplevel->fMaxWidth  == 0 ? 32768 : roundf(fXdgSurface->fToplevel->fMaxWidth * scale) - 1,
+				fXdgSurface->fToplevel->fMinHeight == 0 ? 0     : roundf(fXdgSurface->fToplevel->fMinHeight * scale) - 1,
+				fXdgSurface->fToplevel->fMaxHeight == 0 ? 32768 : roundf(fXdgSurface->fToplevel->fMaxHeight * scale) - 1
 			);
 			if (
 				fXdgSurface->fToplevel->fMinWidth != 0 && fXdgSurface->fToplevel->fMinWidth == fXdgSurface->fToplevel->fMaxWidth &&
@@ -68,10 +72,13 @@ void XdgSurfaceHook::HandleCommit()
 			BSize oldSize(fXdgSurface->fToplevel->fWidth - 1, fXdgSurface->fToplevel->fHeight - 1);
 			BSize newSize = oldSize;
 
+			// Renga (batch 12): geometry is logical; the window and the
+			// surface's view are in screen pixels (Renguin display scale)
+			float scale = HaikuClientScale(fXdgSurface->Client());
 			if (fXdgSurface->Surface()->View() != NULL)
-				AppKitPtrs::LockedPtr(fXdgSurface->Surface()->View())->MoveTo(-fXdgSurface->fPendingGeometry.x, -fXdgSurface->fPendingGeometry.y);
-			newSize.width = fXdgSurface->fPendingGeometry.width - 1;
-			newSize.height = fXdgSurface->fPendingGeometry.height - 1;
+				AppKitPtrs::LockedPtr(fXdgSurface->Surface()->View())->MoveTo(-roundf(fXdgSurface->fPendingGeometry.x * scale), -roundf(fXdgSurface->fPendingGeometry.y * scale));
+			newSize.width = roundf(fXdgSurface->fPendingGeometry.width * scale) - 1;
+			newSize.height = roundf(fXdgSurface->fPendingGeometry.height * scale) - 1;
 
 			if (oldSize != newSize) {
 				fXdgSurface->fToplevel->fSizeChanged = true;
@@ -88,11 +95,12 @@ void XdgSurfaceHook::HandleCommit()
 		// last resize, the window takes the size of what it drew
 		HaikuXdgToplevel* toplevel = fXdgSurface->fToplevel;
 		if (toplevel->fSizeLimitsDirty) {
+			float scale = HaikuClientScale(fXdgSurface->Client());
 			fXdgSurface->Window()->SetSizeLimits(
-				toplevel->fMinWidth == 0 ? 0 : toplevel->fMinWidth - 1,
-				toplevel->fMaxWidth == 0 ? 32768 : toplevel->fMaxWidth - 1,
-				toplevel->fMinHeight == 0 ? 0 : toplevel->fMinHeight - 1,
-				toplevel->fMaxHeight == 0 ? 32768 : toplevel->fMaxHeight - 1);
+				toplevel->fMinWidth == 0 ? 0 : roundf(toplevel->fMinWidth * scale) - 1,
+				toplevel->fMaxWidth == 0 ? 32768 : roundf(toplevel->fMaxWidth * scale) - 1,
+				toplevel->fMinHeight == 0 ? 0 : roundf(toplevel->fMinHeight * scale) - 1,
+				toplevel->fMaxHeight == 0 ? 32768 : roundf(toplevel->fMaxHeight * scale) - 1);
 			toplevel->fSizeLimitsDirty = false;
 		}
 		if ((int32_t)toplevel->fResizeSerial - (int32_t)fXdgSurface->fAckSerial
@@ -111,9 +119,10 @@ void XdgSurfaceHook::HandleCommit()
 			fXdgSurface->fPendingGeometry.x != fXdgSurface->fGeometry.x ||
 			fXdgSurface->fPendingGeometry.y != fXdgSurface->fGeometry.y
 		) {
+			float scale = HaikuClientScale(fXdgSurface->Client());
 			fXdgSurface->Window()->MoveBy(
-				fXdgSurface->fGeometry.x - fXdgSurface->fPendingGeometry.x,
-				fXdgSurface->fGeometry.y - fXdgSurface->fPendingGeometry.y
+				roundf((fXdgSurface->fGeometry.x - fXdgSurface->fPendingGeometry.x) * scale),
+				roundf((fXdgSurface->fGeometry.y - fXdgSurface->fPendingGeometry.y) * scale)
 			);
 		}
 		if (fXdgSurface->Surface()->Bitmap() != NULL) {
@@ -148,6 +157,7 @@ void XdgSurfaceHook::HandleCommit()
 		BRect wndRect = fXdgSurface->fPopup->fPosition;
 		if (fXdgSurface->Geometry().valid && !fXdgSurface->HasServerDecoration())
 			wndRect.OffsetBy(-fXdgSurface->Geometry().x, -fXdgSurface->Geometry().y);
+		// (logical; ConvertToScreen() applies the display scale)
 		fXdgSurface->fPopup->fParent->ConvertToScreen(wndRect);
 		fXdgSurface->Window()->MoveTo(wndRect.left, wndRect.top);
 	}
@@ -200,24 +210,41 @@ bool HaikuXdgSurface::HasServerDecoration()
 		Surface()->WantsServerFrame();
 }
 
+// Renga (batch 12): the points are logical (Renguin display scale)
 void HaikuXdgSurface::ConvertFromScreen(BPoint &pt)
 {
+	float scale = HaikuClientScale(Client());
 	Window()->ConvertFromScreen(&pt);
+	pt.x /= scale;
+	pt.y /= scale;
 	if (fGeometry.valid)
 		pt -= BPoint(fGeometry.x, fGeometry.y);
 }
 
 void HaikuXdgSurface::ConvertToScreen(BPoint &pt)
 {
+	float scale = HaikuClientScale(Client());
 	if (fGeometry.valid)
 		pt += BPoint(fGeometry.x, fGeometry.y);
+	pt.x *= scale;
+	pt.y *= scale;
 
 	Window()->ConvertToScreen(&pt);
+}
+
+static void
+scale_rect(BRect &rect, float scale)
+{
+	rect.left *= scale;
+	rect.top *= scale;
+	rect.right = (rect.right + 1) * scale - 1;
+	rect.bottom = (rect.bottom + 1) * scale - 1;
 }
 
 void HaikuXdgSurface::ConvertFromScreen(BRect &rect)
 {
 	Window()->ConvertFromScreen(&rect);
+	scale_rect(rect, 1 / HaikuClientScale(Client()));
 	if (fGeometry.valid && !HasServerDecoration())
 		rect.OffsetBy(-fGeometry.x, -fGeometry.y);
 }
@@ -226,6 +253,7 @@ void HaikuXdgSurface::ConvertToScreen(BRect &rect)
 {
 	if (fGeometry.valid && !HasServerDecoration())
 		rect.OffsetBy(fGeometry.x, fGeometry.y);
+	scale_rect(rect, HaikuClientScale(Client()));
 
 	Window()->ConvertToScreen(&rect);
 }

@@ -9,10 +9,13 @@
 #include "RengaProtocols.h"
 #include "HaikuCompositor.h"
 #include "HaikuSeat.h"
+#include "HaikuOutput.h"
 #include "AppKitPtrs.h"
 
 #include "Wayland.h"
 #include "FractionalScaleV1.h"
+#include <string>
+#include <map>
 #include "IdleInhibitUnstableV1.h"
 #include "CursorShapeV1.h"
 #include "XdgToplevelIconV1.h"
@@ -297,8 +300,29 @@ void HaikuFixesGlobal::Bind(struct wl_client *client, uint32_t version, uint32_t
 	It used to follow the system font size; with a large font Linux
 	Chromium drew at 1.5x while its window was sized at 1x on the
 	maintainer's machine (content in the top left, the window larger).
-	Until surfaces are sized from the viewport end to end, clients draw at
-	1x and Renga's font size does not scale them.
+
+	Renga (batch 12): the Renguin display scale. Renga's windows are in
+	screen pixels and Linux programs draw in logical pixels; with a scale
+	S the compositor treats S screen pixels as one logical pixel, end to
+	end: a surface's window is its logical size (viewport destination, or
+	buffer size over its buffer scale) times S, its buffer is drawn into
+	that (one to one for a client that drew at S), pointer positions are
+	divided by S, configure sizes and bounds are window sizes over S, and
+	window geometry, subsurface and popup positions are multiplied by S.
+	wl_output.scale is S rounded up (an integer), wp_fractional_scale_v1's
+	preferred scale is S itself. The setting is
+	~/config/settings/Renga/renguin_display_scale, written by Renguin
+	Manager:
+
+		scale 1.5
+		program chrome 1.25
+
+	("program" lines: per-program overrides, by the name of the client's
+	executable). The compositor reads it again when Renguin Manager sends
+	it kMsgDisplayScaleChanged; the outputs and fractional scale objects
+	of every client then get the new scale (live, as the protocols allow),
+	and windows follow the client's next buffer. The old switch still
+	works when the file sets no scale: "on" follows the system font size.
 */
 static bool
 fractional_scale_enabled()
@@ -317,21 +341,162 @@ fractional_scale_enabled()
 }
 
 
-uint32_t HaikuPreferredScale120()
+static float
+valid_scale(float scale)
 {
-	if (!fractional_scale_enabled())
-		return 120;
-	// Haiku scales its interface with the system font size (12 pt is 1.0).
-	float scale = be_plain_font->Size() / 12.0f;
-	if (scale < 1.0f || isnan(scale))
-		scale = 1.0f;
+	if (isnan(scale) || scale < 0.5f)
+		return 1.0f;
 	if (scale > 4.0f)
-		scale = 4.0f;
-	return (uint32_t)lroundf(scale * 120);
+		return 4.0f;
+	// 1/120 steps, as wp_fractional_scale_v1 has them
+	return roundf(scale * 120) / 120;
 }
 
-class HaikuFractionalScale: public WpFractionalScaleV1 {
+
+struct DisplayScaleSettings {
+	bool							loaded = false;
+	float							scale = 1.0f;
+	std::map<std::string, float>	programs;
 };
+
+static DisplayScaleSettings sScaleSettings;
+static std::map<struct wl_client*, float> sClientScales;
+
+
+static void
+load_scale_settings()
+{
+	sScaleSettings = DisplayScaleSettings();
+	sScaleSettings.loaded = true;
+	bool haveScale = false;
+	BPath path;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) == B_OK
+		&& path.Append("Renga/renguin_display_scale") == B_OK) {
+		FILE* file = fopen(path.Path(), "r");
+		if (file != NULL) {
+			char line[256];
+			while (fgets(line, sizeof(line), file) != NULL) {
+				char name[128];
+				float value;
+				if (sscanf(line, "scale %f", &value) == 1) {
+					sScaleSettings.scale = valid_scale(value);
+					haveScale = true;
+				} else if (sscanf(line, "program %127s %f", name, &value)
+						== 2)
+					sScaleSettings.programs[name] = valid_scale(value);
+			}
+			fclose(file);
+		}
+	}
+	if (!haveScale && fractional_scale_enabled())
+		sScaleSettings.scale = valid_scale(be_plain_font->Size() / 12.0f);
+}
+
+
+/*!	The name of the client's program, from its team's arguments: the file
+	name of the first word that is not Renguin's launcher ("/bin/linux"),
+	"env" or a variable setting (Renguin Manager names programs the same
+	way, from their Exec lines).
+*/
+static std::string
+client_program(struct wl_client* client)
+{
+	pid_t pid = -1;
+	wl_client_get_credentials(client, &pid, NULL, NULL);
+	team_info info;
+	if (pid <= 0 || get_team_info(pid, &info) != B_OK)
+		return "";
+	std::string args(info.args);
+	size_t start = 0;
+	while (start < args.size()) {
+		while (start < args.size() && args[start] == ' ')
+			start++;
+		size_t end = args.find(' ', start);
+		if (end == std::string::npos)
+			end = args.size();
+		std::string word = args.substr(start, end - start);
+		start = end;
+		if (word.empty() || word == "env" || word == "/bin/linux"
+			|| word == "linux" || word.find('=') != std::string::npos)
+			continue;
+		size_t slash = word.rfind('/');
+		if (slash != std::string::npos)
+			word.erase(0, slash + 1);
+		return word;
+	}
+	return "";
+}
+
+
+struct ClientScaleListener {
+	struct wl_listener	listener;
+};
+
+
+static void
+client_scale_destroyed(struct wl_listener* listener, void* data)
+{
+	sClientScales.erase((struct wl_client*)data);
+	wl_list_remove(&listener->link);
+	delete (ClientScaleListener*)listener;
+}
+
+
+float HaikuClientScale(struct wl_client* client)
+{
+	if (client == NULL)
+		return 1.0f;
+	auto found = sClientScales.find(client);
+	if (found != sClientScales.end())
+		return found->second;
+	if (!sScaleSettings.loaded)
+		load_scale_settings();
+	float scale = sScaleSettings.scale;
+	if (!sScaleSettings.programs.empty()) {
+		auto program = sScaleSettings.programs.find(client_program(client));
+		if (program != sScaleSettings.programs.end())
+			scale = program->second;
+	}
+	ClientScaleListener* listener = new(std::nothrow) ClientScaleListener;
+	if (listener != NULL) {
+		listener->listener.notify = client_scale_destroyed;
+		wl_client_add_destroy_listener(client, &listener->listener);
+		sClientScales[client] = scale;
+	}
+	return scale;
+}
+
+
+int32_t HaikuClientIntegerScale(struct wl_client* client)
+{
+	return (int32_t)ceilf(HaikuClientScale(client) - 0.001f);
+}
+
+
+uint32_t HaikuPreferredScale120(struct wl_client* client)
+{
+	return (uint32_t)lroundf(HaikuClientScale(client) * 120);
+}
+
+
+class HaikuFractionalScale: public WpFractionalScaleV1 {
+public:
+	HaikuFractionalScale();
+	virtual ~HaikuFractionalScale();
+};
+
+static std::vector<HaikuFractionalScale*> sFractionalScales;
+
+HaikuFractionalScale::HaikuFractionalScale()
+{
+	sFractionalScales.push_back(this);
+}
+
+HaikuFractionalScale::~HaikuFractionalScale()
+{
+	sFractionalScales.erase(std::remove(sFractionalScales.begin(),
+		sFractionalScales.end(), this), sFractionalScales.end());
+}
 
 class HaikuFractionalScaleManager: public WpFractionalScaleManagerV1 {
 public:
@@ -339,9 +504,32 @@ public:
 	{
 		HaikuFractionalScale *scale = bind_simple<HaikuFractionalScale>(Client(), Version(), id);
 		if (scale != NULL)
-			scale->SendPreferredScale(HaikuPreferredScale120());
+			scale->SendPreferredScale(HaikuPreferredScale120(Client()));
 	}
 };
+
+
+void HaikuDisplayScaleChanged(struct wl_display* display)
+{
+	load_scale_settings();
+	// every client's scale anew (a client's program can have its own)
+	std::vector<struct wl_client*> clients;
+	for (auto& entry : sClientScales)
+		clients.push_back(entry.first);
+	for (struct wl_client* client : clients) {
+		float scale = sScaleSettings.scale;
+		auto program = sScaleSettings.programs.find(client_program(client));
+		if (program != sScaleSettings.programs.end())
+			scale = program->second;
+		sClientScales[client] = scale;
+	}
+	for (HaikuFractionalScale* scale : sFractionalScales)
+		scale->SendPreferredScale(HaikuPreferredScale120(scale->Client()));
+	HaikuOutputResendState(display);
+	printf("wayland: display scale %.3f, %zu program overrides, %zu "
+		"clients\n", sScaleSettings.scale, sScaleSettings.programs.size(),
+		clients.size());
+}
 
 DEFINE_CREATE(HaikuFractionalScaleGlobal, wp_fractional_scale_manager_v1_interface, 1)
 

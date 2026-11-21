@@ -325,7 +325,7 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
 		case trackClient:
 			for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 				if (pointer->Client() != surface->Client()) continue;
-				pointer->SendEnter(NextSerial(), surface->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
+				pointer->SendEnter(NextSerial(), surface->ToResource(), wl_fixed_from_double(where.x / HaikuClientScale(surface->Client())), wl_fixed_from_double(where.y / HaikuClientScale(surface->Client())));
 				pointer->SendFrame();
 			}
 			break;
@@ -335,7 +335,7 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
 				msg.FindMessage("be:drag_message", &data);
 				HaikuDataOffer *dataOffer = HaikuDataOffer::Create(fDataDevice, data);
 				if (dataOffer != NULL) {
-					fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y), dataOffer->ToResource());
+					fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(where.x / HaikuClientScale(fPointerFocus->Client())), wl_fixed_from_double(where.y / HaikuClientScale(fPointerFocus->Client())), dataOffer->ToResource());
 				}
 			}
 			break;
@@ -628,6 +628,9 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			uint32 btns;
 			msg->FindInt64("when", &when);
 			msg->FindPoint("be:view_where", &where);
+			// Renga (batch 12): logical pixels for the client, screen
+			// pixels for moving and resizing its window
+			float scale = HaikuClientScale(fPointerFocus->Client());
 			switch (fTrack.id) {
 				case trackNone:
 				case trackClient: {
@@ -636,14 +639,14 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 						break;
 					for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 						if (pointer->Client() != fPointerFocus->Client()) continue;
-						pointer->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
+						pointer->SendMotion(when / 1000, wl_fixed_from_double(where.x / scale), wl_fixed_from_double(where.y / scale));
 						pointer->SendFrame();
 					}
 					break;
 				}
 				case trackDrag: {
 					if (fDataDevice != NULL)
-						fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
+						fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(where.x / scale), wl_fixed_from_double(where.y / scale));
 					break;
 				}
 				case trackMove: {
@@ -666,9 +669,9 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 								.data = &arrayData
 							};
 
-							xdgSurface->Toplevel()->SendConfigure(fTrack.wndWidth - (where.x - fTrack.origin.x), fTrack.wndHeight - (where.y - fTrack.origin.y), &array);
-							fTrack.wndWidth -= where.x - fTrack.origin.x;
-							fTrack.wndHeight -= where.y - fTrack.origin.y;
+							xdgSurface->Toplevel()->SendConfigure(fTrack.wndWidth - (where.x - fTrack.origin.x) / scale, fTrack.wndHeight - (where.y - fTrack.origin.y) / scale, &array);
+							fTrack.wndWidth -= (where.x - fTrack.origin.x) / scale;
+							fTrack.wndHeight -= (where.y - fTrack.origin.y) / scale;
 							xdgSurface->SendConfigure(xdgSurface->NextSerial());
 							break;
 						}
@@ -683,8 +686,8 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 							xdgSurface->Toplevel()->MaxSize(maxWidth, maxHeight);
 							if (maxWidth == 0) maxWidth = INT32_MAX;
 							if (maxHeight == 0) maxHeight = INT32_MAX;
-							int32_t newWidth = std::min<int32_t>(std::max<int32_t>(fTrack.wndWidth + (where.x - fTrack.origin.x), minWidth), maxWidth);
-							int32_t newHeight = std::min<int32_t>(std::max<int32_t>(fTrack.wndHeight + (where.y - fTrack.origin.y), minHeight), maxHeight);
+							int32_t newWidth = std::min<int32_t>(std::max<int32_t>(fTrack.wndWidth + (where.x - fTrack.origin.x) / scale, minWidth), maxWidth);
+							int32_t newHeight = std::min<int32_t>(std::max<int32_t>(fTrack.wndHeight + (where.y - fTrack.origin.y) / scale, minHeight), maxHeight);
 
 							uint32_t arrayData[] = {XdgToplevel::stateResizing};
 							struct wl_array array {

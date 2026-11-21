@@ -51,5 +51,13 @@ void RengaRetireGlobal(WlGlocal *global);
 //! For the harness: is a retired global with this name still kept?
 bool RengaRetiredGlobalPending(uint32_t name);
 
+//! Renguin display scale (batch 12): screen pixels per logical pixel.
+float HaikuClientScale(struct wl_client *client);
+//! wl_output.scale for the client: its scale rounded up.
+int32_t HaikuClientIntegerScale(struct wl_client *client);
 //! The scale wp_fractional_scale_v1 reports, in 1/120 (120 = 1.0).
-uint32_t HaikuPreferredScale120();
+uint32_t HaikuPreferredScale120(struct wl_client *client);
+//! The setting changed: read it again, tell every client.
+void HaikuDisplayScaleChanged(struct wl_display *display);
+//! Renguin Manager sends this to the compositor when the scale changed.
+enum { kMsgDisplayScaleChanged = 'RgSc' };

@@ -195,6 +195,10 @@ void HaikuXdgToplevel::SendBounds()
 	}
 	int32_t width = (int32_t)(usable.Width() + 1 - left - right);
 	int32_t height = (int32_t)(usable.Height() + 1 - top - bottom);
+	// Renga (batch 12): in logical pixels (Renguin display scale)
+	float scale = HaikuClientScale(Client());
+	width = (int32_t)(width / scale);
+	height = (int32_t)(height / scale);
 	SendConfigureBounds(width > 0 ? width : 0, height > 0 ? height : 0);
 }
 
@@ -231,7 +235,11 @@ void HaikuXdgToplevel::DoSendConfigure()
 	if (fState.activated ) {*p++ = XdgToplevel::stateActivated;}
 
 	state.size = (uint8_t*)p - (uint8_t*)state.data;
-	SendConfigure(fWidth, fHeight, &state);
+	// Renga (batch 12): fWidth and fHeight are the window's size in screen
+	// pixels; the client hears logical pixels (Renguin display scale)
+	float scale = HaikuClientScale(Client());
+	SendConfigure((int32_t)lroundf(fWidth / scale),
+		(int32_t)lroundf(fHeight / scale), &state);
 }
 
 void HaikuXdgToplevel::HandleSetParent(struct wl_resource *_parent)

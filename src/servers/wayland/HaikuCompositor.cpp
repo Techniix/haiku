@@ -254,7 +254,10 @@ void WaylandView::Draw(BRect dirty)
 				mode = B_OP_COPY;
 				break;
 		}
-		if (mode == B_OP_ALPHA && fSurface->fState.opaqueRgn.has_value()) {
+		bool oneToOne = fSurface->Size() == BSize(bmp->Bounds().Width(),
+			bmp->Bounds().Height()) && !fSurface->fState.viewportSrc.IsValid();
+		if (mode == B_OP_ALPHA && fSurface->fState.opaqueRgn.has_value()
+			&& oneToOne) {
 			viewLocked->ConstrainClippingRegion(&fSurface->fState.opaqueRgn.value());
 			viewLocked->SetDrawingMode(B_OP_COPY);
 			viewLocked->DrawBitmap(bmp);
@@ -263,14 +266,25 @@ void WaylandView::Draw(BRect dirty)
 			viewLocked->ConstrainClippingRegion(&remaining);
 		}
 		viewLocked->SetDrawingMode(mode);
+		// Renga (batch 12): the buffer drawn into the surface's size on
+		// screen (its logical size times the Renguin display scale); one
+		// to one when the client drew at that scale
 		const auto &viewportSrc = fSurface->fState.viewportSrc;
-		const auto &viewportDst = fSurface->fState.viewportDst;
-		if (viewportSrc.IsValid() && viewportDst.IsValid()) {
-			BRect bitmapRect(viewportSrc.x, viewportSrc.y, viewportSrc.x + viewportSrc.width - 1, viewportSrc.y + viewportSrc.height - 1);
-			BRect viewRect(0, 0, viewportDst.width - 1, viewportDst.height - 1);
-			viewLocked->DrawBitmap(bmp, bitmapRect, viewRect);
-		} else {
+		int32_t bufferScale = std::max<int32_t>(1, fSurface->fState.scale);
+		BRect bitmapRect = bmp->Bounds();
+		if (viewportSrc.IsValid()) {
+			bitmapRect.Set(viewportSrc.x * bufferScale,
+				viewportSrc.y * bufferScale,
+				(viewportSrc.x + viewportSrc.width) * bufferScale - 1,
+				(viewportSrc.y + viewportSrc.height) * bufferScale - 1);
+		}
+		BSize size = fSurface->Size();
+		BRect viewRect(0, 0, size.width, size.height);
+		if (bitmapRect == bmp->Bounds() && viewRect == bmp->Bounds())
 			viewLocked->DrawBitmap(bmp);
+		else {
+			viewLocked->DrawBitmap(bmp, bitmapRect, viewRect,
+				B_FILTER_BITMAP_BILINEAR);
 		}
 	}
 
@@ -340,16 +354,28 @@ HaikuSurface::~HaikuSurface()
 	}
 }
 
+/*!	The surface's size on screen: its logical size (the viewport's
+	destination, or the buffer's size over the buffer scale) times the
+	client's Renguin display scale (batch 12; before, the buffer scale was
+	ignored and the logical size was taken as screen pixels).
+*/
 BSize HaikuSurface::Size() const
 {
+	float logicalWidth, logicalHeight;
 	if (fState.viewportDst.IsValid()) {
-		return BSize(fState.viewportDst.width - 1, fState.viewportDst.height - 1);
-	}
-	if (Bitmap() != NULL) {
-		return BSize(Bitmap()->Bounds().Width(), Bitmap()->Bounds().Height());
-	}
-	return BSize(-1, -1);
+		logicalWidth = fState.viewportDst.width;
+		logicalHeight = fState.viewportDst.height;
+	} else if (Bitmap() != NULL) {
+		int32_t bufferScale = std::max<int32_t>(1, fState.scale);
+		logicalWidth = (Bitmap()->Bounds().Width() + 1) / bufferScale;
+		logicalHeight = (Bitmap()->Bounds().Height() + 1) / bufferScale;
+	} else
+		return BSize(-1, -1);
+	float scale = HaikuClientScale(const_cast<HaikuSurface*>(this)->Client());
+	return BSize(roundf(logicalWidth * scale) - 1,
+		roundf(logicalHeight * scale) - 1);
 }
+
 
 void HaikuSurface::AttachWindow(BWindow *window)
 {
@@ -406,7 +432,11 @@ void HaikuSurface::Invalidate()
 		return;
 	}
 	auto viewLocked = AppKitPtrs::LockedPtr(fView);
-	if (fSubsurface != NULL) {
+	// damage is in buffer or logical pixels; scaled surfaces (Renguin
+	// display scale, buffer scale, viewport) are drawn again whole
+	bool scaled = Bitmap() != NULL && Size() != BSize(
+		Bitmap()->Bounds().Width(), Bitmap()->Bounds().Height());
+	if (fSubsurface != NULL || scaled || fState.viewportSrc.IsValid()) {
 		viewLocked->Invalidate();
 	} else {
 		viewLocked->Invalidate(&fDirty);
@@ -709,7 +739,9 @@ void HaikuSurface::ApplyCommit()
 	if (View() != NULL && View()->Window() != NULL) {
 		auto viewLocked = AppKitPtrs::LockedPtr(View());
 		if (fSubsurface != NULL) {
-			viewLocked->MoveTo(fSubsurface->GetState().x, fSubsurface->GetState().y);
+			float scale = HaikuClientScale(Client());
+			viewLocked->MoveTo(roundf(fSubsurface->GetState().x * scale),
+				roundf(fSubsurface->GetState().y * scale));
 		}
 		BSize size = Size();
 		viewLocked->ResizeTo(size.width, size.height);

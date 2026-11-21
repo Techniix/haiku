@@ -111,8 +111,9 @@ void HaikuOutputGlobal::SendState(HaikuOutput *output)
 		WlOutput::subpixelUnknown, "Renga", "Screen", WlOutput::transformNormal);
 	output->SendMode(WlOutput::modeCurrent | WlOutput::modePreferred, width,
 		height, (int32_t)lroundf(fRefresh * 1000));
+	// Renga (batch 12): the Renguin display scale, rounded up
 	if (output->Version() >= 2)
-		output->SendScale(1);
+		output->SendScale(HaikuClientIntegerScale(output->Client()));
 	if (output->Version() >= 4) {
 		char name[32];
 		snprintf(name, sizeof(name), "RENGA-%" B_PRId32, fIndex + 1);
@@ -146,6 +147,12 @@ void HaikuOutputGlobal::Update(BRect frame, float refresh)
 		return;
 	fFrame = frame;
 	fRefresh = refresh;
+	for (HaikuOutput *output : fOutputs)
+		SendState(output);
+}
+
+void HaikuOutputGlobal::ResendState()
+{
 	for (HaikuOutput *output : fOutputs)
 		SendState(output);
 }
@@ -307,8 +314,10 @@ void HaikuXdgOutputManager::HandleGetXdgOutput(uint32_t id, struct wl_resource *
 	HaikuOutputGlobal *global = output != NULL ? output->Global() : NULL;
 	BRect frame = global != NULL ? global->Frame() : BRect(0, 0, 1023, 767);
 	xdgOutput->SendLogicalPosition((int32_t)frame.left, (int32_t)frame.top);
-	xdgOutput->SendLogicalSize((int32_t)frame.Width() + 1,
-		(int32_t)frame.Height() + 1);
+	// logical pixels: screen pixels over the Renguin display scale
+	float scale = HaikuClientScale(Client());
+	xdgOutput->SendLogicalSize((int32_t)lroundf((frame.Width() + 1) / scale),
+		(int32_t)lroundf((frame.Height() + 1) / scale));
 	if (xdgOutput->Version() >= 2) {
 		char name[32];
 		snprintf(name, sizeof(name), "RENGA-%" B_PRId32,
@@ -322,4 +331,15 @@ void HaikuXdgOutputManager::HandleGetXdgOutput(uint32_t id, struct wl_resource *
 			output->SendDone();
 	} else
 		xdgOutput->SendDone();
+}
+
+
+/*!	Renga (batch 12): every bound output's state again (the Renguin
+	display scale changed).
+*/
+void
+HaikuOutputResendState(struct wl_display *display)
+{
+	for (HaikuOutputGlobal *global : sOutputGlobals)
+		global->ResendState();
 }
