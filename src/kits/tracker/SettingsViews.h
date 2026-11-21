@@ -126,6 +126,10 @@ private:
 	BCheckBox* fHideDotFilesCheckBox;
 	BCheckBox* fTypeAheadFilteringCheckBox;
 	BCheckBox* fGenerateImageThumbnailsCheckBox;
+	// Renga (F-66, batch 9)
+	BCheckBox* fShowFolderSizesCheckBox;
+	BCheckBox* fKeepBothOnConflictCheckBox;
+	BCheckBox* fOpenTerminalHereCheckBox;
 
 	bool fShowFullPathInTitleBar;
 	bool fSingleWindowBrowse;
@@ -135,6 +139,9 @@ private:
 	bool fHideDotFiles;
 	bool fTypeAheadFiltering;
 	bool fGenerateImageThumbnails;
+	bool fShowFolderSizes;
+	bool fKeepBothOnConflict;
+	bool fOpenTerminalHere;
 
 	typedef SettingsView _inherited;
 };

@@ -196,6 +196,8 @@ public:
 
 	BMessage* AddOnMessage(int32);
 	BPopUpMenu* ContextMenu();
+	void WindowContextMenuForTest(BMessage* reply);
+		// Renga (batch 9), harness images only
 
 	void ShowSelectionWindow();
 
@@ -273,6 +275,8 @@ protected:
 		const entry_ref* ref = NULL);
 	virtual void UpdateWindowMenu(BMenu* menu);
 	virtual void UpdateWindowContextMenu(BMenu* menu);
+	void _SetupOpenTerminalItem(BMenu* menu);
+		// Renga (F-66, batch 9)
 	virtual void UpdateWindowMenuOrWindowContextMenu(BMenu* menu, MenuContext context);
 
 	BMenu* AddMimeMenu(const BMimeType& mimeType, bool isSuperType,

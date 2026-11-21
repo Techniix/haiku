@@ -29,6 +29,13 @@ static const bool kDefaultTypeAheadFiltering = false;
 static const bool kDefaultGenerateImageThumbnails = true;
 static const bool kDefaultPrefetchFolderMenus = true;
 	// Renga (F-59), NavMenuPrefetch.h
+static const bool kDefaultShowFolderSizes = true;
+	// Renga (F-66, batch 9), FolderSizeCache.h
+static const bool kDefaultKeepBothOnConflict = true;
+	// Renga (F-66, batch 9): the name-conflict dialog with "Keep both" and
+	// "Apply to all" (FSUtils.cpp, ConflictDialog)
+static const bool kDefaultOpenTerminalHere = true;
+	// Renga (F-66, batch 9): "Open Terminal here" in folder windows' menus
 
 static const int32 kDefaultRecentApplications = 10;
 static const int32 kDefaultRecentDocuments = 10;

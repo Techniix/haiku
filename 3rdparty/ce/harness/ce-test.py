@@ -205,6 +205,10 @@ DEVNOTIFY_SCREENSHOTS = ["audio_device_prompt", "audio_device_policy"]
 TRACKER_MENU_SCREENSHOTS = ["tracker_prefetch_setting"]
 # The Deskbar's menu search window and its preferences (F-41, batch 9).
 DESKBAR_SCREENSHOTS = ["deskbar_search", "deskbar_preferences"]
+# Tracker's folder sizes, the name-conflict question and the preferences
+# (F-66, batch 9).
+TRACKER_MODERN_SCREENSHOTS = ["tracker_folder_sizes",
+	"tracker_preferences_batch9", "tracker_conflict_dialog"]
 # The low-latency mode (F-31): the audio settings with a game's "Low
 # latency" switch on, and the default output's page with "Buffer size".
 LATENCY_SCREENSHOTS = ["media_low_latency", "media_buffer_size"]
@@ -279,7 +283,7 @@ COMPILE_TARGETS = ["kernel_x86_64", "libroot.so", "libgnu.so",
 	"SoundRecorder", "media_addon_server", "crash_collector",
 	"crashlog_test", "SystemLogs", "debug_server",
 	"webpositive_test", "WebPositive", "deskbar_test", "Deskbar",
-	"ControlPanel"]
+	"ControlPanel", "libtracker.so", "tracker_modern_test"]
 
 # Scratch disks for vblk_test: sparse files attached as virtio block devices
 # without -snapshot, so what the guest does to them (trimming above all) can
@@ -5048,6 +5052,9 @@ def main():
 		if "tracker_menu_test" in (args.only or available):
 			check_screenshots(results_dir, report, TRACKER_MENU_SCREENSHOTS,
 				"tracker_menu.screenshots")
+		if "tracker_modern_test" in (args.only or available):
+			check_screenshots(results_dir, report, TRACKER_MODERN_SCREENSHOTS,
+				"tracker_modern.screenshots")
 		if "deskbar_test" in (args.only or available):
 			check_screenshots(results_dir, report, DESKBAR_SCREENSHOTS,
 				"deskbar.screenshots")

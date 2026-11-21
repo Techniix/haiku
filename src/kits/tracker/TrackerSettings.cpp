@@ -78,6 +78,9 @@ private:
 	BooleanValueSetting* fTypeAheadFiltering;
 	BooleanValueSetting* fGenerateImageThumbnails;
 	BooleanValueSetting* fPrefetchFolderMenus;
+	BooleanValueSetting* fShowFolderSizes;
+	BooleanValueSetting* fKeepBothOnConflict;
+	BooleanValueSetting* fOpenTerminalHere;
 
 	ScalarValueSetting* fRecentApplicationsCount;
 	ScalarValueSetting* fRecentDocumentsCount;
@@ -141,6 +144,9 @@ TTrackerState::TTrackerState()
 	fTypeAheadFiltering(NULL),
 	fGenerateImageThumbnails(NULL),
 	fPrefetchFolderMenus(NULL),
+	fShowFolderSizes(NULL),
+	fKeepBothOnConflict(NULL),
+	fOpenTerminalHere(NULL),
 	fRecentApplicationsCount(NULL),
 	fRecentDocumentsCount(NULL),
 	fRecentFoldersCount(NULL),
@@ -172,6 +178,9 @@ TTrackerState::TTrackerState(const TTrackerState&)
 	fTypeAheadFiltering(NULL),
 	fGenerateImageThumbnails(NULL),
 	fPrefetchFolderMenus(NULL),
+	fShowFolderSizes(NULL),
+	fKeepBothOnConflict(NULL),
+	fOpenTerminalHere(NULL),
 	fRecentApplicationsCount(NULL),
 	fRecentDocumentsCount(NULL),
 	fRecentFoldersCount(NULL),
@@ -239,6 +248,10 @@ TTrackerState::LoadSettingsIfNeeded()
 		= new BooleanValueSetting("GenerateImageThumbnails", kDefaultGenerateImageThumbnails));
 	Add(fPrefetchFolderMenus
 		= new BooleanValueSetting("PrefetchFolderMenus", kDefaultPrefetchFolderMenus));
+	// Renga (F-66, batch 9)
+	Add(fShowFolderSizes = new BooleanValueSetting("ShowFolderSizes", kDefaultShowFolderSizes));
+	Add(fKeepBothOnConflict = new BooleanValueSetting("KeepBothOnConflict", kDefaultKeepBothOnConflict));
+	Add(fOpenTerminalHere = new BooleanValueSetting("OpenTerminalHere", kDefaultOpenTerminalHere));
 
 	Add(fRecentApplicationsCount
 		= new ScalarValueSetting("RecentApplications", kDefaultRecentApplications, "", ""));
@@ -495,6 +508,48 @@ void
 TrackerSettings::SetPrefetchFolderMenus(bool enabled)
 {
 	gTrackerState.fPrefetchFolderMenus->SetValue(enabled);
+}
+
+
+bool
+TrackerSettings::ShowFolderSizes()
+{
+	return gTrackerState.fShowFolderSizes->Value();
+}
+
+
+void
+TrackerSettings::SetShowFolderSizes(bool enabled)
+{
+	gTrackerState.fShowFolderSizes->SetValue(enabled);
+}
+
+
+bool
+TrackerSettings::KeepBothOnConflict()
+{
+	return gTrackerState.fKeepBothOnConflict->Value();
+}
+
+
+void
+TrackerSettings::SetKeepBothOnConflict(bool enabled)
+{
+	gTrackerState.fKeepBothOnConflict->SetValue(enabled);
+}
+
+
+bool
+TrackerSettings::OpenTerminalHere()
+{
+	return gTrackerState.fOpenTerminalHere->Value();
+}
+
+
+void
+TrackerSettings::SetOpenTerminalHere(bool enabled)
+{
+	gTrackerState.fOpenTerminalHere->SetValue(enabled);
 }
 
 

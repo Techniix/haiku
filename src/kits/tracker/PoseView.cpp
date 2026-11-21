@@ -85,6 +85,7 @@ All rights reserved.
 #include "DesktopPoseView.h"
 #include "FSClipboard.h"
 #include "FSUndoRedo.h"
+#include "FolderSizeCache.h"
 #include "FSUtils.h"
 #include "FilePanelPriv.h"
 #include "FunctionObject.h"
@@ -920,6 +921,7 @@ BPoseView::DetachedFromWindow()
 		tracker->StopWatching(this, kSortFolderNamesFirstChanged);
 		tracker->StopWatching(this, kHideDotFilesChanged);
 		tracker->StopWatching(this, kTypeAheadFilteringChanged);
+		tracker->StopWatching(this, kShowFolderSizesChanged);
 		tracker->Unlock();
 	}
 
@@ -1019,6 +1021,7 @@ BPoseView::AttachedToWindow()
 		tracker->StartWatching(this, kSortFolderNamesFirstChanged);
 		tracker->StartWatching(this, kHideDotFilesChanged);
 		tracker->StartWatching(this, kTypeAheadFilteringChanged);
+		tracker->StartWatching(this, kShowFolderSizesChanged);
 		tracker->Unlock();
 	}
 
@@ -2248,6 +2251,26 @@ BPoseView::MessageReceived(BMessage* message)
 		return;
 
 	switch (message->what) {
+		case kFolderSizeReady:
+		{
+			// Renga (F-66, batch 9): FolderSizeCache.h; the Size column of
+			// that folder's row
+			node_ref folder;
+			folder.device = message->GetInt32("device", -1);
+			folder.node = message->GetInt64("node", -1);
+			int32 index;
+			BPose* pose = CurrentPoseList()->FindPose(&folder, &index);
+			if (pose == NULL || ViewMode() != kListMode)
+				break;
+			Model* model = pose->TargetModel();
+			if (model->OpenNode() != B_OK)
+				break;
+			BPoint poseLoc(0, index * fListElemHeight);
+			pose->UpdateWidgetAndModel(NULL, 0, index, poseLoc, this, true);
+			model->CloseNode();
+			break;
+		}
+
 		case kAddNewPoses:
 		{
 			AddPosesResult* currentPoses;
@@ -2756,6 +2779,29 @@ BPoseView::MessageReceived(BMessage* message)
 							settings.SetHideDotFiles(hideDotFiles);
 
 						Refresh();
+						break;
+					}
+
+					case kShowFolderSizesChanged:
+					{
+						// Renga (F-66, batch 9): every folder's Size
+						// column, now or "-"
+						if (ViewMode() != kListMode)
+							break;
+						PoseList* poses = CurrentPoseList();
+						for (int32 index = 0; index < poses->CountItems();
+								index++) {
+							BPose* pose = poses->ItemAt(index);
+							Model* model = pose->TargetModel();
+							if (!model->IsDirectory()
+								|| model->OpenNode() != B_OK) {
+								continue;
+							}
+							pose->UpdateWidgetAndModel(NULL, 0, index,
+								BPoint(0, index * fListElemHeight), this,
+								true);
+							model->CloseNode();
+						}
 						break;
 					}
 

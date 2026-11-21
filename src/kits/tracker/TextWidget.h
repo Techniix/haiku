@@ -95,6 +95,8 @@ public:
 	void SetActive(bool);
 
 	const char* Text(const BPoseView* view) const;
+	WidgetAttributeText* AttributeText() const { return fText; }
+		// Renga (batch 9), for the harness hook (Tracker.cpp)
 		// returns the untruncated version of the text
 	float TextWidth(const BPoseView*) const;
 	float PreferredWidth(const BPoseView*) const;

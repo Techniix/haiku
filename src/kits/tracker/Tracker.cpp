@@ -75,6 +75,7 @@ All rights reserved.
 #include "FindPanel.h"
 #include "FunctionObject.h"
 #include "FSClipboard.h"
+#include "FolderSizeCache.h"
 #include "FSUtils.h"
 #include "InfoWindow.h"
 #include "MimeTypes.h"
@@ -89,6 +90,7 @@ All rights reserved.
 #include "TrackerSettings.h"
 #include "TrackerSettingsWindow.h"
 #include "TrackerString.h"
+#include "TextWidget.h"
 #include "TrashWatcher.h"
 #include "VirtualDirectoryWindow.h"
 
@@ -590,6 +592,132 @@ TTracker::MessageReceived(BMessage* message)
 		case kShowSettingsWindow:
 			ShowSettingsWindow();
 			break;
+
+		case kOpenTerminalHere:
+		{
+			// Renga (F-66, batch 9): the context menu's "Open Terminal
+			// here", as the "Open Terminal" add-on starts it
+			entry_ref ref;
+			BPath path;
+			status_t status = message->FindRef("refs", &ref);
+			if (status == B_OK)
+				status = path.SetTo(&ref);
+			if (status == B_OK) {
+				const char* argv[] = { "-w", path.Path(), NULL };
+				status = be_roster->Launch("application/x-vnd.Haiku-Terminal",
+					2, argv);
+			}
+			if (message->IsSourceWaiting()) {
+				BMessage reply(B_REPLY);
+				reply.AddInt32("status", status);
+				reply.AddString("path", path.Path() != NULL ? path.Path() : "");
+				message->SendReply(&reply);
+			}
+			break;
+		}
+
+		case kTestTrackerState:
+			// Renga (batch 9), harness images only: the batch 9 settings
+			// ("set_<name>" changes one first), and with "refs" and
+			// "action": "context_menu" (the labels of that folder's
+			// window's context menu), "folder_size" (FolderSizeCache) or
+			// "size_column" (the Size column's text of that entry in its
+			// parent folder's window)
+			if (access("/boot/system/non-packaged/data/ce-harness", F_OK)
+					== 0) {
+				TrackerSettings settings;
+				bool value;
+				if (message->FindBool("set_ShowFolderSizes", &value) == B_OK)
+					settings.SetShowFolderSizes(value);
+				if (message->FindBool("set_KeepBothOnConflict", &value)
+						== B_OK) {
+					settings.SetKeepBothOnConflict(value);
+				}
+				if (message->FindBool("set_OpenTerminalHere", &value) == B_OK)
+					settings.SetOpenTerminalHere(value);
+
+				int32 page;
+				if (message->FindInt32("show_page", &page) == B_OK) {
+					ShowSettingsWindow();
+					if (fSettingsWindow->Lock()) {
+						fSettingsWindow->ShowPage(
+							(TrackerSettingsWindow::SettingsPage)page);
+						fSettingsWindow->Unlock();
+					}
+				}
+
+				BMessage reply(B_REPLY);
+				reply.AddBool("ShowFolderSizes", settings.ShowFolderSizes());
+				reply.AddBool("KeepBothOnConflict",
+					settings.KeepBothOnConflict());
+				reply.AddBool("OpenTerminalHere", settings.OpenTerminalHere());
+				reply.AddBool("HideDotFiles", settings.HideDotFiles());
+				reply.AddBool("SortFolderNamesFirst",
+					settings.SortFolderNamesFirst());
+				reply.AddInt32("computed",
+					FolderSizeCache::Default()->CountComputed());
+				reply.AddInt32("queued",
+					FolderSizeCache::Default()->CountQueued());
+
+				entry_ref ref;
+				BString action = message->GetString("action", "");
+				if (message->FindRef("refs", &ref) == B_OK) {
+					if (action == "context_menu") {
+						BContainerWindow* window = FindContainerWindow(&ref);
+						if (window != NULL && window->Lock()) {
+							window->WindowContextMenuForTest(&reply);
+							window->Unlock();
+						}
+						reply.AddBool("window", window != NULL);
+					} else if (action == "folder_size") {
+						BEntry entry(&ref);
+						node_ref node;
+						off_t size = -1;
+						bool known = entry.GetNodeRef(&node) == B_OK
+							&& FolderSizeCache::Default()->Lookup(node, &size);
+						reply.AddBool("known", known);
+						reply.AddInt64("size", size);
+					} else if (action == "size_column") {
+						BContainerWindow* window
+							= FindParentContainerWindow(&ref);
+						reply.AddBool("window", window != NULL);
+						if (window != NULL && window->Lock()) {
+							BEntry entry(&ref);
+							node_ref node;
+							entry.GetNodeRef(&node);
+							BPose* pose = window->PoseView()->FindPose(&node);
+							BTextWidget* widget = pose != NULL
+								? pose->WidgetFor(AttrHashString(kAttrStatSize,
+									B_OFF_T_TYPE)) : NULL;
+							if (widget != NULL) {
+								reply.AddString("text",
+									widget->AttributeText()->FittingText(
+										window->PoseView()));
+							}
+							reply.AddBool("pose", pose != NULL);
+							window->Unlock();
+						}
+					}
+				}
+				message->SendReply(&reply);
+			}
+			break;
+
+		case kFolderSizeReady:
+		{
+			// Renga (F-66, batch 9): a folder's size is known
+			// (FolderSizeCache.h); every window updates its row, if it
+			// shows that folder
+			AutoLock<WindowList> lock(&fWindowList);
+			int32 count = fWindowList.CountItems();
+			for (int32 index = 0; index < count; index++) {
+				BContainerWindow* window = dynamic_cast<BContainerWindow*>(
+					fWindowList.ItemAt(index));
+				if (window != NULL && window->PoseView() != NULL)
+					window->PostMessage(message, window->PoseView());
+			}
+			break;
+		}
 
 		case kFavoriteCountChangedExternally:
 			SendNotices(kFavoriteCountChangedExternally, message);

@@ -30,6 +30,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			BackgroundImage.cpp
 			Bitmaps.cpp
 			ContainerWindow.cpp
+			ConflictDialog.cpp
 			CountView.cpp
 			DeskWindow.cpp
 			DesktopPoseView.cpp
@@ -44,6 +45,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			FavoritesMenu.cpp
 			FilePanel.cpp
 			FilePanelPriv.cpp
+			FolderSizeCache.cpp
 			FilePermissionsView.cpp
 			FindPanel.cpp
 			GeneralInfoView.cpp

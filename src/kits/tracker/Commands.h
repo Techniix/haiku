@@ -141,6 +141,14 @@ const uint32 kHideDotFilesChanged = 'Hdfc';
 const uint32 kTypeAheadFilteringChanged = 'Tafc';
 const uint32 kGenerateImageThumbnailsChanged = 'GITc';
 const uint32 kPrefetchFolderMenusChanged = 'PFMc';
+// Renga (F-66, batch 9)
+const uint32 kShowFolderSizesChanged = 'SFSc';
+const uint32 kKeepBothOnConflictChanged = 'KBCc';
+const uint32 kOpenTerminalHereChanged = 'OTHc';
+const uint32 kOpenTerminalHere = 'OTrm';
+	// "refs": the folder
+const uint32 kTestTrackerState = 'Tsta';
+	// harness images only: see TTracker::MessageReceived()
 	// Renga (F-59); to DesktopSettingsView with an optional bool
 	// "renga:value", the check box is set to it first (tests, scripts)
 const uint32 kTestBuildNavMenu = 'Tnav';

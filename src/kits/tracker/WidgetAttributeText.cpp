@@ -60,6 +60,7 @@ All rights reserved.
 #include <VolumeRoster.h>
 
 #include "Attributes.h"
+#include "FolderSizeCache.h"
 #include "FSUtils.h"
 #include "Model.h"
 #include "OpenWithWindow.h"
@@ -1012,6 +1013,20 @@ SizeAttributeText::ReadValue()
 		BVolume volume(fModel->NodeRef()->device);
 		fValueIsDefined = volume.Capacity() != 0;
 		return volume.Capacity();
+	}
+
+	// Renga (F-66, batch 9): a folder's size once it has been computed in
+	// the background (FolderSizeCache.h); "-" until then, on network
+	// volumes, and with "Show folder sizes" off
+	if (fModel->IsDirectory() && !fModel->IsVolume()
+		&& !fModel->IsVirtualDirectory()) {
+		off_t size;
+		if (FolderSizeCache::Default()->Lookup(*fModel->NodeRef(), &size)) {
+			fValueIsDefined = true;
+			return size;
+		}
+		fValueIsDefined = false;
+		return kUnknownSize;
 	}
 
 	if (fModel->IsDirectory() || fModel->IsQuery()

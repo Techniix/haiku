@@ -100,6 +100,13 @@ public:
 	// Renga (F-59)
 	bool PrefetchFolderMenus();
 	void SetPrefetchFolderMenus(bool enabled);
+	// Renga (F-66, batch 9)
+	bool ShowFolderSizes();
+	void SetShowFolderSizes(bool enabled);
+	bool KeepBothOnConflict();
+	void SetKeepBothOnConflict(bool enabled);
+	bool OpenTerminalHere();
+	void SetOpenTerminalHere(bool enabled);
 
 	bool ShowSelectionWhenInactive();
 	void SetShowSelectionWhenInactive(bool);

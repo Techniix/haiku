@@ -82,6 +82,7 @@ respective holders. All rights reserved.
 #include "Bitmaps.h"
 #include "Commands.h"
 #include "FindPanel.h"
+#include "ConflictDialog.h"
 #include "FSUndoRedo.h"
 #include "FSUtils.h"
 #include "InfoWindow.h"
@@ -107,7 +108,11 @@ enum ConflictCheckResult {
 	kSkipAll,
 	kReplace,
 	kReplaceAll,
-	kNoConflicts
+	kNoConflicts,
+	// Renga (F-66, batch 9), the ConflictDialog
+	kKeepBoth,
+	kKeepBothAll,
+	kCancelAll
 };
 
 
@@ -135,7 +140,9 @@ ConflictCheckResult PreFlightNameCheck(BObjectList<entry_ref, true>* srcList,
 	const BDirectory* destDir, int32* collisionCount, uint32 moveMode);
 status_t CheckName(uint32 moveMode, const BEntry* srcEntry,
 	const BDirectory* destDir, bool multipleCollisions,
-	ConflictCheckResult &);
+	ConflictCheckResult &, BString* keepBothName = NULL);
+static void KeepBothName(const char* name, const BDirectory* destDir,
+	BString& newName);
 void CopyAttributes(CopyLoopControl* control, BNode* srcNode,
 	BNode* destNode, void* buffer, size_t bufsize);
 void CopyPoseLocation(BNode* src, BNode* dest);
@@ -1174,8 +1181,14 @@ MoveTask(BObjectList<entry_ref, true>* srcList, BEntry* destEntry, BList* pointL
 			}
 
 			// resolve name collisions and hierarchy problems
+			BString keepBothName;
 			if (CheckName(moveMode, &sourceEntry, &destDir,
-					collisionCount > 1, conflictCheckResult) != B_OK) {
+					collisionCount > 1, conflictCheckResult,
+					&keepBothName) != B_OK) {
+				// Renga (batch 9): Cancel in the ConflictDialog stops here
+				if (conflictCheckResult == kCancelAll)
+					break;
+
 				// we will skip the current item, because we got a conflict
 				// and were asked to or because there was some conflict
 
@@ -1199,7 +1212,9 @@ MoveTask(BObjectList<entry_ref, true>* srcList, BEntry* destEntry, BList* pointL
 			if (pointList != NULL)
 				loc = (BPoint*)pointList->ItemAt(i);
 
-			result = MoveItem(&sourceEntry, &destDir, loc, moveMode, NULL, undo, &loopControl);
+			result = MoveItem(&sourceEntry, &destDir, loc, moveMode,
+				keepBothName.IsEmpty() ? NULL : keepBothName.String(), undo,
+				&loopControl);
 			if (result != B_OK)
 				break;
 		}
@@ -1263,7 +1278,7 @@ public:
 void
 CopyFile(BEntry* srcFile, StatStruct* srcStat, BDirectory* destDir,
 	CopyLoopControl* loopControl, BPoint* loc, bool makeOriginalName,
-	Undo &undo)
+	Undo &undo, const char* newName = NULL)
 {
 	if (loopControl->SkipEntry(srcFile, true))
 		return;
@@ -1286,7 +1301,11 @@ CopyFile(BEntry* srcFile, StatStruct* srcStat, BDirectory* destDir,
 
 	loopControl->UpdateStatus(destName, ref, 1024, true);
 
-	if (makeOriginalName) {
+	if (newName != NULL) {
+		// Renga (batch 9): "Keep both", named by KeepBothName()
+		strlcpy(destName, newName, sizeof(destName));
+		undo.UpdateEntry(srcFile, destName);
+	} else if (makeOriginalName) {
 		BString suffix(" ");
 		suffix << B_TRANSLATE_COMMENT("copy", "filename copy");
 		FSMakeOriginalName(destName, destDir, suffix);
@@ -1580,7 +1599,7 @@ CopyAttributes(CopyLoopControl* control, BNode* srcNode, BNode* destNode,
 static void
 CopyFolder(BEntry* srcEntry, BDirectory* destDir,
 	CopyLoopControl* loopControl, BPoint* loc, bool makeOriginalName,
-	Undo &undo, bool removeSource = false)
+	Undo &undo, bool removeSource = false, const char* newName = NULL)
 {
 	BDirectory newDir;
 	BEntry entry;
@@ -1599,7 +1618,11 @@ CopyFolder(BEntry* srcEntry, BDirectory* destDir,
 
 	loopControl->UpdateStatus(ref.name, ref, 1024, true);
 
-	if (makeOriginalName) {
+	if (newName != NULL) {
+		// Renga (batch 9): "Keep both", named by KeepBothName()
+		strlcpy(destName, newName, sizeof(destName));
+		undo.UpdateEntry(srcEntry, destName);
+	} else if (makeOriginalName) {
 		BString suffix(" ");
 		suffix << B_TRANSLATE_COMMENT("copy", "filename copy");
 		FSMakeOriginalName(destName, destDir, suffix);
@@ -1871,17 +1894,23 @@ MoveItem(BEntry* entry, BDirectory* destDir, BPoint* loc, uint32 moveMode,
 			// for "Move" the size for status is always 1 - since file
 			// size is irrelevant when simply moving to a new folder
 			loopControl->UpdateStatus(ref.name, ref, 1);
-			if (entry->IsDirectory())
+			// Renga (batch 9): "Keep both" moves a folder in under its new
+			// name instead of merging it
+			if (entry->IsDirectory() && newName == NULL)
 				return RecursiveMove(entry, destDir, loopControl);
 
+			if (newName != NULL)
+				undo.UpdateEntry(entry, newName);
 			MoveError::FailOnError(entry->MoveTo(destDir, newName));
 		} else {
 			bool removeSource = moveMode == kMoveSelectionTo;
 			bool makeOriginalName = (moveMode == kDuplicateSelection);
 			if (S_ISDIR(statbuf.st_mode)) {
-				CopyFolder(entry, destDir, loopControl, loc, makeOriginalName, undo, removeSource);
+				CopyFolder(entry, destDir, loopControl, loc, makeOriginalName,
+					undo, removeSource, newName);
 			} else {
-				CopyFile(entry, &statbuf, destDir, loopControl, loc, makeOriginalName, undo);
+				CopyFile(entry, &statbuf, destDir, loopControl, loc,
+					makeOriginalName, undo, newName);
 				if (removeSource)
 					entry->Remove();
 			}
@@ -2143,6 +2172,13 @@ PreFlightNameCheck(BObjectList<entry_ref, true>* srcList, const BDirectory* dest
 			(*collisionCount)++;
 	}
 
+	// Renga (F-66, batch 9): the ConflictDialog asks per item, with "Apply
+	// to all"; no question up front
+	if (TrackerSettings().KeepBothOnConflict() && moveMode != kCreateLink
+		&& moveMode != kCreateRelativeLink) {
+		return kNoConflicts;
+	}
+
 	// prompt user only if there is more than one collision, otherwise the
 	// single collision case will be handled as a "Prompt" case by CheckName
 	if (*collisionCount > 1) {
@@ -2196,10 +2232,46 @@ FileStatToString(StatStruct* stat, char* buffer, int32 length)
 }
 
 
+/*!	Renga (F-66, batch 9): the name "Keep both" gives the new item: "name
+	copy.ext", then "name copy 2.ext" and so on, keeping a short extension
+	at the end so the file still opens with its program.
+*/
+static void
+KeepBothName(const char* name, const BDirectory* destDir, BString& newName)
+{
+	BString base(name);
+	BString extension;
+	int32 dot = base.FindLast('.');
+	if (dot > 0 && base.Length() - dot <= 9
+		&& base.FindFirst(' ', dot) < 0) {
+		base.CopyInto(extension, dot, base.Length() - dot);
+		base.Truncate(dot);
+	}
+	BString copy(B_TRANSLATE_COMMENT("copy", "filename copy"));
+	for (int32 number = 1; number < 10000; number++) {
+		if (number == 1)
+			newName.SetToFormat("%s %s%s", base.String(), copy.String(),
+				extension.String());
+		else {
+			newName.SetToFormat("%s %s %" B_PRId32 "%s", base.String(),
+				copy.String(), number, extension.String());
+		}
+		if (newName.Length() >= B_FILE_NAME_LENGTH) {
+			base.Truncate(base.Length() - (newName.Length()
+				- B_FILE_NAME_LENGTH + 1));
+			number--;
+			continue;
+		}
+		if (!destDir->Contains(newName.String()))
+			return;
+	}
+}
+
+
 status_t
 CheckName(uint32 moveMode, const BEntry* sourceEntry,
 	const BDirectory* destDir, bool multipleCollisions,
-	ConflictCheckResult& conflictResolution)
+	ConflictCheckResult& conflictResolution, BString* keepBothName)
 {
 	if (moveMode == kDuplicateSelection) {
 		// when duplicating, we will never have a conflict
@@ -2286,7 +2358,53 @@ CheckName(uint32 moveMode, const BEntry* sourceEntry,
 	if (conflictResolution == kSkipAll)
 		return B_ERROR;
 
-	if (conflictResolution != kReplaceAll) {
+	// Renga (F-66, batch 9): one question with Replace (Merge for folders),
+	// Keep both, Skip and Cancel, and "Apply to all"
+	if (TrackerSettings().KeepBothOnConflict() && keepBothName != NULL
+		&& moveMode != kCreateLink && moveMode != kCreateRelativeLink) {
+		if (conflictResolution == kKeepBothAll) {
+			KeepBothName(name, destDir, *keepBothName);
+			return B_OK;
+		}
+		if (conflictResolution != kReplaceAll) {
+			char existingInfo[96] = "";
+			char newInfo[96] = "";
+			StatStruct statBuffer;
+			if (!sourceIsDirectory && sourceEntry->GetStat(&statBuffer) == B_OK)
+				FileStatToString(&statBuffer, newInfo, sizeof(newInfo));
+			if (!destIsDir && entry.GetStat(&statBuffer) == B_OK)
+				FileStatToString(&statBuffer, existingInfo,
+					sizeof(existingInfo));
+			BEntry destFolder;
+			destDir->GetEntry(&destFolder);
+			char folderName[B_FILE_NAME_LENGTH] = "";
+			destFolder.GetName(folderName);
+			// FileStatToString() gives "\n\t(<size> <date>)"
+			BString existingText(existingInfo);
+			BString newText(newInfo);
+			existingText.Trim().RemoveFirst("(").RemoveLast(")");
+			newText.Trim().RemoveFirst("(").RemoveLast(")");
+			ConflictDialog* dialog = new ConflictDialog(name, folderName,
+				existingText.String(), newText.String(), destIsDir,
+				moveMode == kMoveSelectionTo, multipleCollisions);
+			bool applyToAll = false;
+			switch (dialog->Go(&applyToAll)) {
+				case kConflictCancel:
+					conflictResolution = kCancelAll;
+					return B_ERROR;
+				case kConflictSkip:
+					conflictResolution = applyToAll ? kSkipAll : kPrompt;
+					return B_ERROR;
+				case kConflictKeepBoth:
+					conflictResolution = applyToAll ? kKeepBothAll : kPrompt;
+					KeepBothName(name, destDir, *keepBothName);
+					return B_OK;
+				case kConflictReplace:
+					conflictResolution = applyToAll ? kReplaceAll : kPrompt;
+					break;
+			}
+		}
+	} else if (conflictResolution != kReplaceAll) {
 		// prompt user to determine whether to replace or not
 		BString replaceMsg;
 

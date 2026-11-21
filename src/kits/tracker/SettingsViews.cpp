@@ -35,6 +35,7 @@ All rights reserved.
 
 #include "SettingsViews.h"
 
+#include "FolderSizeCache.h"
 #include "NavMenuPrefetch.h"
 
 #include <Box.h>
@@ -449,6 +450,9 @@ WindowsSettingsView::WindowsSettingsView()
 	fHideDotFilesCheckBox(NULL),
 	fTypeAheadFilteringCheckBox(NULL),
 	fGenerateImageThumbnailsCheckBox(NULL),
+	fShowFolderSizesCheckBox(NULL),
+	fKeepBothOnConflictCheckBox(NULL),
+	fOpenTerminalHereCheckBox(NULL),
 	fShowFullPathInTitleBar(kDefaultShowFullPathInTitleBar),
 	fSingleWindowBrowse(kDefaultSingleWindowBrowse),
 	fShowNavigator(kDefaultShowNavigator),
@@ -456,7 +460,10 @@ WindowsSettingsView::WindowsSettingsView()
 	fSortFolderNamesFirst(kDefaultSortFolderNamesFirst),
 	fHideDotFiles(kDefaultHideDotFiles),
 	fTypeAheadFiltering(kDefaultTypeAheadFiltering),
-	fGenerateImageThumbnails(kDefaultGenerateImageThumbnails)
+	fGenerateImageThumbnails(kDefaultGenerateImageThumbnails),
+	fShowFolderSizes(kDefaultShowFolderSizes),
+	fKeepBothOnConflict(kDefaultKeepBothOnConflict),
+	fOpenTerminalHere(kDefaultOpenTerminalHere)
 {
 	fShowFullPathInTitleBarCheckBox = new BCheckBox("",
 		B_TRANSLATE("Show folder location in title tab"),
@@ -490,6 +497,23 @@ WindowsSettingsView::WindowsSettingsView()
 		B_TRANSLATE("Generate image thumbnails"),
 		new BMessage(kGenerateImageThumbnailsChanged));
 
+	// Renga (F-66, batch 9)
+	fShowFolderSizesCheckBox = new BCheckBox("folderSizes",
+		B_TRANSLATE("Show folder sizes"),
+		new BMessage(kShowFolderSizesChanged));
+	fShowFolderSizesCheckBox->SetToolTip(B_TRANSLATE("The Size column "
+		"shows the size of each folder's contents, computed in the "
+		"background. Never on network volumes."));
+	fKeepBothOnConflictCheckBox = new BCheckBox("keepBoth",
+		B_TRANSLATE("Ask with \"Keep both\" when names collide"),
+		new BMessage(kKeepBothOnConflictChanged));
+	fKeepBothOnConflictCheckBox->SetToolTip(B_TRANSLATE("Copying or moving "
+		"onto an existing name asks once: Replace, Keep both, Skip or "
+		"Cancel, with \"Apply to all\". Off: the classic questions."));
+	fOpenTerminalHereCheckBox = new BCheckBox("openTerminal",
+		B_TRANSLATE("\"Open Terminal here\" in folder menus"),
+		new BMessage(kOpenTerminalHereChanged));
+
 	const float spacing = be_control_look->DefaultItemSpacing();
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
@@ -507,6 +531,9 @@ WindowsSettingsView::WindowsSettingsView()
 			.Add(fHideDotFilesCheckBox)
 			.Add(fTypeAheadFilteringCheckBox)
 			.Add(fGenerateImageThumbnailsCheckBox)
+			.Add(fShowFolderSizesCheckBox)
+			.Add(fKeepBothOnConflictCheckBox)
+			.Add(fOpenTerminalHereCheckBox)
 			.End()
 		.AddGlue()
 		.SetInsets(spacing);
@@ -524,6 +551,9 @@ WindowsSettingsView::AttachedToWindow()
 	fHideDotFilesCheckBox->SetTarget(this);
 	fTypeAheadFilteringCheckBox->SetTarget(this);
 	fGenerateImageThumbnailsCheckBox->SetTarget(this);
+	fShowFolderSizesCheckBox->SetTarget(this);
+	fKeepBothOnConflictCheckBox->SetTarget(this);
+	fOpenTerminalHereCheckBox->SetTarget(this);
 }
 
 
@@ -595,6 +625,9 @@ WindowsSettingsView::MessageReceived(BMessage* message)
 
 		case kHideDotFilesChanged:
 		{
+			bool value;
+			if (message->FindBool("renga:value", &value) == B_OK)
+				fHideDotFilesCheckBox->SetValue(value);
 			settings.SetHideDotFiles(
 				fHideDotFilesCheckBox->Value() == 1);
 			send_bool_notices(kHideDotFilesChanged,
@@ -622,6 +655,34 @@ WindowsSettingsView::MessageReceived(BMessage* message)
 			send_bool_notices(kGenerateImageThumbnailsChanged,
 				"GenerateImageThumbnails",
 				fGenerateImageThumbnailsCheckBox->Value() == 1);
+			Window()->PostMessage(kSettingsContentsModified);
+			break;
+		}
+
+		// Renga (F-66, batch 9); "renga:value" (bool) sets the check box
+		// first, for the tests
+		case kShowFolderSizesChanged:
+		case kKeepBothOnConflictChanged:
+		case kOpenTerminalHereChanged:
+		{
+			BCheckBox* box = message->what == kShowFolderSizesChanged
+				? fShowFolderSizesCheckBox
+				: message->what == kKeepBothOnConflictChanged
+					? fKeepBothOnConflictCheckBox : fOpenTerminalHereCheckBox;
+			bool value;
+			if (message->FindBool("renga:value", &value) == B_OK)
+				box->SetValue(value);
+			bool enabled = box->Value() == 1;
+			if (message->what == kShowFolderSizesChanged) {
+				settings.SetShowFolderSizes(enabled);
+				if (!enabled)
+					FolderSizeCache::Default()->Clear();
+				send_bool_notices(kShowFolderSizesChanged, "ShowFolderSizes",
+					enabled);
+			} else if (message->what == kKeepBothOnConflictChanged)
+				settings.SetKeepBothOnConflict(enabled);
+			else
+				settings.SetOpenTerminalHere(enabled);
 			Window()->PostMessage(kSettingsContentsModified);
 			break;
 		}
@@ -687,6 +748,14 @@ WindowsSettingsView::SetDefaults()
 			"GenerateImageThumbnails", kDefaultGenerateImageThumbnails);
 	}
 
+	if (settings.ShowFolderSizes() != kDefaultShowFolderSizes) {
+		settings.SetShowFolderSizes(kDefaultShowFolderSizes);
+		send_bool_notices(kShowFolderSizesChanged, "ShowFolderSizes",
+			kDefaultShowFolderSizes);
+	}
+	settings.SetKeepBothOnConflict(kDefaultKeepBothOnConflict);
+	settings.SetOpenTerminalHere(kDefaultOpenTerminalHere);
+
 	ShowCurrentSettings();
 }
 
@@ -703,7 +772,10 @@ WindowsSettingsView::IsDefaultable() const
 		|| settings.SortFolderNamesFirst() != kDefaultSortFolderNamesFirst
 		|| settings.HideDotFiles() != kDefaultHideDotFiles
 		|| settings.TypeAheadFiltering() != kDefaultTypeAheadFiltering
-		|| settings.GenerateImageThumbnails() != kDefaultGenerateImageThumbnails;
+		|| settings.GenerateImageThumbnails() != kDefaultGenerateImageThumbnails
+		|| settings.ShowFolderSizes() != kDefaultShowFolderSizes
+		|| settings.KeepBothOnConflict() != kDefaultKeepBothOnConflict
+		|| settings.OpenTerminalHere() != kDefaultOpenTerminalHere;
 }
 
 
@@ -744,7 +816,10 @@ WindowsSettingsView::Revert()
 	}
 
 	if (settings.HideDotFiles() != fHideDotFiles) {
-		settings.SetSortFolderNamesFirst(fHideDotFiles);
+		// Renga (batch 9, F-60 review): this set "List folders first"
+		// instead (upstream bug), so Revert never restored "Hide dotfiles"
+		// and changed the folder sorting
+		settings.SetHideDotFiles(fHideDotFiles);
 		send_bool_notices(kHideDotFilesChanged,
 			"HideDotFiles", fHideDotFiles);
 	}
@@ -760,6 +835,14 @@ WindowsSettingsView::Revert()
 		send_bool_notices(kGenerateImageThumbnailsChanged,
 			"GenerateImageThumbnails", fGenerateImageThumbnails);
 	}
+
+	if (settings.ShowFolderSizes() != fShowFolderSizes) {
+		settings.SetShowFolderSizes(fShowFolderSizes);
+		send_bool_notices(kShowFolderSizesChanged, "ShowFolderSizes",
+			fShowFolderSizes);
+	}
+	settings.SetKeepBothOnConflict(fKeepBothOnConflict);
+	settings.SetOpenTerminalHere(fOpenTerminalHere);
 
 	ShowCurrentSettings();
 }
@@ -782,6 +865,9 @@ WindowsSettingsView::ShowCurrentSettings()
 	fTypeAheadFilteringCheckBox->SetValue(settings.TypeAheadFiltering());
 	fGenerateImageThumbnailsCheckBox->SetValue(
 		settings.GenerateImageThumbnails());
+	fShowFolderSizesCheckBox->SetValue(settings.ShowFolderSizes());
+	fKeepBothOnConflictCheckBox->SetValue(settings.KeepBothOnConflict());
+	fOpenTerminalHereCheckBox->SetValue(settings.OpenTerminalHere());
 }
 
 
@@ -798,6 +884,9 @@ WindowsSettingsView::RecordRevertSettings()
 	fHideDotFiles = settings.HideDotFiles();
 	fTypeAheadFiltering = settings.TypeAheadFiltering();
 	fGenerateImageThumbnails = settings.GenerateImageThumbnails();
+	fShowFolderSizes = settings.ShowFolderSizes();
+	fKeepBothOnConflict = settings.KeepBothOnConflict();
+	fOpenTerminalHere = settings.OpenTerminalHere();
 }
 
 
@@ -813,7 +902,10 @@ WindowsSettingsView::IsRevertable() const
 		|| fSortFolderNamesFirst != settings.SortFolderNamesFirst()
 		|| fHideDotFiles != settings.HideDotFiles()
 		|| fTypeAheadFiltering != settings.TypeAheadFiltering()
-		|| fGenerateImageThumbnails != settings.GenerateImageThumbnails();
+		|| fGenerateImageThumbnails != settings.GenerateImageThumbnails()
+		|| fShowFolderSizes != settings.ShowFolderSizes()
+		|| fKeepBothOnConflict != settings.KeepBothOnConflict()
+		|| fOpenTerminalHere != settings.OpenTerminalHere();
 }
 
 

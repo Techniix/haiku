@@ -2939,6 +2939,8 @@ BContainerWindow::UpdateWindowContextMenu(BMenu* menu)
 
 	UpdateWindowMenuOrWindowContextMenu(menu, kWindowPopUpContext);
 
+	_SetupOpenTerminalItem(menu);
+
 	// "Mount >" menu is inserted at the bottom
 	if (PoseView()->IsDesktopView() || TargetModel()->IsRoot())
 		SetupMountMenu(menu, kWindowPopUpContext, TargetModel()->EntryRef());
@@ -2998,6 +3000,57 @@ BContainerWindow::UpdateWindowMenuOrWindowContextMenu(BMenu* menu, MenuContext c
 	MarkNamedMenuItem(menu, kIconMode, viewMode == kIconMode);
 	MarkNamedMenuItem(menu, kListMode, viewMode == kListMode);
 	MarkNamedMenuItem(menu, kMiniIconMode, viewMode == kMiniIconMode);
+}
+
+
+/*!	Renga (F-66, batch 9): "Open Terminal here" in the window's context
+	menu, after "Open parent" (or "Select all"), for a real folder, while
+	"\"Open Terminal here\" in folder menus" is on (Tracker preferences).
+*/
+void
+BContainerWindow::_SetupOpenTerminalItem(BMenu* menu)
+{
+	BMenuItem* item = menu->FindItem(kOpenTerminalHere);
+	if (item != NULL) {
+		menu->RemoveItem(item);
+		delete item;
+	}
+
+	Model* model = TargetModel();
+	if (!TrackerSettings().OpenTerminalHere() || model == NULL
+		|| !model->IsDirectory() || model->IsTrash() || model->InTrash()
+		|| model->IsPrintersDir() || model->IsRoot()
+		|| model->IsVirtualDirectory()) {
+		return;
+	}
+
+	BMessage* message = new BMessage(kOpenTerminalHere);
+	message->AddRef("refs", model->EntryRef());
+	item = new BMenuItem(B_TRANSLATE("Open Terminal here"), message);
+	item->SetTarget(be_app);
+
+	BMenuItem* after = menu->FindItem(kOpenParentDir);
+	if (after == NULL)
+		after = menu->FindItem(B_SELECT_ALL);
+	int32 index = after != NULL ? menu->IndexOf(after) + 1 : menu->CountItems();
+	menu->AddItem(item, index);
+}
+
+
+/*!	Renga (batch 9), harness images only: the window's context menu as
+	opening it shows it, as labels into \a reply ("item").
+*/
+void
+BContainerWindow::WindowContextMenuForTest(BMessage* reply)
+{
+	if (fWindowContextMenu == NULL)
+		return;
+	UpdateWindowContextMenu(fWindowContextMenu);
+	for (int32 i = 0; i < fWindowContextMenu->CountItems(); i++) {
+		BMenuItem* item = fWindowContextMenu->ItemAt(i);
+		if (item->Label() != NULL && item->Label()[0] != '\0')
+			reply->AddString("item", item->Label());
+	}
 }
 
 

@@ -7,14 +7,21 @@ Application tracker_menu_test :
 ;
 
 # Tracker's defaults for new installs (batch 7), see the source.
-UsePrivateHeaders tracker shared ;
+UsePrivateHeaders tracker shared mount interface ;
 SubDirHdrs $(HAIKU_TOP) src kits tracker ;
 Application tracker_defaults_test :
 	tracker_defaults_test.cpp
 	: be tracker [ TargetLibstdc++ ]
 ;
 
+# Tracker's batch 9 features (F-66) and the F-60 numbers, see the source;
+# it links libtracker to copy with Tracker's own copy engine.
+Application tracker_modern_test :
+	tracker_modern_test.cpp
+	: be tracker [ TargetLibstdc++ ]
+;
+
 if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : tracker_menu_test
-		tracker_defaults_test ;
+		tracker_defaults_test tracker_modern_test ;
 }

@@ -717,6 +717,26 @@ of a 1 GiB guest was, so the bounce path went untested.
   cache, and Defaults turns it on. Starts Tracker if it is not running
   (renga-* images) and quits it again at the end, so later suites run on
   the same desktop as before. Build times are INFO only.
+- **tracker_modern** (every image, `tracker_modern_test`; F-66, F-60,
+  batch 9): a folder of 10 000 files opens and shows all of them while
+  Tracker keeps answering (window, all-shown and longest-answer times as
+  INFO); through Tracker's hook `kTestTrackerState` (harness images only):
+  a folder with 10 000 bytes in four files (one a level deeper) is
+  computed in the background as 10 000, its row in the list view shows
+  "9.77 KiB" (screenshot `tracker_folder_sizes`), "Show folder sizes" off
+  in the preferences shows "-" and on shows the size again; "Open
+  Terminal here" is in a folder window's context menu only with its
+  switch on, and starts a Terminal in that folder; Revert in the
+  preferences restores "Hide dotfiles" without touching "List folders
+  first" (screenshot `tracker_preferences_batch9`; an upstream bug, the
+  check fails on the old code). The name-conflict question runs in the
+  test program itself, which copies with Tracker's own engine
+  (`FSMoveToFolder()`, libtracker) and answers by posting the buttons'
+  messages: Keep both with "Apply to all" (screenshot
+  `tracker_conflict_dialog`), Replace with "Apply to all", Skip then Keep
+  both, Cancel, a folder kept as "d copy", a move that keeps both, and the
+  classic question with the switch off. Starts Tracker where it is not
+  running and quits it again.
 - **deskbar** (every image, `deskbar_test`; F-41, F-60, batch 9): the
   Deskbar's harness hooks (harness images only, `BarApp.h`) build the
   Deskbar menu as opening it does: "Search..." heads it, it builds in
