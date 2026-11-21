@@ -31,6 +31,9 @@ UnixAddress::ToString(char *buffer, size_t bufferSize) const
 		strlcpy(buffer, "<empty>", bufferSize);
 	else if (IsInternalAddress())
 		snprintf(buffer, bufferSize, "<%05" B_PRIx32 ">", fInternalID);
+	else if (IsAbstractAddress())
+		snprintf(buffer, bufferSize, "<@%.*s>", (int)fAbstractLength,
+			fAbstractName);
 	else {
 		snprintf(buffer, bufferSize, "<%" B_PRIdDEV ", %" B_PRIdINO ">",
 			fVolumeID, fNodeID);

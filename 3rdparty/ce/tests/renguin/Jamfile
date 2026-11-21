@@ -66,7 +66,18 @@ programs += [ RenguinLinuxProgram libc-wait : libc-wait.c : libc
 # DRM sync objects passed through (Quasar R-18).
 programs += [ RenguinLinuxProgram libc-syncobj : libc-syncobj.c : libc
 	: -static ] ;
-for name in pthread libc-signals libc-fs {
+programs += [ RenguinLinuxProgram libc-unix : libc-unix.c : libc
+	: -static ] ;
+programs += [ RenguinLinuxProgram libc-vdso : libc-vdso.c : libc
+	: -static ] ;
+programs += [ RenguinLinuxProgram libc-evdev : libc-evdev.c : libc
+	: -static ] ;
+programs += [ RenguinLinuxProgram libc-xattr : libc-xattr.c : libc
+	: -static ] ;
+# not run by renguin_test: linux_apps_test makes an AppImage of it
+programs += [ RenguinLinuxProgram appimage-fake : appimage-fake.c : libc
+	: -static ] ;
+for name in pthread libc-signals libc-fs libc-ipc libc-pshared {
 	programs += [ RenguinLinuxProgram $(name) : $(name).c : libc
 		: -static -pthread ] ;
 }

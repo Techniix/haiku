@@ -1,20 +1,24 @@
 # Renguin: Linux system call coverage
 
 What the renguin personality (`src/add-ons/kernel/personalities/renguin`)
-does with each x86-64 Linux system call, as of 2026-11-14. The numbers and
+does with each x86-64 Linux system call, as of 2026-11-21 (batch 10). The numbers and
 names are those of `abi/linux_syscall_names.h` (FreeBSD's `syscalls.master`,
 350 named entries, up to `map_shadow_stack`); the table comes from the dispatch in
 `syscall.cpp`. Roadmap F-27 keeps the plan; the harness's `renguin` suite
 tests what is listed as implemented (3rdparty/ce/README.md).
 
-- **Implemented** (206): handled, mostly on Haiku's own calls with Linux
+- **Implemented** (238): handled, mostly on Haiku's own calls with Linux
   structures, flags and errno values translated; event and memory
   descriptors (epoll, eventfd, timerfd, signalfd, inotify, memfd with
   seals) are Renga's own implementations (`fds.cpp`); sockets are Haiku's
-  network stack (`net.cpp`), with a read-only NETLINK_ROUTE.
-- **Stubbed** (20): accepted without effect, or refused with a fixed error
+  network stack (`net.cpp`), with a read-only NETLINK_ROUTE. Batch 10:
+  POSIX timers on Haiku's user timers (`timers.cpp`), System V shared
+  memory, semaphores and message queues on Haiku's XSI IPC (`ipc.cpp`,
+  shared with native programs), extended attributes on Haiku's file
+  attributes (`xattr.cpp`).
+- **Stubbed** (8): accepted without effect, or refused with a fixed error
   that Linux programs handle (in brackets).
-- **Missing** (124): -ENOSYS, logged once per program in the syslog
+- **Missing** (104): -ENOSYS, logged once per program in the syslog
   ("unimplemented Linux syscall").
 
 ## Implemented
@@ -70,24 +74,24 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `247 waitid`, `328 pwritev2`, `332 statx`, `435 clone3`,
 `436 close_range`, `439 faccessat2`
 `441 epoll_pwait2`, `452 fchmodat2`
+`29 shmget`, `30 shmat`, `31 shmctl`, `64 semget`, `65 semop`
+`66 semctl`, `67 shmdt`, `68 msgget`, `69 msgsnd`, `70 msgrcv`
+`71 msgctl`, `220 semtimedop`, `222 timer_create`, `223 timer_settime`
+`224 timer_gettime`, `225 timer_getoverrun`, `226 timer_delete`
+`188 setxattr`, `189 lsetxattr`, `190 fsetxattr`, `191 getxattr`
+`192 lgetxattr`, `193 fgetxattr`, `194 listxattr`, `195 llistxattr`
+`196 flistxattr`, `197 removexattr`, `198 lremovexattr`
+`199 fremovexattr`
 
 ## Stubbed
 
 `149 mlock (0)`, `150 munlock (0)`, `151 mlockall (0)`
-`152 munlockall (0)`, `161 chroot (EPERM)`, `188 setxattr (EOPNOTSUPP)`
-`189 lsetxattr (EOPNOTSUPP)`, `190 fsetxattr (EOPNOTSUPP)`
-`191 getxattr (EOPNOTSUPP)`, `192 lgetxattr (EOPNOTSUPP)`
-`193 fgetxattr (EOPNOTSUPP)`, `194 listxattr (EOPNOTSUPP)`
-`195 llistxattr (EOPNOTSUPP)`, `196 flistxattr (EOPNOTSUPP)`
-`197 removexattr (EOPNOTSUPP)`, `198 lremovexattr (EOPNOTSUPP)`
-`199 fremovexattr (EOPNOTSUPP)`, `325 mlock2 (0)`
+`152 munlockall (0)`, `161 chroot (EPERM)`, `325 mlock2 (0)`
 `326 copy_file_range (ENOSYS)`, `334 rseq (ENOSYS)`
 
 ## Missing
 
-`27 mincore`, `29 shmget`, `30 shmat`, `31 shmctl`, `64 semget`
-`65 semop`, `66 semctl`, `67 shmdt`, `68 msgget`, `69 msgsnd`, `70 msgrcv`
-`71 msgctl`, `78 getdents`, `101 ptrace`, `103 syslog`, `125 capget`
+`27 mincore`, `78 getdents`, `101 ptrace`, `103 syslog`, `125 capget`
 `126 capset`, `136 ustat`, `139 sysfs`, `153 vhangup`, `154 modify_ldt`
 `155 pivot_root`, `156 sysctl`, `159 adjtimex`, `163 acct`
 `164 settimeofday`, `165 mount`, `166 umount`, `167 swapon`, `168 swapoff`
@@ -95,9 +99,7 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `173 ioperm`, `175 init_module`, `176 delete_module`, `179 quotactl`
 `206 io_setup`, `207 io_destroy`, `208 io_getevents`, `209 io_submit`
 `210 io_cancel`, `212 lookup_dcookie`, `216 remap_file_pages`
-`219 restart_syscall`, `220 semtimedop`, `222 timer_create`
-`223 timer_settime`, `224 timer_gettime`, `225 timer_getoverrun`
-`226 timer_delete`, `227 clock_settime`, `237 mbind`, `238 set_mempolicy`
+`219 restart_syscall`, `227 clock_settime`, `237 mbind`, `238 set_mempolicy`
 `239 get_mempolicy`, `240 mq_open`, `241 mq_unlink`, `242 mq_timedsend`
 `243 mq_timedreceive`, `244 mq_notify`, `245 mq_getsetattr`
 `246 kexec_load`, `248 add_key`, `249 request_key`
@@ -119,9 +121,8 @@ tests what is listed as implemented (3rdparty/ce/README.md).
 `448 process_mrelease`, `449 futex_waitv`, `450 set_mempolicy_home_node`
 `451 cachestat`, `453 map_shadow_stack`
 
-Next, by use in the application ladder (F-27): `execveat`, `restart_syscall`, `mincore`; the POSIX timers
-(`timer_*`) and message queues (`mq_*`) and System V shared memory, which
-Renga has natively (F-12) and only need mapping; `copy_file_range` and
+Next, by use in the application ladder (F-27): `execveat`, `restart_syscall`, `mincore`; the POSIX
+message queues (`mq_*`), which Renga has natively and only need mapping; `copy_file_range` and
 `splice`/`tee` (coreutils, cat and cp fall back today); `pidfd_open`,
 `pidfd_send_signal`, `pidfd_getfd` (with F-52); `getdents` (old ABI);
 `ptrace` (gdb, strace; a kernel addition); `seccomp` and `unshare`/`setns`
@@ -138,16 +139,21 @@ Renga has natively (F-12) and only need mapping; `copy_file_range` and
   socket requests SIOCGIFNAME, SIOCGIFCONF, SIOCGIFFLAGS, SIOCGIFADDR,
   SIOCGIFDSTADDR, SIOCGIFBRDADDR, SIOCGIFNETMASK, SIOCGIFMETRIC,
   SIOCGIFMTU, SIOCGIFHWADDR, SIOCGIFINDEX, SIOCGIFTXQLEN, SIOCATMARK.
-  Anything else: ENOTTY. Not yet: evdev and hidraw pass-through for
-  gamepads (F-42 note), DRM, V4L2.
+  Batch 10: evdev ('E'), uinput ('U') and hidraw ('H') requests go to
+  Renga's gamepad core unchanged (it speaks Linux's numbers and layouts);
+  `/dev/uinput` is `/dev/input/uinput`. Anything else: ENOTTY. Not yet:
+  DRM, V4L2.
 - **fcntl**: F_DUPFD(_CLOEXEC), F_GETFD/SETFD, F_GETFL/SETFL, F_GETLK/
   SETLK/SETLKW and the F_OFD_* variants (as process locks), F_ADD_SEALS/
   F_GET_SEALS, F_GETPIPE_SZ/SETPIPE_SZ (64 KiB reported), F_SETOWN/
   F_GETOWN/F_SETSIG/F_GETSIG (accepted, no SIGIO).
-- **Sockets**: AF_UNIX (path names; abstract names are refused until
-  F-52 adds them to Haiku's stack), AF_INET, AF_INET6 (no IPv4-mapped
-  addresses: a server listening on [::] does not see IPv4 clients, as on
-  Linux with IPV6_V6ONLY), AF_NETLINK with NETLINK_ROUTE (RTM_GETLINK,
+- **Sockets**: AF_UNIX (path names, and since batch 10 abstract names:
+  Renga's stack keeps any name after a null byte as an abstract name,
+  `UnixAddress.h`, shared with native programs; Haiku's 5-hex-digit
+  internal names are the autobind form, as on Linux), AF_INET, AF_INET6
+  (no IPv4-mapped addresses yet: a server listening on [::] does not see
+  IPv4 clients, as on Linux with IPV6_V6ONLY; needs dual-stack lookups in
+  Haiku's TCP and UDP modules), AF_NETLINK with NETLINK_ROUTE (RTM_GETLINK,
   RTM_GETADDR, RTM_GETROUTE dumps and single requests; empty neighbour and
   rule dumps; changes refused with EPERM; no multicast notifications);
   AF_PACKET is refused. SCM_RIGHTS works in both directions and with
@@ -172,8 +178,10 @@ Renga has natively (F-12) and only need mapping; `copy_file_range` and
   (procfs.cpp); `/dev` is Haiku's. On BFS, which stores no access time,
   st_atime is the modification time (as on a Linux volume mounted with
   noatime) instead of "now"; access times set with utimensat() are kept
-  only on volumes that store them. Extended attributes: EOPNOTSUPP until
-  the F-52 mapping of BFS attributes.
+  only on volumes that store them. Extended attributes (batch 10): the
+  user.* namespace is the file's Haiku attributes, byte for byte (new
+  ones are B_RAW_TYPE, BEOS:TYPE and the other MIME-string names keep
+  their type); other namespaces are EOPNOTSUPP; switch "xattrs false".
 - **The `linux` command** (`src/bin/linux`, 2026-11-14): starts the Linux
   root's login shell, or runs one command, with a clean Linux environment
   (Linux PATH, HOME, TERM, LANG, XDG_RUNTIME_DIR, WAYLAND_DISPLAY); the
@@ -181,3 +189,15 @@ Renga has natively (F-12) and only need mapping; `copy_file_range` and
   and Terminal's title is "Linux (Renguin)". `linux --setup` installs Alpine's
   minirootfs (pinned SHA-256) when there is no root. Deskbar's "Linux
   shell" (`src/apps/linuxshell`) opens Terminal with it.
+- **vDSO** (batch 10, `vdso/`, `vdso.cpp`): `__vdso_clock_gettime`
+  (realtime, monotonic and their coarse/raw/boottime forms),
+  `__vdso_gettimeofday`, `__vdso_time` and `__vdso_getcpu` (RDPID or
+  RDTSCP's TSC_AUX) without entering the kernel, from the commpage's
+  real_time_data; AT_SYSINFO_EHDR; "[vdso]" in /proc/self/maps; switch
+  "vdso false". clock_gettime() as a system call now has nanoseconds too.
+- **Futexes** (batch 10): shared futexes (no FUTEX_PRIVATE_FLAG) in shared
+  memory (MAP_SHARED, memfd, System V segments) are keyed by the memory,
+  so processes can wait and wake each other.
+- **Scheduling** (batch 10): setpriority()/getpriority() nice values on
+  the thread's Haiku priority (positive nice lower, negative nice at most
+  B_DISPLAY_PRIORITY).

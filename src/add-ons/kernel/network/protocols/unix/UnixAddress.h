@@ -5,6 +5,8 @@
 #ifndef UNIX_ADDRESS_H
 #define UNIX_ADDRESS_H
 
+#include <stddef.h>
+#include <string.h>
 #include <sys/un.h>
 
 #include <SupportDefs.h>
@@ -20,6 +22,11 @@
 
 #define	INTERNAL_UNIX_ADDRESS_LEN	(2 + 1 + 5)
 	// sun_len + sun_family + null byte + 5 hex digits
+
+// Renga: any other name after the null byte is a Linux abstract name: the
+// bytes up to the address length (sun_len), with no null termination,
+// nulls included. Linux allows up to 107 bytes (sun_path is 108 there).
+#define	UNIX_ABSTRACT_NAME_MAX		107
 
 
 struct vnode;
@@ -53,6 +60,7 @@ public:
 		fVolumeID = -1;
 		fNodeID = -1;
 		fVnode = NULL;
+		fAbstractLength = 0;
 	}
 
 	void SetTo(dev_t volumeID, ino_t nodeID, struct vnode* vnode)
@@ -61,6 +69,18 @@ public:
 		fVolumeID = volumeID;
 		fNodeID = nodeID;
 		fVnode = vnode;
+		fAbstractLength = 0;
+	}
+
+	//! A Linux abstract name of 1 to UNIX_ABSTRACT_NAME_MAX bytes.
+	void SetToAbstract(const char* name, size_t length)
+	{
+		fInternalID = -1;
+		fVolumeID = -1;
+		fNodeID = -1;
+		fVnode = NULL;
+		fAbstractLength = length;
+		memcpy(fAbstractName, name, length);
 	}
 
 	void Unset()
@@ -69,11 +89,17 @@ public:
 		fVolumeID = -1;
 		fNodeID = -1;
 		fVnode = NULL;
+		fAbstractLength = 0;
 	}
 
 	bool IsValid() const
 	{
-		return fInternalID >= 0 || fVolumeID >= 0;
+		return fInternalID >= 0 || fVolumeID >= 0 || fAbstractLength > 0;
+	}
+
+	bool IsAbstractAddress() const
+	{
+		return fAbstractLength > 0;
 	}
 
 	bool IsInternalAddress() const
@@ -103,6 +129,13 @@ public:
 
 	uint32 HashCode() const
 	{
+		if (fAbstractLength > 0) {
+			// FNV-1a of the name; kept apart from small internal IDs
+			uint32 hash = 2166136261u;
+			for (uint32 i = 0; i < fAbstractLength; i++)
+				hash = (hash ^ (uint8)fAbstractName[i]) * 16777619u;
+			return hash | 0x80000000u;
+		}
 		return fInternalID >= 0
 			? fInternalID
 			: uint32(fVolumeID) ^ uint32(fNodeID);
@@ -116,11 +149,18 @@ public:
 		fVolumeID = other.fVolumeID;
 		fNodeID = other.fNodeID;
 		fVnode = other.fVnode;
+		fAbstractLength = other.fAbstractLength;
+		memcpy(fAbstractName, other.fAbstractName, fAbstractLength);
 		return *this;
 	}
 
 	bool operator==(const UnixAddress& other) const
 	{
+		if (fAbstractLength > 0 || other.fAbstractLength > 0) {
+			return fAbstractLength == other.fAbstractLength
+				&& memcmp(fAbstractName, other.fAbstractName,
+					fAbstractLength) == 0;
+		}
 		return fInternalID >= 0
 			? fInternalID == other.fInternalID
 			: fVolumeID == other.fVolumeID
@@ -158,7 +198,42 @@ public:
 				return B_BAD_VALUE;
 		}
 
+		if (address.sun_len > INTERNAL_UNIX_ADDRESS_LEN) {
+			// longer addresses stay internal IDs only if the rest is nulls
+			// (native callers passing sizeof(sockaddr_un)); otherwise they
+			// are abstract names
+			size_t length = address.sun_len;
+			if (length > sizeof(sockaddr_un))
+				length = sizeof(sockaddr_un);
+			for (size_t i = INTERNAL_UNIX_ADDRESS_LEN; i < length; i++) {
+				if (((const char*)&address)[i] != '\0')
+					return B_BAD_VALUE;
+			}
+		}
+
 		return id;
+	}
+
+	/*!	The address of a name in the internal space (sun_path[0] is a null
+		byte, not the empty address): Haiku's 5-hex-digit internal IDs, or
+		else a Linux abstract name. B_BAD_VALUE if there is no name.
+	*/
+	static status_t FromInternalSpace(const sockaddr_un& address,
+		UnixAddress& _address)
+	{
+		int32 internalID = InternalID(address);
+		if (internalID >= 0) {
+			_address.SetTo(internalID);
+			return B_OK;
+		}
+		size_t offset = offsetof(sockaddr_un, sun_path) + 1;
+		size_t end = address.sun_len;
+		if (end > sizeof(sockaddr_un))
+			end = sizeof(sockaddr_un);
+		if (end <= offset || end - offset > UNIX_ABSTRACT_NAME_MAX)
+			return B_BAD_VALUE;
+		_address.SetToAbstract(address.sun_path + 1, end - offset);
+		return B_OK;
 	}
 
 private:
@@ -168,6 +243,8 @@ private:
 	dev_t			fVolumeID;
 	ino_t			fNodeID;
 	struct vnode*	fVnode;
+	uint32			fAbstractLength;	// > 0: a Linux abstract name
+	char			fAbstractName[UNIX_ABSTRACT_NAME_MAX];
 };
 
 

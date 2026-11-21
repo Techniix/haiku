@@ -66,7 +66,17 @@
 	  chrome.dump_dom          only in images with the Chromium layer
 	                           (ce-test.py --linux-chromium): Alpine's
 	                           Chromium, headless, loads a local page, runs
-	                           its script and prints the DOM
+	                           its script and prints the DOM;
+	                           chrome.dump_dom_multi: the same with
+	                           Chromium's process model, five runs
+	  libc-ipc ... libc-xattr  (batch 10, static glibc programs in
+	                           linux/expected.txt) POSIX timers and System
+	                           V IPC, abstract AF_UNIX names, the vDSO,
+	                           shared futexes between processes, gamepads
+	                           through evdev and uinput, extended
+	                           attributes on Haiku attributes
+	  xattr.native             what libc-xattr wrote is a BFS attribute
+	                           with the right type, seen by listattr
 	  dyn.ip                   busybox ip addr/route (netlink) and ifconfig
 	                           (SIOCGIF* ioctls) show the loopback "lo"
 	  dyn.resolv_conf          /etc/resolv.conf in the root is Haiku's own
@@ -474,11 +484,87 @@ run_chromium_check()
 	// threads): works under Renguin.
 	run_chromium_dump("chrome.dump_dom", "--single-process", false);
 	// Chromium's normal process model (browser, renderer and utility
-	// processes over Mojo). Batch 3: worked in 3 of 5 runs (one failure
-	// came from a session bus that did not answer, since fixed); the other
-	// child processes reported "no connection" after 15 s. Informational
-	// until it passes every time (docs/partners/CHROMIUM.md).
-	run_chromium_dump("chrome.dump_dom_multi", "", true);
+	// processes over Mojo). Batch 3: worked in 3 of 5 runs; the failing
+	// runs' children "terminated after 15 seconds with no connection".
+	// Batch 10 traced it (trace_process with trace_buffer): the children's
+	// Mojo channels work; the browser's process launcher thread did not get
+	// the CPU for 8-36 s at a time under one emulated CPU, so it did not
+	// finish launching (Unpause of the child's channel) within Chromium's
+	// 15 s connection timeout. Renguin now applies Chromium's thread nice
+	// values (background threads lower), and the check runs five times.
+	int works = 0;
+	const int kRuns = 5;
+	for (int i = 0; i < kRuns; i++) {
+		if (run_chromium_dump("chrome.dump_dom_multi_run", "", true))
+			works++;
+	}
+	report("chrome.dump_dom_multi", works == kRuns, "%d of %d runs",
+		works, kRuns);
+}
+
+
+/*!	The application ladder (roadmap F-27), rungs 1-3, in images whose
+	Linux root carries them (the Chromium root, ce-test.py
+	--linux-chromium): bash, git, python3, curl and apk.
+	  ladder.bash    a bash script with a pipe and arithmetic
+	  ladder.git     git init, add, commit, log and status in /tmp
+	  ladder.python  python3 with json, hashlib and sqlite3
+	  ladder.curl    curl fetches a page from python3's http.server on
+	                 127.0.0.1 (both Linux programs, Renguin's sockets)
+	  ladder.apk     apk-tools answers about the root's packages
+*/
+static void
+run_ladder_checks()
+{
+	if (access((std::string(kRoot) + "/bin/bash").c_str(), F_OK) != 0) {
+		printf("CE-INFO renguin: no bash in the Linux root (the ladder comes "
+			"with ce-test.py --linux-chromium); ladder.* not checked\n");
+		fflush(stdout);
+		return;
+	}
+	std::string output = run("timeout 60 /bin/linux bash -c 'n=0; "
+		"for i in 1 2 3 4; do n=$((n + i)); done; "
+		"echo \"bash ${BASH_VERSINFO[0]} sum $n $(printf a\\\\nb | wc -l)\"' "
+		"2>&1");
+	report("ladder.bash", output.find("bash 5 sum 10 1") != std::string::npos,
+		"%s", one_line(output).c_str());
+
+	output = run("timeout 120 /bin/linux sh -c 'cd /tmp && rm -rf rg-git && "
+		"mkdir rg-git && cd rg-git && git init -q && "
+		"git config user.email ce@renga.invalid && git config user.name CE && "
+		"echo hello > file && git add file && git commit -qm first && "
+		"echo \"commits $(git log --oneline | wc -l) "
+		"changes $(git status --porcelain | wc -l)\"' 2>&1; "
+		"rm -rf /tmp/rg-git");
+	report("ladder.git", output.find("commits 1 changes 0")
+			!= std::string::npos, "%s", one_line(output).c_str());
+
+	output = run("timeout 120 /bin/linux python3 -c 'import json, hashlib, "
+		"sqlite3; c = sqlite3.connect(\":memory:\"); "
+		"c.execute(\"create table t (x)\"); "
+		"c.execute(\"insert into t values (42)\"); "
+		"print(json.dumps({\"sha\": hashlib.sha256(b\"renga\").hexdigest()"
+		"[:8], \"row\": c.execute(\"select x from t\").fetchone()[0]}))' "
+		"2>&1");
+	report("ladder.python", output.find("\"row\": 42") != std::string::npos
+			&& output.find("\"sha\": \"") != std::string::npos,
+		"%s", one_line(output).c_str());
+
+	output = run("rm -rf /tmp/rg-www && mkdir -p /tmp/rg-www && "
+		"echo renguin-ladder-page > /tmp/rg-www/index.html && "
+		"timeout 120 /bin/linux sh -c '(python3 -m http.server 8099 "
+		"--bind 127.0.0.1 --directory /tmp/rg-www >/dev/null 2>&1 &) ; "
+		"for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do "
+		"curl -s http://127.0.0.1:8099/index.html && break; sleep 2; done; "
+		"pkill -f \"http.server 8099\"' 2>&1; rm -rf /tmp/rg-www");
+	report("ladder.curl", output.find("renguin-ladder-page")
+			!= std::string::npos, "%s", one_line(output).c_str());
+
+	output = run("timeout 60 /bin/linux sh -c 'apk --version; "
+		"apk info -e busybox' 2>&1");
+	report("ladder.apk", output.find("apk-tools") != std::string::npos
+			&& output.find("busybox") != std::string::npos,
+		"%s", one_line(output).c_str());
 }
 
 
@@ -671,9 +757,20 @@ main()
 	}
 	fclose(expected);
 
+	// batch 10: what libc-xattr left, seen natively (user.NAME is the BFS
+	// attribute NAME; BEOS:TYPE got its MIME string type)
+	std::string attributes = run("/bin/listattr /tmp/renguin-xattr-native "
+		"2>&1; /bin/catattr -r BEOS:TYPE /tmp/renguin-xattr-native 2>&1");
+	report("xattr.native", attributes.find("MIME String") != std::string::npos
+			&& attributes.find("renguin.note") != std::string::npos
+			&& attributes.find("text/x-renguin") != std::string::npos,
+		"%s", one_line(attributes).c_str());
+	run("rm -f /tmp/renguin-xattr-native");
+
 	run_brand_checks();
 	run_root_checks();
 	run_chromium_check();
+	run_ladder_checks();
 
 	std::string native = run("/bin/uname -s 2>&1");
 	report("native_after", !native.empty()

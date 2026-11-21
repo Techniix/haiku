@@ -135,6 +135,7 @@ renguin_team_forked(Team* parent, Team* child)
 	// an empty thread list, and its main thread gets its data when it first
 	// runs (renguin_thread_entering_userspace()).
 	renguin_team_threads_init(data);
+	renguin_timers_init(data);
 
 	renguin_thread* threadData = (renguin_thread*)
 		thread_get_current_thread()->personality_data;

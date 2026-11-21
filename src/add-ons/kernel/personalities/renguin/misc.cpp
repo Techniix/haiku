@@ -205,6 +205,29 @@ to_timespec(bigtime_t micros)
 int64
 renguin_sys_clock_gettime(uint64 clockId, uint64 timespecPtr)
 {
+	// The wall and monotonic clocks in nanoseconds, as the vDSO reads them
+	// (vdso/vdso.c), so a program mixing both never sees time go back.
+	switch (clockId) {
+		case LX_CLOCK_REALTIME:
+		case LX_CLOCK_REALTIME_COARSE:
+		case LX_CLOCK_MONOTONIC:
+		case LX_CLOCK_MONOTONIC_RAW:
+		case LX_CLOCK_MONOTONIC_COARSE:
+		case LX_CLOCK_BOOTTIME:
+		{
+			bigtime_t offset = clockId == LX_CLOCK_REALTIME
+					|| clockId == LX_CLOCK_REALTIME_COARSE
+				? real_time_clock_usecs() - system_time() : 0;
+			int64 nsecs = system_time_nsecs() + offset * 1000;
+			linux_timespec ts;
+			ts.tv_sec = nsecs / 1000000000;
+			ts.tv_nsec = nsecs % 1000000000;
+			if (renguin_copy_out(timespecPtr, &ts, sizeof(ts)) != B_OK)
+				return -LX_EFAULT;
+			return 0;
+		}
+	}
+
 	bigtime_t micros;
 	if (read_clock(clockId, &micros) != B_OK)
 		return -LX_EINVAL;

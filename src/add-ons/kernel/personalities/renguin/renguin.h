@@ -74,6 +74,7 @@
 #define RENGUIN_AT_RANDOM		25
 #define RENGUIN_AT_HWCAP2		26
 #define RENGUIN_AT_EXECFN		31
+#define RENGUIN_AT_SYSINFO_EHDR	33
 
 #define RENGUIN_AT_RANDOM_LEN	16
 
@@ -127,6 +128,14 @@ struct renguin_sigaction {
 #define RENGUIN_NSIG	64		// Linux _NSIG
 
 
+#define RENGUIN_MAX_TIMERS	32		// POSIX timers per process
+
+struct renguin_timer_slot {
+	int32		haiku_id;
+	int32		thread;
+};
+
+
 // Per-team data owned by the personality, hung off Team::personality_data.
 struct renguin_team {
 	addr_t	executable_base;	// load bias of the main executable
@@ -152,6 +161,7 @@ struct renguin_team {
 	uint64	fork_gs_base;		// parent's GS base, for a fork()ed child
 								// (Haiku's fork copies only the FS base)
 	image_id app_image;			// registered B_APP_IMAGE, or -1
+	addr_t	vdso_base;			// the vDSO's address (vdso.cpp), or 0
 	bool	have_linux_root;	// RENGUIN_LINUX_ROOT existed at exec time
 	uint32	umask;				// file creation mask. Haiku's kernel does not
 								// apply one (libroot does, in userland), so
@@ -182,6 +192,10 @@ struct renguin_team {
 		// per-thread data of this team's threads (threads.cpp); freed with
 		// the team, whichever way its threads ended
 
+	struct renguin_timer_slot timers[RENGUIN_MAX_TIMERS];
+		// POSIX timers (timers.cpp) by Linux timer ID: Haiku's timer ID
+		// (0 free, -1 being made) and its thread (-1: a team timer)
+
 	struct renguin_sigaction sigactions[RENGUIN_NSIG + 1];
 		// what each rt_sigaction() asked for, by Linux signal number. Haiku
 		// holds the actions themselves (for signals it has a number for);
@@ -211,6 +225,8 @@ struct renguin_thread {
 	addr_t		forced_sigsegv_ip;	// address 0; where it really was
 	uint64		unmapped_blocked;	// blocked Linux signals that have no Haiku
 									// number (Haiku keeps the rest)
+	int8		nice;				// setpriority() value (sysinfo.cpp), when
+	bool		nice_set;			// nice_set
 };
 
 
@@ -328,6 +344,53 @@ int64		renguin_sys_setitimer(uint64 which, uint64 newValue,
 				uint64 oldValue);
 int64		renguin_sys_getitimer(uint64 which, uint64 value);
 int64		renguin_sys_alarm(uint64 seconds);
+
+// timers.cpp
+int64		renguin_sys_timer_create(uint64 clockId, uint64 event,
+				uint64 timerId);
+int64		renguin_sys_timer_settime(uint64 timerId, uint64 flags,
+				uint64 newValue, uint64 oldValue);
+int64		renguin_sys_timer_gettime(uint64 timerId, uint64 value);
+int64		renguin_sys_timer_getoverrun(uint64 timerId);
+int64		renguin_sys_timer_delete(uint64 timerId);
+void		renguin_timers_init(struct renguin_team* data);
+
+// xattr.cpp: how a call names its file: a path (following a final link or
+// not) or an open descriptor
+enum xattr_target {
+	XATTR_PATH,
+	XATTR_LINK,
+	XATTR_FD
+};
+void		renguin_xattr_settings(bool enabled);
+int64		renguin_sys_getxattr(enum xattr_target target, uint64 file,
+				uint64 name, uint64 value, uint64 size);
+int64		renguin_sys_setxattr(enum xattr_target target, uint64 file,
+				uint64 name, uint64 value, uint64 size, uint64 flags);
+int64		renguin_sys_removexattr(enum xattr_target target, uint64 file,
+				uint64 name);
+int64		renguin_sys_listxattr(enum xattr_target target, uint64 file,
+				uint64 list, uint64 size);
+
+// vdso.cpp
+addr_t		renguin_map_vdso(Team* team);
+
+// ipc.cpp
+int64		renguin_sys_shmget(uint64 key, uint64 size, uint64 flags);
+int64		renguin_sys_shmat(uint64 id, uint64 address, uint64 flags);
+int64		renguin_sys_shmdt(uint64 address);
+int64		renguin_sys_shmctl(uint64 id, uint64 command, uint64 buffer);
+int64		renguin_sys_semget(uint64 key, uint64 count, uint64 flags);
+int64		renguin_sys_semtimedop(uint64 id, uint64 operations, uint64 count,
+				uint64 timeout);
+int64		renguin_sys_semctl(uint64 id, uint64 number, uint64 command,
+				uint64 argument);
+int64		renguin_sys_msgget(uint64 key, uint64 flags);
+int64		renguin_sys_msgsnd(uint64 id, uint64 message, uint64 size,
+				uint64 flags);
+int64		renguin_sys_msgrcv(uint64 id, uint64 message, uint64 size,
+				uint64 type, uint64 flags);
+int64		renguin_sys_msgctl(uint64 id, uint64 command, uint64 buffer);
 
 // syscall.cpp
 void		renguin_syscall(struct iframe* frame);

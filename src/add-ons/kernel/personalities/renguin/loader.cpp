@@ -677,9 +677,12 @@ build_stack(Thread* thread, const foreign_exec_args* args,
 		return B_BAD_ADDRESS;
 	addr_t randomAddr = sp;
 
-	// The auxiliary vector. AT_SYSINFO_EHDR (the vDSO) is deliberately
-	// omitted; glibc and musl fall back to real syscalls without it.
+	// The auxiliary vector. AT_SYSINFO_EHDR names the vDSO (vdso.cpp); it
+	// comes first, as on Linux, and is left out when there is none (the C
+	// libraries then make system calls).
 	struct { uint64 type; uint64 value; } aux[] = {
+		{ data->vdso_base != 0 ? (uint64)RENGUIN_AT_SYSINFO_EHDR
+			: (uint64)RENGUIN_AT_FLAGS, data->vdso_base },
 		{ RENGUIN_AT_PHDR,		data->phdr },
 		{ RENGUIN_AT_PHENT,		data->phentsize },
 		{ RENGUIN_AT_PHNUM,		data->phnum },
@@ -787,6 +790,7 @@ renguin_load(foreign_exec_args* args)
 	strlcpy(data->exe_path, args->path, sizeof(data->exe_path));
 	data->umask = args->umask & 0777;
 	renguin_proc_init_team(data);
+	renguin_timers_init(data);
 
 	struct stat rootStat;
 	data->have_linux_root = vfs_read_stat(-1, RENGUIN_LINUX_ROOT, true,
@@ -840,6 +844,8 @@ renguin_load(foreign_exec_args* args)
 	data->brk_start = executable.high;
 	data->brk_current = data->brk_start;
 	data->brk_mapped_end = data->brk_start;
+
+	data->vdso_base = renguin_map_vdso(team);
 
 	status = build_stack(thread, args, data, &args->stack_pointer);
 	if (status != B_OK)

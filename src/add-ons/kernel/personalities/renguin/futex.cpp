@@ -14,11 +14,17 @@
  * and a list of waiters, and the "compare under the bucket lock, then sleep"
  * rule that makes FUTEX_WAIT atomic with respect to FUTEX_WAKE.
  *
- * A futex is identified by (team, address). Linux identifies a shared
- * (non-FUTEX_PRIVATE_FLAG) futex by the underlying memory object instead, so
- * that processes sharing memory can use it; that is not supported yet. glibc
- * uses shared futexes inside one process too (pthread_join() waits on the
- * thread's TID word without FUTEX_PRIVATE_FLAG), which works.
+ * A futex is identified by a key (futex_key): (team, address) for
+ * FUTEX_PRIVATE_FLAG operations and for memory only this process maps, and,
+ * as Linux's get_futex_key(), (memory object, offset) for a shared futex
+ * (no FUTEX_PRIVATE_FLAG) in shared memory: a MAP_SHARED mapping (anonymous
+ * ones shared across fork(), files, memfds) or a System V segment. So
+ * processes that share memory can wait and wake each other: process-shared
+ * pthread mutexes, condition variables, barriers and semaphores
+ * (PTHREAD_PROCESS_SHARED, sem_init(pshared)), and robust mutexes in shared
+ * memory. Shared memory is recognized as Haiku areas that are B_SHARED_AREA
+ * (MAP_SHARED anonymous memory, clones such as shmat()) or map a file's
+ * cache directly (REGION_NO_PRIVATE_MAP); the object is the area's cache.
  *
  * Priority-inheritance futexes (FUTEX_LOCK_PI, FUTEX_LOCK_PI2,
  * FUTEX_TRYLOCK_PI, FUTEX_UNLOCK_PI; PTHREAD_PRIO_INHERIT mutexes) follow
@@ -46,6 +52,10 @@
 #include <thread.h>
 #include <util/AutoLock.h>
 #include <util/atomic.h>
+#include <vm/vm.h>
+#include <vm/VMAddressSpace.h>
+#include <vm/VMArea.h>
+#include <vm/VMCache.h>
 
 
 // futex() operations and flags (include/uapi/linux/futex.h).
@@ -99,12 +109,27 @@ struct futex_bucket;
 	another bucket while holding both locks, so the waiter re-reads its bucket
 	pointer until it has locked the right one.
 */
+/*!	What a futex word is: \a space is the team ID (private), or the shared
+	memory's cache pointer with the top bit set; \a offset is the address,
+	or the offset in that cache.
+*/
+struct futex_key {
+	uint64				space;
+	uint64				offset;
+
+	bool operator==(const futex_key& other) const
+	{
+		return space == other.space && offset == other.offset;
+	}
+};
+
+static const uint64 kSharedFutexSpace = 1ULL << 63;
+
 struct futex_waiter {
 	futex_waiter*		next;
 	futex_waiter*		previous;
 	futex_bucket*		bucket;
-	team_id				team;
-	addr_t				address;
+	futex_key			key;
 	uint32				bitset;
 	bool				woken;
 	ConditionVariable	condition;
@@ -141,9 +166,10 @@ renguin_futex_uninit()
 
 
 static futex_bucket*
-bucket_for(team_id team, addr_t address)
+bucket_for(const futex_key& futexKey)
 {
-	uint64 key = ((uint64)address >> 2) ^ ((uint64)(uint32)team << 32);
+	uint64 key = (futexKey.offset >> 2) ^ (futexKey.space << 32)
+		^ (futexKey.space >> 7);
 	key ^= key >> 33;
 	key *= 0xff51afd7ed558ccdULL;
 	key ^= key >> 33;
@@ -189,15 +215,14 @@ wake_waiter(futex_bucket* bucket, futex_waiter* waiter)
 
 
 static int32
-wake_locked(futex_bucket* bucket, team_id team, addr_t address, int32 count,
+wake_locked(futex_bucket* bucket, const futex_key& key, int32 count,
 	uint32 bitset)
 {
 	int32 woken = 0;
 	futex_waiter* waiter = bucket->head;
 	while (waiter != NULL) {
 		futex_waiter* next = waiter->next;
-		if (waiter->team == team && waiter->address == address
-			&& (waiter->bitset & bitset) != 0) {
+		if (waiter->key == key && (waiter->bitset & bitset) != 0) {
 			wake_waiter(bucket, waiter);
 			// As Linux: a count of 0 still wakes one waiter.
 			if (++woken >= count)
@@ -234,13 +259,54 @@ unlock_two(futex_bucket* first, futex_bucket* second)
 }
 
 
+/*!	The key of the futex word at \a address of the current team. A shared
+	futex (\a isPrivate false) in shared memory is keyed by the memory.
+*/
+static void
+futex_key_for(uint64 address, bool isPrivate, futex_key* _key)
+{
+	_key->space = (uint32)thread_get_current_thread()->team->id;
+	_key->offset = address;
+	if (isPrivate)
+		return;
+
+	VMAddressSpace* addressSpace = VMAddressSpace::GetCurrent();
+	if (addressSpace == NULL)
+		return;
+	addressSpace->ReadLock();
+	VMArea* area = addressSpace->LookupArea((addr_t)address);
+	if (area != NULL) {
+		VMCache* cache = vm_area_get_locked_cache(area);
+		if ((area->protection & B_SHARED_AREA) != 0
+			|| cache->type == CACHE_TYPE_VNODE) {
+			_key->space = (uint64)(addr_t)cache | kSharedFutexSpace;
+			_key->offset = (uint64)(address - area->Base())
+				+ (uint64)area->cache_offset;
+		}
+		vm_area_put_locked_cache(cache);
+	}
+	addressSpace->ReadUnlock();
+	addressSpace->Put();
+}
+
+
+/*!	Wakes \a count waiters of the shared futex at \a address (thread exit:
+	CLONE_CHILD_CLEARTID and robust lists, which Linux wakes as shared
+	futexes). \a team is the current team.
+*/
 int32
 renguin_futex_wake(team_id team, addr_t address, int32 count)
 {
-	futex_bucket* bucket = bucket_for(team, address);
+	futex_key key;
+	if (team == thread_get_current_thread()->team->id)
+		futex_key_for(address, false, &key);
+	else {
+		key.space = (uint32)team;
+		key.offset = address;
+	}
+	futex_bucket* bucket = bucket_for(key);
 	MutexLocker locker(bucket->lock);
-	return wake_locked(bucket, team, address, count,
-		LX_FUTEX_BITSET_MATCH_ANY);
+	return wake_locked(bucket, key, count, LX_FUTEX_BITSET_MATCH_ANY);
 }
 
 
@@ -294,7 +360,7 @@ get_timeout(uint64 userTimeout, bool absolute, bool realtime, uint32* _flags,
 
 
 static int64
-futex_wait(team_id team, uint64 address, uint32 value, uint32 flags,
+futex_wait(const futex_key& key, uint64 address, uint32 value, uint32 flags,
 	bigtime_t timeout, uint32 bitset)
 {
 	if (bitset == 0)
@@ -302,15 +368,14 @@ futex_wait(team_id team, uint64 address, uint32 value, uint32 flags,
 
 	futex_waiter waiter;
 	waiter.next = waiter.previous = NULL;
-	waiter.team = team;
-	waiter.address = (addr_t)address;
+	waiter.key = key;
 	waiter.bitset = bitset;
 	waiter.woken = false;
 	waiter.condition.Init(&waiter, "renguin futex");
 
 	ConditionVariableEntry entry;
 
-	futex_bucket* bucket = bucket_for(team, (addr_t)address);
+	futex_bucket* bucket = bucket_for(key);
 	mutex_lock(&bucket->lock);
 
 	// The value check and queueing happen under the bucket lock, which a
@@ -366,8 +431,8 @@ futex_wait(team_id team, uint64 address, uint32 value, uint32 flags,
 
 
 static int64
-futex_requeue(team_id team, uint64 address, uint64 address2, int32 wakeCount,
-	int32 requeueCount, bool compare, uint32 value)
+futex_requeue(bool isPrivate, uint64 address, uint64 address2,
+	int32 wakeCount, int32 requeueCount, bool compare, uint32 value)
 {
 	int64 error = check_address(address2);
 	if (error != 0)
@@ -375,8 +440,11 @@ futex_requeue(team_id team, uint64 address, uint64 address2, int32 wakeCount,
 	if (wakeCount < 0 || requeueCount < 0)
 		return -LX_EINVAL;
 
-	futex_bucket* bucket = bucket_for(team, (addr_t)address);
-	futex_bucket* bucket2 = bucket_for(team, (addr_t)address2);
+	futex_key key, key2;
+	futex_key_for(address, isPrivate, &key);
+	futex_key_for(address2, isPrivate, &key2);
+	futex_bucket* bucket = bucket_for(key);
+	futex_bucket* bucket2 = bucket_for(key2);
 	lock_two(bucket, bucket2);
 
 	if (compare) {
@@ -396,13 +464,13 @@ futex_requeue(team_id team, uint64 address, uint64 address2, int32 wakeCount,
 	futex_waiter* waiter = bucket->head;
 	while (waiter != NULL && (woken < wakeCount || requeued < requeueCount)) {
 		futex_waiter* next = waiter->next;
-		if (waiter->team == team && waiter->address == (addr_t)address) {
+		if (waiter->key == key) {
 			if (woken < wakeCount) {
 				wake_waiter(bucket, waiter);
 				woken++;
 			} else {
 				dequeue_waiter(bucket, waiter);
-				waiter->address = (addr_t)address2;
+				waiter->key = key2;
 				enqueue_waiter(bucket2, waiter);
 				requeued++;
 			}
@@ -479,8 +547,8 @@ wake_op_compare(uint32 encoded, uint32 oldValue)
 	condition variables used it before glibc 2.25.
 */
 static int64
-futex_wake_op(team_id team, uint64 address, uint64 address2, int32 wakeCount,
-	int32 wakeCount2, uint32 encoded)
+futex_wake_op(bool isPrivate, uint64 address, uint64 address2,
+	int32 wakeCount, int32 wakeCount2, uint32 encoded)
 {
 	int64 error = check_address(address2);
 	if (error != 0)
@@ -490,8 +558,11 @@ futex_wake_op(team_id team, uint64 address, uint64 address2, int32 wakeCount,
 	if (cmp > LX_FUTEX_OP_CMP_GE)
 		return -LX_ENOSYS;
 
-	futex_bucket* bucket = bucket_for(team, (addr_t)address);
-	futex_bucket* bucket2 = bucket_for(team, (addr_t)address2);
+	futex_key key, key2;
+	futex_key_for(address, isPrivate, &key);
+	futex_key_for(address2, isPrivate, &key2);
+	futex_bucket* bucket = bucket_for(key);
+	futex_bucket* bucket2 = bucket_for(key2);
 	lock_two(bucket, bucket2);
 
 	uint32 oldValue = 0;
@@ -505,10 +576,10 @@ futex_wake_op(team_id team, uint64 address, uint64 address2, int32 wakeCount,
 		return -LX_EFAULT;
 	}
 
-	int64 woken = wake_locked(bucket, team, (addr_t)address, wakeCount,
+	int64 woken = wake_locked(bucket, key, wakeCount,
 		LX_FUTEX_BITSET_MATCH_ANY);
 	if (wake_op_compare(encoded, oldValue)) {
-		woken += wake_locked(bucket2, team, (addr_t)address2, wakeCount2,
+		woken += wake_locked(bucket2, key2, wakeCount2,
 			LX_FUTEX_BITSET_MATCH_ANY);
 	}
 
@@ -524,9 +595,12 @@ futex_wake_op(team_id team, uint64 address, uint64 address2, int32 wakeCount,
 	kernel) and waits for the unlock.
 */
 static int64
-futex_lock_pi(team_id team, uint64 address, uint64 userTimeout, bool realtime,
-	bool tryOnly)
+futex_lock_pi(bool isPrivate, uint64 address, uint64 userTimeout,
+	bool realtime, bool tryOnly)
 {
+	futex_key key;
+	futex_key_for(address, isPrivate, &key);
+
 	uint32 flags = B_CAN_INTERRUPT;
 	bigtime_t timeout = 0;
 	if (!tryOnly) {
@@ -574,7 +648,7 @@ futex_lock_pi(team_id team, uint64 address, uint64 userTimeout, bool realtime,
 
 		// Wait while the word still says "held, with waiters"; the unlock
 		// changes it and wakes every waiter, which then try again.
-		int64 result = futex_wait(team, address, value, flags, timeout,
+		int64 result = futex_wait(key, address, value, flags, timeout,
 			LX_FUTEX_BITSET_MATCH_ANY);
 		if (result == -LX_ETIMEDOUT || result == -LX_EINTR)
 			return result;
@@ -589,7 +663,7 @@ futex_lock_pi(team_id team, uint64 address, uint64 userTimeout, bool realtime,
 	others still wait, so no wake-up is lost).
 */
 static int64
-futex_unlock_pi(team_id team, uint64 address)
+futex_unlock_pi(bool isPrivate, uint64 address)
 {
 	uint32 tid = (uint32)thread_get_current_thread()->id & LX_FUTEX_TID_MASK;
 	for (int attempt = 0; attempt < 100000; attempt++) {
@@ -604,10 +678,11 @@ futex_unlock_pi(team_id team, uint64 address)
 		if (seen != value)
 			continue;
 		if ((value & LX_FUTEX_WAITERS) != 0) {
-			futex_bucket* bucket = bucket_for(team, (addr_t)address);
+			futex_key key;
+			futex_key_for(address, isPrivate, &key);
+			futex_bucket* bucket = bucket_for(key);
 			MutexLocker locker(bucket->lock);
-			wake_locked(bucket, team, (addr_t)address, INT32_MAX,
-				LX_FUTEX_BITSET_MATCH_ANY);
+			wake_locked(bucket, key, INT32_MAX, LX_FUTEX_BITSET_MATCH_ANY);
 		}
 		return 0;
 	}
@@ -644,7 +719,7 @@ renguin_sys_futex(uint64 address, uint64 op, uint64 value, uint64 timeout,
 	if (error != 0)
 		return error;
 
-	team_id team = thread_get_current_thread()->team->id;
+	bool isPrivate = (op & LX_FUTEX_PRIVATE_FLAG) != 0;
 
 	switch (command) {
 		case LX_FUTEX_WAIT:
@@ -657,7 +732,9 @@ renguin_sys_futex(uint64 address, uint64 op, uint64 value, uint64 timeout,
 				&waitTimeout);
 			if (error != 0)
 				return error;
-			return futex_wait(team, address, (uint32)value, flags,
+			futex_key key;
+			futex_key_for(address, isPrivate, &key);
+			return futex_wait(key, address, (uint32)value, flags,
 				waitTimeout, bitsetOp
 					? (uint32)value3 : LX_FUTEX_BITSET_MATCH_ANY);
 		}
@@ -669,32 +746,33 @@ renguin_sys_futex(uint64 address, uint64 op, uint64 value, uint64 timeout,
 				? (uint32)value3 : LX_FUTEX_BITSET_MATCH_ANY;
 			if (bitset == 0)
 				return -LX_EINVAL;
-			futex_bucket* bucket = bucket_for(team, (addr_t)address);
+			futex_key key;
+			futex_key_for(address, isPrivate, &key);
+			futex_bucket* bucket = bucket_for(key);
 			MutexLocker locker(bucket->lock);
-			return wake_locked(bucket, team, (addr_t)address, (int32)value,
-				bitset);
+			return wake_locked(bucket, key, (int32)value, bitset);
 		}
 
 		case LX_FUTEX_REQUEUE:
 		case LX_FUTEX_CMP_REQUEUE:
 			// The requeue count travels in the timeout argument.
-			return futex_requeue(team, address, address2, (int32)value,
+			return futex_requeue(isPrivate, address, address2, (int32)value,
 				(int32)timeout, command == LX_FUTEX_CMP_REQUEUE,
 				(uint32)value3);
 
 		case LX_FUTEX_WAKE_OP:
-			return futex_wake_op(team, address, address2, (int32)value,
+			return futex_wake_op(isPrivate, address, address2, (int32)value,
 				(int32)timeout, (uint32)value3);
 
 		case LX_FUTEX_LOCK_PI:
 			// always CLOCK_REALTIME
-			return futex_lock_pi(team, address, timeout, true, false);
+			return futex_lock_pi(isPrivate, address, timeout, true, false);
 		case LX_FUTEX_LOCK_PI2:
-			return futex_lock_pi(team, address, timeout, realtime, false);
+			return futex_lock_pi(isPrivate, address, timeout, realtime, false);
 		case LX_FUTEX_TRYLOCK_PI:
-			return futex_lock_pi(team, address, 0, false, true);
+			return futex_lock_pi(isPrivate, address, 0, false, true);
 		case LX_FUTEX_UNLOCK_PI:
-			return futex_unlock_pi(team, address);
+			return futex_unlock_pi(isPrivate, address);
 
 		case LX_FUTEX_FD:
 		case LX_FUTEX_WAIT_REQUEUE_PI:

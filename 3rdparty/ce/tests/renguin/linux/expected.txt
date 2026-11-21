@@ -20,3 +20,9 @@ libc-procfs|x|0|stat\nstatus\ncmdline\nexe\nfd\nlisting\nsystem\nrelative\nlinks
 segv||139|
 libc-syncobj||0|create\ntimeline\nsync_file\neventfd\nwait\nok
 libc-wait||0|exited\nkilled\nclose_range\nok
+libc-ipc||0|timer_signal\ntimer_thread\ntimer_abstime\nshm\nsem\nmsg\nok
+libc-unix||0|stream\ninuse\nmissing\nnulls\nautobind\ndgram\nok
+libc-vdso||0|auxv\nmonotonic\nrealtime\ngetcpu\nfaster\nok
+libc-pshared||0|futex\nmutex\nsemaphore\nshm\nmemfd\nok
+libc-evdev||0|uinput\nevdev\nevents\ngrab\nok
+libc-xattr||0|set_get\nlist\nflags\nfd\nremove\nerrors\nnative\nok

@@ -79,24 +79,40 @@ UnixEndpoint::_Bind(const struct sockaddr_un* address)
 	if (address->sun_path[0] == '\0') {
 		UnixAddressManagerLocker addressLocker(gAddressManager);
 
-		// internal address space (or empty address)
-		int32 internalID;
-		if (UnixAddress::IsEmptyAddress(*address))
-			internalID = gAddressManager.NextUnusedInternalID();
-		else
-			internalID = UnixAddress::InternalID(*address);
-		if (internalID < 0)
-			RETURN_ERROR(internalID);
+		// internal address space (or empty address), or a Linux abstract
+		// name
+		UnixAddress internalAddress;
+		if (UnixAddress::IsEmptyAddress(*address)) {
+			int32 internalID = gAddressManager.NextUnusedInternalID();
+			if (internalID < 0)
+				RETURN_ERROR(internalID);
+			internalAddress.SetTo(internalID);
+		} else {
+			status_t error = UnixAddress::FromInternalSpace(*address,
+				internalAddress);
+			if (error != B_OK)
+				RETURN_ERROR(error);
+		}
 
-		status_t error = _Bind(internalID);
-		if (error != B_OK)
-			RETURN_ERROR(error);
+		// an abstract name or ID is in use until its socket is closed
+		if (gAddressManager.Lookup(internalAddress) != NULL)
+			RETURN_ERROR(EADDRINUSE);
+
+		fAddress = internalAddress;
 
 		sockaddr_un* outAddress = (sockaddr_un*)&socket->address;
-		outAddress->sun_path[0] = '\0';
-		sprintf(outAddress->sun_path + 1, "%05" B_PRIx32, internalID);
-		outAddress->sun_len = INTERNAL_UNIX_ADDRESS_LEN;
-			// null-byte + 5 hex digits
+		if (internalAddress.IsAbstractAddress()) {
+			// the name as given, up to its length
+			memcpy(outAddress, address, address->sun_len);
+			outAddress->sun_len = address->sun_len;
+		} else {
+			outAddress->sun_family = AF_UNIX;
+			outAddress->sun_path[0] = '\0';
+			sprintf(outAddress->sun_path + 1, "%05" B_PRIx32,
+				internalAddress.InternalID());
+			outAddress->sun_len = INTERNAL_UNIX_ADDRESS_LEN;
+				// null-byte + 5 hex digits
+		}
 
 		gAddressManager.Add(this);
 	} else {

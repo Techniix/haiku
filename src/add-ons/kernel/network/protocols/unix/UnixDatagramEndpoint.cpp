@@ -514,16 +514,15 @@ UnixDatagramEndpoint::_InitializeEndpoint(const struct sockaddr* _address,
 	const struct sockaddr_un* address = (const struct sockaddr_un*)_address;
 
 	if (address->sun_path[0] == '\0') {
-		// internal address space (or empty address)
-		int32 internalID;
+		// internal address space (or empty address), or a Linux abstract
+		// name
 		if (UnixAddress::IsEmptyAddress(*address))
 			RETURN_ERROR(B_BAD_VALUE);
 
-		internalID = UnixAddress::InternalID(*address);
-		if (internalID < 0)
-			RETURN_ERROR(internalID);
-
-		unixAddress.SetTo(internalID);
+		status_t error = UnixAddress::FromInternalSpace(*address,
+			unixAddress);
+		if (error != B_OK)
+			RETURN_ERROR(error);
 	} else {
 		// FS address space
 		size_t pathLen = strnlen(address->sun_path, sizeof(address->sun_path));

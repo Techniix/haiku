@@ -283,6 +283,23 @@ enum {
 	LINUX_faccessat2		= 439,
 	LINUX_epoll_pwait2		= 441,
 	LINUX_fchmodat2			= 452,
+	LINUX_shmget			= 29,
+	LINUX_shmat				= 30,
+	LINUX_shmctl			= 31,
+	LINUX_semget			= 64,
+	LINUX_semop				= 65,
+	LINUX_semctl			= 66,
+	LINUX_shmdt				= 67,
+	LINUX_msgget			= 68,
+	LINUX_msgsnd			= 69,
+	LINUX_msgrcv			= 70,
+	LINUX_msgctl			= 71,
+	LINUX_semtimedop		= 220,
+	LINUX_timer_create		= 222,
+	LINUX_timer_settime		= 223,
+	LINUX_timer_gettime		= 224,
+	LINUX_timer_getoverrun	= 225,
+	LINUX_timer_delete		= 226,
 };
 
 
@@ -430,7 +447,10 @@ renguin_reload_trace_settings()
 	bool all = false;
 	bool process = false;
 	bool buffer = false;
+	bool xattrs = true;
 	if (void* handle = load_driver_settings("renguin")) {
+		// not trace settings, but read as often (at every exec)
+		xattrs = get_driver_boolean_parameter(handle, "xattrs", true, true);
 		buffer = get_driver_boolean_parameter(handle, "trace_buffer", false,
 			true);
 		const char* value = get_driver_parameter(handle, "trace_all", NULL,
@@ -447,6 +467,7 @@ renguin_reload_trace_settings()
 			strlcpy(pattern, value, sizeof(pattern));
 		unload_driver_settings(handle);
 	}
+	renguin_xattr_settings(xattrs);
 	if (strcmp(pattern, sTracePattern) != 0 || all != sTraceAll
 		|| process != sTraceProcess || buffer != sTraceBuffer) {
 		dprintf("renguin: system call trace %s%s%s\n",
@@ -834,22 +855,44 @@ renguin_syscall(struct iframe* frame)
 		case LINUX_sendfile:
 			result = renguin_sys_sendfile((int)a1, (int)a2, a3, a4);
 			break;
-		// Extended attributes: Haiku has them, but not in Linux's
-		// namespaces (user., security., system.); report none. ls, cp and
-		// tar treat EOPNOTSUPP as "no ACLs/attributes".
+		// Extended attributes: the user. namespace is the file's Haiku
+		// attributes (xattr.cpp); the others are EOPNOTSUPP, which ls, cp
+		// and tar take as "no ACLs/attributes".
 		case LINUX_setxattr:
+			result = renguin_sys_setxattr(XATTR_PATH, a1, a2, a3, a4, a5);
+			break;
 		case LINUX_lsetxattr:
+			result = renguin_sys_setxattr(XATTR_LINK, a1, a2, a3, a4, a5);
+			break;
 		case LINUX_fsetxattr:
+			result = renguin_sys_setxattr(XATTR_FD, a1, a2, a3, a4, a5);
+			break;
 		case LINUX_getxattr:
+			result = renguin_sys_getxattr(XATTR_PATH, a1, a2, a3, a4);
+			break;
 		case LINUX_lgetxattr:
+			result = renguin_sys_getxattr(XATTR_LINK, a1, a2, a3, a4);
+			break;
 		case LINUX_fgetxattr:
+			result = renguin_sys_getxattr(XATTR_FD, a1, a2, a3, a4);
+			break;
 		case LINUX_listxattr:
+			result = renguin_sys_listxattr(XATTR_PATH, a1, a2, a3);
+			break;
 		case LINUX_llistxattr:
+			result = renguin_sys_listxattr(XATTR_LINK, a1, a2, a3);
+			break;
 		case LINUX_flistxattr:
+			result = renguin_sys_listxattr(XATTR_FD, a1, a2, a3);
+			break;
 		case LINUX_removexattr:
+			result = renguin_sys_removexattr(XATTR_PATH, a1, a2);
+			break;
 		case LINUX_lremovexattr:
+			result = renguin_sys_removexattr(XATTR_LINK, a1, a2);
+			break;
 		case LINUX_fremovexattr:
-			result = -LX_EOPNOTSUPP;
+			result = renguin_sys_removexattr(XATTR_FD, a1, a2);
 			break;
 		// cp and others fall back to read/write; not logged.
 		case LINUX_copy_file_range:
@@ -1256,6 +1299,61 @@ renguin_syscall(struct iframe* frame)
 			break;
 		case LINUX_alarm:
 			result = renguin_sys_alarm(a1);
+			break;
+
+		// --- System V IPC (ipc.cpp) ---
+		case LINUX_shmget:
+			result = renguin_sys_shmget(a1, a2, a3);
+			break;
+		case LINUX_shmat:
+			result = renguin_sys_shmat(a1, a2, a3);
+			break;
+		case LINUX_shmdt:
+			result = renguin_sys_shmdt(a1);
+			break;
+		case LINUX_shmctl:
+			result = renguin_sys_shmctl(a1, a2, a3);
+			break;
+		case LINUX_semget:
+			result = renguin_sys_semget(a1, a2, a3);
+			break;
+		case LINUX_semop:
+			result = renguin_sys_semtimedop(a1, a2, a3, 0);
+			break;
+		case LINUX_semtimedop:
+			result = renguin_sys_semtimedop(a1, a2, a3, a4);
+			break;
+		case LINUX_semctl:
+			result = renguin_sys_semctl(a1, a2, a3, a4);
+			break;
+		case LINUX_msgget:
+			result = renguin_sys_msgget(a1, a2);
+			break;
+		case LINUX_msgsnd:
+			result = renguin_sys_msgsnd(a1, a2, a3, a4);
+			break;
+		case LINUX_msgrcv:
+			result = renguin_sys_msgrcv(a1, a2, a3, a4, a5);
+			break;
+		case LINUX_msgctl:
+			result = renguin_sys_msgctl(a1, a2, a3);
+			break;
+
+		// --- POSIX timers (timers.cpp) ---
+		case LINUX_timer_create:
+			result = renguin_sys_timer_create(a1, a2, a3);
+			break;
+		case LINUX_timer_settime:
+			result = renguin_sys_timer_settime(a1, a2, a3, a4);
+			break;
+		case LINUX_timer_gettime:
+			result = renguin_sys_timer_gettime(a1, a2);
+			break;
+		case LINUX_timer_getoverrun:
+			result = renguin_sys_timer_getoverrun(a1);
+			break;
+		case LINUX_timer_delete:
+			result = renguin_sys_timer_delete(a1);
 			break;
 
 		// --- Process creation (exec.cpp) ---

@@ -572,18 +572,31 @@ address_from_linux(uint64 userAddress, uint32 length,
 			out->sun_family = AF_UNIX;
 			size_t pathLength = length - offsetof(linux_sockaddr_un, sun_path);
 			if (pathLength == 0) {
-				// autobind / unnamed
-				out->sun_len = offsetof(sockaddr_un, sun_path);
+				// autobind / unnamed: Haiku's empty address (bind() picks
+				// an internal name, connect() refuses it as Linux does)
+				out->sun_len = sizeof(sockaddr);
 				*_length = out->sun_len;
 				return 0;
 			}
 			const char* path = (const char*)buffer
 				+ offsetof(linux_sockaddr_un, sun_path);
 			if (path[0] == '\0') {
-				// Abstract names (a leading NUL byte) are not supported by
-				// Haiku's stack yet (roadmap F-52); D-Bus and X11 fall back
-				// to path names.
-				return create ? -LX_EADDRNOTAVAIL : -111 /* ECONNREFUSED */;
+				// An abstract name: the bytes after the null byte up to the
+				// address length, nulls included, untranslated. Renga's
+				// stack keeps them apart from path names (UnixAddress.h);
+				// "\0" plus 5 hex digits is the autobind form both use.
+				if (pathLength > LX_UNIX_PATH_MAX)
+					return -LX_EINVAL;
+				if (pathLength == 1) {
+					// a bare null byte: no name
+					out->sun_len = sizeof(sockaddr);
+					*_length = out->sun_len;
+					return 0;
+				}
+				memcpy(out->sun_path, path, pathLength);
+				out->sun_len = offsetof(sockaddr_un, sun_path) + pathLength;
+				*_length = out->sun_len;
+				return 0;
 			}
 			char* linuxPath = (char*)malloc(B_PATH_NAME_LENGTH);
 			if (linuxPath == NULL)
@@ -667,6 +680,22 @@ address_to_linux(const sockaddr* address, socklen_t length,
 			lx->sun_family = LX_AF_UNIX;
 			size_t pathRoom = length > offsetof(sockaddr_un, sun_path)
 				? length - offsetof(sockaddr_un, sun_path) : 0;
+			// Haiku's unnamed address: a null byte or two (an unbound
+			// socket) or the empty address of 16 null bytes
+			bool unnamed = pathRoom <= 2 || un->sun_path[1] == '\0';
+			if (!unnamed && un->sun_path[0] == '\0') {
+				// an abstract name (or an internal ID): its bytes up to the
+				// address length, as Linux reports them
+				size_t nameLength = min_c(min_c(pathRoom,
+					sizeof(un->sun_path)), (size_t)LX_UNIX_PATH_MAX);
+				size_t end = min_c((size_t)un->sun_len,
+					offsetof(sockaddr_un, sun_path) + nameLength);
+				nameLength = end > offsetof(sockaddr_un, sun_path)
+					? end - offsetof(sockaddr_un, sun_path) : 0;
+				memcpy(lx->sun_path, un->sun_path, nameLength);
+				outLength = offsetof(linux_sockaddr_un, sun_path) + nameLength;
+				break;
+			}
 			char path[sizeof(un->sun_path) + 1];
 			size_t pathLength = strnlen(un->sun_path,
 				min_c(pathRoom, sizeof(un->sun_path)));

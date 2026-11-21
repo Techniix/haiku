@@ -394,6 +394,11 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 		char host[32];
 		if (renguin_linux_pts_to_host(path, host, sizeof(host)))
 			strlcpy(path, host, pathSize);
+		else if (strcmp(path, "/dev/uinput") == 0) {
+			// Linux has the uinput node in both places; Renga's gamepad
+			// core publishes /dev/input/uinput (F-42)
+			strlcpy(path, "/dev/input/uinput", pathSize);
+		}
 		return B_OK;
 	}
 

@@ -15,6 +15,8 @@
 
 
 #include "renguin.h"
+
+#include <algorithm>
 #include "linux_defs.h"
 
 #include <string.h>
@@ -275,17 +277,76 @@ target_exists(int64 pid)
 }
 
 
-/*!	getpriority(): Haiku's priorities don't map onto nice values; every
-	process reports nice 0. The raw call returns 20 - nice.
+/*!	Nice values on Haiku's thread priorities (batch 10). Linux's nice is
+	per thread (PRIO_PROCESS with a thread ID, 0 for the caller; a process
+	ID names its main thread), and so are Haiku's priorities. Positive
+	nice lowers the priority by one step per two (nice 10 is
+	B_LOW_PRIORITY, 5; 19 is 1); negative nice raises it by one per four,
+	at most to B_DISPLAY_PRIORITY (15), so a Linux program cannot outrank
+	the desktop. Chromium marks its background and utility threads this
+	way; build tools run under "nice" stay out of the desktop's way. The
+	value set is kept with the thread, so getpriority() returns it exactly.
+	PRIO_PGRP and PRIO_USER are accepted and not applied.
+*/
+static int32
+priority_for_nice(int32 nice)
+{
+	if (nice > 0)
+		return std::max((int32)B_LOWEST_ACTIVE_PRIORITY, B_NORMAL_PRIORITY
+			- (nice + 1) / 2);
+	return std::min((int32)B_DISPLAY_PRIORITY, B_NORMAL_PRIORITY
+		+ (-nice + 3) / 4);
+}
+
+
+static int32
+nice_for_priority(int32 priority)
+{
+	if (priority < B_NORMAL_PRIORITY)
+		return std::min(19, (B_NORMAL_PRIORITY - priority) * 2);
+	return std::max(-20, -(priority - B_NORMAL_PRIORITY) * 4);
+}
+
+
+//! The thread PRIO_PROCESS \a who names in the caller's team, or -1.
+static thread_id
+nice_target(int64 who)
+{
+	if ((int32)who == 0)
+		return thread_get_current_thread()->id;
+	Thread* thread = Thread::Get((thread_id)who);
+	if (thread == NULL)
+		return -1;
+	thread_id id = thread->id;
+	thread->ReleaseReference();
+	return id;
+}
+
+
+/*!	getpriority(): the raw call returns 20 - nice (the C library converts).
 */
 int64
 renguin_sys_getpriority(int64 which, int64 who)
 {
 	if (which < LX_PRIO_PROCESS || which > LX_PRIO_USER)
 		return -LX_EINVAL;
-	if (which == LX_PRIO_PROCESS && !target_exists(who))
-		return -LX_ESRCH;
-	return 20;
+	if (which != LX_PRIO_PROCESS)
+		return 20;
+	thread_id target = nice_target(who);
+	if (target < 0)
+		return target_exists(who) ? 20 : -LX_ESRCH;
+	int32 nice = 0;
+	Thread* thread = Thread::Get(target);
+	if (thread != NULL) {
+		renguin_thread* data = (renguin_thread*)thread->personality_data;
+		if (data != NULL && data->nice_set
+			&& thread->team == thread_get_current_thread()->team) {
+			nice = data->nice;
+		} else
+			nice = nice_for_priority(thread->priority);
+		thread->ReleaseReference();
+	}
+	return 20 - nice;
 }
 
 
@@ -294,9 +355,25 @@ renguin_sys_setpriority(int64 which, int64 who, int64 nice)
 {
 	if (which < LX_PRIO_PROCESS || which > LX_PRIO_USER)
 		return -LX_EINVAL;
-	if (which == LX_PRIO_PROCESS && !target_exists(who))
-		return -LX_ESRCH;
-	// Accepted and not applied (nice, renice, make -l keep working).
+	if (which != LX_PRIO_PROCESS)
+		return target_exists(who) || which == LX_PRIO_USER ? 0 : -LX_ESRCH;
+	thread_id target = nice_target(who);
+	if (target < 0)
+		return target_exists(who) ? 0 : -LX_ESRCH;
+	int32 value = (int32)std::max((int64)-20, std::min((int64)19, nice));
+	status_t status = set_thread_priority(target, priority_for_nice(value));
+	if (status < B_OK)
+		return renguin_encode(status);
+	Thread* thread = Thread::Get(target);
+	if (thread != NULL) {
+		renguin_thread* data = (renguin_thread*)thread->personality_data;
+		if (data != NULL
+			&& thread->team == thread_get_current_thread()->team) {
+			data->nice = (int8)value;
+			data->nice_set = true;
+		}
+		thread->ReleaseReference();
+	}
 	return 0;
 }
 

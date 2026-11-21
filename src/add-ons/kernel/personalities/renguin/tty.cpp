@@ -342,7 +342,14 @@ renguin_sys_ioctl(int fd, uint64 cmd, uint64 arg)
 					&& nr != 0xce)
 				|| (type == '>' && nr >= 3 && nr <= 5)
 				|| (type == 'W' && nr <= 1);
-			if (syncRequest) {
+			// Input devices (Renga 2026-11-21, F-42 for Renguin): evdev
+			// ('E', /dev/input/event*), uinput ('U', /dev/input/uinput)
+			// and hidraw ('H', /dev/hidraw*). Renga's gamepad core speaks
+			// Linux's numbers and layouts (<linux/input.h>), including
+			// requests that pass a value instead of a pointer (EVIOCGRAB,
+			// EVIOCRMFF, UI_SET_EVBIT ...), so they go through unchanged.
+			bool inputRequest = type == 'E' || type == 'U' || type == 'H';
+			if (syncRequest || inputRequest) {
 				size_t size = ((uint32)cmd >> 16) & 0x3fff;
 				return renguin_encode(_user_ioctl(fd, (uint32)cmd,
 					(void*)(addr_t)arg, size));

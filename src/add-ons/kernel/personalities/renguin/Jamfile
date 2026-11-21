@@ -3,8 +3,37 @@ SubDir HAIKU_TOP src add-ons kernel personalities renguin ;
 UsePrivateKernelHeaders ;
 UsePrivateHeaders system drivers ;
 
+# The vDSO: a freestanding shared object built with the target compiler and
+# embedded in the module (vdso.cpp maps it into every Linux process).
+rule BuildRenguinVdso object : source : versionScript : layoutScript
+{
+	SEARCH on $(source) $(versionScript) $(layoutScript)
+		= [ FDirName $(SUBDIR) vdso ] ;
+	MakeLocateDebug $(object) ;
+	Depends $(object) : $(source) $(versionScript) $(layoutScript) ;
+	BuildRenguinVdso1 $(object) : $(source) $(versionScript) $(layoutScript) ;
+}
+
+actions BuildRenguinVdso1
+{
+	$(RM) $(1)
+	$(HAIKU_CC_$(HAIKU_PACKAGING_ARCH)) -O2 -fPIC -ffreestanding \
+		-fno-stack-protector -fno-asynchronous-unwind-tables \
+		-fno-unwind-tables -mno-red-zone -nostdlib -shared \
+		-Wl,-T,$(2[3]) -Wl,--version-script=$(2[2]) \
+		-Wl,-soname=linux-vdso.so.1 -Wl,--hash-style=both \
+		-Wl,--build-id=none -Wl,-z,max-page-size=4096 -Wl,-z,norelro \
+		-Wl,--no-undefined -o $(1) $(2[1])
+}
+
 # Linux ABI binaries are x86-64 only for now.
 if $(TARGET_ARCH) = x86_64 {
+	BuildRenguinVdso [ FGristFiles renguin_vdso.so ] : <renguin-vdso>vdso.c
+		: <renguin-vdso>vdso.ld : <renguin-vdso>vdso-layout.ld ;
+	DataFileToSourceFile [ FGristFiles VDSO.h ]
+		: [ FGristFiles renguin_vdso.so ] : kRenguinVdso : kRenguinVdsoSize ;
+	Includes [ FGristFiles vdso.cpp ] : [ FGristFiles VDSO.h ] ;
+
 	KernelAddon renguin :
 		renguin.cpp
 		loader.cpp
@@ -27,5 +56,9 @@ if $(TARGET_ARCH) = x86_64 {
 		sysinfo.cpp
 		net.cpp
 		fds.cpp
+		timers.cpp
+		ipc.cpp
+		vdso.cpp
+		xattr.cpp
 	;
 }
