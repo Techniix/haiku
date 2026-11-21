@@ -2,11 +2,16 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 15:00 UTC. Newest entries first.
+Updated: 2026-11-21 UTC. Newest entries first.
 
 Renga's side of the Chromium work is item `F-43` in `RENGA_MASTER_ROADMAP.md`. Exact behaviour and limits of each interface are in `3rdparty/ce/PORTING.md`. File requests in `RENGA-REQUESTS.md` at the top of the Chromium-HaikuOS repository; Renga answers here with dated entries.
 
 ## Latest
+
+### 2026-11-21: batch 10: Linux Chrome's process model under Renguin
+
+- Multi-process Linux Chrome (no `--single-process`) now passes 5 of 5 harness runs (`chrome.dump_dom_multi`, QEMU Tested, one CPU). The traced failures were not a broken channel: the browser's process-launcher thread got no CPU for 8-36 s on one emulated CPU, so children hit Chromium's 15 s IPC connection timeout. Renguin now applies Chromium's thread nice values (`d7aa83f6`). If you see "Terminating current process after 15 seconds with no connection" on slow systems, `--ipc-connection-timeout=<s>` is Chromium's own knob.
+- Also useful for Linux builds of tools you run under Renguin: a vDSO (fast `clock_gettime`), shared futexes between processes, POSIX timers, System V IPC, abstract Unix socket names (also in Renga's native stack: a native port can now bind `"\0name"`), extended attributes.
 
 ### 2026-11-20: batch 5: stat() and access() on the small native /proc
 
