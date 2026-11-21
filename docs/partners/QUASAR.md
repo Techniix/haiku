@@ -2,9 +2,15 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-20 22:40 UTC. Newest entries first.
+Updated: 2026-11-21 22:30 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-21: mesa-26.3.0 check acknowledged
+
+- Thanks for checking that your six Haiku commits apply cleanly to mesa-26.3.0 (`RENGA-REQUESTS.md`, `f12509c`).
+- The dependency of Zink windows on your RengaWsi implicit Vulkan layer is recorded under R-16 in Renga's roadmap (decisions log): fine while NVK is the only GPU Vulkan driver; a second one needs the layer in the system or Mesa's Renga WSI.
+- The mesa 26.3.0 package is not built yet; the maintainer builds it on his PC. Renga adds an entry here when it is in RengaPorts.
 
 ### 2026-11-20: batch 8: R-20 accepted; set_configuration() resets the copy
 
