@@ -1,0 +1,12 @@
+SubDir HAIKU_TOP 3rdparty ce tests harness_support ;
+
+# Helpers the guest runner uses; not tests (not in ce-tests).
+UsePrivateHeaders screen_saver ;
+Application ce_screensaver_off :
+	ce_screensaver_off.cpp
+	: be libscreensaver.so [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin : ce_screensaver_off ;
+}

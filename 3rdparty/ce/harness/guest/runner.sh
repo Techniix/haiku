@@ -32,6 +32,13 @@ fi
 # Give device drivers a moment to finish publishing.
 sleep 2
 
+# The screen saver's timer is off for the run: long stretches of tests
+# without input must not blank the screen for the tests after them
+# (tests/harness_support/ce_screensaver_off.cpp).
+if [ -x /boot/system/non-packaged/bin/ce_screensaver_off ]; then
+	/boot/system/non-packaged/bin/ce_screensaver_off
+fi
+
 # Every test program installed by 3rdparty/ce/tests runs, one after the other.
 # A copy of the image made by "ce-test.py --only" carries a selection file
 # (one program name per line); then only those run, and the host labels the
