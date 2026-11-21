@@ -4,6 +4,8 @@
  */
 
 
+#include <math.h>
+#include <algorithm>
 #include "WindowsPage.h"
 
 #include <stdio.h>
@@ -84,8 +86,10 @@ public:
 		fColumns(3),
 		fDragging(false)
 	{
-		SetExplicitMinSize(BSize(240, 135));
-		SetExplicitPreferredSize(BSize(320, 180));
+		float scale = std::max(1.0f, be_plain_font->Size() / 12);
+		SetExplicitMinSize(BSize(ceilf(240 * scale), ceilf(135 * scale)));
+		SetExplicitPreferredSize(BSize(ceilf(320 * scale),
+			ceilf(180 * scale)));
 		SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 	}
 
@@ -692,8 +696,12 @@ private:
 	{
 		BPopUpMenu* menu = new BPopUpMenu(name);
 		BMenuField* field = new BMenuField(name, label, menu);
-		if (what != 0)
-			field->SetExplicitMaxSize(BSize(260, B_SIZE_UNSET));
+		// batch 11: from the font (a fixed 260 pixels cut "Same as the
+		// screen" off with the maintainer's larger system font)
+		if (what != 0) {
+			field->SetExplicitMaxSize(BSize(
+				ceilf(260 * be_plain_font->Size() / 12), B_SIZE_UNSET));
+		}
 		return field;
 	}
 

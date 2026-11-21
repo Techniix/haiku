@@ -30,10 +30,12 @@ public:
 	virtual	void				MessageReceived(BMessage* message);
 	virtual	void				SetAdvanced(bool advanced);
 	virtual	void				Refresh();
+	virtual	void				PageShown(bool shown);
 
 			void				GetState(BMessage* state);
 
 private:
+			bool				fWasShown;
 			void				_Read();
 			void				_Write();
 			void				_WriteKeys();
@@ -69,10 +71,12 @@ public:
 	virtual	void				MessageReceived(BMessage* message);
 	virtual	void				SetAdvanced(bool advanced);
 	virtual	void				Refresh();
+	virtual	void				PageShown(bool shown);
 
 			void				GetState(BMessage* state);
 
 private:
+			bool				fWasShown;
 			void				_RebuildCombine();
 			void				_RebuildTriggers();
 			void				_WriteDucking();

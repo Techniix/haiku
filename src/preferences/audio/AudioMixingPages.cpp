@@ -105,6 +105,7 @@ make_note(const char* name, const char* text)
 MicrophonePage::MicrophonePage(AudioDeviceList& devices)
 	:
 	AudioPage("microphone", B_TRANSLATE("Microphone")),
+	fWasShown(false),
 	fDevices(devices),
 	fChanged(0)
 {
@@ -262,8 +263,23 @@ MicrophonePage::SetAdvanced(bool advanced)
 
 
 void
+MicrophonePage::PageShown(bool shown)
+{
+	if (shown && !fWasShown) {
+		fWasShown = true;
+		Refresh();
+	}
+}
+
+
+void
 MicrophonePage::Refresh()
 {
+	// only once shown: the Control Panel and the Audio preferences refresh
+	// every page when they open, and these ask the media nodes (slow while
+	// the media services start; the Control Panel stopped answering)
+	if (!fWasShown)
+		return;
 	BStringList names = fDevices.InputNames();
 	BString key;
 	for (int32 i = 0; i < names.CountStrings(); i++)
@@ -386,6 +402,7 @@ MicrophonePage::GetState(BMessage* state)
 MixingPage::MixingPage(AudioDeviceList& devices)
 	:
 	AudioPage("mixing", B_TRANSLATE("Mixing")),
+	fWasShown(false),
 	fDevices(devices),
 	fDuckActive(false),
 	fChanged(0)
@@ -618,8 +635,20 @@ MixingPage::_WriteCombined()
 
 
 void
+MixingPage::PageShown(bool shown)
+{
+	if (shown && !fWasShown) {
+		fWasShown = true;
+		Refresh();
+	}
+}
+
+
+void
 MixingPage::Refresh()
 {
+	if (!fWasShown)
+		return;
 	if (fControl.Update() != B_OK)
 		return;
 	bool userChanged = system_time() - fChanged < kChangeGrace;
