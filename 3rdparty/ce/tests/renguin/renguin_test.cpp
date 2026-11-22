@@ -249,9 +249,11 @@ static const RootCheck kRootChecks[] = {
 	// Linux tools are found before Haiku's (hardware: apk, ip "not found"
 	// from busybox sh started with Haiku's PATH)
 	{ "linux_command", "/bin/linux sh -c 'echo $PATH; command -v apk; "
-		"echo $XDG_RUNTIME_DIR $WAYLAND_DISPLAY'", 0,
+		"echo $XDG_RUNTIME_DIR $WAYLAND_DISPLAY; "
+		"echo $DBUS_SYSTEM_BUS_ADDRESS'", 0,
 		"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
-		"/sbin/apk\n/tmp/xdg-runtime wayland-0" },
+		"/sbin/apk\n/tmp/xdg-runtime wayland-0\n"
+		"unix:path=/tmp/xdg-runtime/bus" },
 	// the linux command's locale (batch 3): Linux programs said
 	// "Translation: Unsupported language 'C.UTF-8'" on hardware. C,
 	// POSIX and C.UTF-8 become English; Haiku's language-only names and

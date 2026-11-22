@@ -16,8 +16,8 @@
 	  LANG, LANGUAGE and the formatting LC_* from Haiku's Locale settings
 	  in the form Linux C libraries know (see linux_locale_environment()),
 	  XDG_RUNTIME_DIR=/tmp/xdg-runtime and WAYLAND_DISPLAY=wayland-0 (Renga's
-	  Wayland compositor), DBUS_SESSION_BUS_ADDRESS (Renga's session bus),
-	  SHELL.
+	  Wayland compositor), DBUS_SESSION_BUS_ADDRESS and (batch 12)
+	  DBUS_SYSTEM_BUS_ADDRESS (both Renga's session bus), SHELL.
 	The interactive shell shows that it is Linux: the Terminal window is
 	titled "Linux (Renguin)", a line says so at start-up, and the prompt
 	starts with a coloured "[linux]" (/etc/profile.d/renga.sh in the root,
@@ -494,6 +494,11 @@ linux_environment(const std::string& shell)
 	// Secret Service
 	environment.push_back(
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/xdg-runtime/bus");
+	// batch 12: and as the system bus. Renga has no other, and UPower, a
+	// system service on Linux, is on this one; without it programs looked
+	// for /run/dbus/system_bus_socket (Chromium logged it missing)
+	environment.push_back(
+		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/tmp/xdg-runtime/bus");
 	environment.push_back("SHELL=" + shell);
 	// batch 11: HiDPI from Renga's font size (linux-apps theme writes the
 	// scale); what the user set in the environment wins
