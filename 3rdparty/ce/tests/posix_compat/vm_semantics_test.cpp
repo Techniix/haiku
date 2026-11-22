@@ -19,8 +19,10 @@
 	 - madvise(MADV_FREE) accepted (V8's DiscardSystemPages());
 	 - munmap() of sub-ranges (V8's OS::Release()).
 
-	And one Renga kernel behaviour: memory below 16 MiB stays available
-	after the boot (lomem_area, see test_low_memory()).
+	And Renga kernel behaviours: memory below 16 MiB stays available
+	after the boot (lomem_area, see test_low_memory()); and (batch 12)
+	fork() of a team with a locked area, whose copies are then given up
+	in either order (test_fork_locked_area()).
 
 	Memory use is read from get_system_info()'s needed_memory (committed
 	memory); limits are generous because other programs run meanwhile.
@@ -40,6 +42,8 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include <initializer_list>
 
 
 #define SUITE "vm_semantics"
@@ -439,6 +443,60 @@ test_low_memory()
 }
 
 
+/*!	Batch 12: fork() copies a B_FULL_LOCK area (memory that never goes to
+	swap, such as Renguin's one-page vDSO in every Linux program). The
+	child's copy got a swappable cache above the locked one; when the
+	parent's own copy went away first, the kernel merged the locked cache
+	into the child's and panicked ("VMAnonymousCache::Merge(): merge with
+	incompatible cache"; Linux git under Renguin, renguin_test ladder.git).
+	The parent deletes its area while the child still has its copy, and
+	both copies keep their contents.
+*/
+static void
+test_fork_locked_area()
+{
+	void* address = NULL;
+	area_id area = create_area("ce locked", &address, B_ANY_ADDRESS,
+		B_PAGE_SIZE, B_FULL_LOCK, B_READ_AREA | B_WRITE_AREA);
+	if (area < 0) {
+		report("fork_locked_area", false, "create_area: %s", strerror(area));
+		return;
+	}
+	char* page = (char*)address;
+	page[0] = 'a';
+	int toChild[2], toParent[2];
+	if (pipe(toChild) != 0 || pipe(toParent) != 0) {
+		report("fork_locked_area", false, "pipe: %s", strerror(errno));
+		delete_area(area);
+		return;
+	}
+	pid_t child = fork();
+	if (child == 0) {
+		char go;
+		read(toChild[0], &go, 1);
+		// the parent's copy is gone: this one still has the page
+		bool kept = page[0] == 'a';
+		page[0] = 'c';
+		write(toParent[1], kept ? "k" : "l", 1);
+		_exit(kept && page[0] == 'c' ? 0 : 1);
+	}
+	page[0] = 'p';
+	status_t deleted = delete_area(area);
+	write(toChild[1], "g", 1);
+	char answer = 0;
+	read(toParent[0], &answer, 1);
+	int status = -1;
+	waitpid(child, &status, 0);
+	for (int fd : { toChild[0], toChild[1], toParent[0], toParent[1] })
+		close(fd);
+	report("fork_locked_area", child > 0 && deleted == B_OK && answer == 'k'
+			&& WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		"fork %d, parent's delete_area %s, child's copy %s, child %d",
+		child > 0, strerror(deleted), answer == 'k' ? "kept" : "lost",
+		WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+}
+
+
 int
 main()
 {
@@ -451,6 +509,7 @@ main()
 	test_dontneed();
 	test_free();
 	test_low_memory();
+	test_fork_locked_area();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
 	fflush(stdout);

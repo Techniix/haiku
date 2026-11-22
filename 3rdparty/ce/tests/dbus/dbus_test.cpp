@@ -14,6 +14,8 @@
 	  the sender filled in by the bus, and its reply back;
 	- fd_passing: a pipe end sent along with a message arrives usable;
 	- unknown_name: a call to a name nobody owns gets ServiceUnknown;
+	- linux_user (batch 12): a client claiming Renguin's Linux user, uid
+	  1000, is accepted and known as uid 1000; uid 1234 is rejected;
 	- notifications: GetServerInformation and Notify (an ID back);
 	- upower: EnumerateDevices, GetDisplayDevice and OnBattery;
 	- portal_settings: org.freedesktop.appearance color-scheme;
@@ -86,7 +88,7 @@ public:
 		fFD = -1;
 	}
 
-	bool Connect(BString& error)
+	bool Connect(BString& error, uid_t claimedUID = getuid())
 	{
 		fFD = socket(AF_UNIX, SOCK_STREAM, 0);
 		struct sockaddr_un address;
@@ -98,7 +100,7 @@ public:
 			return false;
 		}
 		BString uid;
-		uid << (int)getuid();
+		uid << (int)claimedUID;
 		BString hex;
 		for (int32 i = 0; i < uid.Length(); i++)
 			hex << BString().SetToFormat("%02x", (uint8)uid[i]);
@@ -465,6 +467,39 @@ test_bus()
 }
 
 
+/*!	Batch 12 (hardware report, 2026-11-21): a Linux program running as
+	Renguin's normal user claims uid 1000 in AUTH EXTERNAL, while its
+	socket carries Renga's own user. Linux Chromium's calls timed out
+	because the bus rejected that. Checks that the claim is accepted, that
+	GetConnectionUnixUser then says 1000, and that another uid is still
+	rejected.
+*/
+static void
+test_linux_user()
+{
+	Client linuxClient, stranger;
+	BString error, strangerError;
+	bool connected = linuxClient.Connect(error, 1000);
+	uint32 user = 0;
+	if (connected) {
+		DValueList name;
+		name.push_back(DValue::String(linuxClient.Unique()));
+		Message reply;
+		linuxClient.Call(call("org.freedesktop.DBus", "/org/freedesktop/DBus",
+			"org.freedesktop.DBus", "GetConnectionUnixUser", name), reply);
+		DValueList values;
+		reply.GetArguments(values);
+		user = values.size() == 1 ? values[0].u : 0;
+	}
+	bool rejected = !stranger.Connect(strangerError, 1234)
+		&& strangerError.FindFirst("REJECTED") >= 0;
+	report("linux_user", connected && user == 1000 && rejected,
+		"uid 1000 %s (%s), its unix user %u; uid 1234 %s [%s]",
+		connected ? "accepted" : "refused", error.String(), user,
+		rejected ? "rejected" : "not rejected", strangerError.String());
+}
+
+
 static void
 test_services()
 {
@@ -734,6 +769,11 @@ test_secrets()
 	client.Send(request);
 	uint32 serial = request.serial;
 	Message reply;
+	// a harmless key first: on some QEMU hosts the PS/2 keyboard is only
+	// found when its first key arrives ("ps2: possibly a hot plugin"),
+	// and that key is lost (run 20261121-204754: the Escape)
+	printf("CE-HOST sendkey shift\n");
+	fflush(stdout);
 	bool early = client.WaitFor(reply, [serial](const Message& message) {
 		return message.replySerial == serial; }, 1500000);
 	printf("CE-HOST screenshot secret_prompt\n");
@@ -791,6 +831,7 @@ main()
 	report("bus_running", running, "%s", kSocket);
 	if (running) {
 		test_bus();
+		test_linux_user();
 		test_services();
 		test_secrets();
 	}

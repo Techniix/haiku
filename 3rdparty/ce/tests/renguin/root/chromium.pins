@@ -1,8 +1,9 @@
 # Alpine Linux packages for the optional Chromium root (build-chromium-root.sh),
 # which also carries the application ladder (batch 10, at the end):
 # Alpine's chromium and every package it needs to start, except mesa,
-# mesa-dri-gallium (with LLVM; software rendering needs neither), gtk+3.0 and
-# xdg-utils (desktop integration). chromium-swiftshader is the software
+# mesa-dri-gallium (with LLVM; software rendering needs neither), gtk+3.0
+# or gtk4.0 and xdg-utils (desktop integration). update-pins.py brings the
+# versions up to date when Alpine replaced a package. chromium-swiftshader is the software
 # Vulkan driver behind ANGLE (SwANGLE), Chromium's GPU path without a GPU.
 # Same format as alpine.pins.
 branch v3.24
@@ -17,10 +18,10 @@ main brotli-libs-1.2.1-r0.apk 62a7e37e43bbfc1f8525a00ad2125fd5897135dc93b8497338
 main busybox-1.37.0-r31.apk 0e626fa97cf937fda7bba4ed4dde8e2f2dbb5083ac34e02180cec0c4eba9351b
 main busybox-binsh-1.37.0-r31.apk 93f803ae5db6b729c0f66f4afba6e907ccc17d7d5f8b8c3d25bdb4636de2c48a
 main cairo-1.18.4-r1.apk 23364d77506b5f60eae26daa0a5489cdee8bc100fcd010cd73774dfa5a7f9305
-community chromium-156.0.8078.79-r0.apk 488b94cfc04e05b59ad6e9ca2799316f413da71964d462e6a5c4d3181af25daa
-community chromium-angle-156.0.8078.79-r0.apk d941ed04dc7a26f9e089d2a105a2e9dfc8056416562e647ab66a6f20f84e7c4a
-community chromium-common-156.0.8078.79-r0.apk 6813a751c9c4a61d81b6ac4a034414f657ee2549955670d31b04acac6869da72
-community chromium-swiftshader-156.0.8078.79-r0.apk d458f9fa5642418d55faea412e027687ed1ec1fa1adfd4d4c2c49d3579850849
+community chromium-158.0.8127.36-r0.apk 48513d7cc542b7c5e2048ded5906e991f1d6765b9c2230d6be3af484cdde5577
+community chromium-angle-158.0.8127.36-r0.apk 9cdf9ff0177d473409df7edef922b0ed11a5c6c69c3cdeb4c50cd4e28a032b84
+community chromium-common-158.0.8127.36-r0.apk 181180283e77db22cac7ba0fbb7d81fbc3e5b0e52dbcfb2ef061a1931452208e
+community chromium-swiftshader-158.0.8127.36-r0.apk 4ab7c1535b752f98c4242bd46ae7a2a4010715a7d2444dc7046d160573abdd34
 main cjson-1.7.19-r1.apk b1aca971a5ba46e42169311ef7bcfa96eac40d39207b22dbd3af8d4f3103d1d8
 community crc32c-1.1.2-r3.apk 5ce4db9f797e92304bf4f7477d98d2230733f8589f40e1cf330c1d26c88810f3
 main cups-libs-2.4.19-r1.apk 5739c568d90f23006d74ff82619e1a18447a6f698ae2af61970debe6658a7bea
@@ -37,7 +38,7 @@ main freetype-2.14.3-r0.apk 09d76fde675a9ca3cfeb83d72fb09cb2e9ccf79b2937daa05a1a
 main fribidi-1.0.16-r3.apk be0cba50bc7bfdaadfba020fe8239ba3f25f35d309806a9e89e9e09860f985c0
 main glib-2.88.1-r1.apk 2f32203b97789bc9a92e57e2d9b89eb2e6951b69534ba082a683c6e49031cb5d
 main gmp-6.3.0-r4.apk 85323ef5bce8ff234736dc2d6592ea37aebdc6348a531e27430bdfe38364d256
-main gnutls-3.8.13-r0.apk 8d3f3612145db8cd7feb83607187a60f809f06cfa3c2e74d310d58a6b053d54c
+main gnutls-3.8.14-r0.apk 1dbdcd27b41ec454a533b188fda278763d1dfb579ec0c474d16ebbd6547dc463
 main graphite2-1.3.14-r6.apk 2caa36d901f79215753ce3b614818ca71596baf2bbb2c21b6eadcf073d81b552
 main harfbuzz-13.2.1-r0.apk 01f7862265ef2256bbadd0fc998df3d1243dee606df3bd8284471cf390f86f29
 main harfbuzz-subset-13.2.1-r0.apk c5a566d7c0b1dc5ae55a919593802462ff641a2d93997a04dc78a5dbff48640c
@@ -55,7 +56,7 @@ main libbsd-0.12.2-r0.apk 407597c04b41dbfe8a05b35d45a3453e32fae7df84aed3a06ff48d
 main libbz2-1.0.8-r6.apk 2737e2b23ed08d4911ee62cd0163b5f4bf0379cacf4dc35b23a00209584c98fd
 community libcamera-0.7.1-r1.apk 6b37940398502e5ee910a03fc4f1f63e730af1f949895d6ab3401ddb2ed3a7e7
 community libcamera-ipa-0.7.1-r1.apk 3f7e35dbedc2fa1ef292ba56f709432a25353587543f46d97544b63487c3f1ee
-main libcrypto3-3.5.9-r0.apk 6632d758d8f5e9ea3b650fe966f23bbf9a202f8b8dceecac93da135dec5e3689
+main libcrypto3-3.5.9-r1.apk 042026082cc9bc7872d1baa81755c50efa70b05f03b5369fdc5f0a1303009720
 main libdav1d-1.5.3-r0.apk 40a2b1b92cdcc6fd295934f799ee80ef67e2e384097624d565c6222d827f8480
 main libdrm-2.4.134-r0.apk 584fd84ad5030040e613fa1816097cd1706ddd542100070852b0eab6e09e12ca
 community libdvdcss-1.4.3-r0.apk ee57c56316be61bd1a7a81a31a314dbe18fd6d3f50ae9c7d257d5364108d652a
@@ -65,7 +66,7 @@ main libeconf-0.8.3-r0.apk 2a791c7957961f830cf31b04f35f814a63afcf633badc9052425f
 main libexpat-2.10.0-r0.apk e7e7408ea787ed06d00159b0ff1f9b65a63cf634f36d9e0fa7512ce2c489a503
 main libffi-3.5.2-r1.apk 6da1a19313a40c56cac756fb11e2c4d5267831e1c22fc8323f24c943c94da6e0
 main libflac-1.4.3-r2.apk 683e75654d71965a504acd09fa5829cd7f376b4317b9fc905ebc7944f97965bb
-main libfontenc-1.1.9-r0.apk ea7f6d097653572991da749ac0764c2568d8902a01eea4236e56b10b90a7b0e3
+main libfontenc-1.1.10-r0.apk cab0395163ac9f1b9ff4df80d33e4aedc3302a72310ca49487e4ca8e489d022a
 main libgcc-15.2.0-r5.apk 393dcd32629f06d7d85409c272d142d0c082772d10b87ef55ee82f47de3be637
 main libgomp-15.2.0-r5.apk e7204aad00e31d544e0a34eac5a7eb7d3586d2b7b22afd6e5907189c4e0337cc
 community libhwy-1.3.0-r0.apk a4356d71e627b5321a89a3f4cce1d491950e2358fecafc01b89d2cabe8c9e473
@@ -87,7 +88,7 @@ main libsndfile-1.2.2-r2.apk 56b9aff207756be28b7cbb013a5ae063761e2721ecc1b10ca39
 main libsodium-1.0.22-r0.apk 9104e01a043d92f1f646e5750a6ba9d8a030f4d87f6c5690e8a015f0d9a4ab73
 community libsrt-1.5.3-r1.apk a7b2c3d08e8a4d2464629caa26b482b7f204e4fa5171b849565a4e82ab6144e9
 community libssh-0.12.2-r0.apk ad36fea448d82f3ed08fcd8eefeabb60f56ef94d1c8c66e1282443521fe72d01
-main libssl3-3.5.9-r0.apk 05e3393fb95aa5751ca2f9d242f659f6cff82c1cc7767cc2df4a086f7ad01877
+main libssl3-3.5.9-r1.apk 18c5778cbe52e1991303f8531970b05d4e6e036ea08349322f7422f42a689dc7
 main libstdc++-15.2.0-r5.apk 14c987b556f5385a5db18376e788c75f37d85321b8dc1920d926ea7daac1d6f6
 main libtasn1-4.21.0-r0.apk 407f255c5af989f4e22a5e9404c4558f6fda04f14a4209a2ca1e06c3f2ba476e
 main libtheora-1.2.0-r1.apk d3cd6213cbf316656c0d07eb195f9ad30204283d65c83233ca846c21b867b993
@@ -114,14 +115,14 @@ main libxfixes-6.0.2-r0.apk cb00578d1b83abe8baf291f311f194d4deca0f9cf525f47ab10e
 main libxft-2.3.9-r0.apk eba6fd85599b4fedf3acdd3ad3e2eec84ea97a5ba8f1ac570fa1ee37a7d81420
 main libxi-1.8.4-r0.apk e41ff864833603ab1065ac37680b47838436f78d4d9510604723341fcb933723
 main libxkbcommon-1.13.1-r0.apk f52efd26a9069b1c3edc89cab399f7f81bdc47c9e88a54e017c470bd9734b003
-main libxml2-2.13.9-r2.apk 4b2f986159c659f014b942fe8a5d70c67af475153ca826c3dd53389eea46a300
+main libxml2-2.13.9-r3.apk 8b37229c4761cf0eef5089045283526ef43bf335073050515010d34a313186ed
 main libxrandr-1.5.5-r0.apk c64856b77001cdf31a32841729b1950ad45e6981c16d09f9fdf08824ab1c0271
 main libxrender-0.9.13-r0.apk 724aa6c6353e70869e0eb5aa5461e8fc0753b99db765de47a3ae238573dbdcf8
 main libxslt-1.1.43-r4.apk 40e6cc7d09ce1e69421c2b37e1da4e9afef486843f21c3a79339cd6d93c1c617
 main libxtst-1.2.6-r0.apk e6426212f638e23091a22e1a792684d0e105c5d7a020f3ba30c43b7d2f4e955b
 main libyuv-0.0.1928-r0.apk f72ec03d1a1db08f7efa2d005765783e73188397a64e41090702105856b347b6
 main libzmq-4.3.5-r2.apk 6bdc93b3ca98fea14a1fb29c6874fc8c460096d03b956f92632cbad58cdf444d
-community mbedtls3-3.6.7-r0.apk d4ac9dec9efd61bb7cc72929eaf944279439068b0b07c7d2167bfab98dce9273
+community mbedtls3-3.6.8-r0.apk 735176c22b6078b904543fb78d203f5c4ca75f17adf56cee22a80995c2fcdfa0
 main mesa-egl-26.1.6-r0.apk ccdd25c8f3a069b018a39a5641e4f13ab7ceb511d5991e9f8fb18bd551172ffa
 main mesa-gbm-26.1.6-r0.apk db6b00543e7e686f377a5c250036067742f914112839255e2e5edbbc241bfb0d
 main mesa-gles-26.1.6-r0.apk 2544a75e74778ab9ddcecfc8d9dc35375cb3a4ac3661e94a1156e2c528d7b59b
@@ -131,7 +132,7 @@ main mpg123-libs-1.33.5-r0.apk 3cab9a9a4b414a77dd9947e227e32d6108361ebdf8c6c1ee6
 main musl-1.2.6-r3.apk e142255d0fa397f14318996bc10378093dcc069dc3dd1b6818c8f28a789c21da
 main nettle-3.10.2-r0.apk 693c1a99b781cd17149916df30113ccd6bdddac130298c17b1286fd2ae438386
 main nspr-4.38.2-r0.apk 0b918a47c9e625f2b7001424dc64d6738e192594c584cecce4ae67d72199c4b0
-main nss-3.124-r0.apk 1df40eb4fccf83653c166bd843e8193eb82a969dedb6d1e7760263d1adc078a8
+main nss-3.133-r0.apk afe396bc1fcbd234a856edda5644d0671700acbd7c7df6b084d5c195736eab77
 main numactl-2.0.19-r0.apk 4a78670a16d9ae7377906e2084be7430197d4b4c24877d65712dd1d4597b59db
 community openh264-2.6.0-r0.apk 10f980486959f6fd149b80a940c054247cf52869ca360cd0fc374924a8d6748e
 main opus-1.6.1-r0.apk 8aecfcbe5b02eb8642ebc8703880ac3bbcdbeac537495bd98c5e4269c904f9e0

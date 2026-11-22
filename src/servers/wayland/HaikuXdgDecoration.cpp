@@ -9,7 +9,12 @@
 #include "HaikuXdgToplevel.h"
 
 #include <AutoDeleter.h>
+#include <FindDirectory.h>
+#include <Path.h>
 #include <Window.h>
+
+#include <stdio.h>
+#include <string.h>
 
 #include <new>
 
@@ -133,12 +138,46 @@ void HaikuXdgToplevelDecoration::Apply(uint32_t mode)
 	}
 }
 
+/*!	Renga (batch 12, F-27 "First-class Linux windows"; hardware report:
+	Linux windows had no title bar or borders): Renga's frame also for a
+	client that asks for client-side decorations, as xdg-decoration allows
+	("the compositor can decide not to use the client's mode and enforce a
+	different mode instead"). Linux Chromium asks for client-side by
+	default and then draws its own frame without Renga's tab. The client
+	follows the configure's mode. Renguin's switch "server_frames" (on;
+	~/config/settings/Renguin/settings, Renguin Manager) off honours the
+	client's choice. Read at each set_mode, so a change applies to the
+	next window without restarting the compositor.
+*/
+static bool
+server_frames_forced()
+{
+	BPath path;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK
+		|| path.Append("Renguin/settings") != B_OK)
+		return true;
+	FILE* file = fopen(path.Path(), "r");
+	if (file == NULL)
+		return true;
+	bool forced = true;
+	char line[256];
+	static const char kKey[] = "server_frames ";
+	while (fgets(line, sizeof(line), file) != NULL) {
+		if (strncmp(line, kKey, sizeof(kKey) - 1) == 0)
+			forced = strncmp(line + sizeof(kKey) - 1, "false", 5) != 0;
+	}
+	fclose(file);
+	return forced;
+}
+
 void HaikuXdgToplevelDecoration::HandleSetMode(uint32_t mode)
 {
 	if (mode != modeClientSide && mode != modeServerSide) {
 		wl_resource_post_error(ToResource(), errorInvalidMode, "invalid mode");
 		return;
 	}
+	if (mode == modeClientSide && server_frames_forced())
+		mode = modeServerSide;
 	Apply(mode);
 }
 

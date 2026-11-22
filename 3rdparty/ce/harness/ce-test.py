@@ -2600,6 +2600,15 @@ class SerialReader(threading.Thread):
 		try:
 			time.sleep(1)
 			self._send("bt", 2)
+			# A VM panic that names a cache ("merge with incompatible cache
+			# 0x..."): its type, flags, areas and the chain it is in say
+			# which mapping it was (batch 12; once captured, no rerun).
+			with self.lock:
+				panicText = self.kdl_text
+			match = re.search(r"PANIC: [^\n]*\bcache (0x[0-9a-f]+)", panicText)
+			if match:
+				self._send("cache " + match.group(1), 2)
+				self._send("cache_tree " + match.group(1), 3)
 			with self.lock:
 				before = len(self.kdl_text)
 			self._send("threads", 4)
@@ -3517,7 +3526,9 @@ def repository_priorities(text):
 		if name:
 			current = name.group(1)
 			continue
-		priority = re.match(r"^\t\tpriority:\s+(\d+)\s*$", line)
+		# (batch 12) a kernel or package_daemon prefix may come first on
+		# the same serial line: "package_daemon: [...] \t\tpriority:  2"
+		priority = re.search(r"\t\tpriority:\s+(\d+)\s*$", line)
 		if priority and current is not None:
 			priorities[current] = int(priority.group(1))
 			current = None

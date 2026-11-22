@@ -1429,10 +1429,18 @@ vm_map_cache(VMAddressSpace* addressSpace, VMCache* cache, off_t offset,
 		VMCache* newCache;
 
 		// create an anonymous cache
+		// Renga (batch 12): swappable only above a swappable cache, as
+		// vm_copy_on_write_area() and cut_area() do. A ramfs file's cache
+		// (memfd, shm_open) is a temporary VMAnonymousNoSwapCache: once the
+		// file was closed, it was merged into this consumer, and
+		// VMAnonymousCache::Merge() panicked ("merge with incompatible
+		// cache"; a Linux git under Renguin, renguin_test ladder.git).
 		status = VMCacheFactory::CreateAnonymousCache(newCache,
 			(protection & B_STACK_AREA) != 0
 				|| (protection & B_OVERCOMMITTING_AREA) != 0, 0,
-			cache->GuardSize() / B_PAGE_SIZE, true, VM_PRIORITY_USER);
+			cache->GuardSize() / B_PAGE_SIZE,
+			dynamic_cast<VMAnonymousNoSwapCache*>(cache) == NULL,
+			VM_PRIORITY_USER);
 		if (status != B_OK)
 			goto err1;
 

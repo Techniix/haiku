@@ -42,6 +42,11 @@
  *                      child's terminal is /dev/pts/N and 24 80
  *   pty_ctrl_c         ^C written to the master ends "sleep 30" in the
  *                      child by SIGINT
+ *   termios2           (batch 12) TCGETS2 on the slave answers with the
+ *                      speed, TCSETS2 with BOTHER 9600 sets B9600 (TCGETS
+ *                      sees it) and BOTHER 12345 is EINVAL; raw ioctls, so
+ *                      the check does not depend on the libc (glibc 2.42+
+ *                      uses TCGETS2 for isatty(), which failed before)
  */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -499,6 +504,60 @@ test_pty(void)
 }
 
 
+/* Linux struct termios2 (asm-generic/termbits.h), with its own name so
+   that no libc header's definition is needed */
+struct rg_termios2 {
+	unsigned int	c_iflag, c_oflag, c_cflag, c_lflag;
+	unsigned char	c_line;
+	unsigned char	c_cc[19];
+	unsigned int	c_ispeed, c_ospeed;
+};
+#define RG_TCGETS2	0x802c542aUL
+#define RG_TCSETS2	0x402c542bUL
+#define RG_TCGETS	0x5401UL
+#define RG_CBAUD	0010017
+#define RG_BOTHER	0010000
+#define RG_B9600	0000015
+
+
+static void
+test_termios2(void)
+{
+	int master = posix_openpt(O_RDWR | O_NOCTTY);
+	char* name = master >= 0 && grantpt(master) == 0 && unlockpt(master) == 0
+		? ptsname(master) : NULL;
+	int slave = name != NULL ? open(name, O_RDWR | O_NOCTTY) : -1;
+	if (slave < 0) {
+		result("termios2", 0, "no pty slave: %s", strerror(errno));
+		if (master >= 0)
+			close(master);
+		return;
+	}
+	struct rg_termios2 t2;
+	memset(&t2, 0, sizeof(t2));
+	int got = ioctl(slave, RG_TCGETS2, &t2);
+	int gotErrno = errno;
+	unsigned int speed = t2.c_ospeed;
+	t2.c_cflag = (t2.c_cflag & ~RG_CBAUD) | RG_BOTHER;
+	t2.c_ispeed = t2.c_ospeed = 9600;
+	int set = ioctl(slave, RG_TCSETS2, &t2);
+	struct rg_termios2 back;
+	memset(&back, 0, sizeof(back));
+	int get = ioctl(slave, RG_TCGETS, &back);
+	t2.c_ispeed = t2.c_ospeed = 12345;
+	int odd = ioctl(slave, RG_TCSETS2, &t2);
+	int oddErrno = errno;
+	result("termios2", got == 0 && speed > 0 && set == 0 && get == 0
+			&& (back.c_cflag & RG_CBAUD) == RG_B9600 && odd == -1
+			&& oddErrno == EINVAL,
+		"TCGETS2 %d (%s) speed %u, TCSETS2 BOTHER 9600 %d, TCGETS baud %#o, "
+		"BOTHER 12345 %d (%s)", got, strerror(gotErrno), speed, set,
+		back.c_cflag & RG_CBAUD, odd, strerror(oddErrno));
+	close(slave);
+	close(master);
+}
+
+
 int
 main(void)
 {
@@ -507,6 +566,7 @@ main(void)
 	test_fallocate();
 	test_memfd_shared();
 	test_pty();
+	test_termios2();
 	if (sFailed == 0)
 		printf("ok\n");
 	return sFailed == 0 ? 0 : 1;

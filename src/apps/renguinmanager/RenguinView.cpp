@@ -94,6 +94,11 @@ static const renguin_switch kSwitches[] = {
 		"the flags Renguin needs (no sandbox, zygote or GPU process yet)") },
 	{ "hidpi", false, B_TRANSLATE_MARK("Scale Linux programs like Renga "
 		"(HiDPI from the font size: GTK and Qt)") },
+	// batch 12
+	{ "apk_sync", false, B_TRANSLATE_MARK("Update Deskbar's Applications "
+		"as soon as apk installs or removes Linux programs") },
+	{ "server_frames", false, B_TRANSLATE_MARK("Give Linux windows Renga's "
+		"title bar and borders, also when they would draw their own") },
 };
 static const int32 kSwitchCount = sizeof(kSwitches) / sizeof(kSwitches[0]);
 static_assert(kSwitchCount <= 16, "RenguinView::fSwitches holds 16");

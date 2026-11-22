@@ -376,6 +376,13 @@ expect("identity: priority after the list (another CE- line) is ignored",
 	not repository_priority({"HaikuPorts": 2}, noise=False)
 	and ce_test.repository_priorities("CE-INFO pkgman list-repos:\r\n"
 		"        Renga\r\nCE-INFO x\r\n\t\tpriority:  1\r\n") == {})
+expect("identity: a priority line with a package_daemon prefix counts "
+	"(batch 12, run 20261121-202231)",
+	ce_test.repository_priorities("CE-INFO pkgman list-repos:\r\n"
+		"        HaikuPorts\r\n"
+		"package_daemon: [9631183:    83] \t\tpriority:  2\r\n"
+		"        Renga\r\n\t\tpriority:  1\r\n")
+	== {"HaikuPorts": 2, "Renga": 1})
 
 # Pointer devices: every attached device must have been tested in the guest
 # and every pointer request carried out; an image without a desktop skips.

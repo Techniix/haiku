@@ -223,6 +223,12 @@
 #define LX_TCSETS		0x5402
 #define LX_TCSETSW		0x5403
 #define LX_TCSETSF		0x5404
+// termios2 (glibc 2.42+ uses these for tcgetattr()/tcsetattr(), and so
+// for isatty()): struct linux_termios2, 44 bytes
+#define LX_TCGETS2		0x802c542a	// _IOR('T', 0x2a, struct termios2)
+#define LX_TCSETS2		0x402c542b	// _IOW('T', 0x2b, struct termios2)
+#define LX_TCSETSW2		0x402c542c	// _IOW('T', 0x2c, struct termios2)
+#define LX_TCSETSF2		0x402c542d	// _IOW('T', 0x2d, struct termios2)
 #define LX_TIOCSCTTY	0x540E
 #define LX_TIOCGPGRP	0x540F
 #define LX_TIOCSPGRP	0x5410
@@ -242,6 +248,7 @@
 // iflag/oflag bits, and lflag bits up to TOSTOP, are identical.
 #define LX_CBAUD		0010017
 #define LX_CBAUDEX		0010000
+#define LX_BOTHER		0010000	// c_cflag: speeds in termios2's c_[io]speed
 #define LX_CSIZE		0000060
 #define LX_CS5			0000000
 #define LX_CS6			0000020
@@ -378,6 +385,15 @@ struct linux_termios {
 	uint8	c_line;
 	uint8	c_cc[LX_NCCS];
 };
+
+// Linux struct termios2: struct termios, then the speeds in bits per
+// second (used when c_cflag's baud field is LX_BOTHER).
+struct linux_termios2 {
+	linux_termios	termios;
+	uint32			c_ispeed;
+	uint32			c_ospeed;
+};
+static_assert(sizeof(linux_termios2) == 44, "Linux struct termios2");
 
 // Linux struct linux_dirent64 (getdents64). d_name follows the header.
 struct linux_dirent64 {

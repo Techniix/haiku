@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!-- Renguin test page (renguin_test chrome.dump_dom): the script writes
      its result into the document, which headless Chromium prints with
-     dump-dom. -->
+     dump-dom, and logs it to the console (chrome.window_multi). -->
 <html>
 <head><meta charset="utf-8"><title>Renguin Chromium test</title></head>
 <body>
@@ -11,6 +11,9 @@ const n = [3, 1, 2].sort().join("");
 const crypto_ok = typeof crypto.getRandomValues(new Uint8Array(4))[0];
 document.getElementById("result").textContent
 	= "renguin-chromium-ok " + n + " " + crypto_ok + " " + (6 * 7);
+// chrome.window_multi: a windowed Chromium logs this console line
+// (--enable-logging=stderr) once its renderer process ran the script
+console.log(document.getElementById("result").textContent);
 </script>
 </body>
 </html>

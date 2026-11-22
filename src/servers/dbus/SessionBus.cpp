@@ -27,6 +27,15 @@
 namespace DBus {
 
 
+/*!	The user ID Linux programs see under Renguin as its normal user
+	(Renguin's process.cpp, kLinuxUserID; switch "linux_user"). Their
+	sockets carry Renga's own user (SO_PEERCRED), so EXTERNAL
+	authentication with "1000" from a peer of the bus's own user is
+	accepted (batch 12: Linux Chromium's calls timed out, its libdbus was
+	rejected). Renga has one user, so this lets no one in who was not.
+*/
+static const uid_t kRenguinUserID = 1000;
+
 static const char* kBusName = "org.freedesktop.DBus";
 static const size_t kMaxConnections = 256;
 static const size_t kMaxPendingOutput = 32 * 1024 * 1024;
@@ -496,6 +505,12 @@ SessionBus::_Authenticate(Connection* connection)
 			}
 			uid_t claimed = decoded.IsEmpty() ? connection->uid
 				: (uid_t)strtoul(decoded.String(), NULL, 10);
+			if (connection->uid != (uid_t)-1 && claimed == kRenguinUserID
+				&& connection->uid == getuid()) {
+				// a Linux program as Renguin's normal user (batch 11): it
+				// sees uid 1000, the socket says Renga's own user
+				connection->uid = claimed;
+			}
 			if (connection->uid != (uid_t)-1 && claimed == connection->uid) {
 				BString ok;
 				ok << "OK " << fGUID << "\r\n";

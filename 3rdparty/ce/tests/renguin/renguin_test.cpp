@@ -68,7 +68,12 @@
 	                           Chromium, headless, loads a local page, runs
 	                           its script and prints the DOM;
 	                           chrome.dump_dom_multi: the same with
-	                           Chromium's process model, five runs
+	                           Chromium's process model, five runs;
+	                           chrome.window_multi (batch 12): plain
+	                           "chromium" (Alpine's launcher and
+	                           renguin.conf) in a window on Renga's
+	                           compositor, its renderer runs the page
+	                           and it is still running after 90 s
 	  libc-ipc ... libc-xattr  (batch 10, static glibc programs in
 	                           linux/expected.txt) POSIX timers and System
 	                           V IPC, abstract AF_UNIX names, the vDSO,
@@ -244,9 +249,11 @@ static const RootCheck kRootChecks[] = {
 	// Linux tools are found before Haiku's (hardware: apk, ip "not found"
 	// from busybox sh started with Haiku's PATH)
 	{ "linux_command", "/bin/linux sh -c 'echo $PATH; command -v apk; "
-		"echo $XDG_RUNTIME_DIR $WAYLAND_DISPLAY'", 0,
+		"echo $XDG_RUNTIME_DIR $WAYLAND_DISPLAY; "
+		"echo $DBUS_SYSTEM_BUS_ADDRESS'", 0,
 		"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
-		"/sbin/apk\n/tmp/xdg-runtime wayland-0" },
+		"/sbin/apk\n/tmp/xdg-runtime wayland-0\n"
+		"unix:path=/tmp/xdg-runtime/bus" },
 	// the linux command's locale (batch 3): Linux programs said
 	// "Translation: Unsupported language 'C.UTF-8'" on hardware. C,
 	// POSIX and C.UTF-8 become English; Haiku's language-only names and
@@ -279,13 +286,15 @@ static const RootCheck kRootChecks[] = {
 		"connect6_block ok\nconnect_fallback ok\n"
 		"connect_nonblock_poll ok\n"
 		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
-		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
+		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\n"
+		"termios2 ok\nok" },
 	{ "dyn.sys_glibc", "$R/opt/renguin-tests/sys-glibc", 0,
 		"connect6_nonblock ok\nconnect6_failed_poll ok\nudp6_route ok\n"
 		"connect6_block ok\nconnect_fallback ok\n"
 		"connect_nonblock_poll ok\n"
 		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
-		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
+		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\n"
+		"termios2 ok\nok" },
 	// Alpine's busybox has no httpd: busybox nc answers one request with a
 	// canned HTTP response (a Linux TCP server, on 127.0.0.1: Haiku's IPv6
 	// has no IPv4-mapped addresses, so nc's default [::] listener would
@@ -381,6 +390,31 @@ run_root_checks()
 	root/build-chromium-root.sh): headless, without Chromium's sandbox
 	(Renguin has no user namespaces or seccomp yet), without the GPU.
 */
+//! run(), with a line every 30 s while it runs, so the harness does not
+//! take a long quiet Chromium run for a hang (90 s without serial output).
+static std::string
+run_with_heartbeat(const std::string& command)
+{
+	static volatile bool sChromeDone;
+	sChromeDone = false;
+	pthread_t heartbeat;
+	pthread_create(&heartbeat, NULL, [](void*) -> void* {
+		for (int i = 0; !sChromeDone; i++) {
+			snooze(1000000);
+			if (i % 30 == 29 && !sChromeDone) {
+				printf("CE-INFO renguin chrome: running\n");
+				fflush(stdout);
+			}
+		}
+		return NULL;
+	}, NULL);
+	std::string output = run(command);
+	sChromeDone = true;
+	pthread_join(heartbeat, NULL);
+	return output;
+}
+
+
 //! One headless --dump-dom run of Chromium with \a extraFlags; a check
 //! named \a name, or only a CE-INFO line when \a informational.
 static bool
@@ -402,24 +436,7 @@ run_chromium_dump(const char* name, const char* extraFlags,
 		+ std::string(kRoot) + "/bin/busybox grep -o "
 		"'renguin-chromium-ok[^<]*' /tmp/rg-chrome.out";
 	bigtime_t started = system_time();
-	// a line every 30 s while it runs, so the harness does not take the
-	// long quiet run for a hang (90 s without serial output)
-	static volatile bool sChromeDone;
-	sChromeDone = false;
-	pthread_t heartbeat;
-	pthread_create(&heartbeat, NULL, [](void*) -> void* {
-		for (int i = 0; !sChromeDone; i++) {
-			snooze(1000000);
-			if (i % 30 == 29 && !sChromeDone) {
-				printf("CE-INFO renguin chrome: running\n");
-				fflush(stdout);
-			}
-		}
-		return NULL;
-	}, NULL);
-	std::string output = run(command);
-	sChromeDone = true;
-	pthread_join(heartbeat, NULL);
+	std::string output = run_with_heartbeat(command);
 	bigtime_t took = system_time() - started;
 	int status = -1;
 	size_t marker = output.find("CE-RC:");
@@ -472,6 +489,83 @@ run_chromium_dump(const char* name, const char* extraFlags,
 }
 
 
+/*!	Batch 12 (hardware report, 2026-11-21): plain "chromium" in a window,
+	with Chromium's process model and Alpine's launcher (so the flags of
+	/etc/chromium/renguin.conf, without --single-process), on Renga's
+	Wayland compositor. On the batch 11 image it exited at once with no
+	window (zygote and GPU process, launch error 1002). Passes when the
+	renderer process ran the page's script (its console line) and the
+	browser is still running after \a seconds.
+*/
+static void
+run_chromium_window(const char* name, int seconds)
+{
+	// harness boots have no desktop session: start Renga's compositor
+	// when its socket is missing (it stays: the wayland suites later find
+	// it running, as after the launch daemon started it)
+	const char* socketPath = "/tmp/xdg-runtime/wayland-0";
+	if (access(socketPath, F_OK) != 0) {
+		run("mkdir -p /tmp/xdg-runtime; XDG_RUNTIME_DIR=/tmp/xdg-runtime "
+			"/boot/system/servers/wayland_compositor > /dev/null 2>&1 &");
+		for (int i = 0; i < 100 && access(socketPath, F_OK) != 0; i++)
+			snooze(100000);
+	}
+	if (access(socketPath, F_OK) != 0) {
+		report(name, false, "no Wayland compositor (%s missing)", socketPath);
+		return;
+	}
+	char command[1600];
+	snprintf(command, sizeof(command),
+		"rm -rf /tmp/rg-chrome-win; cd /tmp && "
+		"{ timeout %d /bin/linux /bin/sh -c 'chromium "
+		"--user-data-dir=/tmp/rg-chrome-win --no-first-run "
+		"--disable-dev-shm-usage --enable-logging=stderr "
+		"file:///opt/renguin-data/chrome/index.html; "
+		"rc=$?; echo linux-status $rc >&2; exit $rc' "
+		"> /dev/null 2> /tmp/rg-chrome-win.err; "
+		"printf 'CE-RC:%%d\\n' $?; }; "
+		"timeout 20 /bin/linux pkill -f /usr/lib/chromium/chromium; "
+		"%s/bin/busybox grep -c -E 'CONSOLE.*renguin-chromium-ok 123 number "
+		"42' /tmp/rg-chrome-win.err", seconds, kRoot);
+	bigtime_t started = system_time();
+	std::string output = run_with_heartbeat(command);
+	bigtime_t took = system_time() - started;
+	int status = -1;
+	size_t marker = output.find("CE-RC:");
+	if (marker != std::string::npos)
+		status = atoi(output.c_str() + marker + 6);
+	std::string count = marker != std::string::npos
+		? output.substr(output.find('\n', marker) + 1) : "";
+	bool ran = atoi(count.c_str()) > 0;
+	// timeout ends a browser that is still running with status 124
+	bool stayed = status == 124 || status == 143;
+	bool pass = ran && stayed;
+	report(name, pass, "page script ran %d, still running after %d s %d "
+		"(exit %d, %.1f s)", ran, seconds, stayed, status,
+		took / 1000000.0);
+	// Chromium's own error lines and the processes' last words, always:
+	// this is the check that says why a windowed Chromium stops
+	std::string errors = run(std::string(kRoot) + "/bin/busybox sh -c \"grep "
+		"-E 'FATAL|ERROR|Check failed|Received signal|linux-status|"
+		"error_code|exit_code|1002|zygote|Zygote' /tmp/rg-chrome-win.err "
+		"| grep -v -E 'dbus|udev|angle_platform|egl_util|gl_display' "
+		"| cut -c 1-300 | head -n 30; tail -c 600 /tmp/rg-chrome-win.err\"");
+	size_t start = 0;
+	while (start < errors.size()) {
+		size_t end = errors.find('\n', start);
+		if (end == std::string::npos)
+			end = errors.size();
+		if (end > start) {
+			printf("CE-INFO renguin %s: %s\n", name,
+				errors.substr(start, end - start).c_str());
+		}
+		start = end + 1;
+	}
+	fflush(stdout);
+	run("rm -rf /tmp/rg-chrome-win /tmp/rg-chrome-win.err");
+}
+
+
 static void
 run_chromium_check()
 {
@@ -501,7 +595,7 @@ run_chromium_check()
 			works++;
 	}
 	report("chrome.dump_dom_multi", works == kRuns, "%d of %d runs",
-		works, kRuns);
+		works, kRuns);	run_chromium_window("chrome.window_multi", 90);
 }
 
 
