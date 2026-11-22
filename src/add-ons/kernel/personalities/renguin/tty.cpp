@@ -4,9 +4,10 @@
  *
  * Linux ioctl(), currently the terminal subset.
  *
- * libc calls TCGETS to implement isatty() (and so to decide whether stdout is
- * line buffered), shells use TCGETS/TCSETS* for raw mode and TIOC[GS]PGRP for
- * job control, and most interactive tools ask for TIOCGWINSZ. FreeBSD
+ * libc calls TCGETS (glibc 2.42 and later: TCGETS2) to implement isatty()
+ * (and so to decide whether stdout is line buffered), shells use
+ * TCGETS/TCSETS* for raw mode and TIOC[GS]PGRP for job control, and most
+ * interactive tools ask for TIOCGWINSZ. FreeBSD
  * translates the same requests in sys/compat/linux/linux_ioctl.c
  * (linux_ioctl_termio(), bsd_to_linux_termios()).
  *
@@ -81,6 +82,49 @@ baud_from_haiku(uint32 cflag)
 		case B31250:	return B38400;
 		default:		return baud;
 	}
+}
+
+
+/*!	Renga (batch 12): the speeds of termios2. glibc 2.42 and later
+	implement tcgetattr() and tcsetattr(), and so isatty(), with
+	TCGETS2/TCSETS2, so without them every newer glibc program saw no
+	terminal (sys_glibc's pty check on a glibc 2.43 build host). Haiku has
+	only the fixed rates, so a BOTHER speed must be one of them.
+*/
+static const uint32 kLinuxSpeeds[] = {
+	0, 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600,
+	19200, 38400
+};
+static const uint32 kLinuxHighSpeeds[] = { 57600, 115200, 230400 };
+
+
+//!	Bits per second of the Linux c_cflag baud code \a cflag.
+static uint32
+linux_speed(uint32 cflag)
+{
+	uint32 baud = cflag & LX_CBAUD;
+	if ((baud & LX_CBAUDEX) == 0)
+		return kLinuxSpeeds[baud];
+	uint32 index = (baud & ~LX_CBAUDEX) - 1;
+	return index < B_COUNT_OF(kLinuxHighSpeeds) ? kLinuxHighSpeeds[index]
+		: 0;
+}
+
+
+//!	The Linux baud code of \a speed bits per second, or -1 if Haiku has
+//!	no such rate.
+static int32
+linux_baud_code(uint32 speed)
+{
+	for (uint32 i = 0; i < B_COUNT_OF(kLinuxSpeeds); i++) {
+		if (kLinuxSpeeds[i] == speed)
+			return i;
+	}
+	for (uint32 i = 0; i < B_COUNT_OF(kLinuxHighSpeeds); i++) {
+		if (kLinuxHighSpeeds[i] == speed)
+			return LX_CBAUDEX | (i + 1);
+	}
+	return -1;
 }
 
 
@@ -226,13 +270,45 @@ renguin_sys_ioctl(int fd, uint64 cmd, uint64 arg)
 			return 0;
 		}
 
+		case LX_TCGETS2:
+		{
+			struct termios haiku;
+			memset(&haiku, 0, sizeof(haiku));
+			status_t status = haiku_ioctl_struct(fd, TCGETA, &haiku,
+				sizeof(haiku), true);
+			if (status != B_OK)
+				return tty_status(status);
+			linux_termios2 linux;
+			memset(&linux, 0, sizeof(linux));
+			termios_from_haiku(haiku, linux.termios);
+			linux.c_ispeed = linux.c_ospeed
+				= linux_speed(linux.termios.c_cflag);
+			if (renguin_copy_out(arg, &linux, sizeof(linux)) != B_OK)
+				return -LX_EFAULT;
+			return 0;
+		}
+
 		case LX_TCSETS:
 		case LX_TCSETSW:
 		case LX_TCSETSF:
+		case LX_TCSETS2:
+		case LX_TCSETSW2:
+		case LX_TCSETSF2:
 		{
-			linux_termios linux;
-			if (renguin_copy_in(&linux, arg, sizeof(linux)) != B_OK)
+			linux_termios2 linux2;
+			linux_termios& linux = linux2.termios;
+			bool two = cmd == LX_TCSETS2 || cmd == LX_TCSETSW2
+				|| cmd == LX_TCSETSF2;
+			if (renguin_copy_in(&linux2, arg,
+					two ? sizeof(linux2) : sizeof(linux)) != B_OK)
 				return -LX_EFAULT;
+			if (two && (linux.c_cflag & LX_CBAUD) == LX_BOTHER) {
+				// a speed in bits per second: only Haiku's fixed rates
+				int32 code = linux_baud_code(linux2.c_ospeed);
+				if (code < 0)
+					return -LX_EINVAL;
+				linux.c_cflag = (linux.c_cflag & ~LX_CBAUD) | code;
+			}
 			struct termios haiku;
 			memset(&haiku, 0, sizeof(haiku));
 			status_t status = haiku_ioctl_struct(fd, TCGETA, &haiku,
@@ -240,8 +316,8 @@ renguin_sys_ioctl(int fd, uint64 cmd, uint64 arg)
 			if (status != B_OK)
 				return tty_status(status);
 			termios_to_haiku(linux, haiku);
-			uint32 command = cmd == LX_TCSETS ? TCSETA
-				: cmd == LX_TCSETSW ? TCSETAW : TCSETAF;
+			uint32 command = cmd == LX_TCSETS || cmd == LX_TCSETS2 ? TCSETA
+				: cmd == LX_TCSETSW || cmd == LX_TCSETSW2 ? TCSETAW : TCSETAF;
 			return tty_status(haiku_ioctl_struct(fd, command, &haiku,
 				sizeof(haiku), false));
 		}

@@ -142,7 +142,7 @@ message queues (`mq_*`), which Renga has natively and only need mapping; `copy_f
   `::ffff:a.b.c.d` is replaced in place by an AF_INET socket and reports
   mapped addresses (net.cpp); a socket bound to `[::]` stays IPv6-only.
 
-- **ioctl**: terminal requests (TCGETS/TCSETS*, TIOCGWINSZ/SWINSZ,
+- **ioctl**: terminal requests (TCGETS/TCSETS*, TCGETS2/TCSETS*2 (glibc 2.42+; BOTHER speeds that are fixed rates), TIOCGWINSZ/SWINSZ,
   TIOC[GS]PGRP, TIOCGSID, TIOCSCTTY, TIOCNOTTY), pseudo-terminals
   (TIOCGPTN, TIOCSPTLCK, TIOCGPTPEER on Haiku's pty driver: `/dev/ptmx`
   is the master, `/dev/pts/<n>` names Haiku's `/dev/tt/<l><h>` slave and

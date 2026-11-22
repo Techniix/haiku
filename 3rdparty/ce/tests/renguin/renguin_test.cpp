@@ -279,13 +279,15 @@ static const RootCheck kRootChecks[] = {
 		"connect6_block ok\nconnect_fallback ok\n"
 		"connect_nonblock_poll ok\n"
 		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
-		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
+		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\n"
+		"termios2 ok\nok" },
 	{ "dyn.sys_glibc", "$R/opt/renguin-tests/sys-glibc", 0,
 		"connect6_nonblock ok\nconnect6_failed_poll ok\nudp6_route ok\n"
 		"connect6_block ok\nconnect_fallback ok\n"
 		"connect_nonblock_poll ok\n"
 		"sigint_read ok\nsigint_poll ok\nmemfd_fallocate ok\n"
-		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\nok" },
+		"fallocate_keep ok\nmemfd_shared ok\npty ok\nforkpty ok\npty_ctrl_c ok\n"
+		"termios2 ok\nok" },
 	// Alpine's busybox has no httpd: busybox nc answers one request with a
 	// canned HTTP response (a Linux TCP server, on 127.0.0.1: Haiku's IPv6
 	// has no IPv4-mapped addresses, so nc's default [::] listener would
