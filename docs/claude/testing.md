@@ -89,7 +89,11 @@ silently: report them, flaky or not.
 
 Recurring failures that are **not** flaky (open work, hand-over batch 11 and 12): `linux_apps.open_with`,
 `linux_apps.appimage`; `renguin_manager.display_scale` and two `large_font` windows until the batch 12
-Renguin Manager work lands.
+Renguin Manager work lands; `large_font.deskbar_preferences` (window larger than the screen). With the
+Chromium layer, `renguin.chrome.*` fail intermittently: Linux Chromium crashes with a NULL buffer pointer in
+libxkbcommon or libbrotlidec (exit 191; open Renguin bug, same on the old kernel). On the WSL host:
+`crashlog.debugger_reboots` fails when QMP's socket is gone after the reboot ("set-action: No such file"),
+and `selftest.py` fails "sound settings: clean recordings pass" (also on HEAD).
 
 ## Reading results cheaply
 
