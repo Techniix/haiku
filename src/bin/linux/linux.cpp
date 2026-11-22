@@ -690,36 +690,82 @@ linux_setting(const char* name, bool fallback)
 }
 
 
+/*!	Writes \a text to the Linux root's \a linuxPath with \a mode, only when
+	the file's text differs, through a temporary file and rename(), so a
+	program reading it at the same moment never sees it half written.
+*/
 static void
-ensure_chromium_flags()
+write_root_file(const char* linuxPath, const char* text, mode_t mode)
 {
-	std::string conf = root_path("/etc/chromium/renguin.conf");
-	if (!linux_setting("chromium_flags", true)) {
-		unlink(conf.c_str());
-		return;
-	}
-	FILE* file = fopen(conf.c_str(), "r");
+	std::string path = root_path(linuxPath);
+	FILE* file = fopen(path.c_str(), "r");
 	if (file != NULL) {
-		char current[2048];
+		char current[4096];
 		size_t length = fread(current, 1, sizeof(current) - 1, file);
 		fclose(file);
 		current[length] = '\0';
-		if (strcmp(current, kChromiumConf) == 0)
+		if (strcmp(current, text) == 0)
 			return;
 	}
-	mkdir(root_path("/etc").c_str(), 0755);
-	mkdir(root_path("/etc/chromium").c_str(), 0755);
+	// the parent directories (/etc/apk/commit_hooks.d, /etc/chromium)
+	std::string linuxFile(linuxPath);
+	for (size_t slash = linuxFile.find('/', 1); slash != std::string::npos;
+			slash = linuxFile.find('/', slash + 1))
+		mkdir(root_path(linuxFile.substr(0, slash).c_str()).c_str(), 0755);
 	char temporary[PATH_MAX];
-	snprintf(temporary, sizeof(temporary), "%s.%ld", conf.c_str(),
+	snprintf(temporary, sizeof(temporary), "%s.%ld", path.c_str(),
 		(long)getpid());
 	file = fopen(temporary, "w");
 	if (file == NULL)
 		return;
-	bool written = fputs(kChromiumConf, file) >= 0;
+	bool written = fputs(text, file) >= 0;
 	written = fclose(file) == 0 && written;
-	chmod(temporary, 0644);
-	if (!written || rename(temporary, conf.c_str()) != 0)
+	chmod(temporary, mode);
+	if (!written || rename(temporary, path.c_str()) != 0)
 		unlink(temporary);
+}
+
+
+static void
+ensure_chromium_flags()
+{
+	if (!linux_setting("chromium_flags", true)) {
+		unlink(root_path("/etc/chromium/renguin.conf").c_str());
+		return;
+	}
+	write_root_file("/etc/chromium/renguin.conf", kChromiumConf, 0644);
+}
+
+
+/*!	Batch 12 (hardware report): Linux programs installed with apk appeared
+	in Deskbar's Applications only after the next login or a Renguin
+	Manager refresh. apk runs the scripts in /etc/apk/commit_hooks.d after
+	each change ("pre-commit", then "post-commit"); this one runs Haiku's
+	linux-apps sync (Renguin finds /boot/system/bin in Haiku's own root),
+	which updates the Deskbar entries from the .desktop files. Switch
+	"apk_sync" (on).
+*/
+static const char* kApkHook =
+	"#!/bin/sh\n"
+	"# Written by Renga's \"linux\" command (switch \"apk_sync\" in the\n"
+	"# Renguin Manager): after apk adds or removes programs, Deskbar's\n"
+	"# Applications are brought up to date.\n"
+	"[ \"$1\" = post-commit ] || exit 0\n"
+	"[ -x /boot/system/bin/linux-apps ] || exit 0\n"
+	"/boot/system/bin/linux-apps sync > /dev/null 2>&1 < /dev/null\n"
+	"exit 0\n";
+static const char* kApkHookPath = "/etc/apk/commit_hooks.d/renga-apps.hook";
+
+
+static void
+ensure_apk_hook()
+{
+	if (!linux_setting("apk_sync", true)) {
+		unlink(root_path(kApkHookPath).c_str());
+		return;
+	}
+	if (exists(root_path("/etc/apk")))
+		write_root_file(kApkHookPath, kApkHook, 0755);
 }
 
 
@@ -772,6 +818,7 @@ main(int argc, char** argv)
 	write_profile_script();
 	ensure_linux_user();
 	ensure_chromium_flags();
+	ensure_apk_hook();
 	std::string shell = login_shell();
 	update_theme();
 	std::vector<std::string> environment = linux_environment(shell);

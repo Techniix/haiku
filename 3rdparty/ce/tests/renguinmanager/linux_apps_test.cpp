@@ -38,6 +38,11 @@
 	  linux_apps.chromium_flags  (batch 11) /etc/chromium/renguin.conf
 	                         gives Chromium's flags, notes them once, and
 	                         goes with the switch "chromium_flags"
+	  linux_apps.apk_sync    (batch 12) an apk commit (a virtual package,
+	                         no network) brings a new .desktop program into
+	                         Deskbar and its removal takes it out, through
+	                         the commit hook "linux" writes (switch
+	                         "apk_sync" off removes the hook)
 	  linux_apps.chromium_launcher  (batch 12) plain "chromium", started
 	                         in the same "linux" run that installed it,
 	                         reaches the binary with those flags (the
@@ -484,8 +489,11 @@ main()
 	run((std::string("rm -f ") + home.Path()
 		+ "/.config/renguin/chromium-noted").c_str());
 	run("/bin/linux true 2>&1");
-	std::string first = run("/bin/linux sh -c '. /etc/chromium/renguin.conf; "
-		"echo $CHROMIUM_FLAGS' 2>&1");
+	// (the marker removed in the same Linux shell: a Chromium started by an
+	// earlier suite may still be leaving, run 20261121-203345)
+	std::string first = run("/bin/linux sh -c 'rm -f "
+		"\"$HOME/.config/renguin/chromium-noted\"; "
+		". /etc/chromium/renguin.conf; echo $CHROMIUM_FLAGS' 2>&1");
 	std::string second = run("/bin/linux sh -c '. /etc/chromium/renguin.conf;"
 		" echo $CHROMIUM_FLAGS' 2>&1");
 	write_text(settings, "chromium_flags false\n");
@@ -577,6 +585,39 @@ main()
 			"%s Chromium: flags %d, binary reached %d [%.300s]",
 			realChromium ? "installed" : "stand-in", flagged, reached,
 			oneLine(trace).c_str());
+	}
+
+	// batch 12: Deskbar's Applications follow apk at once (the hardware
+	// case: apk-installed programs appeared only after a login or a
+	// Renguin Manager refresh). A real apk commit without the network
+	// (a virtual package) runs /etc/apk/commit_hooks.d/renga-apps.hook,
+	// which runs Haiku's linux-apps sync from inside the Linux root.
+	{
+		std::string hook = std::string(kRoot)
+			+ "/etc/apk/commit_hooks.d/renga-apps.hook";
+		run("/bin/linux true 2>&1");
+		bool hookThere = access(hook.c_str(), X_OK) == 0;
+		std::string desktop = applications + "/ce-test-apkhook.desktop";
+		std::string hookEntry = std::string(menu.Path()) + "/CE Apk Hook";
+		write_text(desktop, "[Desktop Entry]\nType=Application\n"
+			"Name=CE Apk Hook\nExec=ce-apk-hook\n");
+		std::string added = run("timeout 120 /bin/linux --root apk add "
+			"--no-network --virtual .ce-renga-hook 2>&1");
+		bool appeared = access(hookEntry.c_str(), F_OK) == 0;
+		unlink(desktop.c_str());
+		std::string removed = run("timeout 120 /bin/linux --root apk del "
+			".ce-renga-hook 2>&1");
+		bool gone = access(hookEntry.c_str(), F_OK) != 0;
+		write_text(settings, "apk_sync false\n");
+		run("/bin/linux true 2>&1");
+		bool hookOff = access(hook.c_str(), F_OK) != 0;
+		unlink(settings.c_str());
+		run("/bin/linux true 2>&1");
+		report("apk_sync", hookThere && appeared && gone && hookOff,
+			"hook %d, entry after apk add %d, gone after apk del %d, switch "
+			"off removes the hook %d [%s] [%s]", hookThere, appeared, gone,
+			hookOff, oneLine(added).c_str(), oneLine(removed).c_str());
+		unlink(hookEntry.c_str());
 	}
 
 	run("/bin/linux-apps theme 2>&1");
