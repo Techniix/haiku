@@ -29,8 +29,11 @@
 	  capabilities        wm_capabilities: maximize, fullscreen, minimize
 	  decoration_server   zxdg_toplevel_decoration_v1 configures
 	                      server_side; the window has Renga's frame (a tab)
-	  decoration_client   after set_mode(client_side): configure
-	                      client_side, the window has no frame
+	  decoration_forced   (batch 12) set_mode(client_side) while Renguin's
+	                      switch "server_frames" is on (default): configure
+	                      server_side, the frame stays
+	  decoration_client   with the switch off, set_mode(client_side):
+	                      configure client_side, the window has no frame
 	  fractional_scale    preferred_scale is 120 (1.0) unless fractional
 	                      scaling is on (batch 11)
 	  resize_*            (batch 11) a toplevel without window geometry
@@ -71,8 +74,11 @@
 
 #include <Application.h>
 #include <Clipboard.h>
+#include <Directory.h>
 #include <Font.h>
+#include <FindDirectory.h>
 #include <OS.h>
+#include <Path.h>
 #include <Messenger.h>
 #include <Roster.h>
 #include <String.h>
@@ -718,13 +724,55 @@ test_window(Connection& connection)
 		"configure mode %u, window tab height %.0f", state.decorationMode,
 		tab);
 
-	// Client-side on request: the frame goes.
+	// batch 12: a request for client-side decorations still gets Renga's
+	// frame while Renguin's switch "server_frames" is on (the default):
+	// Linux Chromium asks for client-side and had no Renga title bar
+	BPath settingsPath;
+	find_directory(B_USER_SETTINGS_DIRECTORY, &settingsPath, true);
+	settingsPath.Append("Renguin");
+	create_directory(settingsPath.Path(), 0755);
+	settingsPath.Append("settings");
+	std::string savedSettings;
+	if (FILE* file = fopen(settingsPath.Path(), "r")) {
+		char buffer[4096];
+		size_t length = fread(buffer, 1, sizeof(buffer), file);
+		savedSettings.assign(buffer, length);
+		fclose(file);
+	}
+	unlink(settingsPath.Path());
 	state.configured = false;
 	zxdg_toplevel_decoration_v1_set_mode(decoration,
 		ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
 	dispatch_until(connection.display, 3000000, &state.configured);
 	xdg_surface_ack_configure(xdgSurface, state.serial);
 	wl_surface_commit(surface);
+	float forcedTab = -1;
+	for (int i = 0; i < 10; i++) {
+		dispatch_until(connection.display, 100000, NULL);
+		forcedTab = window_tab_height();
+	}
+	report("decoration_forced", state.decorationMode
+			== ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE && forcedTab > 0,
+		"set_mode(client_side) with server_frames on: configure mode %u, "
+		"window tab height %.0f", state.decorationMode, forcedTab);
+
+	// Client-side on request with the switch off: the frame goes.
+	if (FILE* file = fopen(settingsPath.Path(), "w")) {
+		fputs("server_frames false\n", file);
+		fclose(file);
+	}
+	state.configured = false;
+	zxdg_toplevel_decoration_v1_set_mode(decoration,
+		ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+	dispatch_until(connection.display, 3000000, &state.configured);
+	xdg_surface_ack_configure(xdgSurface, state.serial);
+	wl_surface_commit(surface);
+	if (savedSettings.empty())
+		unlink(settingsPath.Path());
+	else if (FILE* file = fopen(settingsPath.Path(), "w")) {
+		fwrite(savedSettings.data(), 1, savedSettings.size(), file);
+		fclose(file);
+	}
 	float noTab = -1;
 	for (int i = 0; i < 20; i++) {
 		dispatch_until(connection.display, 100000, NULL);
