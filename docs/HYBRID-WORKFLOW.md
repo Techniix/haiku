@@ -151,6 +151,26 @@ Note the run times next to the cloud ones.
 
 Between tasks: `/clear`, or start a new session. No scheduled check-ins.
 
+## 3a. Autonomous sessions (maintainer, 2026-11-21)
+
+The maintainer wants local sessions to work through the queue on their own.
+
+- **Permissions:** `.claude/settings.json` (checked in) lets sessions edit files and run the build, harness,
+  `git` and `gh` commands without asking. It denies force-push, pushing to or deleting `master`, `sudo`
+  and recursive deletes of `/` or `~`. Personal overrides go in `.claude/settings.local.json` (not
+  committed). Do not use `--dangerously-skip-permissions`.
+- **Long runs:** the session runs builds and suites itself with the tool's background mode and waits for
+  the result without polling, then reads only `renga-summary`. It does not ask the maintainer to run them.
+- **Merging:** the architect merges. In a local session that means an Opus session: after the gates pass,
+  it reviews the PR (diff stat, summaries, the hunks that matter), sets `Architect-Approved: yes` when
+  protected paths changed, merges with a merge commit, pulls `ce/main`, and continues with the next item.
+  A Sonnet session opens the PR and stops for an Opus review.
+- **When to stop and ask the maintainer:** a change of direction or priorities, a decision the roadmap
+  does not cover, protected paths without a clear brief, anything needing real hardware (hardware tests
+  are recorded only from his reports), and spending outside the subscription.
+- **Starting it:** `cd ~/renga/haiku && git pull && claude --model opus`, then the queue prompt from the
+  hand-over ("Batch 12: continue from here").
+
 ## 4. Git workflow
 
 - `ce/main` is the integration branch: merges only through pull requests after the gates and the review,
