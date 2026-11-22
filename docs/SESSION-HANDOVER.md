@@ -86,6 +86,10 @@ Open, queued by the coordinator in batch 11 and not done: the large-font UI audi
 
 ## Batch 12: continue from here
 
+**Local session, 2026-11-21 (first under the hybrid workflow; branch `fix/linux-chromium`, PR to `ce/main`).** Done, QEMU Tested: hardware items 1-5 below (`02a7d936`, `02f9edc2`, `20d215eb`, `23dcea60`, `e12407f5`), plus a kernel fork panic with `B_FULL_LOCK` areas (`b2f10df0`; upstream bug 67), Renguin termios2 for glibc 2.42+ (`941c56df`), the clang 21 IFUNC test (`2930cf51`), harness KDL cache dump and priority parser (`0f05fb8f`). Decisions recorded: the architect merges (section 3a) and writes the briefs for batch 12's protected paths. Next, in order: (6) per-client Deskbar entries for Linux programs (design: the compositor answers a "list clients" message with each client's name, icon signature and its windows' client tokens, `window_info.client_token`, from `_get_object_token_()`; Deskbar shows one entry per client and filters window menus by those tokens; a Renguin switch); then the Renguin Manager scale controls and Renga Depot from `wip/batch12-depot-renguinscale`, `F-23`, `F-24`, `F-22`, the sweep and the image.
+
+Found in this session, open: windowed Linux Chromium crashed once in QEMU (run 20261121-203345) with SIGSEGV in libxkbcommon 1.13.1 at offset 0xfea1: a parser's buffer pointer, reloaded from its state, was NULL after 67 bytes (exit 191); possibly the `--single-process` segfault seen on hardware; suspect a Renguin memory bug (copy-on-write or `MADV_DONTNEED`). On this WSL host QEMU's PS/2 keyboard is found only at its first key, which is lost (tests that press keys send a harmless key first). `selftest.py` fails "sound settings: clean recordings pass" on HEAD too (pre-existing).
+
 Paused by the maintainer on 2026-11-21 (evening). Committed: Quasar note and R-16 record (`74c31ad5`), large-font audit suite with window fixes (`1f5a9d57`), compositor side of the Renguin display scale (`de6e7d71`). No sweep and no image yet.
 
 Uncommitted in the working tree (`/home/claude/haiku`), file by file:
@@ -110,7 +114,7 @@ Known test state (QEMU Tested, partial runs): `large_font` passes for Control Pa
 
 Hardware results on the batch 11 image (maintainer, 2026-11-21 evening), first in the next session's queue:
 - Confirmed working: `apk add chromium` ends "OK" (hard links as copies); the Linux shell runs as `user`; Linux Chromium content fills its window and follows resize (`238208d5`).
-- Open, Linux windows and Chromium:
+- Open, Linux windows and Chromium (items 1-5 done on 2026-11-21, see the top of this section; 6 next):
   1. Plain `chromium` as the normal user dies in the sandbox (`sandbox/linux/services/credentials.cc:131 Check failed: Function not implemented`): the batch 11 flags (`/etc/chromium/renguin.conf`) are not read by Alpine's launcher. Write them where the launcher reads them; add a test that starts plain `chromium`.
   2. Without `--single-process`, Chromium exits silently with no window (zygote and GPU process, error 1002).
   3. As the normal user, Chromium reaches the session bus but its calls time out ("Did not receive a reply"); `/run/dbus/system_bus_socket` is missing.
