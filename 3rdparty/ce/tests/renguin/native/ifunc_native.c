@@ -15,13 +15,21 @@ answer_impl(void)
 }
 
 
-static int (*resolve_answer(void))(void)
+__attribute__((used)) static int (*resolve_answer(void))(void)
 {
 	return answer_impl;
 }
 
 
-int answer(void) __attribute__((ifunc("resolve_answer")));
+/*	The IFUNC in assembly, not __attribute__((ifunc)): clang 21 for
+	x86_64-unknown-haiku drops that attribute without a word, which left
+	"answer" undefined (runtime_loader: "Could not resolve symbol"). The
+	directive gives the same STT_GNU_IFUNC symbol with any clang, and
+	ld.lld still turns the call into an R_X86_64_IRELATIVE relocation. */
+__asm__(".globl answer\n"
+	".type answer, @gnu_indirect_function\n"
+	".set answer, resolve_answer\n");
+int answer(void);
 
 
 int
