@@ -646,6 +646,14 @@ ensure_linux_user()
 	/etc/chromium/renguin.conf (its launcher reads /etc/chromium/*.conf),
 	which also says why, once, in the terminal. Switch "chromium_flags"
 	(on).
+
+	Batch 12: the file is written whenever the Linux root exists, not only
+	once /usr/lib/chromium does: otherwise "apk add chromium" followed by
+	"chromium" in the same Linux shell started Chromium without the flags,
+	and it died in its sandbox (credentials.cc: Function not implemented).
+	Nothing but Chromium's launcher reads /etc/chromium. The file is
+	replaced by a rename, and only when its text changes, so a launcher
+	sourcing it at the same moment never sees it half written.
 */
 static const char* kChromiumConf =
 	"# Written by Renga's \"linux\" command (switch \"chromium_flags\" in the\n"
@@ -690,14 +698,28 @@ ensure_chromium_flags()
 		unlink(conf.c_str());
 		return;
 	}
-	if (!exists(root_path("/usr/lib/chromium")))
-		return;
-	mkdir(root_path("/etc/chromium").c_str(), 0755);
-	FILE* file = fopen(conf.c_str(), "w");
+	FILE* file = fopen(conf.c_str(), "r");
 	if (file != NULL) {
-		fputs(kChromiumConf, file);
+		char current[2048];
+		size_t length = fread(current, 1, sizeof(current) - 1, file);
 		fclose(file);
+		current[length] = '\0';
+		if (strcmp(current, kChromiumConf) == 0)
+			return;
 	}
+	mkdir(root_path("/etc").c_str(), 0755);
+	mkdir(root_path("/etc/chromium").c_str(), 0755);
+	char temporary[PATH_MAX];
+	snprintf(temporary, sizeof(temporary), "%s.%ld", conf.c_str(),
+		(long)getpid());
+	file = fopen(temporary, "w");
+	if (file == NULL)
+		return;
+	bool written = fputs(kChromiumConf, file) >= 0;
+	written = fclose(file) == 0 && written;
+	chmod(temporary, 0644);
+	if (!written || rename(temporary, conf.c_str()) != 0)
+		unlink(temporary);
 }
 
 

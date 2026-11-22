@@ -33,6 +33,17 @@
 	  linux_apps.theme       "theme" writes GTK 3/4 settings and colours and
 	                         qt5ct/qt6ct schemes into ~/.config with the
 	                         marker line, and "theme false" removes them
+	  linux_apps.linux_user  (batch 11) Linux programs run as uid 1000,
+	                         "--root" and "sudo" as root, switch off
+	  linux_apps.chromium_flags  (batch 11) /etc/chromium/renguin.conf
+	                         gives Chromium's flags, notes them once, and
+	                         goes with the switch "chromium_flags"
+	  linux_apps.chromium_launcher  (batch 12) plain "chromium", started
+	                         in the same "linux" run that installed it,
+	                         reaches the binary with those flags (the
+	                         installed Chromium's launcher, traced with
+	                         --version, else a stand-in with the layout of
+	                         Alpine's package)
 
 	Everything it adds is removed again.
 */
@@ -51,6 +62,7 @@
 #include <Path.h>
 #include <TranslatorRoster.h>
 
+#include <ctype.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -497,6 +509,75 @@ main()
 		first.find("Renguin: Chromium runs with") != std::string::npos,
 		second.find("Renguin: Chromium runs") == std::string::npos,
 		confGone, oneLine(first).c_str());
+
+	// batch 12: plain "chromium" gets the flags through Alpine's launcher,
+	// also when Chromium is installed in the same Linux shell (the
+	// hardware case: "apk add chromium", then "chromium", died in its
+	// sandbox because renguin.conf was only written by a later "linux";
+	// a real Chromium can only show the launcher reads the flags)
+	{
+		std::string root(kRoot);
+		std::string conf = root + "/etc/chromium/renguin.conf";
+		struct stat linkStat;
+		bool realChromium = lstat((root + "/usr/bin/chromium").c_str(),
+				&linkStat) == 0
+			|| access((root + "/usr/lib/chromium/chromium").c_str(), F_OK) == 0;
+		std::string trace;
+		if (realChromium) {
+			// the real launcher, traced; --version starts no sandbox
+			unlink(conf.c_str());
+			trace = run("/bin/linux sh -c 'sh -x \"$(readlink -f "
+				"/usr/bin/chromium)\" --version' 2>&1");
+		} else {
+			// a stand-in with the layout of Alpine's package: /usr/bin/
+			// chromium -> chromium-browser -> ../lib/chromium/chromium-
+			// launcher.sh, which sources /etc/chromium/*.conf and passes
+			// $CHROMIUM_FLAGS to /usr/lib/chromium/chromium
+			std::string setup = root + "/ce-chromium-setup.sh";
+			write_text(setup,
+				"mkdir -p /usr/lib/chromium /usr/bin\n"
+				"cat > /usr/lib/chromium/chromium-launcher.sh <<'END'\n"
+				"#!/bin/sh\n"
+				"for f in /etc/chromium/*.conf; do\n"
+				"	[ -f \"$f\" ] && . \"$f\"\n"
+				"done\n"
+				"exec /usr/lib/chromium/chromium $CHROMIUM_FLAGS \"$@\"\n"
+				"END\n"
+				"printf '#!/bin/sh\\necho \"chromium args: $*\"\\n' "
+					"> /usr/lib/chromium/chromium\n"
+				"chmod 755 /usr/lib/chromium/chromium-launcher.sh "
+					"/usr/lib/chromium/chromium\n"
+				"ln -sf ../lib/chromium/chromium-launcher.sh "
+					"/usr/bin/chromium-browser\n"
+				"ln -sf chromium-browser /usr/bin/chromium\n");
+			unlink(conf.c_str());
+			// one "linux" start: no Chromium when it starts, Chromium
+			// installed in it, then plain "chromium" (root, to write /usr)
+			trace = run("/bin/linux --root sh -c 'sh /ce-chromium-setup.sh"
+				" && chromium --ce-probe' 2>&1");
+			unlink(setup.c_str());
+			unlink((root + "/usr/bin/chromium").c_str());
+			unlink((root + "/usr/bin/chromium-browser").c_str());
+			unlink((root + "/usr/lib/chromium/chromium-launcher.sh").c_str());
+			unlink((root + "/usr/lib/chromium/chromium").c_str());
+			rmdir((root + "/usr/lib/chromium").c_str());
+		}
+		bool flagged = trace.find("--no-sandbox --no-zygote --in-process-gpu "
+			"--disable-gpu --ozone-platform=wayland") != std::string::npos;
+		// the installed binary's "--version" answers "Chromium <digits>"
+		size_t version = trace.find("Chromium ");
+		while (version != std::string::npos
+			&& !isdigit((unsigned char)trace[version + 9]))
+			version = trace.find("Chromium ", version + 1);
+		bool reached = realChromium
+			? version != std::string::npos
+			: trace.find("chromium args:") != std::string::npos
+				&& trace.find("--ce-probe") != std::string::npos;
+		report("chromium_launcher", flagged && reached,
+			"%s Chromium: flags %d, binary reached %d [%.300s]",
+			realChromium ? "installed" : "stand-in", flagged, reached,
+			oneLine(trace).c_str());
+	}
 
 	run("/bin/linux-apps theme 2>&1");
 	if (savedSettings.empty())
