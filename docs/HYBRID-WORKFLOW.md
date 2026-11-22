@@ -64,7 +64,7 @@ packages, plus the harness and workflow tools:
 sudo apt update
 sudo apt install git nasm bc autoconf automake texinfo flex bison gawk build-essential \
     unzip zip wget less zlib1g-dev libzstd-dev xorriso mtools libtool python3 \
-    libexpat1-dev libffi-dev libssl-dev python3-dev \
+    libexpat1-dev libffi-dev libssl-dev python3-dev clang lld curl python3-pil python3-numpy \
     qemu-system-x86 qemu-system-gui qemu-utils ovmf gh cppcheck shellcheck
 ```
 
