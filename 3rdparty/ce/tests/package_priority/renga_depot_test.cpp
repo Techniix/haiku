@@ -25,6 +25,10 @@
 
 
 #include <Application.h>
+#include <Directory.h>
+#include <File.h>
+#include <FindDirectory.h>
+#include <Path.h>
 #include <Messenger.h>
 #include <OS.h>
 #include <Roster.h>
@@ -98,6 +102,26 @@ main()
 		return 0;
 	}
 
+	// HaikuDepot asks once whether it may send usage data, in a modal
+	// alert that blocks its application thread: answer it beforehand
+	// (No), as the Settings window would store it
+	{
+		BPath path;
+		find_directory(B_USER_SETTINGS_DIRECTORY, &path, true);
+		path.Append("HaikuDepot");
+		create_directory(path.Path(), 0755);
+		path.Append("main_settings");
+		BMessage settings;
+		BFile file(path.Path(), B_READ_WRITE | B_CREATE_FILE);
+		settings.Unflatten(&file);
+		if (!settings.HasBool("can share anonymous usage data")) {
+			settings.AddBool("can share anonymous usage data", false);
+			file.Seek(0, SEEK_SET);
+			file.SetSize(0);
+			settings.Flatten(&file);
+		}
+	}
+
 	bool wasRunning = be_roster->IsRunning(kSignature);
 	team_id team = -1;
 	if (!wasRunning)
@@ -105,23 +129,31 @@ main()
 	else
 		team = be_roster->TeamFor(kSignature);
 
-	// the main window appears once the local repositories are read
+	// the main window appears once the local repositories are read; at
+	// most a minute, with a line every few seconds (the harness takes a
+	// minute and a half without output for a stall)
 	BMessage reply;
-	for (int attempt = 0; attempt < 60; attempt++) {
-		snooze(500000);
+	status_t sent = B_ERROR;
+	for (int attempt = 0; attempt < 30; attempt++) {
+		snooze(1000000);
 		BMessenger depot(kSignature);
 		BMessage request(kMsgRengaHarnessReport);
 		reply.MakeEmpty();
-		if (depot.SendMessage(&request, &reply, 2000000, 2000000) == B_OK
-			&& reply.what == B_REPLY && reply.HasString("title"))
+		sent = depot.SendMessage(&request, &reply, 500000, 1000000);
+		if (sent == B_OK && reply.what == B_REPLY && reply.HasString("title"))
 			break;
+		if (attempt % 5 == 4) {
+			printf("CE-INFO renga_depot: waiting for the window (%s, reply "
+				"0x%08" B_PRIx32 ")\n", strerror(sent), reply.what);
+			fflush(stdout);
+		}
 	}
 
 	const char* title = reply.GetString("title", "");
 	report("window", strcmp(title, "Renga Depot") == 0
 			&& strcmp(reply.GetString("menu", ""), "Renga Depot") == 0,
-		"team %d, title \"%s\", first menu \"%s\"", (int)team, title,
-		reply.GetString("menu", ""));
+		"team %d, title \"%s\", first menu \"%s\" (last request: %s)",
+		(int)team, title, reply.GetString("menu", ""), strerror(sent));
 
 	report("update_all", has(reply, "menu_item", "Update all…")
 			&& has(reply, "menu_item", "Check for updates…"),

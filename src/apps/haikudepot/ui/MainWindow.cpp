@@ -466,7 +466,7 @@ void
 MainWindow::HarnessReport(BMessage& reply)
 {
 	reply.AddString("title", Title());
-	BMenuBar* menuBar = KeyMenuBar();
+	BMenuBar* menuBar = dynamic_cast<BMenuBar*>(FindView("Main Menu"));
 	BMenu* menu = menuBar != NULL ? menuBar->SubmenuAt(0) : NULL;
 	if (menu != NULL) {
 		reply.AddString("menu", menu->Name());

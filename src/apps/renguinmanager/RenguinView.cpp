@@ -76,7 +76,7 @@ static const float kDisplayScales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f,
 	2.5f, 3.0f };
 
 
-/*!	A one-line caption above a list (batch 12, large-font audit): a
+/*!	A one-line caption or short note (batch 12, large-font audit): a
 	BStringView that shortens its text with an ellipsis when the tab is
 	narrower than the text. A WrappingNote there was measured only once
 	its tab was shown, so a hidden tab kept a one-line height for two
@@ -615,7 +615,7 @@ RenguinView::_SettingsTab()
 		builder.Add(fSwitches[i]);
 	}
 	fSwitchCount = kSwitchCount;
-	builder.Add(new BPrivate::WrappingNote("switchNote", B_TRANSLATE("Changes apply to "
+	builder.Add(short_note("switchNote", B_TRANSLATE("Changes apply to "
 		"Linux programs started from now on.")));
 
 	// batch 12: the display scale (100% is off)
