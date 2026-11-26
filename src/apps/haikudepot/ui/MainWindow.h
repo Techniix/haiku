@@ -61,6 +61,8 @@ public:
 	virtual	void				MessageReceived(BMessage* message);
 
 			void				StoreSettings(BMessage& message);
+			void				HarnessReport(BMessage& reply);
+									// Renga (batch 12), harness images
 
 	// ProcessCoordinatorListener
 	virtual void				CoordinatorChanged(

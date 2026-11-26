@@ -12,3 +12,15 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests
 		: package_priority_test ;
 }
+
+# Renga Depot (batch 12): HaikuDepot shown as Renga Depot, "Update all…",
+# the Source column; the renga-* images (second phase, a GUI test).
+Application renga_depot_test :
+	renga_depot_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: renga_depot_test ;
+}

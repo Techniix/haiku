@@ -34,6 +34,17 @@ enum {
 	MSG_SHOW_ALL_PACKAGES_TAB				= 'sapt'
 };
 
+/*!	Renga (batch 12): HaikuDepot is shown as "Renga Depot". The program
+	keeps its file name, signature, settings, package kit use, repositories
+	and HaikuDepot server protocol, so it stays compatible with stock
+	HaikuDepot's; only what the user reads changes.
+*/
+#define RENGA_DEPOT_NAME B_TRANSLATE_SYSTEM_NAME("Renga Depot")
+
+//! Harness images only: MainWindow::HarnessReport() (renga_depot_test).
+enum { kMsgRengaHarnessReport = 'Trdp' };
+
+
 enum BitmapSize {
 	BITMAP_SIZE_16							= 0,
 	BITMAP_SIZE_22							= 1,

@@ -63,6 +63,7 @@
 #include "UserUsageConditionsWindow.h"
 #include "WorkStatusView.h"
 #include "support.h"
+#include "HaikuDepotConstants.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -73,6 +74,7 @@ enum {
 	MSG_REFRESH_REPOS								= 'mrrp',
 	MSG_MANAGE_REPOS								= 'mmrp',
 	MSG_SOFTWARE_UPDATER							= 'mswu',
+	MSG_RENGA_UPDATE_ALL							= 'rgua',
 	MSG_SETTINGS									= 'stgs',
 	MSG_LOG_IN										= 'lgin',
 	MSG_AUTHORIZATION_CHANGED						= 'athc',
@@ -227,7 +229,7 @@ private:
 
 MainWindow::MainWindow(const BMessage& settings)
 	:
-	BWindow(BRect(50, 50, 650, 550), B_TRANSLATE_SYSTEM_NAME("HaikuDepot"), B_DOCUMENT_WINDOW_LOOK,
+	BWindow(BRect(50, 50, 650, 550), RENGA_DEPOT_NAME, B_DOCUMENT_WINDOW_LOOK,
 		B_NORMAL_WINDOW_FEEL, B_ASYNCHRONOUS_CONTROLS | B_AUTO_UPDATE_SIZE_LIMITS),
 	fScreenshotWindow(NULL),
 	fShuttingDownWindow(NULL),
@@ -321,7 +323,7 @@ MainWindow::MainWindow(const BMessage& settings)
 
 MainWindow::MainWindow(const BMessage& settings, const PackageInfoRef package)
 	:
-	BWindow(BRect(50, 50, 650, 350), B_TRANSLATE_SYSTEM_NAME("HaikuDepot"), B_DOCUMENT_WINDOW_LOOK,
+	BWindow(BRect(50, 50, 650, 350), RENGA_DEPOT_NAME, B_DOCUMENT_WINDOW_LOOK,
 		B_NORMAL_WINDOW_FEEL, B_ASYNCHRONOUS_CONTROLS | B_AUTO_UPDATE_SIZE_LIMITS),
 	fFeaturedPackagesView(NULL),
 	fPackageListView(NULL),
@@ -455,6 +457,39 @@ MainWindow::QuitRequested()
 }
 
 
+/*!	Renga (batch 12), harness images only (App, kMsgRengaHarnessReport):
+	what the Renga Depot test checks: the window title, the main menu's
+	items, the package list's column titles and the Source labels of a few
+	repository names. Called with the window locked.
+*/
+void
+MainWindow::HarnessReport(BMessage& reply)
+{
+	reply.AddString("title", Title());
+	BMenuBar* menuBar = KeyMenuBar();
+	BMenu* menu = menuBar != NULL ? menuBar->SubmenuAt(0) : NULL;
+	if (menu != NULL) {
+		reply.AddString("menu", menu->Name());
+		for (int32 i = 0; BMenuItem* item = menu->ItemAt(i); i++) {
+			if (item->Label() != NULL && item->Label()[0] != '\0')
+				reply.AddString("menu_item", item->Label());
+		}
+	}
+	if (fPackageListView != NULL) {
+		for (int32 i = 0; BColumn* column = fPackageListView->ColumnAt(i);
+				i++) {
+			BString title;
+			column->GetColumnName(&title);
+			reply.AddString("column", title);
+		}
+	}
+	const char* depots[] = { "Haiku", "haikuports_x86_64", "RengaPorts",
+		"my-repo" };
+	for (size_t i = 0; i < sizeof(depots) / sizeof(depots[0]); i++)
+		reply.AddString("source", renga_source_label(depots[i]));
+}
+
+
 void
 MainWindow::MessageReceived(BMessage* message)
 {
@@ -496,6 +531,19 @@ MainWindow::MessageReceived(BMessage* message)
 		case MSG_SOFTWARE_UPDATER:
 			be_roster->Launch("application/x-vnd.haiku-softwareupdater");
 			break;
+
+		case MSG_RENGA_UPDATE_ALL:
+		{
+			// in a Terminal, so that the list of changes is shown and
+			// confirmed before anything is installed
+			const char* arguments[] = { "-t", "Update all", "/bin/sh", "-c",
+				"pkgman full-sync; echo; echo 'The previous system state is "
+				"kept: choose it in the boot menu to go back.'; "
+				"echo 'Press Enter to close.'; read answer", NULL };
+			be_roster->Launch("application/x-vnd.Haiku-Terminal", 5,
+				arguments);
+			break;
+		}
 
 		case MSG_LOG_IN:
 			if (!fModel.CanNicknamePasswordAuthenticate())
@@ -971,7 +1019,7 @@ MainWindow::_HandlePackagesChanged(const BMessage* message)
 void
 MainWindow::_BuildMenu(BMenuBar* menuBar)
 {
-	BMenu* menu = new BMenu(B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+	BMenu* menu = new BMenu(RENGA_DEPOT_NAME);
 	fRefreshRepositoriesItem
 		= new BMenuItem(B_TRANSLATE("Refresh repositories"), new BMessage(MSG_REFRESH_REPOS));
 	menu->AddItem(fRefreshRepositoriesItem);
@@ -979,6 +1027,11 @@ MainWindow::_BuildMenu(BMenuBar* menuBar)
 		new BMessage(MSG_MANAGE_REPOS)));
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Check for updates" B_UTF8_ELLIPSIS),
 		new BMessage(MSG_SOFTWARE_UPDATER)));
+	// Renga (batch 12): every update from every repository at once; the
+	// package daemon keeps the state before it, which the boot menu offers
+	// as a restore point
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Update all" B_UTF8_ELLIPSIS),
+		new BMessage(MSG_RENGA_UPDATE_ALL)));
 	menu->AddSeparatorItem();
 	menu->AddItem(
 		new BMenuItem(B_TRANSLATE("Settings" B_UTF8_ELLIPSIS), new BMessage(MSG_SETTINGS), ','));
@@ -2206,7 +2259,7 @@ MainWindow::_WindowTitleForPackage(const PackageInfoRef& pkg)
 		versionString = version->ToString();
 
 	BString title("%AppName% - %PackageName% %PackageVersion%");
-	title.ReplaceFirst("%AppName%", B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+	title.ReplaceFirst("%AppName%", RENGA_DEPOT_NAME);
 	title.ReplaceFirst("%PackageName%", pkg->Name());
 	title.ReplaceFirst("%PackageVersion%", versionString);
 

@@ -20,6 +20,12 @@ class PackageRow;
 class WorkStatusView;
 
 
+/*!	Renga (batch 12): the "Source" column's label for a repository: Haiku,
+	HaikuPorts, RengaPorts, else the repository's own name.
+*/
+BString renga_source_label(const BString& depotName);
+
+
 class PackageListView : public BColumnListView {
 public:
 								PackageListView(Model* model);
