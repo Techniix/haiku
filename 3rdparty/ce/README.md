@@ -643,6 +643,14 @@ of a 1 GiB guest was, so the bounce path went untested.
 
 ## Current suites
 
+- **disk_engine** (every image, `disk_engine_test`, suite directory
+  `storage`; F-24 first part): Renga's shared disk-management engine
+  through `rengadisk`, on a 64 MiB disk image file in the home folder
+  only: attach, a plan shown without writing, GPT with two partitions
+  applied, the table backup and journal, refusals (the boot disk, a disk
+  that is not an image, a step naming a missing partition), restoring a
+  saved table, BFS format, detach. `rengadisk` is put into harness images
+  by the test's Jamfile.
 - **installer** (`installer_test`): see "Installing over an existing
   installation"; only with `--installer-upgrade`.
 - **installer_ui** (renga-* images, `installer_ui_test`): the harness

@@ -1,0 +1,10 @@
+SubDir HAIKU_TOP src libs diskengine ;
+
+# Renga's shared disk-management engine (roadmap F-24, first part): one
+# implementation for rengadisk, the partition manager and the Installer
+# (F-23). Private static library; see headers/private/diskengine.
+UsePrivateHeaders diskengine storage shared ;
+
+StaticLibrary libdiskengine.a :
+	DiskEngine.cpp
+;
