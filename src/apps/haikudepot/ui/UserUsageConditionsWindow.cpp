@@ -439,7 +439,7 @@ UserUsageConditionsWindow::_IntroductionTextForMode(UserUsageConditionsSelection
 		case LATEST:
 		{
 			BString text(B_TRANSLATE(INTRODUCTION_TEXT_LATEST));
-			text.ReplaceFirst("%Appname%", B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+			text.ReplaceFirst("%Appname%", RENGA_DEPOT_NAME);
 			return text;
 		}
 		case USER:
@@ -458,7 +458,7 @@ UserUsageConditionsWindow::_IntroductionTextForMode(UserUsageConditionsSelection
 			}
 
 			BString text = B_TRANSLATE(INTRODUCTION_TEXT_USER);
-			text.ReplaceFirst("%Appname%", B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+			text.ReplaceFirst("%Appname%", RENGA_DEPOT_NAME);
 			text.ReplaceAll("%Nickname%", nicknamePresentation);
 			text.ReplaceAll("%AgreedToTimestamp%", agreedToTimestampPresentation);
 			return text;

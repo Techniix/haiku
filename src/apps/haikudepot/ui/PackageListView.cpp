@@ -886,6 +886,25 @@ PackageRow::UpdateSize()
 }
 
 
+/*!	Renga (batch 12): the source a package comes from, as Renga Depot
+	names it: Haiku (the system repository), HaikuPorts, RengaPorts; other
+	repositories by their own name.
+*/
+BString
+renga_source_label(const BString& depotName)
+{
+	BString lower(depotName);
+	lower.ToLower();
+	if (lower == "haiku")
+		return "Haiku";
+	if (lower.StartsWith("haikuports"))
+		return "HaikuPorts";
+	if (lower.StartsWith("rengaports") || lower == "renga")
+		return "RengaPorts";
+	return depotName;
+}
+
+
 void
 PackageRow::UpdateRepository()
 {
@@ -895,10 +914,12 @@ PackageRow::UpdateRepository()
 	BStringField* existingDepotNameField = static_cast<BStringField*>(GetField(kRepositoryColumn));
 	BString depotName = PackageUtils::DepotName(fPackage);
 
-	if (existingDepotNameField != NULL && existingDepotNameField->String() == depotName)
+	if (existingDepotNameField != NULL
+		&& existingDepotNameField->String() == renga_source_label(depotName))
 		return;
 
-	SetField(new BStringField(depotName), kRepositoryColumn);
+	SetField(new BStringField(renga_source_label(depotName)),
+		kRepositoryColumn);
 }
 
 
@@ -1102,7 +1123,7 @@ PackageListView::PackageListView(Model* model)
 				  B_TRUNCATE_END),
 		kStatusColumn);
 
-	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Repository"), 120 * scale, 50 * scale,
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Source"), 120 * scale, 50 * scale,
 				  200 * scale, B_TRUNCATE_MIDDLE),
 		kRepositoryColumn);
 	SetColumnVisible(kRepositoryColumn, false);

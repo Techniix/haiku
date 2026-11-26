@@ -11,6 +11,7 @@
 #include <Catalog.h>
 #include <Entry.h>
 #include <Message.h>
+#include <unistd.h>
 #include <Path.h>
 #include <Roster.h>
 #include <Screen.h>
@@ -30,6 +31,7 @@
 #include "ServerSettings.h"
 #include "SharedIcons.h"
 #include "StorageUtils.h"
+#include "HaikuDepotConstants.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -133,6 +135,18 @@ App::MessageReceived(BMessage* message)
 
 		case MSG_ALERT_SIMPLE_ERROR:
 			_AlertSimpleError(message);
+			break;
+
+		case kMsgRengaHarnessReport:
+			// Renga (batch 12): harness images only (renga_depot_test)
+			if (access("/boot/system/non-packaged/data/ce-harness", F_OK) == 0
+				&& fMainWindow != NULL
+				&& fMainWindow->LockLooperWithTimeout(2000000) == B_OK) {
+				BMessage reply(B_REPLY);
+				fMainWindow->HarnessReport(reply);
+				fMainWindow->UnlockLooper();
+				message->SendReply(&reply);
+			}
 			break;
 
 		case MSG_PKG_POPULATE_USER_RATINGS:
@@ -461,7 +475,7 @@ App::_CheckPackageDaemonRuns()
 		BString text(B_TRANSLATE("%appname% needs the package daemon to function, "
 						"and it appears to be not running.\n"
 						"Would you like to start it now?"));
-		text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+		text.ReplaceFirst("%appname%", RENGA_DEPOT_NAME);
 		BAlert* alert = new BAlert(B_TRANSLATE("Start package daemon"), text,
 			B_TRANSLATE("No, quit"), B_TRANSLATE("Start package daemon"), NULL,
 			B_WIDTH_AS_USUAL, B_WARNING_ALERT);
