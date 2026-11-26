@@ -99,8 +99,8 @@ static const renguin_switch kSwitches[] = {
 		"as soon as apk installs or removes Linux programs") },
 	{ "server_frames", false, B_TRANSLATE_MARK("Give Linux windows Renga's "
 		"title bar and borders, also when they would draw their own") },
-	{ "deskbar_entries", false, B_TRANSLATE_MARK("Show each running Linux "
-		"program in the Deskbar with its own entry and icon") },
+	{ "deskbar_entries", false, B_TRANSLATE_MARK("Give each running Linux "
+		"program its own Deskbar entry") },
 };
 static const int32 kSwitchCount = sizeof(kSwitches) / sizeof(kSwitches[0]);
 static_assert(kSwitchCount <= 16, "RenguinView::fSwitches holds 16");

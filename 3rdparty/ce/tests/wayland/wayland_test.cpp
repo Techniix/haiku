@@ -65,6 +65,8 @@
 #include <Bitmap.h>
 #include <Clipboard.h>
 #include <Entry.h>
+#include <FindDirectory.h>
+#include <Path.h>
 #include <Roster.h>
 #include <Screen.h>
 #include <image.h>
@@ -548,6 +550,22 @@ clients_test(Client& client)
 		(int)entry.GetInt32("pid", -1), (int)getpid(), (int)tokens,
 		windowFound ? "found" : "not found");
 
+	// The renga-* images' first-login phase has no Deskbar (deskbar_test
+	// starts it and quits it again): start it here too, and quit it at the
+	// end if this test started it. It asks the compositor for the list
+	// when it starts.
+	static const char* kDeskbarSignature = "application/x-vnd.Be-TSKB";
+	bool startedDeskbar = false;
+	if (!be_roster->IsRunning(kDeskbarSignature)) {
+		startedDeskbar = true;
+		be_roster->Launch(kDeskbarSignature);
+		for (int32 i = 0; i < 120
+				&& !be_roster->IsRunning(kDeskbarSignature); i++) {
+			snooze(250000);
+		}
+		snooze(2000000);
+	}
+
 	BString windows;
 	int32 windowCount = 0;
 	bool listed = deskbar_entry(true, 10, windows, windowCount);
@@ -558,8 +576,14 @@ clients_test(Client& client)
 		windows.String());
 
 	// the Renguin switch: off, then on again (the previous settings kept)
-	BString settingsPath = getenv("HOME");
-	settingsPath << "/config/settings/Renguin/settings";
+	// (find_directory(), as the compositor and linux-apps find it: the
+	// harness's environment need not have HOME)
+	BPath settingsDir;
+	find_directory(B_USER_SETTINGS_DIRECTORY, &settingsDir, true);
+	settingsDir.Append("Renguin");
+	BString dir = settingsDir.Path();
+	BString settingsPath = dir;
+	settingsPath << "/settings";
 	BString previous;
 	bool hadSettings = false;
 	if (FILE* file = fopen(settingsPath.String(), "r")) {
@@ -570,8 +594,6 @@ clients_test(Client& client)
 		hadSettings = true;
 		fclose(file);
 	}
-	BString dir = getenv("HOME");
-	dir << "/config/settings/Renguin";
 	mkdir(dir.String(), 0755);
 	if (FILE* file = fopen(settingsPath.String(), "w")) {
 		fprintf(file, "%s\n%s false\n", previous.String(),
@@ -599,6 +621,14 @@ clients_test(Client& client)
 		"again: entry %s", gone ? "gone" : "still there",
 		offFound ? "yes" : "no", (int)offEnabled,
 		back ? "back" : "not back in 10 s");
+
+	if (startedDeskbar) {
+		BMessenger(kDeskbarSignature).SendMessage(B_QUIT_REQUESTED);
+		for (int32 i = 0; i < 40 && be_roster->IsRunning(kDeskbarSignature);
+				i++) {
+			snooze(250000);
+		}
+	}
 }
 
 
