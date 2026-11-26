@@ -40,18 +40,21 @@ All rights reserved.
 //	in WindowMenu
 
 #include <MenuItem.h>
+#include <String.h>
 
 
 class TShowHideMenuItem : public BMenuItem {
 public:
 						TShowHideMenuItem(const char* title,
 										  const BList* teams,
-										  uint32 action);
+										  uint32 action,
+										  const char* signature = NULL);
 
 	static status_t 	TeamShowHideCommon(int32 action,
 							const BList* teamList,
 							BRect zoomRect = BRect(0, 0, 0, 0),
-							bool doZoom = false);
+							bool doZoom = false,
+							const char* signature = NULL);
 protected:
 	virtual void		GetContentSize(float* width, float* height);
 	virtual void		DrawContent();
@@ -60,6 +63,8 @@ protected:
 private:
 	const BList*		fTeams;
 	uint32				fAction;
+	BString				fSignature;
+		// Renga (batch 12): the entry's, for a Wayland program
 	float				fTitleWidth;
 	float				fTitleAscent;
 	float				fTitleDescent;

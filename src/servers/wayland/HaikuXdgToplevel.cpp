@@ -7,6 +7,7 @@
 #include "HaikuXdgDecoration.h"
 #include "HaikuOutput.h"
 #include "RengaProtocols.h"
+#include "RengaClients.h"
 #include "WaylandEnv.h"
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
@@ -266,6 +267,8 @@ void HaikuXdgToplevel::HandleSetTitle(const char *title)
 
 void HaikuXdgToplevel::HandleSetAppId(const char *app_id)
 {
+	// Renga (batch 12): names the program's Deskbar entry
+	RengaClientsSetAppId(this, app_id);
 }
 
 void HaikuXdgToplevel::HandleShowWindowMenu(struct wl_resource *seat, uint32_t serial, int32_t x, int32_t y)
@@ -394,6 +397,7 @@ HaikuXdgToplevel *HaikuXdgToplevel::Create(HaikuXdgSurface *xdgSurface, uint32_t
 	xdgToplevel->fWindow = new WaylandWindow(xdgToplevel, BRect(), "", B_NO_BORDER_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL, 0);
 	xdgSurface->fSurface->AttachWindow(xdgToplevel->fWindow);
 	xdgToplevel->SendCapabilities();
+	RengaClientsToplevelAdded(xdgToplevel);
 
 	return xdgToplevel;
 }
@@ -401,6 +405,7 @@ HaikuXdgToplevel *HaikuXdgToplevel::Create(HaikuXdgSurface *xdgSurface, uint32_t
 HaikuXdgToplevel::~HaikuXdgToplevel()
 {
 	HaikuXdgDecorationToplevelGone(fDecoration);
+	RengaClientsToplevelRemoved(this);
 
 	// Renga: the xdg_surface and the wl_surface may be gone already (a
 	// client that went away; see ~HaikuXdgSurface()).
