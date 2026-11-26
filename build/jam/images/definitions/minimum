@@ -88,6 +88,7 @@ SYSTEM_BIN = [ FFilterByBuildFeatures
 	ramdisk
 	rc
 	reindex
+	rengadisk
 	release
 	renice
 	resattr
