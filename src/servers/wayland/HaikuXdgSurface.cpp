@@ -1,6 +1,7 @@
 #include "HaikuXdgSurface.h"
 #include <math.h>
 #include "RengaProtocols.h"
+#include "RengaClients.h"
 #include "HaikuXdgShell.h"
 #include "HaikuXdgToplevel.h"
 #include "HaikuXdgPopup.h"
@@ -148,6 +149,9 @@ void XdgSurfaceHook::HandleCommit()
 		}
 		fXdgSurface->Window()->Show();
 		fXdgSurface->fSurfaceInitalized = true;
+		// Renga (batch 12): the program's Deskbar entry
+		if (fXdgSurface->fToplevel != NULL)
+			RengaClientsToplevelShown(fXdgSurface->fToplevel);
 		// Renga: wl_surface.enter for the output it is on
 		HaikuOutputSurfaceShown(fXdgSurface->Surface(),
 			fXdgSurface->Window()->Frame());

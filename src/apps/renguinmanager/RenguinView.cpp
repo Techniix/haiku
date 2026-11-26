@@ -318,6 +318,13 @@ static const renguin_switch kSwitches[] = {
 		"the flags Renguin needs (no sandbox, zygote or GPU process yet)") },
 	{ "hidpi", false, B_TRANSLATE_MARK("Scale Linux programs like Renga "
 		"(HiDPI from the font size: GTK and Qt)") },
+	// batch 12
+	{ "apk_sync", false, B_TRANSLATE_MARK("Update Deskbar's Applications "
+		"as soon as apk installs or removes Linux programs") },
+	{ "server_frames", false, B_TRANSLATE_MARK("Give Linux windows Renga's "
+		"title bar and borders, also when they would draw their own") },
+	{ "deskbar_entries", false, B_TRANSLATE_MARK("Give each running Linux "
+		"program its own Deskbar entry") },
 };
 static const int32 kSwitchCount = sizeof(kSwitches) / sizeof(kSwitches[0]);
 static_assert(kSwitchCount <= 16, "RenguinView::fSwitches holds 16");
@@ -919,6 +926,18 @@ RenguinView::_SaveSwitches()
 		fputs("# Renguin settings (Renguin Manager)\n", file);
 		fputs(files[i].text->String(), file);
 		fclose(file);
+	}
+
+	// "deskbar_entries" (batch 12): the compositor reads the switch when
+	// it lists its clients; this asks it to send the Deskbar a new list
+	// (kMsgListWaylandClients with "push", headers/private/shared/
+	// wayland_clients.h). Without a running compositor there is nothing
+	// to update.
+	BMessenger compositor("application/x-vnd.Renga-WaylandCompositor");
+	if (compositor.IsValid()) {
+		BMessage push('RgLC');
+		push.AddBool("push", true);
+		compositor.SendMessage(&push, (BHandler*)NULL, 0);
 	}
 }
 

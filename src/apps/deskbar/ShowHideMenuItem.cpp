@@ -37,9 +37,11 @@ All rights reserved.
 #include "ShowHideMenuItem.h"
 
 #include <Debug.h>
+#include <MessengerPrivate.h>
 #include <Roster.h>
 #include <WindowInfo.h>
 
+#include "BarApp.h"
 #include "WindowMenuItem.h"
 #include "tracker_private.h"
 
@@ -49,11 +51,12 @@ const float kVPad = 2.0f;
 
 
 TShowHideMenuItem::TShowHideMenuItem(const char* title, const BList* teams,
-	uint32 action)
+	uint32 action, const char* signature)
 	:
 	BMenuItem(title, NULL),
 	fTeams(teams),
-	fAction(action)
+	fAction(action),
+	fSignature(signature)
 {
 	// menu font
 	menu_info info;
@@ -104,19 +107,51 @@ TShowHideMenuItem::Invoke(BMessage*)
 		doZoom = true;
 	}
 	return TeamShowHideCommon(static_cast<int32>(fAction), fTeams, zoomRect,
-		doZoom);
+		doZoom, fSignature.Length() > 0 ? fSignature.String() : NULL);
 }
 
 
 status_t
 TShowHideMenuItem::TeamShowHideCommon(int32 action, const BList* teamList,
-	BRect zoomRect, bool doZoom)
+	BRect zoomRect, bool doZoom, const char* signature)
 {
 	if (teamList == NULL)
 		return B_BAD_VALUE;
 
+	team_id compositor = TBarApp::CompositorTeam();
 	for (int32 i = teamList->CountItems() - 1; i >= 0; i--) {
 		team_id team = (addr_t)teamList->ItemAt(i);
+
+		if (compositor >= 0 && team == compositor) {
+			// Renga (batch 12): a Wayland program's entry: only its own
+			// windows, one by one; never the compositor itself (quitting
+			// it would close every Wayland program)
+			BList one;
+			one.AddItem((void*)(addr_t)team);
+			int32 count = 0;
+			int32* tokens = TBarApp::WindowTokensFor(&one, signature, &count);
+			for (int32 j = 0; j < count; j++) {
+				if (action == B_MINIMIZE_WINDOW || action == B_BRING_TO_FRONT) {
+					do_window_action(tokens[j], action, zoomRect,
+						doZoom && i == 0 && j == 0);
+					continue;
+				}
+				if (action != B_QUIT_REQUESTED)
+					continue;
+				client_window_info* info = get_window_info(tokens[j]);
+				if (info == NULL)
+					continue;
+				// the window's close: the compositor asks the program
+				// (xdg_toplevel.close)
+				BMessenger messenger;
+				BMessenger::Private(messenger).SetTo(info->team,
+					info->client_port, info->client_token);
+				messenger.SendMessage(B_QUIT_REQUESTED);
+				free(info);
+			}
+			free(tokens);
+			continue;
+		}
 
 		switch (action) {
 			case B_MINIMIZE_WINDOW:

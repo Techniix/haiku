@@ -69,6 +69,7 @@ local sources =
 	HaikuServerDecoration.cpp
 	HaikuXdgDecoration.cpp
 	RengaProtocols.cpp
+	RengaClients.cpp
 	HaikuPrimarySelection.cpp
 	HaikuPointerConstraints.cpp
 	HaikuOutput.cpp

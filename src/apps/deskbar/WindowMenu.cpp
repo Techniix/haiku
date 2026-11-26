@@ -111,11 +111,12 @@ TWindowMenu::AttachedToWindow()
 
 	int32 parentMenuItems = 0;
 
-	int32 teamCount = fTeam->CountItems();
-	for (int32 i = 0; i < teamCount; i++) {
-		team_id theTeam = (addr_t)fTeam->ItemAt(i);
+	{
+		// Renga (batch 12): the entry's windows; for a Wayland program
+		// only its own among the compositor's
 		int32 tokenCount = 0;
-		int32* tokens = get_token_list(theTeam, &tokenCount);
+		int32* tokens = TBarApp::WindowTokensFor(fTeam,
+			fApplicationSignature.String(), &tokenCount);
 
 		for (int32 j = 0; j < tokenCount; j++) {
 			client_window_info* wInfo = get_window_info(tokens[j]);
@@ -188,20 +189,20 @@ TWindowMenu::AttachedToWindow()
 		if (fApplicationSignature.ICompare(kTrackerSignature) != 0) {
 			AddSeparatorItem();
 			AddItem(new TShowHideMenuItem(B_TRANSLATE("Quit application"),
-				fTeam, B_QUIT_REQUESTED));
+				fTeam, B_QUIT_REQUESTED, fApplicationSignature.String()));
 		}
 	} else {
 		// Only add the window controls to the menu if we are not in drag mode
 		if (!dragging) {
 			TShowHideMenuItem* hide
 				= new TShowHideMenuItem(B_TRANSLATE("Hide all"), fTeam,
-					B_MINIMIZE_WINDOW);
+					B_MINIMIZE_WINDOW, fApplicationSignature.String());
 			TShowHideMenuItem* show
 				= new TShowHideMenuItem(B_TRANSLATE("Show all"), fTeam,
-					B_BRING_TO_FRONT);
+					B_BRING_TO_FRONT, fApplicationSignature.String());
 			TShowHideMenuItem* close
 				= new TShowHideMenuItem(B_TRANSLATE("Close all"), fTeam,
-					B_QUIT_REQUESTED);
+					B_QUIT_REQUESTED, fApplicationSignature.String());
 
 			if (miniCount == itemCount)
 				hide->SetEnabled(false);

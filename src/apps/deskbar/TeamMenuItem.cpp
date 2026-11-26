@@ -45,6 +45,7 @@ All rights reserved.
 #include <Bitmap.h>
 #include <ControlLook.h>
 #include <Debug.h>
+#include <Entry.h>
 #include <Font.h>
 #include <Mime.h>
 #include <Region.h>
@@ -119,8 +120,39 @@ TTeamMenuItem::HandleMouseDown(BPoint where)
 	message->FindInt32("modifiers", &modifiers);
 	message->FindInt32("buttons", &buttons);
 
+	// Renga (batch 12): a Wayland program's entry stands for some of the
+	// compositor's windows, not for the compositor's team
+	team_id compositor = TBarApp::CompositorTeam();
+	bool wayland = compositor >= 0
+		&& fTeam->HasItem((void*)(addr_t)compositor);
+
 	// check for three finger salute, a.k.a. Vulcan Death Grip
-	if ((modifiers & B_COMMAND_KEY) != 0
+	if (wayland && (modifiers & B_COMMAND_KEY) != 0
+		&& (modifiers & B_CONTROL_KEY) != 0
+		&& (modifiers & B_SHIFT_KEY) != 0) {
+		// the program's own processes; its entry goes when the compositor
+		// sees the connection close
+		BList pids;
+		TBarApp::WaylandClientPids(Signature(), &pids);
+		for (int32 i = 0; i < pids.CountItems(); i++) {
+			team_id pid = (addr_t)pids.ItemAt(i);
+			if (pid > 0 && pid != compositor && pid != be_app->Team())
+				kill_team(pid);
+		}
+		return true;
+	} else if (wayland && (modifiers & B_SHIFT_KEY) == 0
+		&& (buttons & B_TERTIARY_MOUSE_BUTTON) != 0) {
+		// launch another: the program's Deskbar menu entry, else its
+		// "Open with" launcher (the same signature)
+		BString iconPath = TBarApp::WaylandIconPath(Signature());
+		entry_ref ref;
+		if (iconPath.Length() > 0
+			&& get_ref_for_path(iconPath.String(), &ref) == B_OK) {
+			be_roster->Launch(&ref);
+		} else
+			be_roster->Launch(Signature());
+		return true;
+	} else if ((modifiers & B_COMMAND_KEY) != 0
 		&& (modifiers & B_CONTROL_KEY) != 0
 		&& (modifiers & B_SHIFT_KEY) != 0) {
 		BMessage appMessage(B_SOME_APP_QUIT);
@@ -176,7 +208,8 @@ TTeamMenuItem::Invoke(BMessage* message)
 	uint32 mods = modifiers();
 	if (mods & B_CONTROL_KEY) {
 		TShowHideMenuItem::TeamShowHideCommon((mods & B_SHIFT_KEY)
-			? B_MINIMIZE_WINDOW : B_BRING_TO_FRONT, Teams());
+			? B_MINIMIZE_WINDOW : B_BRING_TO_FRONT, Teams(), BRect(), false,
+			Signature());
 	}
 
 	return BMenuItem::Invoke(message);

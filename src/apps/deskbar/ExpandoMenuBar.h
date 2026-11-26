@@ -110,7 +110,8 @@ private:
 			void			AddTeam(BList* team, BBitmap* icon, char* name,
 								char* signature);
 			void			AddTeam(team_id team, const char* signature);
-			void			RemoveTeam(team_id team, bool partial);
+			void			RemoveTeam(team_id team, bool partial,
+										const char* signature = NULL);
 
 			void			_FinishedDrag(bool invoke = false);
 

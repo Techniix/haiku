@@ -457,6 +457,12 @@ TSwitchManager::TSwitchManager()
 		BarTeamInfo* barTeamInfo = (BarTeamInfo*)tmpList.ItemAt(i);
 		if (!barTeamInfo)
 			break;
+		if (barTeamInfo->waylandClient) {
+			// Renga (batch 12): Wayland programs are not switched to yet
+			// (their windows are the compositor's team)
+			delete barTeamInfo;
+			continue;
+		}
 
 		TTeamGroup* group = new TTeamGroup(barTeamInfo->teams,
 			barTeamInfo->flags, barTeamInfo->name, barTeamInfo->sig);
@@ -530,6 +536,14 @@ TSwitchManager::MessageReceived(BMessage* message)
 
 			if (message->FindPointer("teams", (void**)&teams) != B_OK)
 				break;
+			if (message->GetBool("wayland", false)) {
+				// Renga (batch 12): not listed here yet (see above)
+				delete teams;
+				BBitmap* icon = NULL;
+				if (message->FindPointer("icon", (void**)&icon) == B_OK)
+					delete icon;
+				break;
+			}
 
 			TTeamGroup* group = new TTeamGroup(teams, flags, strdup(name),
 				signature);

@@ -14,6 +14,7 @@
 #include "HaikuServerDecoration.h"
 #include "HaikuXdgDecoration.h"
 #include "RengaProtocols.h"
+#include "RengaClients.h"
 #include "HaikuGpuSync.h"
 #include "WaylandEnv.h"
 
@@ -32,6 +33,7 @@
 #include <kernel/image.h>
 
 #include "AppKitPtrs.h"
+#include <wayland_clients.h>
 
 
 static void Assert(bool cond) {if (!cond) abort();}
@@ -57,6 +59,10 @@ void ServerHandler::MessageReceived(BMessage *msg)
 		// Renga: wl_output hot-plug (HaikuOutput.cpp)
 		if (sDisplay != NULL)
 			HaikuOutputCheckScreens(sDisplay);
+		return;
+	case pushClientsMsg:
+		// Renga (batch 12): the Deskbar's per-program entries
+		RengaClientsPush();
 		return;
 	default:
 		break;
@@ -103,6 +109,20 @@ void Application::MessageReceived(BMessage *msg)
 		}
 		BMessage reply(B_REPLY);
 		reply.AddBool("applied", true);
+		msg->SendReply(&reply);
+		return;
+	}
+	case kMsgListWaylandClients: {
+		// Renga (batch 12): the Deskbar (or the harness) asks which
+		// program each window belongs to; "push": also send the list to
+		// the Deskbar (the Renguin Manager's switch changed)
+		BMessage reply;
+		{
+			WaylandEnv env(this);
+			RengaClientsList(&reply);
+			if (msg->GetBool("push", false))
+				RengaClientsChanged();
+		}
 		msg->SendReply(&reply);
 		return;
 	}

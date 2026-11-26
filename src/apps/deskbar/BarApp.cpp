@@ -57,12 +57,19 @@ All rights reserved.
 #include <Message.h>
 #include <Messenger.h>
 #include <Mime.h>
+#include <Node.h>
+#include <NodeInfo.h>
 #include <Path.h>
 #include <Roster.h>
+#include <WindowInfo.h>
+
+#include <map>
+#include <vector>
 
 #include <DeskbarPrivate.h>
 #include <boot_state_file.h>
 #include <RosterPrivate.h>
+#include <wayland_clients.h>
 #include "tracker_private.h"
 
 #include "BarView.h"
@@ -83,6 +90,20 @@ All rights reserved.
 
 BLocker TBarApp::sSubscriberLock;
 BList TBarApp::sBarTeamInfoList;
+
+
+// Renga (batch 12): the Wayland compositor's clients (TBarApp::
+// _UpdateWaylandClients()). sWaylandLock is held only briefly and never
+// while sending a message, so window threads and the expando monitor
+// thread can ask about windows at any time.
+static BLocker sWaylandLock("wayland clients");
+static team_id sCompositorTeam = -1;
+static std::map<int32, BString> sWaylandTokens;
+	// a window's client token -> its program's signature (lower case)
+static std::multimap<BString, team_id> sWaylandPids;
+	// a program's signature (lower case) -> its client processes
+static std::map<BString, BString> sWaylandIconPaths;
+	// a program's signature (lower case) -> its Deskbar menu entry
 BList TBarApp::sWindowIconCache;
 BList TBarApp::sSubscribers;
 
@@ -131,10 +152,17 @@ TBarApp::TBarApp()
 		app_info appInfo;
 		team_id tID = (addr_t)teamList.ItemAt(i);
 		if (be_roster->GetRunningAppInfo(tID, &appInfo) == B_OK) {
+			if (strcasecmp(appInfo.signature,
+					RENGA_WAYLAND_COMPOSITOR_SIGNATURE) == 0) {
+				BAutolock lock(sWaylandLock);
+				sCompositorTeam = appInfo.team;
+			}
 			AddTeam(appInfo.team, appInfo.flags, appInfo.signature,
 				&appInfo.ref);
 		}
 	}
+	if (sCompositorTeam >= 0)
+		_RequestWaylandClients();
 
 	sWindowIconCache.MakeEmpty();
 	for (int32 id = R_WindowShownIcon; id <= R_WindowHiddenSwitchIcon; id++) {
@@ -533,6 +561,16 @@ TBarApp::MessageReceived(BMessage* message)
 			entry_ref ref;
 			message->FindRef("be:ref", &ref);
 
+			if (signature != NULL && strcasecmp(signature,
+					RENGA_WAYLAND_COMPOSITOR_SIGNATURE) == 0) {
+				// Renga (batch 12): the compositor (re)started
+				{
+					BAutolock lock(sWaylandLock);
+					sCompositorTeam = team;
+				}
+				_RequestWaylandClients();
+			}
+
 			AddTeam(team, flags, signature, &ref);
 			break;
 		}
@@ -544,6 +582,46 @@ TBarApp::MessageReceived(BMessage* message)
 			RemoveTeam(team);
 			break;
 		}
+
+		case kMsgWaylandClients:
+			// Renga (batch 12): the compositor's reply or its update
+			_UpdateWaylandClients(message);
+			break;
+
+		case kTestWaylandClients:
+			// harness images only: the Wayland programs' entries, with the
+			// windows each lists (as its window menu does)
+			if (_IsHarness()) {
+				BMessage reply(B_REPLY);
+				reply.AddInt32("compositor", CompositorTeam());
+				BAutolock autolock(sSubscriberLock);
+				for (int32 i = 0; i < sBarTeamInfoList.CountItems(); i++) {
+					BarTeamInfo* barInfo
+						= (BarTeamInfo*)sBarTeamInfoList.ItemAt(i);
+					if (!barInfo->waylandClient)
+						continue;
+					BMessage entry;
+					entry.AddString("name", barInfo->name);
+					entry.AddString("sig", barInfo->sig);
+					entry.AddString("icon_path", barInfo->iconPath);
+					entry.AddBool("icon", barInfo->icon != NULL);
+					int32 count = 0;
+					int32* tokens = WindowTokensFor(barInfo->teams,
+						barInfo->sig, &count);
+					for (int32 j = 0; j < count; j++) {
+						client_window_info* info = get_window_info(tokens[j]);
+						if (info == NULL)
+							continue;
+						if (TWindowMenu::WindowShouldBeListed(info))
+							entry.AddString("window", info->name);
+						free(info);
+					}
+					free(tokens);
+					reply.AddMessage("entry", &entry);
+				}
+				message->SendReply(&reply);
+			}
+			break;
 
 		case B_ARCHIVED_OBJECT:
 			// TODO: what's this???
@@ -975,6 +1053,8 @@ TBarApp::FetchTeamIcon(team_id team, int32 size)
 	int32 teamCount = sBarTeamInfoList.CountItems();
 	for (int32 i = 0; i < teamCount; i++) {
 		BarTeamInfo* barInfo = (BarTeamInfo*)sBarTeamInfoList.ItemAt(i);
+		if (barInfo->waylandClient)
+			continue;
 		if (barInfo->teams->HasItem((void*)(addr_t)team)) {
 			_CacheTeamIcon(barInfo, size);
 			BBitmap* icon = barInfo->icon;
@@ -1051,6 +1131,8 @@ TBarApp::AddTeam(team_id team, uint32 flags, const char* sig, entry_ref* ref)
 	int32 teamCount = sBarTeamInfoList.CountItems();
 	for (int32 i = 0; i < teamCount; i++) {
 		BarTeamInfo* barInfo = (BarTeamInfo*)sBarTeamInfoList.ItemAt(i);
+		if (barInfo->waylandClient)
+			continue;
 		if (barInfo->teams->HasItem((void*)(addr_t)team))
 			return;
 		if (strcasecmp(barInfo->sig, sig) == 0)
@@ -1085,26 +1167,34 @@ TBarApp::AddTeam(team_id team, uint32 flags, const char* sig, entry_ref* ref)
 	barInfo->teams->AddItem((void*)(addr_t)team);
 	sBarTeamInfoList.AddItem(barInfo);
 
+	_NotifyTeamAdded(barInfo);
+}
+
+
+//!	Tells the subscribers about a new entry (sSubscriberLock held).
+void
+TBarApp::_NotifyTeamAdded(BarTeamInfo* barInfo)
+{
 	int32 subsCount = sSubscribers.CountItems();
-	if (subsCount > 0) {
-		for (int32 i = 0; i < subsCount; i++) {
-			BMessenger* messenger = (BMessenger*)sSubscribers.ItemAt(i);
-			BMessage message(B_SOME_APP_LAUNCHED);
+	for (int32 i = 0; i < subsCount; i++) {
+		BMessenger* messenger = (BMessenger*)sSubscribers.ItemAt(i);
+		BMessage message(B_SOME_APP_LAUNCHED);
 
-			BList* tList = new BList(*(barInfo->teams));
-			message.AddPointer("teams", tList);
+		BList* tList = new BList(*(barInfo->teams));
+		message.AddPointer("teams", tList);
 
-			BBitmap* icon = new BBitmap(barInfo->icon);
-			ASSERT(icon);
+		BBitmap* icon = new BBitmap(barInfo->icon);
+		ASSERT(icon);
 
-			message.AddPointer("icon", icon);
+		message.AddPointer("icon", icon);
 
-			message.AddInt32("flags", static_cast<int32>(barInfo->flags));
-			message.AddString("name", barInfo->name);
-			message.AddString("sig", barInfo->sig);
+		message.AddInt32("flags", static_cast<int32>(barInfo->flags));
+		message.AddString("name", barInfo->name);
+		message.AddString("sig", barInfo->sig);
+		if (barInfo->waylandClient)
+			message.AddBool("wayland", true);
 
-			messenger->SendMessage(&message);
-		}
+		messenger->SendMessage(&message);
 	}
 }
 
@@ -1116,9 +1206,21 @@ TBarApp::RemoveTeam(team_id team)
 	if (!autolock.IsLocked())
 		return;
 
+	if (team >= 0 && team == CompositorTeam()) {
+		// Renga (batch 12): the compositor quit, its programs with it
+		BMessage none(kMsgWaylandClients);
+		none.AddInt32("team", team);
+		_UpdateWaylandClients(&none);
+		BAutolock lock(sWaylandLock);
+		sCompositorTeam = -1;
+		return;
+	}
+
 	int32 teamCount = sBarTeamInfoList.CountItems();
 	for (int32 i = 0; i < teamCount; i++) {
 		BarTeamInfo* barInfo = (BarTeamInfo*)sBarTeamInfoList.ItemAt(i);
+		if (barInfo->waylandClient)
+			continue;
 		if (barInfo->teams->HasItem((void*)(addr_t)team)) {
 			int32 subsCount = sSubscribers.CountItems();
 			if (subsCount > 0) {
@@ -1300,9 +1402,30 @@ TBarApp::_CacheTeamIcon(BarTeamInfo* barInfo, int32 size)
 	BRect iconRect = BRect(0, 0, composed - 1, composed - 1);
 	BBitmap* icon = new BBitmap(iconRect, B_RGBA32);
 
+	if (barInfo->waylandClient) {
+		// Renga (batch 12): a Wayland program: the icon of its Deskbar
+		// menu entry (linux-apps), else of its signature, else the
+		// compositor's
+		entry_ref ref;
+		if (barInfo->iconPath.Length() > 0
+			&& get_ref_for_path(barInfo->iconPath.String(), &ref) == B_OK
+			&& BNodeInfo::GetTrackerIcon(&ref, icon, (icon_size)size)
+				== B_OK) {
+			barInfo->iconCache[index] = barInfo->icon = icon;
+			return B_OK;
+		}
+		BMimeType type(barInfo->sig);
+		if (type.GetIcon(icon, (icon_size)size) == B_OK) {
+			barInfo->iconCache[index] = barInfo->icon = icon;
+			return B_OK;
+		}
+	}
+
 	// icon wasn't in cache, get it from be_roster and cache it
 	app_info appInfo;
-	if (be_roster->GetAppInfo(barInfo->sig, &appInfo) == B_OK) {
+	if (be_roster->GetAppInfo(barInfo->waylandClient
+			? RENGA_WAYLAND_COMPOSITOR_SIGNATURE : barInfo->sig,
+			&appInfo) == B_OK) {
 		// fetch the app icon
 		BFile file(&appInfo.ref, B_READ_ONLY);
 		BAppFileInfo appMime(&file);
@@ -1398,6 +1521,243 @@ TBarApp::_CacheWindowIcon(WindowIconCache* winCache)
 }
 
 
+//	#pragma mark - Wayland programs (Renga, batch 12)
+
+
+/*!	Every window of a Wayland program, a Linux program under Renguin or a
+	native one, belongs to the compositor's team, a background server that
+	has no entry. The compositor answers kMsgListWaylandClients, and sends
+	an update whenever a program shows its first window or closes its last,
+	with one "client" per program: its name, signature, icon (the program's
+	Deskbar menu entry) and the client tokens of its windows
+	(headers/private/shared/wayland_clients.h). Each program gets an entry
+	of its own (BarTeamInfo::waylandClient) whose team is the compositor;
+	everything that lists or acts on a team's windows asks
+	WindowTokensFor() or WindowBelongsTo(), which keep for such an entry
+	only the windows with its tokens. Several clients of one program (one
+	signature) share an entry, as several teams of one application do.
+	The Switcher does not list them yet.
+*/
+void
+TBarApp::_RequestWaylandClients()
+{
+	BMessenger compositor(RENGA_WAYLAND_COMPOSITOR_SIGNATURE);
+	BMessage request(kMsgListWaylandClients);
+	// the reply (kMsgWaylandClients) comes to MessageReceived()
+	compositor.SendMessage(&request, this, 500000);
+}
+
+
+/*static*/ team_id
+TBarApp::CompositorTeam()
+{
+	BAutolock lock(sWaylandLock);
+	return sCompositorTeam;
+}
+
+
+/*static*/ bool
+TBarApp::WindowBelongsTo(const char* signature, const window_info* info)
+{
+	if (info == NULL)
+		return false;
+	BAutolock lock(sWaylandLock);
+	if (sCompositorTeam < 0 || info->team != sCompositorTeam)
+		return true;
+	if (signature == NULL)
+		return false;
+	std::map<int32, BString>::const_iterator found
+		= sWaylandTokens.find(info->client_token);
+	return found != sWaylandTokens.end()
+		&& found->second.ICompare(signature) == 0;
+}
+
+
+/*!	The server tokens of the windows of \a teams (get_token_list() for each)
+	that belong to the entry with \a signature: for a Wayland program only
+	its own windows among the compositor's. The caller free()s the result.
+*/
+/*static*/ int32*
+TBarApp::WindowTokensFor(const BList* teams, const char* signature,
+	int32* _count)
+{
+	*_count = 0;
+	if (teams == NULL)
+		return NULL;
+	team_id compositor = CompositorTeam();
+	std::vector<int32> result;
+	for (int32 i = 0; i < teams->CountItems(); i++) {
+		team_id team = (addr_t)teams->ItemAt(i);
+		int32 count = 0;
+		int32* tokens = get_token_list(team, &count);
+		for (int32 j = 0; j < count; j++) {
+			if (compositor < 0 || team != compositor) {
+				result.push_back(tokens[j]);
+				continue;
+			}
+			client_window_info* info = get_window_info(tokens[j]);
+			if (info != NULL && WindowBelongsTo(signature, info))
+				result.push_back(tokens[j]);
+			free(info);
+		}
+		free(tokens);
+	}
+	int32* tokens = (int32*)malloc(sizeof(int32) * (result.size() + 1));
+	if (tokens == NULL)
+		return NULL;
+	for (size_t i = 0; i < result.size(); i++)
+		tokens[i] = result[i];
+	*_count = result.size();
+	return tokens;
+}
+
+
+//!	The client processes of the Wayland program with \a signature.
+/*static*/ void
+TBarApp::WaylandClientPids(const char* signature, BList* pids)
+{
+	BString key(signature);
+	key.ToLower();
+	BAutolock lock(sWaylandLock);
+	std::pair<std::multimap<BString, team_id>::const_iterator,
+		std::multimap<BString, team_id>::const_iterator> range
+			= sWaylandPids.equal_range(key);
+	for (; range.first != range.second; range.first++)
+		pids->AddItem((void*)(addr_t)range.first->second);
+}
+
+
+//!	The Deskbar menu entry of the Wayland program with \a signature.
+/*static*/ BString
+TBarApp::WaylandIconPath(const char* signature)
+{
+	BString key(signature);
+	key.ToLower();
+	BAutolock lock(sWaylandLock);
+	std::map<BString, BString>::const_iterator found
+		= sWaylandIconPaths.find(key);
+	return found != sWaylandIconPaths.end() ? found->second : BString();
+}
+
+
+//!	Removes the Wayland entry at \a index (sSubscriberLock held).
+void
+TBarApp::_RemoveWaylandEntry(int32 index)
+{
+	BarTeamInfo* barInfo = (BarTeamInfo*)sBarTeamInfoList.RemoveItem(index);
+	if (barInfo == NULL)
+		return;
+	int32 subsCount = sSubscribers.CountItems();
+	for (int32 i = 0; i < subsCount; i++) {
+		BMessage message(B_SOME_APP_QUIT);
+		message.AddInt32("team", (addr_t)barInfo->teams->ItemAt(0));
+		message.AddString("sig", barInfo->sig);
+		((BMessenger*)sSubscribers.ItemAt(i))->SendMessage(&message);
+	}
+	delete barInfo;
+}
+
+
+void
+TBarApp::_UpdateWaylandClients(BMessage* message)
+{
+	team_id team = message->GetInt32("team", -1);
+	if (team < 0)
+		return;
+
+	struct Program {
+		BString				sig;
+		BString				name;
+		BString				iconPath;
+		std::vector<int32>	tokens;
+		std::vector<team_id> pids;
+	};
+	std::vector<Program> programs;
+	BMessage client;
+	for (int32 i = 0; message->FindMessage("client", i, &client) == B_OK;
+			i++) {
+		BString sig = client.GetString("signature", "");
+		sig.ToLower();
+		BString name = client.GetString("name", "");
+		if (sig.Length() == 0 || name.Length() == 0)
+			continue;
+		Program* program = NULL;
+		for (Program& other : programs) {
+			if (other.sig == sig)
+				program = &other;
+		}
+		if (program == NULL) {
+			programs.push_back(Program());
+			program = &programs.back();
+			program->sig = sig;
+			program->name = name;
+			program->iconPath = client.GetString("icon_path", "");
+		}
+		int32 token;
+		for (int32 j = 0; client.FindInt32("token", j, &token) == B_OK; j++)
+			program->tokens.push_back(token);
+		int32 pid = client.GetInt32("pid", -1);
+		if (pid > 0)
+			program->pids.push_back(pid);
+	}
+
+	{
+		BAutolock lock(sWaylandLock);
+		sCompositorTeam = team;
+		sWaylandTokens.clear();
+		sWaylandPids.clear();
+		sWaylandIconPaths.clear();
+		for (const Program& program : programs) {
+			sWaylandIconPaths[program.sig] = program.iconPath;
+			for (int32 token : program.tokens)
+				sWaylandTokens[token] = program.sig;
+			for (team_id pid : program.pids) {
+				sWaylandPids.insert(
+					std::pair<BString, team_id>(program.sig, pid));
+			}
+		}
+	}
+
+	BAutolock autolock(sSubscriberLock);
+	if (!autolock.IsLocked())
+		return;
+
+	// entries whose program is gone, or whose name or icon changed
+	std::vector<bool> present(programs.size(), false);
+	for (int32 i = sBarTeamInfoList.CountItems() - 1; i >= 0; i--) {
+		BarTeamInfo* barInfo = (BarTeamInfo*)sBarTeamInfoList.ItemAt(i);
+		if (!barInfo->waylandClient)
+			continue;
+		bool keep = false;
+		for (size_t j = 0; j < programs.size(); j++) {
+			if (programs[j].sig.ICompare(barInfo->sig) != 0)
+				continue;
+			keep = (team_id)(addr_t)barInfo->teams->ItemAt(0) == team
+				&& programs[j].name == barInfo->name
+				&& programs[j].iconPath == barInfo->iconPath;
+			present[j] = keep;
+		}
+		if (!keep)
+			_RemoveWaylandEntry(i);
+	}
+
+	// new programs
+	for (size_t j = 0; j < programs.size(); j++) {
+		if (present[j])
+			continue;
+		BarTeamInfo* barInfo = new BarTeamInfo(new BList(), B_MULTIPLE_LAUNCH,
+			strdup(programs[j].sig.String()),
+			strdup(programs[j].name.String()));
+		barInfo->waylandClient = true;
+		barInfo->iconPath = programs[j].iconPath;
+		barInfo->teams->AddItem((void*)(addr_t)team);
+		_CacheTeamIcon(barInfo);
+		sBarTeamInfoList.AddItem(barInfo);
+		_NotifyTeamAdded(barInfo);
+	}
+}
+
+
 //	#pragma mark - BarTeamInfo
 
 
@@ -1408,7 +1768,8 @@ BarTeamInfo::BarTeamInfo(BList* teams, uint32 flags, char* sig, char* name,
 	flags(flags),
 	sig(sig),
 	name(name),
-	icon(icon)
+	icon(icon),
+	waylandClient(false)
 {
 	_Init();
 }
@@ -1420,7 +1781,9 @@ BarTeamInfo::BarTeamInfo(const BarTeamInfo &info)
 	flags(info.flags),
 	sig(strdup(info.sig)),
 	name(strdup(info.name)),
-	icon(new BBitmap(*info.icon))
+	icon(new BBitmap(*info.icon)),
+	waylandClient(info.waylandClient),
+	iconPath(info.iconPath)
 {
 	_Init();
 }
