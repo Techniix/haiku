@@ -37,6 +37,7 @@ All rights reserved.
 
 
 #include <Server.h>
+#include <String.h>
 
 #include "BarSettings.h"
 
@@ -102,9 +103,11 @@ const uint32 kTestSearch = 'Tsrq';
 const uint32 kTestSearchWindow = 'Tsrw';
 const uint32 kTestAppRecentDocuments = 'Tjmp';
 const uint32 kTestShowPreferences = 'Tdpf';
+const uint32 kTestWaylandClients = 'Twcl';
 
 /* --------------------------------------------- */
 
+struct window_info;
 class BBitmap;
 class BFile;
 class BList;
@@ -131,6 +134,12 @@ public:
 			char*					name;
 			BBitmap*				icon;
 			BBitmap*				iconCache[kIconCacheCount];
+
+			// Renga (batch 12): an entry for a Wayland program (a client
+			// of the compositor, whose team is "teams"); see
+			// TBarApp::IsWaylandClient()
+			bool					waylandClient;
+			BString					iconPath;
 };
 
 
@@ -177,10 +186,27 @@ public:
 			BBitmap*				FetchWindowIcon(bool local = true,
 										bool minimized = false);
 
+	// Renga (batch 12): Wayland programs (Linux programs under Renguin and
+	// native ones) as entries of their own. Their windows are windows of
+	// the compositor's team; the compositor tells which client token
+	// belongs to which program (headers/private/shared/wayland_clients.h).
+	static	bool					WindowBelongsTo(const char* signature,
+										const window_info* info);
+	static	int32*					WindowTokensFor(const BList* teams,
+										const char* signature, int32* _count);
+	static	void					WaylandClientPids(const char* signature,
+										BList* pids);
+	static	BString					WaylandIconPath(const char* signature);
+	static	team_id					CompositorTeam();
+
 private:
 			void					AddTeam(team_id team, uint32 flags,
 										const char* sig, entry_ref*);
 			void					RemoveTeam(team_id);
+			void					_NotifyTeamAdded(BarTeamInfo* barInfo);
+			void					_UpdateWaylandClients(BMessage* message);
+			void					_RequestWaylandClients();
+			void					_RemoveWaylandEntry(int32 index);
 
 			void					InitSettings();
 			void					SaveSettings();

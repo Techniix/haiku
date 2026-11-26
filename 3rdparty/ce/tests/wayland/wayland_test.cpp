@@ -21,6 +21,17 @@
 	                      configured and appears: the screen shows its
 	                      colour (BScreen::GetBitmap), and the harness saves
 	                      a screenshot (screen-wayland_shm_window)
+	  clients_list        (batch 12) the compositor's client list
+	                      (kMsgListWaylandClients) has this client: the
+	                      app_id it set, its signature, its process and one
+	                      client token, the token of the compositor's
+	                      window with the test window's title
+	  clients_deskbar     the Deskbar has an entry of its own for it whose
+	                      window menu lists exactly that window (the
+	                      harness hook kTestWaylandClients)
+	  clients_switch      the Renguin switch "deskbar_entries" off: the
+	                      compositor's list is empty and the entry goes;
+	                      on again: it comes back
 	  clipboard_to_native a wl_data_source set as the selection lands in the
 	                      system clipboard as text/plain
 	  clipboard_from_native text put on the system clipboard reaches the
@@ -58,6 +69,7 @@
 #include <Screen.h>
 #include <image.h>
 #include <WindowInfo.h>
+#include <wayland_clients.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -88,6 +100,7 @@ static const char* kRuntimeDir = "/tmp/xdg-runtime";
 static const int32 kWidth = 240;
 static const int32 kHeight = 160;
 static const uint32 kColor = 0x00129a5e;		// XRGB8888
+static const char* kAppId = "renga-wayland-test";
 
 static int sFailures = 0;
 
@@ -383,6 +396,7 @@ window_test(Client& client)
 	xdg_toplevel* toplevel = xdg_surface_get_toplevel(xdgSurface);
 	xdg_toplevel_add_listener(toplevel, &kToplevelListener, &client);
 	xdg_toplevel_set_title(toplevel, "Renga Wayland test");
+	xdg_toplevel_set_app_id(toplevel, kAppId);
 	wl_surface_commit(surface);
 
 	dispatch_until(client, 10000000, &client.configured);
@@ -411,6 +425,180 @@ window_test(Client& client)
 		"the screen", client.configureSerial, (int)found,
 		(int)(kWidth * kHeight));
 	// The window stays until the client disconnects.
+}
+
+
+// #pragma mark - Deskbar entries (batch 12)
+
+
+static const uint32 kTestWaylandClients = 'Twcl';
+	// the Deskbar's harness hook (src/apps/deskbar/BarApp.h)
+static const char* kClientSignature
+	= RENGA_WAYLAND_CLIENT_SIGNATURE_PREFIX "renga-wayland-test";
+
+
+//!	The compositor's list; returns the entry of this client (or false).
+static bool
+compositor_client(BMessage& list, BMessage& entry)
+{
+	BMessenger compositor(kCompositorSignature);
+	BMessage request(kMsgListWaylandClients);
+	list.MakeEmpty();
+	if (compositor.SendMessage(&request, &list, 5000000, 5000000) != B_OK
+		|| list.what != kMsgWaylandClients)
+		return false;
+	for (int32 i = 0; list.FindMessage("client", i, &entry) == B_OK; i++) {
+		if (strcmp(entry.GetString("app_id", ""), kAppId) == 0)
+			return true;
+	}
+	return false;
+}
+
+
+/*!	The Deskbar's entry with kClientSignature: its windows, one string;
+	"" when there is none. Waits up to \a seconds for \a present.
+*/
+static bool
+deskbar_entry(bool present, int seconds, BString& windows, int32& count)
+{
+	BMessenger deskbar("application/x-vnd.Be-TSKB");
+	for (int attempt = 0; attempt < seconds * 4; attempt++) {
+		BMessage request(kTestWaylandClients);
+		BMessage reply;
+		windows = "";
+		count = 0;
+		bool found = false;
+		if (deskbar.SendMessage(&request, &reply, 2000000, 2000000) == B_OK
+			&& reply.what == B_REPLY) {
+			BMessage entry;
+			for (int32 i = 0; reply.FindMessage("entry", i, &entry) == B_OK;
+					i++) {
+				if (strcasecmp(entry.GetString("sig", ""), kClientSignature)
+						!= 0)
+					continue;
+				found = true;
+				const char* window;
+				for (int32 j = 0; entry.FindString("window", j, &window)
+						== B_OK; j++) {
+					windows << (j > 0 ? ", " : "") << window;
+					count++;
+				}
+			}
+		}
+		if (found == present)
+			return true;
+		snooze(250000);
+	}
+	return false;
+}
+
+
+static void
+push_clients()
+{
+	BMessenger compositor(kCompositorSignature);
+	BMessage push(kMsgListWaylandClients);
+	push.AddBool("push", true);
+	BMessage reply;
+	compositor.SendMessage(&push, &reply, 2000000, 2000000);
+}
+
+
+static void
+clients_test(Client& client)
+{
+	wl_display_roundtrip(client.display);
+	BMessage list;
+	BMessage entry;
+	bool found = compositor_client(list, entry);
+	team_id compositor = list.GetInt32("team", -1);
+	int32 token = entry.GetInt32("token", -1);
+	int32 tokens = 0;
+	type_code type;
+	entry.GetInfo("token", &type, &tokens);
+	// the token is the client token of the compositor's window with the
+	// test window's title
+	bool windowFound = false;
+	int32 count = 0;
+	int32* serverTokens = get_token_list(compositor, &count);
+	for (int32 i = 0; i < count; i++) {
+		client_window_info* info = get_window_info(serverTokens[i]);
+		if (info == NULL)
+			continue;
+		if (info->client_token == token
+			&& strcmp(info->name, "Renga Wayland test") == 0)
+			windowFound = true;
+		free(info);
+	}
+	free(serverTokens);
+	int32 clientCount = 0;
+	list.GetInfo("client", &type, &clientCount);
+	report("clients_list", found && windowFound && tokens == 1
+			&& entry.GetInt32("pid", -1) == getpid()
+			&& strcmp(entry.GetString("signature", ""), kClientSignature)
+				== 0
+			&& strcmp(entry.GetString("name", ""), kAppId) == 0,
+		"list %s (enabled %d, team %d, %d clients); this client: name "
+		"\"%s\", signature %s, pid %d (mine %d), %d token(s), window with "
+		"that token and the title %s",
+		list.what == kMsgWaylandClients ? "answered" : "not answered",
+		(int)list.GetBool("enabled", false), (int)compositor,
+		(int)clientCount,
+		entry.GetString("name", ""), entry.GetString("signature", ""),
+		(int)entry.GetInt32("pid", -1), (int)getpid(), (int)tokens,
+		windowFound ? "found" : "not found");
+
+	BString windows;
+	int32 windowCount = 0;
+	bool listed = deskbar_entry(true, 10, windows, windowCount);
+	report("clients_deskbar", listed && windowCount == 1
+			&& windows == "Renga Wayland test",
+		"Deskbar entry %s; its windows (%d): %s",
+		listed ? "found" : "not found in 10 s", (int)windowCount,
+		windows.String());
+
+	// the Renguin switch: off, then on again (the previous settings kept)
+	BString settingsPath = getenv("HOME");
+	settingsPath << "/config/settings/Renguin/settings";
+	BString previous;
+	bool hadSettings = false;
+	if (FILE* file = fopen(settingsPath.String(), "r")) {
+		char buffer[4096];
+		size_t length = fread(buffer, 1, sizeof(buffer) - 1, file);
+		buffer[length] = '\0';
+		previous = buffer;
+		hadSettings = true;
+		fclose(file);
+	}
+	BString dir = getenv("HOME");
+	dir << "/config/settings/Renguin";
+	mkdir(dir.String(), 0755);
+	if (FILE* file = fopen(settingsPath.String(), "w")) {
+		fprintf(file, "%s\n%s false\n", previous.String(),
+			RENGA_WAYLAND_CLIENTS_SWITCH);
+		fclose(file);
+	}
+	push_clients();
+	bool gone = deskbar_entry(false, 10, windows, windowCount);
+	BMessage offList;
+	BMessage offEntry;
+	bool offFound = compositor_client(offList, offEntry);
+	bool offEnabled = offList.GetBool("enabled", true);
+
+	if (hadSettings) {
+		if (FILE* file = fopen(settingsPath.String(), "w")) {
+			fputs(previous.String(), file);
+			fclose(file);
+		}
+	} else
+		unlink(settingsPath.String());
+	push_clients();
+	bool back = deskbar_entry(true, 10, windows, windowCount);
+	report("clients_switch", gone && !offFound && !offEnabled && back,
+		"switched off: entry %s, compositor lists it %s (enabled %d); on "
+		"again: entry %s", gone ? "gone" : "still there",
+		offFound ? "yes" : "no", (int)offEnabled,
+		back ? "back" : "not back in 10 s");
 }
 
 
@@ -1058,6 +1246,7 @@ main()
 		client.xrgb ? "yes" : "no");
 
 	window_test(client);
+	clients_test(client);
 	clipboard_test(client);
 	linux_client_test();
 

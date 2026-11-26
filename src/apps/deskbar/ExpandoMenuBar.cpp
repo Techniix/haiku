@@ -199,7 +199,7 @@ TExpandoMenuBar::MessageReceived(BMessage* message)
 			team_id team = -1;
 			message->FindInt32("team", &team);
 
-			RemoveTeam(team, true);
+			RemoveTeam(team, true, message->GetString("sig", NULL));
 			break;
 		}
 
@@ -208,7 +208,9 @@ TExpandoMenuBar::MessageReceived(BMessage* message)
 			team_id team = -1;
 			message->FindInt32("team", &team);
 
-			RemoveTeam(team, false);
+			// Renga (batch 12): "sig" names which entry of the team went
+			// away (Wayland programs share the compositor's team)
+			RemoveTeam(team, false, message->GetString("sig", NULL));
 			break;
 		}
 
@@ -221,7 +223,7 @@ TExpandoMenuBar::MessageReceived(BMessage* message)
 
 			TShowHideMenuItem::TeamShowHideCommon(B_MINIMIZE_WINDOW,
 				item->Teams(), item->Menu()->ConvertToScreen(item->Frame()),
-				true);
+				true, item->Signature());
 			break;
 		}
 
@@ -234,7 +236,7 @@ TExpandoMenuBar::MessageReceived(BMessage* message)
 
 			TShowHideMenuItem::TeamShowHideCommon(B_BRING_TO_FRONT,
 				item->Teams(), item->Menu()->ConvertToScreen(item->Frame()),
-				true);
+				true, item->Signature());
 			break;
 		}
 
@@ -310,7 +312,13 @@ TExpandoMenuBar::MouseDown(BPoint where)
 	bigtime_t delta = system_time() - fLastClickTime;
 	if (message->FindInt32("clicks", &clicks) == B_OK && clicks > 1
 		&& item == fLastClickedItem && delta <= clickSpeed) {
-		be_roster->ActivateApp((addr_t)teamItem->Teams()->ItemAt(0));
+		team_id team = (addr_t)teamItem->Teams()->ItemAt(0);
+		if (team >= 0 && team == TBarApp::CompositorTeam()) {
+			// Renga (batch 12): a Wayland program: its own windows
+			TShowHideMenuItem::TeamShowHideCommon(B_BRING_TO_FRONT,
+				teamItem->Teams(), BRect(), false, teamItem->Signature());
+		} else
+			be_roster->ActivateApp(team);
 			// activate this team
 		return;
 			// absorb the message
@@ -684,13 +692,15 @@ TExpandoMenuBar::AddTeam(team_id team, const char* signature)
 
 
 void
-TExpandoMenuBar::RemoveTeam(team_id team, bool partial)
+TExpandoMenuBar::RemoveTeam(team_id team, bool partial, const char* signature)
 {
 	TWindowMenuItem* windowItem = NULL;
 
 	for (int32 i = CountItems() - 1; i >= 0; i--) {
 		TTeamMenuItem* item = dynamic_cast<TTeamMenuItem*>(ItemAt(i));
-		if (item != NULL && item->Teams()->HasItem((void*)(addr_t)team)) {
+		if (item != NULL && item->Teams()->HasItem((void*)(addr_t)team)
+			&& (signature == NULL
+				|| strcasecmp(item->Signature(), signature) == 0)) {
 			item->Teams()->RemoveItem(team);
 			if (partial)
 				return;
@@ -987,13 +997,13 @@ TExpandoMenuBar::monitor_team_windows(void* arg)
 
 				teamItem = static_cast<TTeamMenuItem*>(teamMenu->ItemAt(i));
 				if (teamItem->IsExpanded()) {
-					int32 teamCount = teamItem->Teams()->CountItems();
-					for (int32 j = 0; j < teamCount; j++) {
+					{
 						// The following code is almost a copy/paste from
-						// WindowMenu.cpp
-						team_id theTeam = (addr_t)teamItem->Teams()->ItemAt(j);
+						// WindowMenu.cpp. Renga (batch 12): the entry's
+						// windows (for a Wayland program only its own)
 						int32 count = 0;
-						int32* tokens = get_token_list(theTeam, &count);
+						int32* tokens = TBarApp::WindowTokensFor(
+							teamItem->Teams(), teamItem->Signature(), &count);
 
 						for (int32 k = 0; k < count; k++) {
 							client_window_info* wInfo

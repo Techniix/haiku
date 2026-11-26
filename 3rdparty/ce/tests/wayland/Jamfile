@@ -6,8 +6,9 @@ SubDir HAIKU_TOP 3rdparty ce tests wayland ;
 include [ FDirName $(HAIKU_TOP) src libs wayland WaylandRules ] ;
 
 UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility gnu ] : true ;
-UsePrivateHeaders interface input ;
-	# WindowInfo.h: the compositor's windows (decorations, Chrome's window)
+UsePrivateHeaders interface input shared ;
+	# WindowInfo.h: the compositor's windows (decorations, Chrome's window);
+	# wayland_clients.h: the compositor's client list (Deskbar entries)
 SubDirSysHdrs $(LOCATE_SOURCE) ;
 SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland src ] ;
 SubDirSysHdrs [ FDirName $(HAIKU_TOP) src libs wayland egl ] ;

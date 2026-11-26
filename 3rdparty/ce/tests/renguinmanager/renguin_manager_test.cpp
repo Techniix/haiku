@@ -133,7 +133,8 @@ main()
 			&& output.FindFirst("switch\tappimage\ton") >= 0
 			&& output.FindFirst("switch\ttheme\ton") >= 0
 			&& output.FindFirst("switch\tapk_sync\ton") >= 0
-			&& output.FindFirst("switch\tserver_frames\ton") >= 0,
+			&& output.FindFirst("switch\tserver_frames\ton") >= 0
+			&& output.FindFirst("switch\tdeskbar_entries\ton") >= 0,
 		"%s", shown.String());
 	BString kernelSettings = run("cat ~/config/settings/kernel/drivers/renguin "
 		"2>/dev/null", NULL);
