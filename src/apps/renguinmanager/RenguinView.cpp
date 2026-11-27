@@ -288,12 +288,16 @@ static const uint32 kMsgEndProcess = 'rpen';
 /*!	Renguin's switches (batch 10). Kernel switches live in the renguin
 	driver settings (read by the module at every exec of a Linux program),
 	the others in ~/config/settings/Renguin/settings (read by linux-apps and
-	the linux command). All are on by default.
+	the linux command). All are on by default except those marked
+	defaultOff (batch 14: "flatpak").
 */
 struct renguin_switch {
 	const char*	key;
 	bool		kernel;
 	const char*	label;
+	bool		defaultOff;
+		// batch 14: off unless turned on ("flatpak": no sandbox, and
+		// runtimes of several hundred MB)
 };
 
 static const renguin_switch kSwitches[] = {
@@ -325,6 +329,9 @@ static const renguin_switch kSwitches[] = {
 		"title bar and borders, also when they would draw their own") },
 	{ "deskbar_entries", false, B_TRANSLATE_MARK("Give each running Linux "
 		"program its own Deskbar entry") },
+	// batch 14 (maintainer, 2026-11-27): Flatpak step 1, unsandboxed
+	{ "flatpak", false, B_TRANSLATE_MARK("Run Flatpak programs, without a "
+		"sandbox (Renguin has none yet)"), true },
 };
 static const int32 kSwitchCount = sizeof(kSwitches) / sizeof(kSwitches[0]);
 static_assert(kSwitchCount <= 16, "RenguinView::fSwitches holds 16");
@@ -857,15 +864,19 @@ RenguinView::Refresh()
 RenguinView::SwitchValue(const char* key)
 {
 	bool kernel = false;
+	bool fallback = true;
 	for (int32 i = 0; i < kSwitchCount; i++) {
-		if (strcmp(kSwitches[i].key, key) == 0)
+		if (strcmp(kSwitches[i].key, key) == 0) {
 			kernel = kSwitches[i].kernel;
+			fallback = !kSwitches[i].defaultOff;
+			break;
+		}
 	}
 	BPath path = kernel ? trace_settings_path() : user_settings_path("settings");
 	void* handle = load_driver_settings(path.Path());
 	if (handle == NULL)
-		return true;
-	bool value = get_driver_boolean_parameter(handle, key, true, true);
+		return fallback;
+	bool value = get_driver_boolean_parameter(handle, key, fallback, true);
 	unload_driver_settings(handle);
 	return value;
 }
@@ -892,10 +903,11 @@ RenguinView::_SaveSwitches()
 {
 	BString kernel, user;
 	for (int32 i = 0; i < fSwitchCount; i++) {
-		if (fSwitches[i]->Value() != 0)
+		bool on = fSwitches[i]->Value() != 0;
+		if (on == !kSwitches[i].defaultOff)
 			continue;
 		BString line;
-		line.SetToFormat("%s false\n", kSwitches[i].key);
+		line.SetToFormat("%s %s\n", kSwitches[i].key, on ? "true" : "false");
 		(kSwitches[i].kernel ? kernel : user) << line;
 	}
 	const char* pattern = fTracePattern->Text();
@@ -939,6 +951,11 @@ RenguinView::_SaveSwitches()
 		push.AddBool("push", true);
 		compositor.SendMessage(&push, (BHandler*)NULL, 0);
 	}
+
+	// "flatpak" (batch 14): Renga's bwrap goes into the Linux root, or
+	// leaves it, now rather than at the next start of a Linux program
+	if (access("/boot/system/bin/linux", X_OK) == 0)
+		system("/boot/system/bin/linux --ensure-flatpak > /dev/null 2>&1 &");
 }
 
 
