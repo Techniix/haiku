@@ -121,7 +121,7 @@ Branches, not merged:
 Open finding: `pointer.usb.pos.top_left` fails on clean `ce/main` (`8921f7ee`, 20261127-141111: "device 0,0 -> pointer 340,300"). It passed in the morning (20261127-110708). Bisect between those runs; #21-#25 are the candidates.
 
 Remaining queue, in order:
-1. Merge #23 and #26 after review.
+1. Done: #23 and #26 were merged on 2026-11-27 after architect review.
 2. Check the 8BitDo replug syslog against #26's per-interface lines (the maintainer was asked for it).
 3. Wi-Fi (MT7922, mt7921e):
    - prefer 5 and 6 GHz, choosing by band and RSSI, with VHT/HE registration
