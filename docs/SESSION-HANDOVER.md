@@ -113,7 +113,7 @@ RengaPorts `main`, pushed:
 The maintainer published both (packages `4cfa3022`). Hardware Tested, extracted: GLInfo shows llvmpipe on LLVM 21.1.8 with OpenGL 4.6, and GLTeapot runs with no ICD and with lavapipe only.
 
 Branches, not merged:
-- `wip/flatpak-step1`: Renguin `chroot()`, the `bwrap` shim and the Manager switch. Never built. It needs a rebase (`linux.cpp` conflicts with #21), a build, the renguin and renguinmanager suites, and a PR with the exact `Architect-Approved: yes` line and a quick default boot run. Its top commit describes it.
+- `wip/flatpak-step1`: superseded by `batch/14-flatpak-step1` (PR #36); the maintainer may delete it.
 - `batch/13-chrome-window`: the network service in-process for Linux Chromium. Pushed, not tested.
 - `batch/13-installer-destination`: F-23 Destination layouts on the engine. Pushed, not compiled.
 - `wip/appimage-diagnostics`: stale diagnostics from before #21. Nothing to merge; the maintainer may delete it.
@@ -138,7 +138,7 @@ Remaining queue, in order:
    - Run the one transaction: `pkgman install` of libglvnd, mesa, mesa_devel, mesa_eglvnd and mesa_lavapipe from RengaPorts, with mesa_swpipe removed in the same transaction.
    - Then the two BGLView checks: no ICD, and lavapipe only.
 6. `batch/13-chrome-window`, then `batch/13-installer-destination`.
-7. Flatpak step 1 (`wip/flatpak-step1`).
+7. Flatpak step 1: PR #36 (`batch/14-flatpak-step1`), QEMU Tested (`renguin.libc-chroot`, `renguin.flatpak.*`, `renguin_manager.flatpak_switch`). It waits for architect review; the OSTree test app comes next.
 8. Steam 64-bit groundwork.
 9. The two load-dependent media checks (`media_drift.estimate`, `media_mixing.duck_switch_off`).
 10. Mesa cross-build on the Linux host, time-boxed to about 2 h (decisions log).

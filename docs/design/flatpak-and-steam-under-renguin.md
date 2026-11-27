@@ -77,6 +77,37 @@ userspace; it needs HTTPS and a writable repository under `~/.local/share/flatpa
      the same commands.
    - Both switchable.
 
+### Step 1 as built (batch 14): what chroot() contains
+
+Items 1, 2 and the switch of item 5 are in `batch/14-flatpak-step1` (QEMU Tested). The root is a
+view for the shim, not a sandbox (maintainer, 2026-11-27: step 1 unsandboxed).
+
+- **Kept as a path, not a vnode.** The root is a canonical host path in the team's Renguin
+  data. Nothing is pinned or released: `fork()` copies it with the team data, team exit
+  frees it with the data. If the directory is removed, lookups under it fail.
+- **Across exec.** `execve()` records the root on a list keyed by team, and the new
+  program's load takes it. The list has no fixed size, so no root is dropped to make room.
+  `execve()` fails with `ENOMEM` rather than lose a root. A failed `execve()` leaves the
+  caller in its root. A dying team's entry is freed. If the team execs a native program, its
+  entry waits, so a Linux program started from it later is in the root again, as on Linux.
+- **Contained:** absolute paths, `..` in them (it stops at the root), and absolute and
+  relative link targets other than the two host prefixes below. `getcwd()` is relative to
+  the root. The interpreter of a dynamic program is looked up in the root.
+- **Not contained, by design:**
+  - absolute link targets under `/boot/system/` and `/boot/home/`, which are host paths
+    (the shim's binds are such links);
+  - absolute paths that do not exist in the root, which fall through to Haiku's tree, as in
+    the Linux root;
+  - relative paths, which Haiku resolves. `..` from a working directory at the root
+    leaves it. A directory opened before `chroot()` stays usable with `fchdir()` and
+    relative paths, as on Linux.
+- **Permissions:** any program may call it (Linux asks for `CAP_SYS_CHROOT`; the shim
+  runs as the user). The caller needs search permission on the directory (`EACCES`).
+  `ENOENT`, `ENOTDIR` and `EFAULT` are as on Linux.
+- **Tests:** `libc-chroot` in the `renguin` suite covers escapes by `..` and by symbolic
+  links, `fchdir()`, `fork()` (two levels) and `exec()` (two levels, and a failed exec).
+  `renguin.flatpak.*` covers the shim. `renguin_manager.flatpak_switch` covers the switch.
+
 ### Step 2: sandboxed
 
 Needs user and mount namespaces in Renguin (a per-team mount table over Haiku's VFS), or a
