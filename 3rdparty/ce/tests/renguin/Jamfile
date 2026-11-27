@@ -202,7 +202,7 @@ if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
 
 Application renguin_test :
 	renguin_test.cpp
-	: [ TargetLibstdc++ ]
+	: be [ TargetLibstdc++ ]
 ;
 
 if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
