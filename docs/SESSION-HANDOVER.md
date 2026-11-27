@@ -86,6 +86,34 @@ Batch 11 (2026-11-21) is finished. Commits: Renga Depot decision (`f3b1ae0c`), b
 
 Open, queued by the coordinator in batch 11 and not done: the large-font UI audit of every Renga window with a harness mode (Control Panel sidebar width, resizable window, minimum size; only the Windows page menus done); Linux Chromium zygote and separate GPU process (flags work around it); the initial-size mismatch of Linux Chromium's window (needs a hardware retest with the scale fix); several inputs at once (no buffers reach the mixer); AppImage through the roster; Open with copy flaky; ptrace, sysfs/udev, V4L2, Debian/Arch roots, Renguin badge on window tab/list; Chrome 10 of 10; system bus socket in the Linux root.
 
+## Batch 13: continue from here
+
+**Cloud session, 2026-11-27.** Merged into `ce/main` (PRs #10-#19), each QEMU Tested in its PR:
+- the harness memory fix and restart-safe runs (#10)
+- the Switcher (#12), the start button (#13), Renguin `madvise` (#14), timing (#15), F-24 GUI part 1 (#16)
+- the Flatpak/Steam design (#11)
+- mid-line serial markers (#17-#19)
+
+Sweep, image and status: see the roadmap's batch 13 line. Image `2026.11.27-batch13` (`d14e9689`, sha256 `b50d244b68dd1f450e318f0ea3fdc6174c271bc83edc0a443282183b7abb28b1`) on renga-builds: publish it from Actions.
+
+Pushed, not tested yet (test first in batch 14):
+- `batch/13-chrome-window`: network service in-process for Linux Chromium; `chrome.window_multi` logs the network service
+- `batch/13-installer-destination`: F-23 Destination layouts on the engine, `Installer --plan-disk`
+
+Local, being finished (this session or next): `batch/13-flatpak` (in the worktree `/home/claude/b13-wt`), containing:
+- Renguin `chroot()` (per-team root, kept on fork and exec), test `libc-chroot`
+- Renga's `bwrap` shim written by `linux` (switch `flatpak`, off by default)
+- the Manager switch, and `renguin_test` `flatpak.*`
+
+Batch 14 list (maintainer, 2026-11-27 11:06 ET, first item moved up):
+1. linux_apps.appimage and linux_apps.open_with (failing since batch 11): find the cause, fix, regression tests, a note with a real AppImage to try on hardware; branch `batch/14-appimage` has extra diagnostics.
+2. Test the two pushed branches.
+3. Flatpak step 1 (above), then a host-built OSTree test app.
+4. Steam 64-bit groundwork (decisions log 2026-11-27).
+5. Look into `media_drift.estimate` and `media_mixing.duck_switch_off` under load (failed in the batch 13 renga-raw sweep leg, passed alone in 20261127-104811; not on `KNOWN_FLAKY`).
+6. Linux Chromium window: page script not run in 90 s (20261127-080322).
+7. F-23 wizard pages, then F-22.
+
 ## Batch 12: continue from here
 
 **Cloud session, 2026-11-27: sweep and image.** `ce/main` 96243930 (PRs #5-#8 merged). Four-way sweep (QEMU, no KVM): default PASS 1403/1403 (20261126-191132); `--smp 2` failed once on `pointer_rate.latency.8000hz` (19.2 ms, one frame 16.7 ms; not on the flaky list), retry PASS 1403/1403 (20261126-205138); `--firmware uefi` PASS 1399/1399 (20261126-193720); `selftest.py` only its known "sound settings: clean recordings pass". renga-raw never completed on this host: twice cut by the 3600 s renga-* timeout during crashlog's reboots (through `renga-gate`), then three direct runs with `--timeout 6000` each ended with ce-test.py SIGKILLed (exit 137) right after crashlog's third boot (`CE-SUITE crashlog DONE failures=0`), before any summary; first one probably a server restart, the next two at the same point, so look into it on the maintainer's PC. Seen in the last run's serial log: 1887 PASS, 8 FAIL: `linux_apps.open_with`, `linux_apps.appimage`, `large_font.deskbar_preferences` (known), `sound_settings.output_device_menu`, `output_device_back`, `test_sound`, `media_usb.unplug_fallback` (known-flaky families), `media_resample.sinc_15khz` (THD+N -49.1 dB, want below -50; not on the flaky list). Image `2026.11.27-batch12` pushed to renga-builds (publish it from Actions). Next: rerun renga-raw on the maintainer's PC; F-24 GUI (DriveSetup on the engine), F-23 wizard on the engine, F-22 after the design note's review (`docs/design/graphical-boot-menu.md`); the Switcher listing Linux programs; the rest of Renga Depot.
