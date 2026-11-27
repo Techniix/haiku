@@ -694,7 +694,11 @@ is never part of the normal runs or the sweep. The image is built with
 2000 MB (`MESA_UPGRADE_IMAGE_SIZE`), the guest gets at least 2 GB, and a
 copy of the image is booted twice with its writes kept, with
 `mesa_upgrade_test` enabled by a flag file (`data/ce-harness/mesa-upgrade`)
-and the tests that end a boot left out; pass `--only mesa_upgrade`:
+and the tests that end a boot left out; pass `--only mesa_upgrade`.
+Selecting `mesa_upgrade_test` with `--only` but without `--mesa-upgrade`
+(as `renga-test mesa` does) is refused (exit 64): it would pass with no
+checks. All other runs get `-nic none` (`nic_args()`, checked by
+`selftest.py`):
 
 1. `upgrade`: once `techniix.github.io` resolves, one `pkgman install
    libglvnd mesa mesa_devel mesa_eglvnd mesa_lavapipe` that also removes

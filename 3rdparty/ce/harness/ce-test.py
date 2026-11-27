@@ -1810,6 +1810,26 @@ def run_restore_point_boots(args, results_dir, report):
 MESA_UPGRADE_BOOTS = ("upgrade", "after")
 
 
+def nic_args(args):
+	"""The QEMU network options: none, so runs are offline by design, except
+	for --mesa-upgrade, which gets QEMU's user-mode network (NAT, DHCP,
+	DNS) for the Renga package repository."""
+	if getattr(args, "mesa_upgrade", False):
+		return ["-nic", "user,model=e1000"]
+	return ["-nic", "none"]
+
+
+def mesa_upgrade_selection_error(args):
+	"""An error text when --only selects mesa_upgrade_test without
+	--mesa-upgrade: the program would print one CE-INFO line and the
+	selection would pass with no checks. None otherwise."""
+	if "mesa_upgrade_test" in (args.only or []) and not args.mesa_upgrade:
+		return ("mesa_upgrade_test only checks something with --mesa-upgrade "
+			"(--profile renga-raw --mesa-upgrade --only mesa_upgrade); "
+			"without it the selection would pass with no checks")
+	return None
+
+
 def run_mesa_upgrade_boots(args, results_dir, report):
 	"""--mesa-upgrade: two starts of one disk with the user-mode network,
 	its writes kept between them (a copy of the test image, made like the
@@ -3401,10 +3421,7 @@ def _boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		"-audiodev", "wav,id=usbsnd%d,path=%s,out.frequency=48000,"
 			"out.channels=2,out.format=s16"
 			% (n, os.path.join(results_dir, "usb-%d.wav" % n)))] + [
-	] + (["-nic", "user,model=e1000"] if args.mesa_upgrade
-		# --mesa-upgrade: QEMU's user-mode network (NAT, DHCP, DNS) for
-		# the Renga package repository
-		else ["-nic", "none"]) + [
+	] + nic_args(args) + [
 		# QEMU's educational PCI device (MMIO, MSI, DMA): lkpi_pcitest
 		# tests the LinuxKPI core against it (linuxkpi suite, F-26;
 		# check_linuxkpi()). A 24-bit DMA mask instead of 28 puts nearly
@@ -5590,6 +5607,8 @@ def main():
 			else []
 	except ValueError as error:
 		parser.error(str(error))
+	if mesa_upgrade_selection_error(args) is not None:
+		parser.error(mesa_upgrade_selection_error(args))
 	if args.two_installs and (args.media == "cdrom"
 			or args.firmware != "uefi"):
 		parser.error("--two-installs tests the EFI boot loader's choice "
@@ -5626,7 +5645,7 @@ def main():
 			or args.mesa_upgrade):
 		log("cannot resume: runs with several boots of their own "
 			"(--restore-points, --loader-writes, --installer-upgrade, "
-			"--other-systems) start again")
+			"--other-systems, --mesa-upgrade) start again")
 		return 3
 
 	started = datetime.datetime.now()
