@@ -17,6 +17,8 @@ class HidrawProtocolHandler;
 
 class HIDDevice {
 public:
+			const char*			HidrawReason() const { return fHidrawReason; }
+			bool				HasHidraw() const { return fHidraw != NULL; }
 								HIDDevice(usb_device device,
 									const usb_configuration_info *config,
 									size_t interfaceIndex, int32 quirkyIndex);
@@ -86,6 +88,8 @@ private:
 			// Renga (F-42): raw access for game controllers
 			usb_pipe			fOutputPipe;
 			HidrawProtocolHandler *fHidraw;
+			const char*			fHidrawReason;
+				// batch 14: why the interface has a hidraw node or not (syslog)
 			sem_id				fOutputDone;
 			status_t			fOutputStatus;
 	static	void				_OutputCallback(void *cookie,

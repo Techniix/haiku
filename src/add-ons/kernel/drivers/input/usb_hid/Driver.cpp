@@ -21,6 +21,8 @@
 #include <new>
 #include <stdio.h>
 #include <string.h>
+#include <stdio.h>
+#include <string.h>
 
 
 struct device_cookie {
@@ -145,6 +147,12 @@ usb_hid_device_added(usb_device device, void **cookie)
 
 			if (hidDevice != NULL && hidDevice->InitCheck() == B_OK) {
 				hidDevice->SetParentCookie(parentCookie);
+				// batch 14: one syslog line per interface, so that a report
+				// says which interface got which nodes (a keyboard dongle
+				// that stopped typing on the maintainer's machine)
+				char nodes[256];
+				size_t nodesLength = 0;
+				nodes[0] = '\0';
 
 				for (uint32 i = 0;; i++) {
 					ProtocolHandler *handler = hidDevice->ProtocolHandlerAt(i);
@@ -171,9 +179,25 @@ usb_hid_device_added(usb_device device, void **cookie)
 
 					gDeviceList->AddDevice(handler->PublishPath(), handler);
 					devicesFound = true;
+					if (nodesLength < sizeof(nodes)) {
+						nodesLength += snprintf(nodes + nodesLength,
+							sizeof(nodes) - nodesLength, " %s",
+							handler->PublishPath());
+					}
 				}
-			} else
+				TRACE_ALWAYS("%04x:%04x interface %" B_PRIuSIZE ":%s; hidraw "
+					"%s (%s)\n", deviceDescriptor->vendor_id,
+					deviceDescriptor->product_id, i,
+					nodes[0] != '\0' ? nodes : " no nodes",
+					hidDevice->HasHidraw() ? "yes" : "no",
+					hidDevice->HidrawReason());
+			} else {
+				TRACE_ALWAYS("%04x:%04x interface %" B_PRIuSIZE ": not used "
+					"(%s)\n", deviceDescriptor->vendor_id,
+					deviceDescriptor->product_id, i, hidDevice == NULL
+						? "no memory" : strerror(hidDevice->InitCheck()));
 				delete hidDevice;
+			}
 
 			mutex_unlock(&sDriverLock);
 		}

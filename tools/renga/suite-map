@@ -28,6 +28,7 @@ tools/renga/                          @none
 
 # --- Shared foundations: full four-way set -------------------------------
 src/system/kernel/                    @full
+src/system/kernel/debug/              @full crashlog kdl
 src/system/boot/                      @full
 src/system/runtime_loader/            @full
 src/system/libroot/                   @full posix_compat
@@ -40,8 +41,10 @@ Jamfile                               @full
 configure                             @full
 src/servers/app/                      @full appserver largefont
 src/add-ons/kernel/drivers/           @full
+src/add-ons/kernel/drivers/input/     @full pointer gamepad kdl crashlog
 src/add-ons/kernel/bus_managers/      @full
 src/add-ons/kernel/busses/            @full
+src/add-ons/kernel/busses/usb/        @full kdl crashlog usb_audio uvc
 src/add-ons/kernel/generic/           @full syncobj
 src/add-ons/kernel/network/           @full posix_compat wifi
 src/add-ons/kernel/file_systems/      @full

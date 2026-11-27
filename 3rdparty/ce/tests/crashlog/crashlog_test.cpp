@@ -21,8 +21,14 @@
 	   filters, the previous boot, "Save a report" (the archive is read
 	   back), and screenshots. Then the kernel debugger is entered once more,
 	   the way a user does it (kernel_debugger(), a "USER:" message).
-	3. The boot after that: the second report, and the first one not saved
-	   twice.
+	3. The boot after that: the second report. Then (batch 14) the kernel
+	   debugger is entered a third time and nothing is typed ("CE-HOST
+	   kdl_unattended"): the kernel settings file says
+	   "kdl_unattended_restart 15" since the first boot (System logs shows
+	   it on the renga-* images), so the debugger shows the report at the
+	   top of the screen and restarts by itself.
+	4. The boot after that: the third report, and none saved twice; the
+	   setting is removed again.
 */
 
 
@@ -70,7 +76,15 @@ static const char* kSystemLogsSignature = "application/x-vnd.Renga-SystemLogs";
 static const char* kExpectedMarker
 	= "CE-INFO crashlog: entering the kernel debugger on purpose";
 
+// batch 14: the kernel debugger's unattended restart, set for the boots
+// after the first (the harness waits for it, CRASHLOG_UNATTENDED_SECONDS)
+static const char* kKernelSettings
+	= "/boot/home/config/settings/kernel/drivers/kernel";
+static const char* kUnattendedParameter = "kdl_unattended_restart";
+static const int32 kUnattendedSeconds = 15;
+
 // System logs' messages (src/apps/systemlogs/SystemLogs.cpp)
+static const uint32 kMsgSetUnattended = 'slun';
 static const uint32 kMsgSetFilter = 'slft';
 static const uint32 kMsgSelectTab = 'sltb';
 static const uint32 kMsgSaveReport = 'slsr';
@@ -207,12 +221,47 @@ set_phase(int phase)
 }
 
 
-/*!	Enters the kernel debugger; the harness answers it with "reboot". */
+/*!	Sets "kdl_unattended_restart <seconds>" in the kernel settings file
+	(-1: removes the line). Other lines stay.
+*/
+static bool
+set_unattended(int32 seconds)
+{
+	std::string text = read_file(kKernelSettings);
+	std::string kept;
+	size_t start = 0;
+	while (start < text.size()) {
+		size_t end = text.find('\n', start);
+		if (end == std::string::npos)
+			end = text.size();
+		std::string line = text.substr(start, end - start);
+		if (line.compare(0, strlen(kUnattendedParameter),
+				kUnattendedParameter) != 0)
+			kept += line + "\n";
+		start = end + 1;
+	}
+	if (seconds >= 0) {
+		char line[64];
+		snprintf(line, sizeof(line), "%s %d\n", kUnattendedParameter,
+			(int)seconds);
+		kept += line;
+	}
+	run("mkdir -p /boot/home/config/settings/kernel/drivers");
+	bool written = write_file(kKernelSettings, kept.c_str());
+	sync();
+	return written;
+}
+
+
+/*!	Enters the kernel debugger; the harness answers it with "reboot" (or,
+	\a how "unattended", does not answer at all).
+*/
 static void
 enter_debugger(const char* how)
 {
 	info("%s", kExpectedMarker + strlen("CE-INFO crashlog: "));
-	printf("CE-HOST kdl_reboot\n");
+	printf(strcmp(how, "unattended") == 0 ? "CE-HOST kdl_unattended\n"
+		: "CE-HOST kdl_reboot\n");
 	fflush(stdout);
 	sync();
 	// the harness reads the request before the debugger's first line
@@ -230,15 +279,18 @@ enter_debugger(const char* how)
 		read(fd, &byte, 1);
 		close(fd);
 	} else {
-		status_t status = _kern_kernel_debugger("CE crash test");
+		status_t status = _kern_kernel_debugger(strcmp(how, "unattended")
+			== 0 ? "CE crash test unattended" : "CE crash test");
 		if (status != B_OK) {
 			report("user_debugger", false, "kernel_debugger(): %s",
 				strerror(status));
 			return;
 		}
 	}
-	// "reboot" comes from the harness within a few seconds
-	snooze(30000000);
+	// "reboot" comes from the harness within a few seconds; the unattended
+	// restart after kUnattendedSeconds and a countdown
+	snooze(strcmp(how, "unattended") == 0
+		? (kUnattendedSeconds + 40) * 1000000LL : 30000000);
 	report("rebooted", false, "still running 30 s after entering the kernel "
 		"debugger (%s)", how);
 }
@@ -619,6 +671,34 @@ check_gui(const std::string& reportPath)
 	report("viewer_lists_crashes", state.GetInt32("crash_reports", 0) >= 2,
 		"%" B_PRId32 " crash reports listed (kernel and application)",
 		state.GetInt32("crash_reports", 0));
+
+	// batch 14: the unattended restart's switch shows the setting the first
+	// boot wrote, and setting it through the window writes the file
+	{
+		BMessage set(kMsgSetUnattended);
+		set.AddInt32("seconds", kUnattendedSeconds);
+		BMessage reply;
+		status_t sent = messenger.SendMessage(&set, &reply, 5000000,
+			5000000);
+		std::string settings = read_file(kKernelSettings);
+		char line[64];
+		snprintf(line, sizeof(line), "%s %d\n", kUnattendedParameter,
+			(int)kUnattendedSeconds);
+		size_t first = settings.find(line);
+		bool once = first != std::string::npos
+			&& settings.find(kUnattendedParameter, first + 1)
+				== std::string::npos;
+		report("unattended_switch", state.GetInt32("unattended_seconds", -1)
+				== kUnattendedSeconds && state.GetBool("unattended_shown",
+					false)
+				&& sent == B_OK && reply.GetInt32("status", -1) == B_OK
+				&& reply.GetInt32("seconds", -1) == kUnattendedSeconds
+				&& once,
+			"window shows %" B_PRId32 " s (want %d), switch shown %d; set "
+			"through the window: %s, file has the line once %d",
+			state.GetInt32("unattended_seconds", -1), (int)kUnattendedSeconds,
+			state.GetBool("unattended_shown", false), strerror(sent), once);
+	}
 	printf("CE-HOST screenshot systemlogs_crash\n");
 	fflush(stdout);
 	snooze(1500000);
@@ -762,6 +842,9 @@ main(int argc, char** argv)
 			kCollector);
 		check_collector();
 		check_application_crash(argv[0]);
+		report("unattended_setting", set_unattended(kUnattendedSeconds),
+			"%s %d in %s (for the next boots)", kUnattendedParameter,
+			(int)kUnattendedSeconds, kKernelSettings);
 		set_phase(1);
 		enter_debugger("panic");
 		// only reached if the debugger did not reboot
@@ -790,7 +873,7 @@ main(int argc, char** argv)
 		set_phase(2);
 		enter_debugger("user");
 		unlink(kPhaseFile);
-	} else {
+	} else if (phase == 2) {
 		std::string text = newest_kernel_report("USER: CE crash test", NULL);
 		report("user_report_saved", !text.empty(), "%s", text.empty()
 			? "no report of the user's debugger entry" : "saved");
@@ -802,6 +885,21 @@ main(int argc, char** argv)
 					CRASH_REPORT_END),
 				"reason \"user request\", message \"USER: CE crash test\"");
 		}
+		set_phase(3);
+		enter_debugger("unattended");
+		unlink(kPhaseFile);
+		set_unattended(-1);
+	} else {
+		// batch 14: nothing was typed; the debugger restarted by itself
+		std::string text = newest_kernel_report("CE crash test unattended",
+			NULL);
+		report("unattended_report_saved", !text.empty()
+				&& contains(text, "message: USER: CE crash test unattended"),
+			"%s", text.empty() ? "no report of the unattended entry"
+				: "saved, kept across the restart the debugger made itself");
+		report("unattended_setting_removed", set_unattended(-1)
+				&& !contains(read_file(kKernelSettings), kUnattendedParameter),
+			"%s", kKernelSettings);
 		std::vector<std::string> files = files_in(CRASH_REPORT_DIRECTORY,
 			"kernel-");
 		int panics = 0;
@@ -810,8 +908,8 @@ main(int argc, char** argv)
 					"requested from kdl driver"))
 				panics++;
 		}
-		report("saved_once", panics == 1 && files.size() == 2,
-			"%d kernel reports, %d of the panic (want 2 and 1)",
+		report("saved_once", panics == 1 && files.size() == 3,
+			"%d kernel reports, %d of the panic (want 3 and 1)",
 			(int)files.size(), panics);
 		unlink(kPhaseFile);
 	}

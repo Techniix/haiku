@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <syslog.h>
 
 #include <algorithm>
@@ -97,6 +98,16 @@ static bool sBlueScreenEnabled = false;
 static bool sDebugScreenEnabled = false;
 static bool sBlueScreenOutput = true;
 static bool sEmergencyKeysEnabled = true;
+// Renga (batch 14): when the debugger was entered with a crash report and
+// no key arrives for this many seconds, it shows the report at the top of
+// the screen and restarts warm, which keeps the report for System logs
+// (USB keyboards that do not work in the debugger left only the power
+// button, which loses it). Kernel settings "kdl_unattended_restart
+// <seconds>", 0 turns it off; System logs has the switch.
+static int32 sUnattendedRestartSeconds = 60;
+static bool sUnattendedRestartArmed = false;
+static bigtime_t sUnattendedRestartTime = 0;
+static const int32 kUnattendedRestartCountdown = 10;
 static spinlock sSpinlock = B_SPINLOCK_INITIALIZER;
 static int32 sDebuggerOnCPU = -1;
 
@@ -694,30 +705,101 @@ read_line(char* buffer, int32 maxLength,
 }
 
 
+//!	One character from any input the debugger reads, or -1.
+static int
+try_getchar(void)
+{
+	// check serial input
+	int c = arch_debug_serial_try_getchar();
+	if (c >= 0)
+		return c;
+
+	// check blue screen input
+	if (sBlueScreenOutput) {
+		c = blue_screen_try_getchar();
+		if (c >= 0)
+			return c;
+	}
+
+	// give the kernel debugger modules a chance
+	for (uint32 i = 0; i < kMaxDebuggerModules; i++) {
+		if (sDebuggerModules[i] && sDebuggerModules[i]->debugger_getchar) {
+			int getChar = sDebuggerModules[i]->debugger_getchar();
+			if (getChar >= 0)
+				return getChar;
+		}
+	}
+
+	return -1;
+}
+
+
+static void print_kernel_debugger_message();
+static void stack_trace_trampoline(void*);
+
+
+/*!	Renga (batch 14): no key arrived since the debugger was entered with a
+	crash report (sUnattendedRestartSeconds). The screen gets the panic
+	message and the backtrace at its top, then the computer restarts warm,
+	which keeps the crash report for System logs. A key during the
+	countdown stays in the debugger.
+*/
+static void
+unattended_restart(void)
+{
+	sUnattendedRestartArmed = false;
+
+	bool pagingEnabled = blue_screen_paging_enabled();
+	blue_screen_set_paging(false);
+	if (sBlueScreenOutput)
+		blue_screen_clear_screen();
+
+	kprintf("No key was pressed in the kernel debugger for %" B_PRId32
+		" seconds.\n", sUnattendedRestartSeconds);
+	print_kernel_debugger_message();
+	kprintf("\n");
+	jmp_buf* jumpBuffer = (jmp_buf*)debug_malloc(sizeof(jmp_buf));
+	if (jumpBuffer != NULL) {
+		debug_call_with_fault_handler(*jumpBuffer, &stack_trace_trampoline,
+			NULL);
+		debug_free(jumpBuffer);
+	} else
+		arch_debug_stack_trace();
+
+	kprintf("\nThe crash report is kept in memory; System logs shows it "
+		"after the restart.\nRestarting in %" B_PRId32 " seconds; press a "
+		"key to stay in the debugger.\n", kUnattendedRestartCountdown);
+
+	bigtime_t restartTime = system_time()
+		+ kUnattendedRestartCountdown * 1000000LL;
+	while (system_time() < restartTime) {
+		if (try_getchar() >= 0) {
+			kprintf("Staying in the debugger.\n%s", kKDLPrompt);
+			blue_screen_set_paging(pagingEnabled);
+			return;
+		}
+		arch_debug_snooze(5000);
+	}
+
+	kprintf("Restarting (no key in the kernel debugger)...\n");
+	arch_cpu_shutdown(true);
+	blue_screen_set_paging(pagingEnabled);
+}
+
+
 char
 kgetc(void)
 {
 	while (true) {
-		// check serial input
-		int c = arch_debug_serial_try_getchar();
-		if (c >= 0)
+		int c = try_getchar();
+		if (c >= 0) {
+			// someone is there: no unattended restart for this entry
+			sUnattendedRestartArmed = false;
 			return (char)c;
-
-		// check blue screen input
-		if (sBlueScreenOutput) {
-			c = blue_screen_try_getchar();
-			if (c >= 0)
-				return (char)c;
 		}
 
-		// give the kernel debugger modules a chance
-		for (uint32 i = 0; i < kMaxDebuggerModules; i++) {
-			if (sDebuggerModules[i] && sDebuggerModules[i]->debugger_getchar) {
-				int getChar = sDebuggerModules[i]->debugger_getchar();
-				if (getChar >= 0)
-					return (char)getChar;
-			}
-		}
+		if (sUnattendedRestartArmed && system_time() >= sUnattendedRestartTime)
+			unattended_restart();
 
 		arch_debug_snooze(5000);
 	}
@@ -916,6 +998,14 @@ kernel_debugger_loop(const char* messagePrefix, const char* message,
 			"not switch the computer off. System logs\nshows it after the "
 			"restart. \"continue\" leaves the debugger, if the system can "
 			"go on.\n");
+		if (sUnattendedRestartSeconds > 0) {
+			kprintf("Without a key within %" B_PRId32 " seconds, the computer "
+				"restarts by itself and keeps the report.\n",
+				sUnattendedRestartSeconds);
+			sUnattendedRestartTime = system_time()
+				+ sUnattendedRestartSeconds * 1000000LL;
+			sUnattendedRestartArmed = true;
+		}
 	}
 
 	int32 continuableLine = -1;
@@ -1803,6 +1893,20 @@ debug_init_post_settings(struct kernel_args* args)
 	sEmergencyKeysEnabled = get_safemode_boolean("emergency_keys",
 		sEmergencyKeysEnabled);
 	sDebugScreenEnabled = get_safemode_boolean("debug_screen", false);
+
+	char unattended[16];
+	size_t unattendedLength = sizeof(unattended);
+	if (get_safemode_option("kdl_unattended_restart", unattended,
+			&unattendedLength) == B_OK) {
+		if (strcasecmp(unattended, "false") == 0
+			|| strcasecmp(unattended, "off") == 0) {
+			sUnattendedRestartSeconds = 0;
+		} else {
+			int32 seconds = strtol(unattended, NULL, 10);
+			sUnattendedRestartSeconds = seconds < 0 ? 0
+				: std::min(seconds, (int32)3600);
+		}
+	}
 
 	if ((sBlueScreenOutput || sDebugScreenEnabled)
 			&& blue_screen_init() != B_OK)

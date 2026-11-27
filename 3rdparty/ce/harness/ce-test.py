@@ -382,6 +382,24 @@ EXPECTED_KDL_PROMPT_TIMEOUT = 30
 EXPECTED_KDL_QUIET_SECONDS = 10
 # --stall for the boots after such a reboot (see boot()).
 EXPECTED_KDL_STALL = 240
+# batch 14 (maintainer's hardware: two USB keyboards typed nothing in the
+# debugger): runs with the crashlog suite get two USB keyboards on an xHCI
+# controller, and the first announced debugger entry is answered by typing
+# "reboot" on the second one through QMP (input-send-event: QEMU gives key
+# events to the keyboard created last, see qmp_type_keys()). Before, the debugger polled only one USB keyboard. If the typing
+# does not show at the prompt within KDL_USB_KEYBOARD_WAIT seconds, the
+# harness answers through the serial port as before, and the host check
+# crashlog.kdl_usb_keyboard fails.
+KDL_USB_KEYBOARD = "kdlkbd2"
+KDL_USB_KEYBOARD_WAIT = 15
+# batch 14: the crashlog suite's third debugger entry gets no key; the
+# kernel (kdl_unattended_restart, which the suite sets to
+# CRASHLOG_UNATTENDED_SECONDS for that boot) shows the report and restarts
+# by itself after the countdown. Seconds to wait for that, and the line it
+# prints.
+CRASHLOG_UNATTENDED_SECONDS = 15
+KDL_UNATTENDED_WAIT = CRASHLOG_UNATTENDED_SECONDS + 10 + 60
+KDL_UNATTENDED_RESTART_TEXT = "Restarting (no key in the kernel debugger)"
 KDL_MAX_BACKTRACES = 120
 PANIC_PATTERN = re.compile(r"PANIC: (.*)")
 # The runner's and the tests' lines go to the serial port through
@@ -2468,6 +2486,8 @@ class SerialReader(threading.Thread):
 		self.host_requests = []
 		self.menu_driver = None	# BootMenuDriver, with --other-systems
 		self.usb_audio_added = 0		# usb-audio devices plugged in so far
+		self.kdl_usb_keyboard = False	# KDL_USB_KEYBOARD attached
+		self.kdl_unattended = False		# the next entry restarts by itself
 		self.usb_audio_plugged = []		# their indices, still plugged in
 		self.done = threading.Event()
 		self.kdl = threading.Event()
@@ -2580,6 +2600,10 @@ class SerialReader(threading.Thread):
 		      the guest is about to enter the kernel debugger on purpose:
 		      answer the next entry with "reboot" instead of stopping the
 		      run (see _expected_kdl_reboot)
+		  CE-HOST kdl_unattended
+		      the same, but nothing is typed: the debugger is to restart
+		      by itself (batch 14, kdl_unattended_restart); the harness
+		      only lets QEMU reset the machine and waits for it
 
 		Pointer and screenshot requests are carried out before the next
 		line is read, so they happen in order and before anything the test
@@ -2627,6 +2651,9 @@ class SerialReader(threading.Thread):
 				request["error"] = self._usb_audio(words[1])
 			elif accepted and words[0] == "kdl_reboot":
 				self.kdl_expected += 1
+			elif accepted and words[0] == "kdl_unattended":
+				self.kdl_expected += 1
+				self.kdl_unattended = True
 			elif accepted and words[0] == "screenshot":
 				path = os.path.join(os.path.dirname(self.log_path),
 					"screen-%s.ppm" % words[1])
@@ -2722,11 +2749,58 @@ class SerialReader(threading.Thread):
 					reboot="reset")
 			# F-59: the second entry restarts with Alt+SysRq+B, the key the
 			# debugger's closing lines name besides "reboot"
-			if len(self.expected_kdls) == 2 and self.monitor_path is not None:
+			if self.kdl_unattended:
+				# batch 14: nothing is typed (anything typed, the serial
+				# port included, would keep the debugger); it shows the
+				# report and restarts by itself
+				self.kdl_unattended = False
+				entry["answer"] = "none (unattended restart)"
+				deadline = time.time() + KDL_UNATTENDED_WAIT
+				while entry["error"] is None and time.time() < deadline:
+					with self.lock:
+						if KDL_UNATTENDED_RESTART_TEXT \
+								in self.expected_kdl_text:
+							entry["answered"] = True
+							break
+					time.sleep(0.5)
+				if not entry["answered"] and entry["error"] is None:
+					entry["error"] = "no unattended restart within %d s" \
+						% KDL_UNATTENDED_WAIT
+			elif len(self.expected_kdls) == 2 and self.monitor_path is not None:
 				entry["answer"] = "alt-sysrq-b"
 				if entry["error"] is None and monitor_command(
 						self.monitor_path, "sendkey alt-sysrq-b"):
 					entry["answered"] = True
+			elif len(self.expected_kdls) == 1 and self.kdl_usb_keyboard \
+					and self.qmp_path is not None and entry["error"] is None:
+				# batch 14: typed on the second USB keyboard; the debugger
+				# echoes what it reads, so "reboot" shows after the prompt
+				entry["answer"] = "reboot on USB keyboard %s" \
+					% KDL_USB_KEYBOARD
+				with self.lock:
+					start = len(self.expected_kdl_text)
+				# The first key can go to the transfer usb_hid had pending
+				# when the debugger was entered (xHCI), so an empty line
+				# comes first.
+				error = qmp_type_keys(self.qmp_path, "\nreboot\n")
+				typed = False
+				deadline = time.time() + KDL_USB_KEYBOARD_WAIT
+				while error is None and time.time() < deadline:
+					with self.lock:
+						if "reboot" in self.expected_kdl_text[start:]:
+							typed = True
+							break
+					time.sleep(0.2)
+				entry["usb_keyboard"] = typed
+				if typed:
+					entry["answered"] = True
+				else:
+					entry["usb_keyboard_error"] = error or \
+						"nothing typed at the prompt within %d s" \
+						% KDL_USB_KEYBOARD_WAIT
+					entry["answer"] += ", then reboot on the serial port"
+					if self._send("reboot", 1):
+						entry["answered"] = True
 			else:
 				entry["answer"] = "reboot"
 				if entry["error"] is None and self._send("reboot", 1):
@@ -2751,6 +2825,8 @@ class SerialReader(threading.Thread):
 			self._persist(EXPECTED_KDL_FILE, {"answered": entry["answered"],
 				"error": entry["error"], "message": entry.get("message"),
 				"answer": entry.get("answer"),
+				"usb_keyboard": entry.get("usb_keyboard"),
+				"usb_keyboard_error": entry.get("usb_keyboard_error"),
 				"log": "kdl-expected-%d.log" % index})
 			self.last_output = time.time()
 			self.kdl_answering = False
@@ -2856,7 +2932,7 @@ def host_request_allowed(words):
 			and int(words[3]) <= 32767
 	if len(words) == 2 and words[0] == "usb_audio":
 		return words[1] in ("add", "remove")
-	if words == ["kdl_reboot"]:
+	if words == ["kdl_reboot"] or words == ["kdl_unattended"]:
 		return True
 	if len(words) == 2 and words[0] == "screenshot":
 		return re.fullmatch(r"[a-z0-9_]{1,40}", words[1]) is not None
@@ -2874,6 +2950,36 @@ def host_request_allowed(words):
 		return all(re.fullmatch(r"-?\d{1,3}", w) is not None
 			and abs(int(w)) <= POINTER_REL_MAX for w in words[1:])
 	return False
+
+
+def kdl_usb_keyboards_wanted(args):
+	"""Whether this run attaches the two USB keyboards for the crashlog
+	suite's debugger entry (see KDL_USB_KEYBOARD)."""
+	if getattr(args, "installer_upgrade", False) \
+			or getattr(args, "other_systems", False):
+		return False
+	return not args.only or "crashlog_test" in args.only
+
+
+def qmp_type_keys(path, text):
+	"""Types \a text (lower-case letters, "\n") on the keyboard QEMU sends
+	key events to, one key press and release at a time. Returns None, or
+	what went wrong. QEMU gives unbound key events to the keyboard that
+	was activated last; a usb-kbd activates itself when it is created, so
+	that is the last one on the command line (KDL_USB_KEYBOARD). Naming the
+	device in input-send-event only works for display consoles (QEMU
+	aborted on it: "Property 'qemu-fixed-text-console.device' not
+	found")."""
+	for character in text:
+		key = "ret" if character == "\n" else character
+		for down in (True, False):
+			error = qmp_execute(path, "input-send-event",
+				events=[{"type": "key", "data": {"down": down,
+					"key": {"type": "qcode", "data": key}}}])
+			if error:
+				return error
+			time.sleep(0.08)
+	return None
 
 
 def qmp_execute(path, command, **arguments):
@@ -3172,6 +3278,13 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		]
 	if "usb" in args.pointer_devices:
 		qemu += ["-device", "%s,id=ptrusb" % USB_CONTROLLERS[args.usb_controller]]
+	if kdl_usb_keyboards_wanted(args):
+		# batch 14: two USB keyboards on their own xHCI controller; the
+		# crashlog suite's first debugger entry is answered by typing on the
+		# second one (KDL_USB_KEYBOARD)
+		qemu += ["-device", "qemu-xhci,id=kdlusb",
+			"-device", "usb-kbd,bus=kdlusb.0,id=kdlkbd1",
+			"-device", "usb-kbd,bus=kdlusb.0,id=%s" % KDL_USB_KEYBOARD]
 	for device in args.pointer_devices:
 		qemu += POINTER_DEVICES[device][0]
 	if NVME_NAMESPACES:
@@ -3235,6 +3348,7 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		progress.start_part()
 	reader = SerialReader(process, serial_log, monitor_path, qmp_path,
 		feeder, progress)
+	reader.kdl_usb_keyboard = kdl_usb_keyboards_wanted(args)
 	menuDriver = None
 	if menu_script is not None or (args.other_systems and not tag):
 		menuDriver = BootMenuDriver(menu_script or args.firmware,
@@ -3339,7 +3453,10 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 			kdlFile.write(entry.get("text", "").replace("\r", ""))
 		expected.append({"answered": entry["answered"],
 			"error": entry["error"], "message": entry.get("message"),
-			"answer": entry.get("answer"), "log": name})
+			"answer": entry.get("answer"),
+			"usb_keyboard": entry.get("usb_keyboard"),
+			"usb_keyboard_error": entry.get("usb_keyboard_error"),
+			"log": name})
 	bootReport["expected_kdl"] = expected
 	bootReport["expected_kdl_unanswered"] = reader.kdl_expected
 	bootReport["status"] = status
@@ -4602,8 +4719,9 @@ def analyze_latency_audio(results_dir, report):
 # desktop (F-51).
 CRASHLOG_SCREENSHOTS = ["crash_notification", "systemlogs_crash",
 	"systemlogs_live", "systemlogs_previous"]
-# Kernel debugger entries crashlog_test makes: the panic, then the user's.
-CRASHLOG_DEBUGGER_ENTRIES = 2
+# Kernel debugger entries crashlog_test makes: the panic, then the user's,
+# then (batch 14) one left alone to restart by itself.
+CRASHLOG_DEBUGGER_ENTRIES = 3
 
 
 # The kernel debugger's closing lines after a crash report (F-59).
@@ -4635,6 +4753,33 @@ def check_kdl_hint(results_dir, report):
 			len(keys))})
 
 
+def check_kdl_unattended(results_dir, report):
+	"""crashlog.unattended_restart (batch 14): the third announced debugger
+	entry got no key and restarted by itself, after showing the panic
+	message and a backtrace below the "No key was pressed" line (the top of
+	a cleared screen)."""
+	entries = report.get("boot", {}).get("expected_kdl", [])
+	entry = entries[2] if len(entries) > 2 else {}
+	try:
+		with open(os.path.join(results_dir, entry.get("log", ""))) as log:
+			text = log.read()
+	except OSError:
+		text = ""
+	header = text.find("No key was pressed in the kernel debugger")
+	shown = text[header:] if header >= 0 else ""
+	message = "CE crash test unattended" in shown
+	trace = "stack trace for thread" in shown
+	restarted = KDL_UNATTENDED_RESTART_TEXT in shown
+	report.setdefault("host_checks", []).append({
+		"name": "crashlog.unattended_restart",
+		"pass": bool(entry.get("answered")) and not entry.get("error")
+			and header >= 0 and message and trace and restarted,
+		"detail": "third entry: %s; header %s, then message %d, backtrace "
+			"%d, restart %d%s" % (entry.get("answer") or "not reached",
+			"shown" if header >= 0 else "missing", message, trace, restarted,
+			"; %s" % entry["error"] if entry.get("error") else "")})
+
+
 def check_crashlog(results_dir, report):
 	"""The crashlog suite's debugger entries (F-51): each was announced,
 	answered with "reboot" and followed by a new boot of the guest runner.
@@ -4661,11 +4806,26 @@ def check_crashlog(results_dir, report):
 			and boot.get("expected_kdl_unanswered", 0) == 0
 			and None not in messages
 			and starts == CRASHLOG_DEBUGGER_ENTRIES + 1,
-		"detail": "%d of %d announced debugger entries answered with reboot "
+		"detail": "%d of %d announced debugger entries answered (reboot, "
+			"keys or by itself) "
 			"(%s), %d runner starts (want %d)%s" % (len(answered),
 			CRASHLOG_DEBUGGER_ENTRIES, ", ".join(str(m) for m in messages)
 				or "none", starts, CRASHLOG_DEBUGGER_ENTRIES + 1,
 			"".join("; %s" % e["error"] for e in entries if e["error"]))})
+
+
+def check_kdl_usb_keyboard(results_dir, report):
+	"""crashlog.kdl_usb_keyboard (batch 14): the first announced debugger
+	entry was answered by typing on the second USB keyboard."""
+	entries = report.get("boot", {}).get("expected_kdl", [])
+	first = entries[0] if entries else {}
+	report.setdefault("host_checks", []).append({
+		"name": "crashlog.kdl_usb_keyboard",
+		"pass": first.get("usb_keyboard") is True,
+		"detail": "first debugger entry: %s%s" % (
+			first.get("answer") or "not reached",
+			"; %s" % first["usb_keyboard_error"]
+				if first.get("usb_keyboard_error") else "")})
 
 
 # Screenshots media_ui_test asks for (CE-HOST screenshot): the
@@ -5549,6 +5709,9 @@ def analyze(args, results_dir, report, available, progress):
 	if "crashlog_test" in selected and not args.installer_upgrade:
 		directory = where("crashlog_test")
 		check_crashlog(directory, reported("crashlog_test"))
+		if kdl_usb_keyboards_wanted(args):
+			check_kdl_usb_keyboard(directory, reported("crashlog_test"))
+		check_kdl_unattended(directory, reported("crashlog_test"))
 		check_kdl_hint(directory, reported("crashlog_test"))
 		if args.profile.startswith("renga-"):
 			check_screenshots(directory, report, CRASHLOG_SCREENSHOTS,

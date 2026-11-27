@@ -46,6 +46,7 @@
 #include <Alert.h>
 #include <Application.h>
 #include <Button.h>
+#include <CheckBox.h>
 #include <Catalog.h>
 #include <Directory.h>
 #include <Entry.h>
@@ -74,9 +75,11 @@
 #include <fs_attr.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <syslog.h>
 #include <time.h>
@@ -110,6 +113,9 @@ enum {
 	kMsgSelectCrash		= 'slsc',	// "path": string
 	kMsgSaveReport		= 'slsr',	// "path": string, optional; replies
 	kMsgGetState		= 'slst',	// replies with the state, see _State()
+	kMsgSetUnattended	= 'slun',
+		// "seconds": int32, 0 off (batch 14: the kernel debugger restarts
+		// by itself when no key arrives); replies when asked to
 
 	// internal
 	kMsgPoll			= 'slpl',
@@ -117,6 +123,8 @@ enum {
 	kMsgLevel			= 'sllv',
 	kMsgSearch			= 'slse',
 	kMsgCrashSelected	= 'slcs',
+	kMsgUnattendedSwitch = 'slus',
+	kMsgUnattendedTime	= 'slut',
 };
 
 enum {
@@ -645,6 +653,112 @@ compare_crash_items(const CrashItem* a, const CrashItem* b)
 // #pragma mark - window
 
 
+// #pragma mark - unattended restart (batch 14)
+
+
+/*!	The kernel debugger's unattended restart: when it was entered with a
+	crash report and no key arrives for this many seconds, it shows the
+	report at the top of the screen and restarts warm, so that the report
+	is kept. The kernel reads "kdl_unattended_restart <seconds>" from the
+	kernel settings file at boot (0 off); without the line, 60 seconds.
+*/
+static const int32 kUnattendedDefault = 60;
+static const char* kUnattendedParameter = "kdl_unattended_restart";
+
+
+static BString
+kernel_settings_path()
+{
+	BPath path;
+	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK)
+		return "/boot/home/config/settings/kernel/drivers/kernel";
+	path.Append("kernel/drivers/kernel");
+	return path.Path();
+}
+
+
+static int32
+read_unattended_seconds()
+{
+	FILE* file = fopen(kernel_settings_path().String(), "r");
+	if (file == NULL)
+		return kUnattendedDefault;
+	int32 seconds = kUnattendedDefault;
+	char line[256];
+	size_t parameterLength = strlen(kUnattendedParameter);
+	while (fgets(line, sizeof(line), file) != NULL) {
+		const char* start = line;
+		while (*start == ' ' || *start == '\t')
+			start++;
+		if (strncmp(start, kUnattendedParameter, parameterLength) != 0
+			|| (start[parameterLength] != ' '
+				&& start[parameterLength] != '\t')) {
+			continue;
+		}
+		const char* value = start + parameterLength;
+		while (*value == ' ' || *value == '\t')
+			value++;
+		if (strncasecmp(value, "off", 3) == 0
+			|| strncasecmp(value, "false", 5) == 0)
+			seconds = 0;
+		else
+			seconds = std::max((int32)0, (int32)atoi(value));
+	}
+	fclose(file);
+	return seconds;
+}
+
+
+//!	Rewrites the kernel settings file with the line for \a seconds.
+static status_t
+write_unattended_seconds(int32 seconds)
+{
+	BString path = kernel_settings_path();
+	std::string kept;
+	FILE* file = fopen(path.String(), "r");
+	if (file != NULL) {
+		char line[512];
+		size_t parameterLength = strlen(kUnattendedParameter);
+		while (fgets(line, sizeof(line), file) != NULL) {
+			const char* start = line;
+			while (*start == ' ' || *start == '\t')
+				start++;
+			if (strncmp(start, kUnattendedParameter, parameterLength) == 0
+				&& (start[parameterLength] == ' '
+					|| start[parameterLength] == '\t'
+					|| start[parameterLength] == '\n')) {
+				continue;
+			}
+			kept += line;
+		}
+		fclose(file);
+	}
+	if (!kept.empty() && kept[kept.size() - 1] != '\n')
+		kept += "\n";
+	char line[64];
+	snprintf(line, sizeof(line), "%s %" B_PRId32 "\n", kUnattendedParameter,
+		seconds);
+	kept += line;
+
+	BPath parent(path.String());
+	parent.GetParent(&parent);
+	create_directory(parent.Path(), 0755);
+	BString temporary = path;
+	temporary << ".new";
+	file = fopen(temporary.String(), "w");
+	if (file == NULL)
+		return errno;
+	bool written = fwrite(kept.data(), 1, kept.size(), file) == kept.size();
+	if (fclose(file) != 0 || !written) {
+		unlink(temporary.String());
+		return B_IO_ERROR;
+	}
+	if (rename(temporary.String(), path.String()) != 0)
+		return errno;
+	return B_OK;
+}
+
+
 class SystemLogsWindow : public BWindow {
 public:
 	SystemLogsWindow()
@@ -679,6 +793,30 @@ public:
 			B_SIZE_UNLIMITED));
 		fCrashEmpty->SetExplicitMinSize(BSize(100, B_SIZE_UNSET));
 
+		// batch 14: the kernel debugger's unattended restart
+		fUnattendedSeconds = read_unattended_seconds();
+		fUnattended = new BCheckBox("unattended restart",
+			B_TRANSLATE("When the kernel debugger gets no key, restart by "
+				"itself and keep the report"),
+			new BMessage(kMsgUnattendedSwitch));
+		fUnattended->SetToolTip(B_TRANSLATE("Some USB keyboards do not work "
+			"in the kernel debugger. Without this, only switching the "
+			"computer off is left, which loses the crash report. The report "
+			"is shown at the top of the screen before the restart. Takes "
+			"effect at the next start."));
+		BPopUpMenu* timeMenu = new BPopUpMenu("time");
+		const int32 kTimes[] = { 30, 60, 120, 300 };
+		for (size_t i = 0; i < sizeof(kTimes) / sizeof(kTimes[0]); i++) {
+			BMessage* message = new BMessage(kMsgUnattendedTime);
+			message->AddInt32("seconds", kTimes[i]);
+			BString label;
+			label.SetToFormat(B_TRANSLATE("after %d seconds"),
+				(int)kTimes[i]);
+			timeMenu->AddItem(new BMenuItem(label, message));
+		}
+		fUnattendedTime = new BMenuField("unattended time", NULL, timeMenu);
+		_UpdateUnattended();
+
 		BView* crashes = new BView(B_TRANSLATE("Crash reports"), 0);
 		BSplitView* split;
 		BLayoutBuilder::Group<>(crashes, B_VERTICAL, B_USE_HALF_ITEM_SPACING)
@@ -688,7 +826,12 @@ public:
 				.Add(listScroll, 0.25f)
 				.Add(textScroll, 0.75f)
 			.End()
-			.Add(fCrashEmpty);
+			.Add(fCrashEmpty)
+			.AddGroup(B_HORIZONTAL, B_USE_HALF_ITEM_SPACING)
+				.Add(fUnattended)
+				.Add(fUnattendedTime)
+				.AddGlue()
+			.End();
 		split->SetCollapsible(false);
 
 		fTabView->AddTab(fLive);
@@ -788,6 +931,22 @@ public:
 				break;
 			}
 
+			case kMsgUnattendedSwitch:
+				_SetUnattended(fUnattended->Value() == B_CONTROL_ON
+					? (fLastUnattendedSeconds > 0 ? fLastUnattendedSeconds
+						: kUnattendedDefault) : 0, NULL);
+				break;
+
+			case kMsgUnattendedTime:
+				_SetUnattended(message->GetInt32("seconds",
+					kUnattendedDefault), NULL);
+				break;
+
+			case kMsgSetUnattended:
+				_SetUnattended(message->GetInt32("seconds",
+					kUnattendedDefault), message);
+				break;
+
 			case kMsgGetState:
 			{
 				BMessage reply(B_REPLY);
@@ -841,6 +1000,51 @@ private:
 		reply.AddString("selected_crash_label",
 			item != NULL ? item->Text() : "");
 		reply.AddInt32("crash_text_length", fCrashText->TextLength());
+		reply.AddInt32("unattended_seconds", fUnattendedSeconds);
+		reply.AddBool("unattended_shown", !fUnattended->IsHidden(fUnattended)
+			&& fUnattended->Window() != NULL);
+	}
+
+	void _SetUnattended(int32 seconds, BMessage* request)
+	{
+		status_t status = write_unattended_seconds(seconds);
+		if (status == B_OK)
+			fUnattendedSeconds = seconds;
+		_UpdateUnattended();
+		if (request != NULL && request->IsSourceWaiting()) {
+			BMessage reply(B_REPLY);
+			reply.AddInt32("status", status);
+			reply.AddInt32("seconds", read_unattended_seconds());
+			request->SendReply(&reply);
+		}
+	}
+
+	void _UpdateUnattended()
+	{
+		if (fUnattendedSeconds > 0)
+			fLastUnattendedSeconds = fUnattendedSeconds;
+		else if (fLastUnattendedSeconds <= 0)
+			fLastUnattendedSeconds = kUnattendedDefault;
+		fUnattended->SetValue(fUnattendedSeconds > 0
+			? B_CONTROL_ON : B_CONTROL_OFF);
+		fUnattendedTime->SetEnabled(fUnattendedSeconds > 0);
+		BMenu* menu = fUnattendedTime->Menu();
+		BMenuItem* marked = NULL;
+		for (int32 i = 0; BMenuItem* item = menu->ItemAt(i); i++) {
+			if (item->Message()->GetInt32("seconds", 0)
+					== fLastUnattendedSeconds) {
+				marked = item;
+			}
+		}
+		if (marked != NULL)
+			marked->SetMarked(true);
+		else {
+			// a value written by hand: shown as it is
+			BString label;
+			label.SetToFormat(B_TRANSLATE("after %d seconds"),
+				(int)fLastUnattendedSeconds);
+			fUnattendedTime->MenuItem()->SetLabel(label);
+		}
 	}
 
 	void _LoadLogs()
@@ -977,6 +1181,10 @@ private:
 	BStringView*	fCrashEmpty;
 	BButton*		fSaveButton;
 	BStringView*	fSaveStatus;
+	BCheckBox*		fUnattended;
+	BMenuField*		fUnattendedTime;
+	int32			fUnattendedSeconds;
+	int32			fLastUnattendedSeconds = 0;
 	off_t			fLiveOffset;
 	bool			fPreviousFound;
 	time_t			fCrashDirectoryTime;
@@ -1030,6 +1238,7 @@ public:
 			case kMsgSelectTab:
 			case kMsgSelectCrash:
 			case kMsgSaveReport:
+			case kMsgSetUnattended:
 			case kMsgGetState:
 				// from other programs: the window answers
 				_Window()->PostMessage(DetachCurrentMessage());

@@ -29,39 +29,64 @@ static status_t
 debug_run_transfer(Pipe *pipe, uint8 *data, size_t dataLength,
 	usb_request_data *requestData, bool cancel)
 {
-	static uint8 transferBuffer[sizeof(Transfer)]
+	// Renga (batch 14): one transfer per pipe, so that the debugger can
+	// poll several keyboards at once (usb_kdl_keyboard.h); before there
+	// was one transfer for all, and only one keyboard was polled.
+	static const int32 kSlots = 6;
+	static uint8 transferBuffers[kSlots][sizeof(Transfer)]
 		__attribute__((aligned(16)));
-	static Transfer *transfer = NULL;
+	static Transfer *transfers[kSlots];
+	static Pipe *pipes[kSlots];
+
+	int32 slot = -1;
+	for (int32 i = 0; i < kSlots; i++) {
+		if (transfers[i] != NULL && pipes[i] == pipe) {
+			slot = i;
+			break;
+		}
+	}
 
 	BusManager *bus = pipe->GetBusManager();
 
 	if (cancel) {
-		if (transfer != NULL) {
-			bus->CancelDebugTransfer(transfer);
-			transfer = NULL;
+		if (slot >= 0) {
+			bus->CancelDebugTransfer(transfers[slot]);
+			transfers[slot] = NULL;
+			pipes[slot] = NULL;
 		}
 
 		return B_OK;
 	}
 
-	if (transfer != NULL) {
-		status_t error = bus->CheckDebugTransfer(transfer);
-		if (error != B_DEV_PENDING)
-			transfer = NULL;
+	if (slot >= 0) {
+		status_t error = bus->CheckDebugTransfer(transfers[slot]);
+		if (error != B_DEV_PENDING) {
+			transfers[slot] = NULL;
+			pipes[slot] = NULL;
+		}
 
 		return error;
 	}
 
-	transfer = new(transferBuffer) Transfer(pipe);
+	for (int32 i = 0; i < kSlots; i++) {
+		if (transfers[i] == NULL) {
+			slot = i;
+			break;
+		}
+	}
+	if (slot < 0)
+		return B_BUSY;
+
+	Transfer *transfer = new(transferBuffers[slot]) Transfer(pipe);
 	transfer->SetData(data, dataLength);
 	transfer->SetRequestData(requestData);
 
 	status_t error = bus->StartDebugTransfer(transfer);
-	if (error != B_OK) {
-		transfer = NULL;
+	if (error != B_OK)
 		return error;
-	}
 
+	transfers[slot] = transfer;
+	pipes[slot] = pipe;
 	return B_DEV_PENDING;
 }
 
