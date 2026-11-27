@@ -267,6 +267,9 @@ TBarApp::SaveSettings()
 		prefs.AddBool("searchFiles", fSettings.searchFiles);
 		prefs.AddBool("showRestartInto", fSettings.showRestartInto);
 		prefs.AddBool("appRecentDocuments", fSettings.appRecentDocuments);
+		// Renga (batch 13)
+		prefs.AddBool("switcherLinuxPrograms",
+			fSettings.switcherLinuxPrograms);
 
 		prefs.Flatten(fSettingsFile);
 	}
@@ -339,6 +342,8 @@ TBarApp::InitSettings()
 	settings.searchFiles = fDefaultSettings.searchFiles = true;
 	settings.showRestartInto = fDefaultSettings.showRestartInto = true;
 	settings.appRecentDocuments = fDefaultSettings.appRecentDocuments = true;
+	settings.switcherLinuxPrograms
+		= fDefaultSettings.switcherLinuxPrograms = true;
 
 	clock_settings clock;
 	clock.showSeconds = false;
@@ -424,6 +429,9 @@ TBarApp::InitSettings()
 				fDefaultSettings.showRestartInto);
 			settings.appRecentDocuments = prefs.GetBool("appRecentDocuments",
 				fDefaultSettings.appRecentDocuments);
+			settings.switcherLinuxPrograms = prefs.GetBool(
+				"switcherLinuxPrograms",
+				fDefaultSettings.switcherLinuxPrograms);
 		}
 
 		// constrain width setting within limits
@@ -831,6 +839,7 @@ TBarApp::MessageReceived(BMessage* message)
 		case kToggleSearchFiles:
 		case kToggleRestartInto:
 		case kToggleAppRecentDocuments:
+		case kToggleSwitcherLinuxPrograms:
 		{
 			bool* setting = message->what == kToggleSearch
 				? &fSettings.showSearch
@@ -840,6 +849,8 @@ TBarApp::MessageReceived(BMessage* message)
 					? &fSettings.searchFiles
 				: message->what == kToggleRestartInto
 					? &fSettings.showRestartInto
+				: message->what == kToggleSwitcherLinuxPrograms
+					? &fSettings.switcherLinuxPrograms
 				: &fSettings.appRecentDocuments;
 			int32 value;
 			if (message->FindInt32("be:value", &value) == B_OK)
@@ -854,6 +865,8 @@ TBarApp::MessageReceived(BMessage* message)
 					fSearchWindow->Hide();
 				fSearchWindow->Unlock();
 			}
+			if (message->what == kToggleSwitcherLinuxPrograms)
+				fSwitcherMessenger.SendMessage(kSwitcherSettingChanged);
 			if (fPreferencesWindow != NULL)
 				fPreferencesWindow->PostMessage(kUpdatePreferences);
 			SaveSettings();
@@ -862,6 +875,12 @@ TBarApp::MessageReceived(BMessage* message)
 
 		case kRestartInto:
 			_RestartInto(message);
+			break;
+
+		case kTestSwitcher:
+			// harness images only: the switcher answers (its groups)
+			if (_IsHarness())
+				fSwitcherMessenger.SendMessage(DetachCurrentMessage());
 			break;
 
 		case kTestDeskbarMenu:
@@ -1040,6 +1059,33 @@ TBarApp::Unsubscribe(const BMessenger &subscriber)
 			break;
 		}
 	}
+}
+
+
+/*!	Renga (batch 13): the icon of the Wayland program with \a signature
+	(its Deskbar entry's, see _CacheTeamIcon()), for the window switcher.
+*/
+BBitmap*
+TBarApp::FetchWaylandIcon(const char* signature, int32 size)
+{
+	BAutolock autolock(sSubscriberLock);
+	if (!autolock.IsLocked() || signature == NULL)
+		return NULL;
+
+	for (int32 i = 0; i < sBarTeamInfoList.CountItems(); i++) {
+		BarTeamInfo* barInfo = (BarTeamInfo*)sBarTeamInfoList.ItemAt(i);
+		if (!barInfo->waylandClient || strcasecmp(barInfo->sig, signature))
+			continue;
+		_CacheTeamIcon(barInfo, size);
+		BBitmap* icon = barInfo->icon;
+		if (size != fSettings.iconSize) {
+			int32 index = (fSettings.iconSize - kMinimumIconSize)
+				/ kIconSizeInterval;
+			barInfo->icon = barInfo->iconCache[index];
+		}
+		return icon;
+	}
+	return NULL;
 }
 
 

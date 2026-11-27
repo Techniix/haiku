@@ -32,6 +32,14 @@
 	  clients_switch      the Renguin switch "deskbar_entries" off: the
 	                      compositor's list is empty and the entry goes;
 	                      on again: it comes back
+	  switcher_list       (batch 13) the window switcher (Ctrl+Tab) has a
+	                      group of its own for this program, with its icon
+	                      and exactly the test window (harness hook
+	                      kTestSwitcher)
+	  switcher_activate   switching to that group brings that window, not
+	                      another of the compositor's, to the front
+	  switcher_switch     the Deskbar setting "Window switcher lists Linux
+	                      programs" off: the group goes; on again: it is back
 	  clipboard_to_native a wl_data_source set as the selection lands in the
 	                      system clipboard as text/plain
 	  clipboard_from_native text put on the system clipboard reaches the
@@ -64,6 +72,7 @@
 #include <Application.h>
 #include <Bitmap.h>
 #include <Clipboard.h>
+#include <Control.h>
 #include <Entry.h>
 #include <FindDirectory.h>
 #include <Path.h>
@@ -506,6 +515,116 @@ push_clients()
 }
 
 
+// #pragma mark - window switcher (batch 13)
+
+
+static const uint32 kTestSwitcher = 'Twsw';
+static const uint32 kToggleSwitcherLinuxPrograms = 'DStW';
+	// the Deskbar's harness hook and setting (src/apps/deskbar/BarApp.h)
+
+
+/*!	The switcher's group with kClientSignature: its windows, one string.
+	Waits up to \a seconds for it to be \a present.
+*/
+static bool
+switcher_group(const char* deskbar, bool present, int seconds,
+	BString& windows, int32& count, bool& wayland, bool& icon)
+{
+	BMessenger messenger(deskbar);
+	for (int attempt = 0; attempt < seconds * 4; attempt++) {
+		BMessage request(kTestSwitcher);
+		BMessage reply;
+		windows = "";
+		count = 0;
+		bool found = false;
+		if (messenger.SendMessage(&request, &reply, 2000000, 2000000) == B_OK
+			&& reply.what == B_REPLY) {
+			BMessage group;
+			for (int32 i = 0; reply.FindMessage("group", i, &group) == B_OK;
+					i++) {
+				if (strcasecmp(group.GetString("sig", ""), kClientSignature)
+						!= 0)
+					continue;
+				found = true;
+				wayland = group.GetBool("wayland", false);
+				icon = group.GetBool("icon", false);
+				const char* window;
+				for (int32 j = 0; group.FindString("window", j, &window)
+						== B_OK; j++) {
+					windows << (j > 0 ? ", " : "") << window;
+					count++;
+				}
+			}
+		}
+		if (found == present)
+			return true;
+		snooze(250000);
+	}
+	return false;
+}
+
+
+static void
+set_switcher_setting(const char* deskbar, bool on)
+{
+	BMessage toggle(kToggleSwitcherLinuxPrograms);
+	toggle.AddInt32("be:value", on ? B_CONTROL_ON : B_CONTROL_OFF);
+	BMessenger(deskbar).SendMessage(&toggle);
+}
+
+
+static void
+switcher_test(const char* deskbar, team_id compositor, int32 clientToken)
+{
+	BString windows;
+	int32 count = 0;
+	bool wayland = false;
+	bool icon = false;
+	bool listed = switcher_group(deskbar, true, 10, windows, count, wayland,
+		icon);
+	report("switcher_list", listed && wayland && icon && count == 1
+			&& windows == "Renga Wayland test",
+		"switcher group %s (wayland %d, icon %d); its windows (%d): %s",
+		listed ? "found" : "not found in 10 s", (int)wayland, (int)icon,
+		(int)count, windows.String());
+
+	BMessage request(kTestSwitcher);
+	request.AddString("activate", kClientSignature);
+	BMessage reply;
+	BMessenger(deskbar).SendMessage(&request, &reply, 5000000, 5000000);
+	int32 activated = reply.GetInt32("client_token", -1);
+	// the frontmost window of the compositor's team afterwards
+	snooze(500000);
+	int32 front = -1;
+	int32 tokenCount = 0;
+	int32* tokens = get_token_list(-1, &tokenCount);
+	for (int32 i = 0; tokens != NULL && i < tokenCount && front < 0; i++) {
+		client_window_info* info = get_window_info(tokens[i]);
+		if (info != NULL && info->team == compositor
+			&& !info->is_mini && info->show_hide_level <= 0)
+			front = info->client_token;
+		free(info);
+	}
+	free(tokens);
+	report("switcher_activate", reply.GetBool("activated", false)
+			&& activated == clientToken && front == clientToken,
+		"switched to the window with client token %d (this program's: %d, "
+		"activated %d); the compositor's front window now %d",
+		(int)activated, (int)clientToken,
+		(int)reply.GetBool("activated", false), (int)front);
+
+	set_switcher_setting(deskbar, false);
+	bool gone = switcher_group(deskbar, false, 10, windows, count, wayland,
+		icon);
+	set_switcher_setting(deskbar, true);
+	bool back = switcher_group(deskbar, true, 10, windows, count, wayland,
+		icon);
+	report("switcher_switch", gone && back && count == 1,
+		"setting off: group %s; on again: %s", gone ? "gone" : "still there",
+		back ? "back" : "not back in 10 s");
+}
+
+
 static void
 clients_test(Client& client)
 {
@@ -621,6 +740,8 @@ clients_test(Client& client)
 		"again: entry %s", gone ? "gone" : "still there",
 		offFound ? "yes" : "no", (int)offEnabled,
 		back ? "back" : "not back in 10 s");
+
+	switcher_test(kDeskbarSignature, compositor, token);
 
 	if (startedDeskbar) {
 		BMessenger(kDeskbarSignature).SendMessage(B_QUIT_REQUESTED);
