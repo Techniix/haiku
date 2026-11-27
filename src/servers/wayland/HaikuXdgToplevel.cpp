@@ -23,6 +23,9 @@
 
 static void Assert(bool cond) {if (!cond) abort();}
 
+// Renga harness: set by WaylandServer's 'RgTz' (harness images only)
+bool gRengaTestResizeAfterDestroy = false;
+
 
 class WaylandWindow: public BWindow {
 private:
@@ -89,6 +92,14 @@ void WaylandWindow::WorkspacesChanged(uint32 oldWorkspace, uint32 newWorkspace)
 void WaylandWindow::FrameResized(float newWidth, float newHeight)
 {
 	WaylandEnv vlEnv(this);
+
+	// Renga (batch 14, hardware report): a resize app_server queued before
+	// the client destroyed its xdg_toplevel arrives after
+	// ~HaikuXdgToplevel() cleared fToplevel (the window only quits once
+	// the B_QUIT_REQUESTED posted then is handled); the compositor
+	// crashed here, taking every Linux window with it
+	if (fToplevel == NULL)
+		return;
 
 	if (fToplevel->fSizeChanged) {
 		fToplevel->fSizeChanged = false;
@@ -417,6 +428,16 @@ HaikuXdgToplevel::~HaikuXdgToplevel()
 
 	if (fWindow != NULL) {
 		fWindow->fToplevel = NULL;
+		if (gRengaTestResizeAfterDestroy) {
+			// harness (wayland_test toplevel_gone_resize): the resize
+			// app_server may have queued before this destruction
+			gRengaTestResizeAfterDestroy = false;
+			BMessage resized(B_WINDOW_RESIZED);
+			resized.AddInt32("width", 619);
+			resized.AddInt32("height", 619);
+			resized.AddInt64("when", system_time());
+			fWindow->PostMessage(&resized);
+		}
 		fWindow->PostMessage(B_QUIT_REQUESTED);
 		//fWindow->Lock();
 		//fWindow->Quit();

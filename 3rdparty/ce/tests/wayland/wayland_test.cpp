@@ -38,6 +38,9 @@
 	                      kTestSwitcher)
 	  switcher_activate   switching to that group brings that window, not
 	                      another of the compositor's, to the front
+	  toplevel_gone_resize (batch 14) a resize queued for a window whose
+	                      xdg_toplevel the client destroyed does not crash
+	                      the compositor
 	  switcher_switch     the Deskbar setting "Window switcher lists Linux
 	                      programs" off: the group goes; on again: it is back
 	  clipboard_to_native a wl_data_source set as the selection lands in the
@@ -436,6 +439,78 @@ window_test(Client& client)
 		"the screen", client.configureSerial, (int)found,
 		(int)(kWidth * kHeight));
 	// The window stays until the client disconnects.
+}
+
+
+// #pragma mark - toplevel gone, resize queued (batch 14)
+
+
+/*!	wayland.toplevel_gone_resize: a second window whose xdg_toplevel the
+	client destroys while a resize is still queued for its BWindow (the
+	compositor's harness hook 'RgTz' posts one right then). The compositor
+	crashed in WaylandWindow::FrameResized() on the old code (a hardware
+	report with Linux Chromium); it must keep running, the same team, and
+	still answer.
+*/
+static bool compositor_client(BMessage& list, BMessage& entry);
+
+
+static void
+toplevel_gone_test(Client& client)
+{
+	BMessenger compositor(kCompositorSignature);
+	team_id before = be_roster->TeamFor(kCompositorSignature);
+	BMessage arm('RgTz');
+	BMessage armed;
+	compositor.SendMessage(&arm, &armed, 5000000, 5000000);
+
+	const int32 kSide = 64;
+	size_t size = kSide * kSide * 4;
+	int fd = memfd_create("wayland-gone", MFD_CLOEXEC);
+	if (fd < 0 || ftruncate(fd, size) != 0) {
+		report("toplevel_gone_resize", false, "memfd: %s", strerror(errno));
+		return;
+	}
+	wl_shm_pool* pool = wl_shm_create_pool(client.shm, fd, size);
+	wl_buffer* buffer = wl_shm_pool_create_buffer(pool, 0, kSide, kSide,
+		kSide * 4, WL_SHM_FORMAT_XRGB8888);
+	wl_surface* surface = wl_compositor_create_surface(client.compositor);
+	xdg_surface* xdgSurface = xdg_wm_base_get_xdg_surface(client.wmBase,
+		surface);
+	client.configured = false;
+	xdg_surface_add_listener(xdgSurface, &kXdgSurfaceListener, &client);
+	xdg_toplevel* toplevel = xdg_surface_get_toplevel(xdgSurface);
+	xdg_toplevel_add_listener(toplevel, &kToplevelListener, &client);
+	xdg_toplevel_set_title(toplevel, "Renga Wayland gone");
+	wl_surface_commit(surface);
+	dispatch_until(client, 10000000, &client.configured);
+	xdg_surface_ack_configure(xdgSurface, client.configureSerial);
+	wl_surface_attach(surface, buffer, 0, 0);
+	wl_surface_commit(surface);
+	wl_display_roundtrip(client.display);
+	snooze(500000);
+
+	// Chromium's order: the toplevel goes first
+	xdg_toplevel_destroy(toplevel);
+	wl_display_roundtrip(client.display);
+	snooze(2000000);
+	xdg_surface_destroy(xdgSurface);
+	wl_surface_destroy(surface);
+	wl_buffer_destroy(buffer);
+	wl_shm_pool_destroy(pool);
+	close(fd);
+	wl_display_roundtrip(client.display);
+	snooze(1000000);
+
+	team_id after = be_roster->TeamFor(kCompositorSignature);
+	BMessage list;
+	BMessage entry;
+	bool answers = compositor_client(list, entry);
+	report("toplevel_gone_resize", armed.GetBool("armed", false)
+			&& before >= 0 && after == before && answers,
+		"hook armed %d; compositor team %d before, %d after; still answers "
+		"%d", (int)armed.GetBool("armed", false), (int)before, (int)after,
+		(int)answers);
 }
 
 
@@ -1398,6 +1473,7 @@ main()
 
 	window_test(client);
 	clients_test(client);
+	toplevel_gone_test(client);
 	clipboard_test(client);
 	linux_client_test();
 
