@@ -36,13 +36,23 @@ enum destination_layout {
 
 
 /*!	Fills \a plan for \a layout on \a disk. \a volumeName names the new BFS
-	volume. Returns B_DEVICE_FULL when the disk (or its largest free space)
-	is smaller than kMinimumInstallSize, B_BAD_VALUE for "free" on a disk
-	without a partition table; \a why says it in words.
+	volume. Returns B_NOT_ALLOWED for the disk the running system started
+	from (before anything else), B_DEVICE_FULL when the disk (or its
+	largest free space) is smaller than kMinimumInstallSize, B_BAD_VALUE
+	for "free" on a disk without a partition table; \a why says it in
+	words. The plan's Check() applies the engine's other safety rules.
 */
 status_t make_destination_plan(const RengaDisk::DiskInfo& disk,
 	destination_layout layout, const char* volumeName,
 	RengaDisk::Plan& plan, BString& why);
+
+//!	Whether a partition on any disk has the volume name \a name.
+bool volume_name_exists(const char* name);
+//!	\a wanted, or "<wanted> 2", "<wanted> 3", ...: a volume name no
+//!	partition has yet. The installation medium's own volume is "Renga",
+//!	and "Installer --unattended --target <name>" needs the new volume's
+//!	name to be unique.
+BString unique_volume_name(const char* wanted);
 
 //!	"erase" or "free"; false for anything else.
 bool destination_layout_for_name(const char* name,

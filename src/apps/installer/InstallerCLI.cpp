@@ -213,14 +213,16 @@ static int usage();
 	with --apply it checks and applies it (the engine's rules: never the
 	boot disk, nothing mounted, disk images only) and prints the new
 	volume's partition as "volume: <name>", ready for --unattended
-	--target <name>.
+	--target <name>. Without --name the volume is "Renga", or "Renga 2"
+	and so on when a volume of that name exists (the installation medium's
+	own); a --name another volume has is refused.
 */
 static int
 plan_disk(int argc, char** argv)
 {
 	const char* disk = NULL;
 	const char* layoutName = NULL;
-	const char* name = "Renga";
+	const char* name = NULL;
 	bool apply = false;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--plan-disk") == 0 && i + 1 < argc)
@@ -244,9 +246,20 @@ plan_disk(int argc, char** argv)
 		fprintf(stderr, "Installer: no disk %s\n", disk);
 		return 1;
 	}
+	// the new volume's name must be unique, or --target cannot find it
+	BString volumeName;
+	if (name == NULL)
+		volumeName = unique_volume_name("Renga");
+	else if (volume_name_exists(name)) {
+		fprintf(stderr, "Installer: a volume named \"%s\" exists already; "
+			"choose another --name\n", name);
+		return 1;
+	} else
+		volumeName = name;
 	RengaDisk::Plan plan(info.path.String());
 	BString why;
-	if (make_destination_plan(info, layout, name, plan, why) != B_OK) {
+	if (make_destination_plan(info, layout, volumeName.String(), plan, why)
+			!= B_OK) {
 		fprintf(stderr, "Installer: %s\n", why.String());
 		return 1;
 	}
@@ -277,7 +290,7 @@ plan_disk(int argc, char** argv)
 			strerror(status));
 		return 1;
 	}
-	printf("volume: %s\n", name);
+	printf("volume: %s\n", volumeName.String());
 	return 0;
 }
 

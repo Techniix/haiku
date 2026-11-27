@@ -305,6 +305,16 @@ SCRATCH_DISKS = [
 # working trims all 8 MiB would.
 SCRATCH_ALLOCATED_RANGE = (4 * 1024 * 1024, 6 * 1024 * 1024)
 
+# A blank disk for installer_destination_test (batch 14, F-23): a sparse
+# file attached as one more virtio disk, after the scratch disks above. The
+# guest puts BFS on it and its 4 GiB disk image files there, since the disk
+# engine and the Installer write only to image files and the boot volume
+# has no room for them; the marker in its first block is how the test
+# recognises it (it never formats a disk without it). Removed after the
+# boot.
+SPARE_DISK = ("spare", 16 * 1024 * 1024 * 1024,
+	b"CE-SPARE-DISK installer_destination\n")
+
 # --two-installs: BFS volume name of the second install attached in front of
 # the test image.
 DECOY_VOLUME_NAME = "Decoy"
@@ -3276,6 +3286,15 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 				"discard=unmap" % (path, name),
 			"-device", "virtio-blk-pci,drive=%s,%s" % (name, properties),
 		]
+	spare = os.path.join(results_dir, SPARE_DISK[0] + ".img")
+	with open(spare, "wb") as disk:
+		disk.truncate(SPARE_DISK[1])
+		disk.write(SPARE_DISK[2])
+	qemu += [
+		"-drive", "file=%s,if=none,id=%s,format=raw,snapshot=off,"
+			"discard=unmap" % (spare, SPARE_DISK[0]),
+		"-device", "virtio-blk-pci,drive=%s" % SPARE_DISK[0],
+	]
 	if "usb" in args.pointer_devices:
 		qemu += ["-device", "%s,id=ptrusb" % USB_CONTROLLERS[args.usb_controller]]
 	if kdl_usb_keyboards_wanted(args):
@@ -3431,8 +3450,9 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 	bootReport["capture_feed"] = {
 		"most_read_seconds": round(feeder.most_read / (CAPTURE_RATE * 4), 1),
 		"tones_written": feeder.changes, "error": feeder.error}
-	for copy in (decoy, patched):
-		# Full copies of the image, only needed while the guest runs.
+	for copy in (decoy, patched, spare):
+		# Full copies of the image, only needed while the guest runs (the
+		# spare disk too: up to a full installation's worth)
 		if copy is not None:
 			os.remove(copy)
 	bootReport["screenshots"] = convert_screenshots(shots

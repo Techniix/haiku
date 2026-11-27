@@ -464,6 +464,18 @@ Plan::Plan(const char* devicePath)
 
 
 static BString
+partition_name(int32 index)
+{
+	BString text;
+	if (index == kNewPartition)
+		text = "the new partition";
+	else
+		text.SetToFormat("partition %" B_PRId32, index);
+	return text;
+}
+
+
+static BString
 describe(const Operation& operation)
 {
 	BString text;
@@ -485,13 +497,15 @@ describe(const Operation& operation)
 				"lost)", operation.index);
 			break;
 		case kFormat:
-			text.SetToFormat("format partition %" B_PRId32 " as %s named "
-				"\"%s\" (its data is lost)", operation.index,
-				DiskSystemName(operation.system), operation.name.String());
+			text.SetToFormat("format %s as %s named \"%s\"%s",
+				partition_name(operation.index).String(),
+				DiskSystemName(operation.system), operation.name.String(),
+				operation.index == kNewPartition ? "" : " (its data is lost)");
 			break;
 		case kSetName:
-			text.SetToFormat("name partition %" B_PRId32 " \"%s\"",
-				operation.index, operation.name.String());
+			text.SetToFormat("name %s \"%s\"",
+				partition_name(operation.index).String(),
+				operation.name.String());
 			break;
 	}
 	return text;
@@ -531,6 +545,7 @@ Plan::Check(BString& why) const
 			mounted.push_back(partition.mounted);
 	}
 	bool hasTable = disk.partitioning.Length() > 0;
+	bool created = false;
 	for (size_t i = 0; i < fOperations.size(); i++) {
 		const Operation& operation = fOperations[i];
 		BString step;
@@ -564,10 +579,19 @@ Plan::Check(BString& why) const
 					return B_BAD_VALUE;
 				}
 				mounted.push_back(false);
+				created = true;
 				break;
 			case kDeletePartition:
 			case kFormat:
 			case kSetName:
+				if (operation.index == kNewPartition) {
+					// a partition this plan makes is never mounted
+					if (!created || operation.kind == kDeletePartition) {
+						why = step << "no new partition before this step";
+						return B_BAD_INDEX;
+					}
+					break;
+				}
 				if (operation.index < 0
 					|| operation.index >= (int32)mounted.size()) {
 					why = step << "no such partition";
@@ -654,7 +678,8 @@ child_type(BPartition* parent, const BString& wanted)
 
 
 static status_t
-apply_one(BDiskDevice& device, const Operation& operation, BString& detail)
+apply_one(BDiskDevice& device, const Operation& operation, BString& detail,
+	off_t& createdOffset)
 {
 	status_t status = device.PrepareModifications();
 	if (status != B_OK) {
@@ -712,6 +737,7 @@ apply_one(BDiskDevice& device, const Operation& operation, BString& detail)
 			if (status == B_OK) {
 				status = device.CreateChild(start, size, type.String(),
 					name.String(), "");
+				createdOffset = start;
 				detail.SetToFormat("at %" B_PRIdOFF ", %s, type %s", start,
 					SizeString(size).String(), type.String());
 			}
@@ -811,12 +837,36 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 		fprintf(journal, "disk %s\ntable %s\n", disk.path.String(),
 			backupPath.String());
 
+	off_t createdOffset = -1;
 	for (size_t i = 0; i < fOperations.size(); i++) {
 		BDiskDevice device;
 		status = get_device(disk.path.String(), device);
 		BString detail;
-		if (status == B_OK)
-			status = apply_one(device, fOperations[i], detail);
+		Operation operation = fOperations[i];
+		if (status == B_OK && operation.index == kNewPartition) {
+			// the partition the latest create step made, by its offset
+			operation.index = -1;
+			for (int32 c = 0; c < device.CountChildren(); c++) {
+				if (createdOffset >= 0
+					&& device.ChildAt(c)->Offset() == createdOffset)
+					operation.index = device.ChildAt(c)->Index();
+			}
+			if (operation.index < 0) {
+				detail = "the new partition is not there";
+				status = B_BAD_INDEX;
+			} else
+				detail.SetToFormat("partition %" B_PRId32, operation.index);
+		}
+		off_t offset = -1;
+		if (status == B_OK) {
+			BString stepDetail;
+			status = apply_one(device, operation, stepDetail, offset);
+			if (detail.Length() > 0 && stepDetail.Length() > 0)
+				detail << ", ";
+			detail << stepDetail;
+		}
+		if (status == B_OK && operation.kind == kCreatePartition)
+			createdOffset = offset;
 		BString line;
 		line.SetToFormat("step %d: %s: %s%s%s\n", (int)i + 1,
 			describe(fOperations[i]).String(),

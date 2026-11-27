@@ -105,9 +105,18 @@ enum OperationKind {
 };
 
 
+//!	Operation::index of a kFormat or kSetName step: the partition the
+//!	plan's latest kCreatePartition step made. Its index is only known once
+//!	it exists (a GUID partition table puts a new partition into its first
+//!	free entry, which can be before the partitions there), so Apply()
+//!	finds it by its offset.
+static const int32 kNewPartition = -2;
+
+
 struct Operation {
 	OperationKind	kind;
-	int32			index;		// partition index; -1 for the disk
+	int32			index;		// partition index; -1 for the disk;
+								// kNewPartition
 	BString			system;
 	off_t			size;
 	BString			name;
