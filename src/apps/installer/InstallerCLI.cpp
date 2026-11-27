@@ -39,7 +39,11 @@
 #include <Looper.h>
 #include <Messenger.h>
 #include <Partition.h>
+#include <Directory.h>
+#include <FindDirectory.h>
 #include <Path.h>
+
+#include "DestinationPlan.h"
 
 #include "InstallationInfo.h"
 #include "InstallerDefs.h"
@@ -200,6 +204,97 @@ find_partition(BDiskDeviceRoster& roster, const char* spec)
 }
 
 
+static int usage();
+
+
+/*!	Renga (batch 13, F-23): "--plan-disk <raw device> --layout erase|free
+	[--name <volume name>] [--apply]": the wizard's Destination step on the
+	command line. Prints the shared disk engine's preview of the layout;
+	with --apply it checks and applies it (the engine's rules: never the
+	boot disk, nothing mounted, disk images only) and prints the new
+	volume's partition as "volume: <name>", ready for --unattended
+	--target <name>. Without --name the volume is "Renga", or "Renga 2"
+	and so on when a volume of that name exists (the installation medium's
+	own); a --name another volume has is refused.
+*/
+static int
+plan_disk(int argc, char** argv)
+{
+	const char* disk = NULL;
+	const char* layoutName = NULL;
+	const char* name = NULL;
+	bool apply = false;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--plan-disk") == 0 && i + 1 < argc)
+			disk = argv[++i];
+		else if (strcmp(argv[i], "--layout") == 0 && i + 1 < argc)
+			layoutName = argv[++i];
+		else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc)
+			name = argv[++i];
+		else if (strcmp(argv[i], "--apply") == 0)
+			apply = true;
+		else
+			return usage();
+	}
+	destination_layout layout;
+	if (disk == NULL || layoutName == NULL
+		|| !destination_layout_for_name(layoutName, layout)) {
+		return usage();
+	}
+	RengaDisk::DiskInfo info;
+	if (RengaDisk::GetDisk(disk, info) != B_OK) {
+		fprintf(stderr, "Installer: no disk %s\n", disk);
+		return 1;
+	}
+	// the new volume's name must be unique, or --target cannot find it
+	BString volumeName;
+	if (name == NULL)
+		volumeName = unique_volume_name("Renga");
+	else if (volume_name_exists(name)) {
+		fprintf(stderr, "Installer: a volume named \"%s\" exists already; "
+			"choose another --name\n", name);
+		return 1;
+	} else
+		volumeName = name;
+	RengaDisk::Plan plan(info.path.String());
+	BString why;
+	if (make_destination_plan(info, layout, volumeName.String(), plan, why)
+			!= B_OK) {
+		fprintf(stderr, "Installer: %s\n", why.String());
+		return 1;
+	}
+	printf("%s\n", plan.Preview().String());
+	if (!apply)
+		return 0;
+	if (plan.Check(why) != B_OK) {
+		fprintf(stderr, "Installer: refused: %s\n", why.String());
+		return 1;
+	}
+	BPath backups;
+	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &backups,
+		true);
+	if (status == B_OK)
+		status = backups.Append("Renga/disk-backups");
+	if (status == B_OK)
+		status = create_directory(backups.Path(), 0700);
+	if (status != B_OK) {
+		fprintf(stderr, "Installer: no backup folder: %s\n",
+			strerror(status));
+		return 1;
+	}
+	BString log;
+	status = plan.Apply(backups.Path(), log);
+	printf("%s\n", log.String());
+	if (status != B_OK) {
+		fprintf(stderr, "Installer: applying failed: %s\n",
+			strerror(status));
+		return 1;
+	}
+	printf("volume: %s\n", volumeName.String());
+	return 0;
+}
+
+
 static int
 usage()
 {
@@ -209,6 +304,8 @@ usage()
 		"           [--source <mount point>] [--mode upgrade|replace|erase]\n"
 		"           [--confirm-erase <volume name>] [--rename-volume yes|no]\n"
 		"           [--lean yes|no]\n"
+		"       Installer --plan-disk <raw device> --layout erase|free\n"
+		"           [--name <volume name>] [--apply]\n"
 		"       Installer [--target <volume name> [--begin]]   (the window)\n");
 	return 2;
 }
@@ -234,6 +331,9 @@ installer_command_line(int argc, char** argv)
 		roster.VisitEachPartition(&lister, &device, &partition);
 		return 0;
 	}
+
+	if (strcmp(argv[1], "--plan-disk") == 0)
+		return plan_disk(argc, argv);
 
 	if (strcmp(argv[1], "--unattended") != 0) {
 		if (strcmp(argv[1], "--target") == 0 && (argc == 3

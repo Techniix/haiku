@@ -26,3 +26,19 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests-media
 		: installer_ui_test ;
 }
+
+# The Destination layouts planned for the Installer's wizard, on the shared
+# disk engine (batch 14, F-23), through the command line only so far:
+# "Installer --plan-disk" on disk image files on the harness's spare disk
+# (ce-test.py SPARE_DISK; erase, free, refusals), then an installation
+# onto the new volume.
+UsePrivateHeaders diskengine ;
+Application installer_destination_test :
+	installer_destination_test.cpp
+	: be libdiskengine.a [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: installer_destination_test ;
+}

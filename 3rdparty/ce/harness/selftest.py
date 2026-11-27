@@ -20,6 +20,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import types
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -485,6 +486,71 @@ for words, allowed in [
 			"allowed" if allowed else "refused"),
 		ce_test.host_request_allowed(words) == allowed)
 
+
+# The spare disk (installer_destination_test): only on the test image's own
+# boot of a run that selects the test (or a full run), never in the modes
+# that boot other disks; a file system without sparse files is refused.
+def spare_args(**changes):
+	values = dict(only="", two_installs=False, other_systems=False,
+		installer_upgrade=False, restore_points=False, loader_writes=False)
+	values.update(changes)
+	return types.SimpleNamespace(**values)
+
+
+for name, args, keywords, wanted in [
+		("a full run", spare_args(), {}, True),
+		("--only installer_destination",
+			spare_args(only="installer_destination"), {}, True),
+		("--only installer_destination_test,epoll",
+			spare_args(only="installer_destination_test,epoll"), {}, True),
+		("--only epoll", spare_args(only="epoll"), {}, False),
+		# the shape main() leaves: --only parsed into program names and an
+		# empty resume selection (the first version read only text)
+		("--only parsed, with the test", spare_args(
+			only=["installer_destination_test", "installer_test"],
+			resume_selection=[]), {}, True),
+		("--only parsed, without the test", spare_args(
+			only=["installer_test"], resume_selection=[]), {}, False),
+		("a full run as main() leaves it",
+			spare_args(only=[], resume_selection=[]), {}, True),
+		("--only installer (installer_test only)",
+			spare_args(only="installer"), {}, False),
+		("a resumed run without the test",
+			spare_args(resume_selection=["epoll_test"]), {}, False),
+		("a resumed run with the test", spare_args(
+			resume_selection=["installer_destination_test"]), {}, True),
+		("--two-installs", spare_args(two_installs=True), {}, False),
+		("--other-systems", spare_args(other_systems=True), {}, False),
+		("--installer-upgrade", spare_args(installer_upgrade=True), {},
+			False),
+		("--restore-points", spare_args(restore_points=True), {}, False),
+		("--loader-writes", spare_args(loader_writes=True), {}, False),
+		("a tagged further boot", spare_args(), {"tag": "upgraded"}, False),
+		("a persistent boot", spare_args(), {"persist": True}, False),
+		("another disk booted as it is", spare_args(),
+			{"plain_image": True}, False)]:
+	expect("spare disk %s for %s" % ("attached" if wanted else "left out",
+			name),
+		ce_test.spare_disk_wanted(args, **keywords) == wanted)
+
+spareDirectory = tempfile.mkdtemp()
+sparePath = os.path.join(spareDirectory, "spare.img")
+problem = ce_test.make_spare_disk(sparePath)
+with open(sparePath, "rb") if problem is None else open(os.devnull, "rb") \
+		as spareFile:
+	start = spareFile.read(len(ce_test.SPARE_DISK[2]))
+expect("spare disk: a sparse 16 GiB file with the marker", problem is None
+	and os.path.getsize(sparePath) == ce_test.SPARE_DISK[1]
+	and start == ce_test.SPARE_DISK[2], str(problem))
+if problem is None:
+	os.remove(sparePath)
+# known bad: more allocated than allowed (a file system without sparse
+# files) is refused, and no file is left behind
+problem = ce_test.make_spare_disk(sparePath, max_allocated=0)
+expect("spare disk: refused when the file is not sparse",
+	problem is not None and "sparse" in problem
+	and not os.path.exists(sparePath), str(problem))
+shutil.rmtree(spareDirectory)
 
 # The capture feed: the file must hold the requested tone everywhere (SDL
 # rereads it from the start on every PCM_PREPARE), seamlessly from one second

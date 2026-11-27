@@ -1101,7 +1101,7 @@ Each rung's programs also run in the `F-61` responsiveness suite where relevant 
 | Dependencies | `F-24` shared disk-management engine (required for the wizard, not for the early part); `F-20`/`F-22` for the Boot page |
 | Difficulty | 5 (Tier 3); user name/network/packages page 4 |
 | Risk | Medium; High for destructive paths |
-| Testing status | QEMU Tested: `--installer-upgrade` (BIOS 795/795, UEFI 793/793, full runs): upgrade, replace and erase on copies of the image made to look like an older stock Haiku, then the upgraded disk and its old state booted; `installer_ui_test` (renga-raw); selftest cases. Needs hardware: the maintainer's Haiku partition (`REAL-HARDWARE-TEST.md`) |
+| Testing status | QEMU Tested: `--installer-upgrade` (BIOS 795/795, UEFI 793/793, full runs): upgrade, replace and erase on copies of the image made to look like an older stock Haiku, then the upgraded disk and its old state booted; `installer_ui_test` (renga-raw); selftest cases; Destination layouts for the wizard, command line only so far (`Installer --plan-disk`, erase/free on the disk engine, then an install onto the new volume): `installer_destination_test` (batch 14). Needs hardware: the maintainer's Haiku partition (`REAL-HARDWARE-TEST.md`) |
 | Next milestone | Hardware Tested (the maintainer's upgrade); then the wizard shell after the shared disk engine |
 | Recommended next action | Maintainer: back up home, then steps 5-8 of the real-hardware test |
 | Links | Audit section 7 |
