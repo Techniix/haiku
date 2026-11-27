@@ -79,6 +79,7 @@ private:
 			BCheckBox*		fMenuSearchFiles;
 			BCheckBox*		fMenuRestartInto;
 			BCheckBox*		fAppsRecentDocuments;
+			BCheckBox*		fAppsSwitcherLinux;
 
 			BCheckBox*		fAppsSort;
 			BCheckBox*		fAppsSortTrackerFirst;

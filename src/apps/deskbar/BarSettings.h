@@ -73,6 +73,10 @@ struct desk_settings {
 		// "Restart into" in the Shutdown menu (boot loader A)
 	bool appRecentDocuments;
 		// "Recent documents" in each application's window menu
+	// Renga (batch 13), on by default
+	bool switcherLinuxPrograms;
+		// the window switcher (Ctrl+Tab) lists running Wayland/Linux
+		// programs as applications of their own (Switcher.cpp)
 };
 
 struct clock_settings {

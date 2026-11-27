@@ -49,6 +49,7 @@ class TBox;
 class TWindowView;
 class TSwitcherWindow;
 struct client_window_info;
+struct window_info;
 
 class TSwitchManager : public BHandler {
 public:
@@ -97,6 +98,16 @@ private:
 
 			bool			_FindNextValidApp(bool forward);
 
+	// Renga (batch 13): Wayland programs (Linux programs under Renguin and
+	// native ones) as groups of their own; their windows are windows of
+	// the compositor's team (wayland_clients.h, TBarApp::WindowBelongsTo())
+			TTeamGroup*		_FindGroupOfWindow(const window_info* info,
+								int32* index);
+			TTeamGroup*		_FrontWaylandGroup(int32* index);
+			void			_AddGroup(TTeamGroup* group, bool redraw);
+			void			_ShowWaylandGroups(bool show);
+			void			_TestReply(BMessage* message);
+
 			TSwitcherWindow* fWindow;
 			sem_id			fMainMonitor;
 			bool			fBlock;
@@ -105,6 +116,9 @@ private:
 			int32			fQuickSwitchIndex;
 			int32			fQuickSwitchWindow;
 			BList			fGroupList;
+			BList			fHiddenGroups;
+				// Wayland groups while the Deskbar setting
+				// switcherLinuxPrograms is off (Renga, batch 13)
 			int32			fCurrentIndex;
 			int32			fCurrentWindow;
 			int32			fCurrentSlot;

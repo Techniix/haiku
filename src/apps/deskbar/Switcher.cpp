@@ -46,6 +46,7 @@ All rights reserved.
 #include <Debug.h>
 #include <Font.h>
 #include <LayoutUtils.h>
+#include <MessengerPrivate.h>
 #include <Mime.h>
 #include <Node.h>
 #include <NodeInfo.h>
@@ -69,7 +70,7 @@ class TTeamGroup {
 public:
 							TTeamGroup();
 							TTeamGroup(BList* teams, uint32 flags, char* name,
-								const char* signature);
+								const char* signature, bool wayland = false);
 	virtual					~TTeamGroup();
 
 			void			Draw(BView* view, BRect bounds, bool main);
@@ -82,6 +83,9 @@ public:
 								{ return fSignature; }
 			uint32			Flags() const
 								{ return fFlags; }
+			bool			IsWayland() const
+								{ return fWayland; }
+			bool			HasWindow(const window_info* info) const;
 
 			const BBitmap*	SmallIcon() const { return fSmallIcon; }
 			const BBitmap*	LargeIcon() const { return fLargeIcon; }
@@ -93,6 +97,9 @@ private:
 			uint32			fFlags;
 			char			fSignature[B_MIME_TYPE_LENGTH];
 			char*			fName;
+			bool			fWayland;
+				// Renga (batch 13): a Wayland program, whose windows are
+				// some of the compositor team's (TBarApp::WindowBelongsTo())
 
 			BBitmap*		fSmallIcon;
 			BBitmap*		fLargeIcon;
@@ -339,6 +346,7 @@ TTeamGroup::TTeamGroup()
 	fTeams(NULL),
 	fFlags(0),
 	fName(NULL),
+	fWayland(false),
 	fSmallIcon(NULL),
 	fLargeIcon(NULL)
 {
@@ -347,15 +355,30 @@ TTeamGroup::TTeamGroup()
 
 
 TTeamGroup::TTeamGroup(BList* teams, uint32 flags, char* name,
-		const char* signature)
+		const char* signature, bool wayland)
 	:
 	fTeams(teams),
 	fFlags(flags),
 	fName(name),
+	fWayland(wayland),
 	fSmallIcon(NULL),
 	fLargeIcon(NULL)
 {
 	strlcpy(fSignature, signature, sizeof(fSignature));
+}
+
+
+/*!	Whether \a info is one of this group's windows: a window of one of its
+	teams and, for a Wayland program, one the compositor lists for it (the
+	compositor's team holds every Wayland program's windows).
+*/
+bool
+TTeamGroup::HasWindow(const window_info* info) const
+{
+	if (info == NULL || fTeams == NULL
+		|| !fTeams->HasItem((void*)(addr_t)info->team))
+		return false;
+	return !fWayland || TBarApp::WindowBelongsTo(fSignature, info);
 }
 
 
@@ -391,6 +414,12 @@ status_t
 TTeamGroup::CacheTeamIcons(int32 smallIconSize, int32 largeIconSize)
 {
 	TBarApp* app = static_cast<TBarApp*>(be_app);
+	if (fWayland) {
+		// Renga (batch 13): the program's own icon, not the compositor's
+		fSmallIcon = app->FetchWaylandIcon(fSignature, smallIconSize);
+		fLargeIcon = app->FetchWaylandIcon(fSignature, largeIconSize);
+		return fLargeIcon != NULL && fSmallIcon != NULL ? B_OK : B_ERROR;
+	}
 	int32 teamCount = TeamList()->CountItems();
 	for (int32 index = 0; index < teamCount; index++) {
 		team_id team = (addr_t)TeamList()->ItemAt(index);
@@ -457,17 +486,12 @@ TSwitchManager::TSwitchManager()
 		BarTeamInfo* barTeamInfo = (BarTeamInfo*)tmpList.ItemAt(i);
 		if (!barTeamInfo)
 			break;
-		if (barTeamInfo->waylandClient) {
-			// Renga (batch 12): Wayland programs are not switched to yet
-			// (their windows are the compositor's team)
-			delete barTeamInfo;
-			continue;
-		}
-
+		// Renga (batch 13): Wayland programs are groups too
 		TTeamGroup* group = new TTeamGroup(barTeamInfo->teams,
-			barTeamInfo->flags, barTeamInfo->name, barTeamInfo->sig);
+			barTeamInfo->flags, barTeamInfo->name, barTeamInfo->sig,
+			barTeamInfo->waylandClient);
 		if (group->CacheTeamIcons(fSmallIconSize, fLargeIconSize) == B_OK)
-			fGroupList.AddItem(group);
+			_AddGroup(group, false);
 		else
 			delete group;
 
@@ -486,6 +510,149 @@ TSwitchManager::~TSwitchManager()
 		TTeamGroup* teamInfo = static_cast<TTeamGroup*>(fGroupList.ItemAt(i));
 		delete teamInfo;
 	}
+	for (int32 i = fHiddenGroups.CountItems() - 1; i >= 0; i--)
+		delete static_cast<TTeamGroup*>(fHiddenGroups.ItemAt(i));
+}
+
+
+static bool
+switcher_lists_linux_programs()
+{
+	TBarApp* app = dynamic_cast<TBarApp*>(be_app);
+	return app == NULL || app->Settings()->switcherLinuxPrograms;
+}
+
+
+/*!	Adds \a group to the switcher, or for a Wayland program while the
+	Deskbar setting "Window switcher lists Linux programs" is off, to the
+	groups kept aside until it is on again.
+*/
+void
+TSwitchManager::_AddGroup(TTeamGroup* group, bool redraw)
+{
+	if (group->IsWayland() && !switcher_lists_linux_programs()) {
+		fHiddenGroups.AddItem(group);
+		return;
+	}
+	fGroupList.AddItem(group);
+	if (redraw)
+		fWindow->Redraw(fGroupList.CountItems() - 1);
+}
+
+
+//!	The setting changed: move the Wayland groups in or out of the list.
+void
+TSwitchManager::_ShowWaylandGroups(bool show)
+{
+	if (show) {
+		while (!fHiddenGroups.IsEmpty()) {
+			fGroupList.AddItem(fHiddenGroups.RemoveItem(
+				fHiddenGroups.CountItems() - 1), 0);
+		}
+	} else {
+		for (int32 i = fGroupList.CountItems() - 1; i >= 0; i--) {
+			TTeamGroup* group = (TTeamGroup*)fGroupList.ItemAt(i);
+			if (!group->IsWayland())
+				continue;
+			fGroupList.RemoveItem(i);
+			fHiddenGroups.AddItem(group);
+		}
+	}
+	if (fCurrentIndex >= fGroupList.CountItems())
+		fCurrentIndex = 0;
+	if (fWindow->Lock()) {
+		fWindow->Redraw(0);
+		fWindow->Unlock();
+	}
+}
+
+
+/*!	The Wayland group of \a info, one of the compositor's windows; NULL for
+	any other window.
+*/
+TTeamGroup*
+TSwitchManager::_FindGroupOfWindow(const window_info* info, int32* index)
+{
+	if (info == NULL || info->team != TBarApp::CompositorTeam())
+		return NULL;
+	for (int32 i = 0; i < fGroupList.CountItems(); i++) {
+		TTeamGroup* group = (TTeamGroup*)fGroupList.ItemAt(i);
+		if (group->IsWayland() && group->HasWindow(info)) {
+			*index = i;
+			return group;
+		}
+	}
+	return NULL;
+}
+
+
+//!	The group of the frontmost window of the compositor's team, if any.
+TTeamGroup*
+TSwitchManager::_FrontWaylandGroup(int32* index)
+{
+	team_id compositor = TBarApp::CompositorTeam();
+	if (compositor < 0)
+		return NULL;
+	int32 count;
+	int32* tokens = get_token_list(-1, &count);
+	if (tokens == NULL)
+		return NULL;
+	TTeamGroup* result = NULL;
+	for (int32 i = 0; i < count && result == NULL; i++) {
+		client_window_info* info = get_window_info(tokens[i]);
+		if (info == NULL)
+			continue;
+		if (info->team == compositor && IsWindowOK(info))
+			result = _FindGroupOfWindow(info, index);
+		free(info);
+	}
+	free(tokens);
+	return result;
+}
+
+
+/*!	Harness images only (kTestSwitcher, via TBarApp): the switcher's groups
+	with their windows, as it shows them; with "activate" (a signature) it
+	selects that group and switches to it as releasing the keys does, and
+	replies with the window it brought to the front.
+*/
+void
+TSwitchManager::_TestReply(BMessage* message)
+{
+	BMessage reply(B_REPLY);
+	const char* activate = message->GetString("activate", NULL);
+	for (int32 i = 0; i < fGroupList.CountItems(); i++) {
+		TTeamGroup* group = (TTeamGroup*)fGroupList.ItemAt(i);
+		if (activate != NULL) {
+			if (strcasecmp(group->Signature(), activate) != 0)
+				continue;
+			fCurrentIndex = i;
+			fCurrentWindow = 0;
+			client_window_info* info = WindowInfo(i, 0);
+			reply.AddInt32("token", info != NULL ? info->server_token : -1);
+			reply.AddInt32("client_token",
+				info != NULL ? info->client_token : -1);
+			free(info);
+			reply.AddBool("activated", ActivateApp(true, true));
+			break;
+		}
+		BMessage entry;
+		entry.AddString("name", group->Name());
+		entry.AddString("sig", group->Signature());
+		entry.AddBool("wayland", group->IsWayland());
+		entry.AddBool("icon", group->LargeIcon() != NULL);
+		int32 count = CountWindows(i);
+		for (int32 j = 0; j < count; j++) {
+			client_window_info* info = WindowInfo(i, j);
+			if (info == NULL)
+				continue;
+			entry.AddString("window", info->name);
+			free(info);
+		}
+		reply.AddMessage("group", &entry);
+	}
+	reply.AddInt32("hidden", fHiddenGroups.CountItems());
+	message->SendReply(&reply);
 }
 
 
@@ -500,9 +667,25 @@ TSwitchManager::MessageReceived(BMessage* message)
 			int i = 0;
 			TTeamGroup* tinfo;
 			message->FindInt32("team", &teamID);
+			// Renga (batch 13): a Wayland program's entry going names its
+			// signature; its team (the compositor's) is every such group's
+			const char* signature = message->GetString("sig", NULL);
+			bool wayland = signature != NULL
+				&& teamID == TBarApp::CompositorTeam();
+			for (int32 j = fHiddenGroups.CountItems() - 1; wayland && j >= 0;
+					j--) {
+				TTeamGroup* hidden = (TTeamGroup*)fHiddenGroups.ItemAt(j);
+				if (strcasecmp(hidden->Signature(), signature) == 0) {
+					fHiddenGroups.RemoveItem(j);
+					delete hidden;
+				}
+			}
 
 			while ((tinfo = (TTeamGroup*)fGroupList.ItemAt(i)) != NULL) {
-				if (tinfo->TeamList()->HasItem((void*)(addr_t)teamID)) {
+				if (tinfo->TeamList()->HasItem((void*)(addr_t)teamID)
+					&& tinfo->IsWayland() == wayland
+					&& (!wayland
+						|| strcasecmp(tinfo->Signature(), signature) == 0)) {
 					fGroupList.RemoveItem(i);
 
 					fWindow->Redraw(i);
@@ -536,23 +719,20 @@ TSwitchManager::MessageReceived(BMessage* message)
 
 			if (message->FindPointer("teams", (void**)&teams) != B_OK)
 				break;
-			if (message->GetBool("wayland", false)) {
-				// Renga (batch 12): not listed here yet (see above)
-				delete teams;
+			bool wayland = message->GetBool("wayland", false);
+			if (wayland) {
+				// Renga (batch 13): the icon comes from the Deskbar's entry
 				BBitmap* icon = NULL;
 				if (message->FindPointer("icon", (void**)&icon) == B_OK)
 					delete icon;
-				break;
 			}
 
 			TTeamGroup* group = new TTeamGroup(teams, flags, strdup(name),
-				signature);
-			if (group->CacheTeamIcons(fSmallIconSize, fLargeIconSize) == B_OK) {
-				fGroupList.AddItem(group);
-				fWindow->Redraw(fGroupList.CountItems() - 1);
-			} else {
+				signature, wayland);
+			if (group->CacheTeamIcons(fSmallIconSize, fLargeIconSize) == B_OK)
+				_AddGroup(group, true);
+			else
 				delete group;
-			}
 			break;
 		}
 
@@ -565,7 +745,8 @@ TSwitchManager::MessageReceived(BMessage* message)
 			for (int32 index = 0; index < teamCount; index++) {
 				TTeamGroup* group = (TTeamGroup*)fGroupList.ItemAt(index);
 				ASSERT(group);
-				if (strcasecmp(group->Signature(), signature) == 0) {
+				if (!group->IsWayland()
+					&& strcasecmp(group->Signature(), signature) == 0) {
 					if (!group->TeamList()->HasItem((void*)(addr_t)team))
 						group->TeamList()->AddItem((void*)(addr_t)team);
 					break;
@@ -581,7 +762,8 @@ TSwitchManager::MessageReceived(BMessage* message)
 			for (int32 index = 0; index < teamCount; index++) {
 				TTeamGroup* group = (TTeamGroup*)fGroupList.ItemAt(index);
 				ASSERT(group);
-				if (group->TeamList()->HasItem((void*)(addr_t)team)) {
+				if (!group->IsWayland()
+					&& group->TeamList()->HasItem((void*)(addr_t)team)) {
 					group->TeamList()->RemoveItem((void*)(addr_t)team);
 					break;
 				}
@@ -623,6 +805,15 @@ TSwitchManager::MessageReceived(BMessage* message)
 			break;
 		}
 
+		case kSwitcherSettingChanged:
+			// Renga (batch 13): "Window switcher lists Linux programs"
+			_ShowWaylandGroups(switcher_lists_linux_programs());
+			break;
+
+		case kTestSwitcher:
+			_TestReply(message);
+			break;
+
 		default:
 			break;
 	}
@@ -646,11 +837,36 @@ TSwitchManager::_SortApps()
 
 	fGroupList.MakeEmpty();
 
+	team_id compositor = TBarApp::CompositorTeam();
 	for (int32 i = 0; i < count; i++) {
+		if (compositor >= 0 && teams[i] == compositor) {
+			// Renga (batch 13): the Wayland programs share the compositor's
+			// place in the application order; among themselves they go
+			// in the order of their front windows
+			int32 tokenCount;
+			int32* tokens = get_token_list(compositor, &tokenCount);
+			for (int32 t = 0; tokens != NULL && t < tokenCount; t++) {
+				client_window_info* window = get_window_info(tokens[t]);
+				if (window == NULL)
+					continue;
+				for (int32 j = 0; j < groups.CountItems(); j++) {
+					TTeamGroup* group = (TTeamGroup*)groups.ItemAt(j);
+					if (group->IsWayland() && group->HasWindow(window)) {
+						groups.RemoveItem(j);
+						fGroupList.AddItem(group);
+						break;
+					}
+				}
+				free(window);
+			}
+			free(tokens);
+			continue;
+		}
 		// find team
 		TTeamGroup* info = NULL;
 		for (int32 j = 0; (info = (TTeamGroup*)groups.ItemAt(j)) != NULL; j++) {
-			if (info->TeamList()->HasItem((void*)(addr_t)teams[i])) {
+			if (!info->IsWayland()
+				&& info->TeamList()->HasItem((void*)(addr_t)teams[i])) {
 				groups.RemoveItem(j);
 				break;
 			}
@@ -686,7 +902,12 @@ TSwitchManager::MainEntry(BMessage* message)
 	fLastSwitch = now;
 
 	int32 index;
-	fCurrentIndex = FindTeam(appInfo.team, &index) != NULL ? index : 0;
+	if (appInfo.team == TBarApp::CompositorTeam()
+		&& _FrontWaylandGroup(&index) != NULL) {
+		// Renga (batch 13): a Linux program is active
+		fCurrentIndex = index;
+	} else
+		fCurrentIndex = FindTeam(appInfo.team, &index) != NULL ? index : 0;
 
 	if (resetQuickSwitch) {
 		fQuickSwitchIndex = fCurrentIndex;
@@ -732,7 +953,10 @@ TSwitchManager::FindTeam(team_id teamID, int32* index)
 	int i = 0;
 	TTeamGroup* info;
 	while ((info = (TTeamGroup*)fGroupList.ItemAt(i)) != NULL) {
-		if (info->TeamList()->HasItem((void*)(addr_t)teamID)) {
+		// Renga (batch 13): the compositor's team is every Wayland
+		// group's; those are found by window (_FindGroupOfWindow())
+		if (!info->IsWayland()
+			&& info->TeamList()->HasItem((void*)(addr_t)teamID)) {
 			*index = i;
 			return info;
 		}
@@ -919,7 +1143,9 @@ TSwitchManager::ActivateApp(bool forceShow, bool allowWorkspaceSwitch)
 	TTeamGroup* teamGroup = (TTeamGroup*)fGroupList.ItemAt(fCurrentIndex);
 
 	// Let's handle the easy case first: There's only 1 team in the group
-	if (teamGroup->TeamList()->CountItems() == 1) {
+	// (Renga, batch 13: not for a Wayland program: activating its team
+	// would bring every Wayland program's windows to the front)
+	if (teamGroup->TeamList()->CountItems() == 1 && !teamGroup->IsWayland()) {
 		bool result;
 		if (forceShow && (fCurrentWindow != 0 || windowInfo->is_mini)) {
 			do_window_action(windowInfo->server_token, B_BRING_TO_FRONT,
@@ -996,8 +1222,7 @@ TSwitchManager::ActivateApp(bool forceShow, bool allowWorkspaceSwitch)
 			break;
 		}
 		if (matchWindowInfo->server_token != windowInfo->server_token
-			&& teamGroup->TeamList()->HasItem(
-				(void*)(addr_t)matchWindowInfo->team))
+			&& teamGroup->HasWindow(matchWindowInfo))
 			windowsToActivate.AddItem(
 				(void*)(addr_t)matchWindowInfo->server_token);
 
@@ -1043,6 +1268,27 @@ TSwitchManager::QuitApp()
 		CycleApp(false, false);
 	}
 
+	if (teamGroup->IsWayland()) {
+		// Renga (batch 13): close the program's windows (the compositor
+		// turns B_QUIT_REQUESTED into xdg_toplevel.close), never the
+		// compositor
+		int32 count = 0;
+		int32* tokens = TBarApp::WindowTokensFor(teamGroup->TeamList(),
+			teamGroup->Signature(), &count);
+		for (int32 i = 0; i < count; i++) {
+			client_window_info* info = get_window_info(tokens[i]);
+			if (info != NULL && IsWindowOK(info)) {
+				BMessenger window;
+				BMessenger::Private(window).SetTo(info->team,
+					info->client_port, info->client_token);
+				window.SendMessage(B_QUIT_REQUESTED);
+			}
+			free(info);
+		}
+		free(tokens);
+		return;
+	}
+
 	// send the quit request to all teams in this group
 	for (int32 i = teamGroup->TeamList()->CountItems() - 1; i >= 0; i--) {
 		team_id team = (addr_t)teamGroup->TeamList()->ItemAt(i);
@@ -1071,6 +1317,19 @@ TSwitchManager::HideApp()
 		return;
 
 	TTeamGroup* teamGroup = (TTeamGroup*)fGroupList.ItemAt(fCurrentIndex);
+
+	if (teamGroup->IsWayland()) {
+		// Renga (batch 13): only this program's windows
+		int32 count = 0;
+		int32* tokens = TBarApp::WindowTokensFor(teamGroup->TeamList(),
+			teamGroup->Signature(), &count);
+		for (int32 i = 0; i < count; i++) {
+			do_window_action(tokens[i], B_MINIMIZE_WINDOW, BRect(0, 0, 0, 0),
+				false);
+		}
+		free(tokens);
+		return;
+	}
 
 	for (int32 i = teamGroup->TeamList()->CountItems() - 1; i >= 0; i--) {
 		team_id team = (addr_t)teamGroup->TeamList()->ItemAt(i);
@@ -1105,8 +1364,7 @@ TSwitchManager::WindowInfo(int32 groupIndex, int32 windowIndex)
 		client_window_info* windowInfo = get_window_info(tokens[i]);
 		if (windowInfo) {
 			// skip hidden/special windows
-			if (IsWindowOK(windowInfo) && (teamGroup->TeamList()->HasItem(
-					(void*)(addr_t)windowInfo->team))) {
+			if (IsWindowOK(windowInfo) && teamGroup->HasWindow(windowInfo)) {
 				// this window belongs to the team!
 				if (matches == windowIndex) {
 					// we found it!
@@ -1148,7 +1406,7 @@ TSwitchManager::CountWindows(int32 groupIndex, bool )
 		for (int32 i = 0; i < count; i++) {
 			window_info	*windowInfo = get_window_info(tokens[i]);
 			if (windowInfo) {
-				if (IsWindowOK(windowInfo))
+				if (IsWindowOK(windowInfo) && teamGroup->HasWindow(windowInfo))
 					result++;
 				free(windowInfo);
 			}
@@ -1177,7 +1435,8 @@ TSwitchManager::SwitchWindow(team_id team, bool, bool activate)
 	// to the group. This is the window to activate.
 
 	int32 index;
-	TTeamGroup* teamGroup = FindTeam(team, &index);
+	TTeamGroup* teamGroup = team == TBarApp::CompositorTeam()
+		? _FrontWaylandGroup(&index) : FindTeam(team, &index);
 	if (teamGroup == NULL)
 		return;
 
@@ -1190,7 +1449,7 @@ TSwitchManager::SwitchWindow(team_id team, bool, bool activate)
 	for (int32 i = count - 1; i >= 0; i--) {
 		client_window_info* windowInfo = get_window_info(tokens[i]);
 		if (windowInfo && IsVisibleInCurrentWorkspace(windowInfo)
-			&& teamGroup->TeamList()->HasItem((void*)(addr_t)windowInfo->team)) {
+			&& teamGroup->HasWindow(windowInfo)) {
 			fWindowID = windowInfo->server_token;
 			if (activate)
 				ActivateWindow(windowInfo->server_token);

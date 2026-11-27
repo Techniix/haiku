@@ -18,6 +18,7 @@
 #include <File.h>
 #include <FormattingConventions.h>
 #include <GroupLayout.h>
+#include <GroupView.h>
 #include <LayoutBuilder.h>
 #include <ListView.h>
 #include <Locale.h>
@@ -33,6 +34,7 @@
 #include <View.h>
 
 #include <DeskbarPrivate.h>
+#include <ScreenFit.h>
 
 #include "BarApp.h"
 #include "DeskbarUtils.h"
@@ -90,6 +92,12 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	fAppsRecentDocuments = new BCheckBox("appRecentDocuments",
 		B_TRANSLATE("Recent documents in each application's menu"),
 		new BMessage(kToggleAppRecentDocuments));
+	// Renga (batch 13)
+	fAppsSwitcherLinux = new BCheckBox("switcherLinuxPrograms",
+		B_TRANSLATE("Window switcher lists Linux programs"),
+		new BMessage(kToggleSwitcherLinuxPrograms));
+	fAppsSwitcherLinux->SetToolTip(B_TRANSLATE("Running Linux and Wayland "
+		"programs appear in Ctrl+Tab as applications of their own."));
 
 	// Applications controls
 	fAppsSort = new BCheckBox(B_TRANSLATE("Sort applications by name"),
@@ -145,6 +153,7 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	fMenuSearchFiles->SetValue(fSettings.searchFiles);
 	fMenuRestartInto->SetValue(fSettings.showRestartInto);
 	fAppsRecentDocuments->SetValue(fSettings.appRecentDocuments);
+	fAppsSwitcherLinux->SetValue(fSettings.switcherLinuxPrograms);
 
 	// Applications settings
 	fAppsSort->SetValue(fSettings.sortRunningApps);
@@ -167,6 +176,7 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	fMenuSearchFiles->SetTarget(be_app);
 	fMenuRestartInto->SetTarget(be_app);
 	fAppsRecentDocuments->SetTarget(be_app);
+	fAppsSwitcherLinux->SetTarget(be_app);
 	fAppsSort->SetTarget(be_app);
 	fAppsSortTrackerFirst->SetTarget(be_app);
 	fAppsShowExpanders->SetTarget(be_app);
@@ -195,6 +205,7 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 				.End()
 			.Add(fAppsHideLabels)
 			.Add(fAppsRecentDocuments)
+			.Add(fAppsSwitcherLinux)
 			.AddGlue()
 			.Add(BSpaceLayoutItem::CreateVerticalStrut(B_USE_SMALL_SPACING))
 			.Add(fAppsIconSizeSlider)
@@ -265,15 +276,39 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 		new BMessage(kRevert));
 
 	// Layout
+	// Renga (batch 13, large-font audit): the settings scroll when the
+	// screen is smaller than they need (at 20 pt the window was 672 pixels
+	// tall and reached below a 1024x768 screen); the buttons stay visible
+	BGroupView* boxes = new BGroupView(B_HORIZONTAL, B_USE_DEFAULT_SPACING);
+	BLayoutBuilder::Group<>(boxes)
+		.Add(appsSettingsBox)
+		.AddGroup(B_VERTICAL, B_USE_SMALL_SPACING)
+			.Add(menuBox)
+			.Add(windowSettingsBox)
+		.End();
+	float inset = be_control_look->ComposeSpacing(B_USE_WINDOW_SPACING);
+	BSize limit = BPrivate::screen_content_limit();
+	limit.width -= 2 * inset;
+	limit.height -= 2 * inset
+		+ be_control_look->ComposeSpacing(B_USE_DEFAULT_SPACING)
+		+ fDefaultsButton->PreferredSize().height;
+	if (boxes->MinSize().width
+			> limit.width - be_control_look->GetScrollBarWidth(B_VERTICAL)) {
+		// too wide for the screen beside a scroll bar (large fonts): one
+		// column, which then only scrolls vertically
+		appsSettingsBox->RemoveSelf();
+		menuBox->RemoveSelf();
+		windowSettingsBox->RemoveSelf();
+		delete boxes;
+		boxes = new BGroupView(B_VERTICAL, B_USE_SMALL_SPACING);
+		BLayoutBuilder::Group<>(boxes)
+			.Add(appsSettingsBox)
+			.Add(menuBox)
+			.Add(windowSettingsBox);
+	}
 	BLayoutBuilder::Group<>(this)
 		.AddGroup(B_VERTICAL, B_USE_DEFAULT_SPACING)
-			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
-				.Add(appsSettingsBox)
-				.AddGroup(B_VERTICAL, B_USE_SMALL_SPACING)
-					.Add(menuBox)
-					.Add(windowSettingsBox)
-				.End()
-			.End()
+			.Add(BPrivate::fit_to_screen(boxes, limit))
 			.AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
 				.Add(fDefaultsButton)
 				.Add(fRevertButton)
@@ -290,6 +325,8 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 		MoveTo(where);
 	} else
 		CenterOnScreen();
+	// sized from the layout, clamped to the screen and moved fully on it
+	BPrivate::size_window_to_screen(this);
 }
 
 
@@ -409,6 +446,7 @@ PreferencesWindow::_EnableDisableDependentItems()
 		fMenuSearchFiles->SetValue(settings->searchFiles);
 		fMenuRestartInto->SetValue(settings->showRestartInto);
 		fAppsRecentDocuments->SetValue(settings->appRecentDocuments);
+		fAppsSwitcherLinux->SetValue(settings->switcherLinuxPrograms);
 	}
 	fMenuSearchCalculator->SetEnabled(fMenuSearch->Value() != B_CONTROL_OFF);
 	fMenuSearchFiles->SetEnabled(fMenuSearch->Value() != B_CONTROL_OFF);
@@ -441,7 +479,8 @@ PreferencesWindow::_IsDefaultable()
 		|| defaults->searchCalculator != settings->searchCalculator
 		|| defaults->searchFiles != settings->searchFiles
 		|| defaults->showRestartInto != settings->showRestartInto
-		|| defaults->appRecentDocuments != settings->appRecentDocuments;
+		|| defaults->appRecentDocuments != settings->appRecentDocuments
+		|| defaults->switcherLinuxPrograms != settings->switcherLinuxPrograms;
 }
 
 
@@ -470,7 +509,9 @@ PreferencesWindow::_IsRevertable()
 		|| fSettings.searchCalculator != settings->searchCalculator
 		|| fSettings.searchFiles != settings->searchFiles
 		|| fSettings.showRestartInto != settings->showRestartInto
-		|| fSettings.appRecentDocuments != settings->appRecentDocuments;
+		|| fSettings.appRecentDocuments != settings->appRecentDocuments
+		|| fSettings.switcherLinuxPrograms
+			!= settings->switcherLinuxPrograms;
 }
 
 
@@ -668,6 +709,8 @@ PreferencesWindow::_UpdatePreferences(desk_settings* settings)
 			fMenuRestartInto },
 		{ current->appRecentDocuments, settings->appRecentDocuments,
 			fAppsRecentDocuments },
+		{ current->switcherLinuxPrograms, settings->switcherLinuxPrograms,
+			fAppsSwitcherLinux },
 	};
 	for (size_t i = 0; i < sizeof(renga) / sizeof(renga[0]); i++) {
 		if (renga[i].current != renga[i].wanted) {
