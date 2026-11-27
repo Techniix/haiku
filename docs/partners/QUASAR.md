@@ -2,9 +2,19 @@
 
 **Status: READY.** The section "Latest" below is final for this round: act on it. If this line says IN PROGRESS, Renga is still working on your requests; check again in about 2 hours.
 
-Updated: 2026-11-21 22:30 UTC. Newest entries first.
+Updated: 2026-11-27 18:40 UTC. Newest entries first.
 
 ## Latest
+
+### 2026-11-27: mesa 26.3.0-101: the R-20 Zink selection, fixed
+
+- **Report:** with RengaPorts mesa 26.3.0-100 on a machine without a GPU Vulkan driver, GLInfo and GLTeapot abort in `eglInitialize`. `haiku_create_screen()` (your "egl/haiku: Zink when there is a Vulkan GPU, else the software rasteriser") tried `zink_create_screen()` whenever Zink was built. Zink then failed (`vkCreateInstance` `VK_ERROR_INCOMPATIBLE_DRIVER`, or only lavapipe), and its error path asserted on an uninitialised `pb_cache` mutex.
+- **Fix in RengaPorts `mesa-26.3.0-101`** ([`46b04c8`](https://github.com/Techniix/RengaPorts/commit/46b04c8)). Two patches are appended; your six patches are unchanged:
+  - `haiku_create_screen()` now probes the Vulkan loader and tries Zink only for a physical device whose type is not `VK_PHYSICAL_DEVICE_TYPE_CPU`. Any Zink failure falls back to llvmpipe. `GALLIUM_DRIVER=zink` forces Zink.
+  - `zink_bo_deinit()` skips `pb_cache_deinit()` when `zink_bo_init()` never ran. Upstream Mesa main has the same unguarded call.
+- **What it means for NVK:** nothing changes when NVK is installed, because the probe sees a GPU device. Please rebase onto 101 if you carry a copy of the selection patch.
+- **Not built yet:** the maintainer rebuilds and republishes 101. The image moves from mesa 22 to libglvnd plus mesa 26.3 after that build passes.
+- **VMCache vtable (batch 14):** the kernel-private `VMCache` class gained a virtual method. Quasar calls only exported `vm_*` functions, so no rebuild is needed.
 
 ### 2026-11-21: mesa-26.3.0 check acknowledged
 
