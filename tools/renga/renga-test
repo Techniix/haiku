@@ -36,7 +36,7 @@ if [ "${1:-}" = --print ]; then
 fi
 case ${1:-} in
 -h|--help) renga_usage; exit 0 ;;
-''|-*) renga_usage >&2; exit 2 ;;
+''|-*) renga_usage >&2; exit 64 ;;
 esac
 
 tests=$renga_root/3rdparty/ce/tests
@@ -71,17 +71,23 @@ log=$(mktemp "${TMPDIR:-/tmp}/renga-test.XXXXXX")
 echo "renga-test: ce-test.py --only $programs $*"
 echo "renga-test: running (log: $log); this takes a while"
 before=$(readlink -f "$RENGA_RESULTS/latest" 2>/dev/null || true)
+# A run wrote results when "latest" then has a summary.md it did not have
+# before: a new directory, or (--resume) the same one finished now.
+before_summary=no
+[ -n "$before" ] && [ -f "$before/summary.md" ] && before_summary=yes
 status=0
 python3 3rdparty/ce/harness/ce-test.py --only "$programs" "$@" > "$log" 2>&1 || status=$?
 
 latest=$(readlink -f "$RENGA_RESULTS/latest" 2>/dev/null || true)
-if [ -n "$latest" ] && [ "$latest" != "$before" ] && [ -f "$latest/summary.md" ]; then
+if [ -n "$latest" ] && [ -f "$latest/summary.md" ] \
+		&& { [ "$latest" != "$before" ] || [ $before_summary = no ]; }; then
 	mv "$log" "$latest/build-and-run.log"
 	log=$latest/build-and-run.log
 	"$RENGA_TOOLS/renga-summary" "$latest" || true
 else
 	echo "renga-test: ce-test.py wrote no new results (status $status); last lines of $log:"
 	tail -n 15 "$log"
+	rm -f "$log"
 	# Nothing ran, so nothing passed: a run without results is never
 	# "selection passed" (2), whatever ce-test.py's status said.
 	case $status in 0|2) status=1 ;; esac

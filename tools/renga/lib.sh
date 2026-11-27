@@ -13,9 +13,9 @@ renga_self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 unset GIT_DIR GIT_WORK_TREE
 renga_root=$(git -C "$(dirname "$renga_self")" rev-parse --show-toplevel 2>/dev/null) || {
 	echo "$(basename "$0"): not inside the Renga git tree" >&2
-	exit 2
+	exit 64
 }
-cd "$renga_root" || exit 2
+cd "$renga_root" || exit 64
 
 # The configured build output directory (ReadMe.Compiling.md; harness
 # default). HAIKU_OUTPUT_DIR overrides it, as for build-handover-image.
