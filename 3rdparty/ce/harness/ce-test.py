@@ -2355,7 +2355,7 @@ RUN_FILE = "run.json"
 BOOT_FILE = "boot.json"
 HOST_REQUESTS_FILE = "host-requests.jsonl"
 EXPECTED_KDL_FILE = "expected-kdl.jsonl"
-EXITED_PATTERN = re.compile(r"^CE-INFO (\S+) exited with (-?\d+)")
+EXITED_PATTERN = re.compile(r"(?:^|\s)CE-INFO (\S+) exited with (-?\d+)")
 
 
 def write_json_atomically(path, data):
@@ -2574,10 +2574,11 @@ class SerialReader(threading.Thread):
 			if self.menu_driver is not None:
 				self.menu_driver.feed(line)
 			if self.progress is not None:
-				exited = EXITED_PATTERN.match(line)
+				exited = EXITED_PATTERN.search(line)
 				if exited:
 					self.progress.test_finished(exited.group(1), self.lines)
-				elif line.startswith("CE-HARNESS END"):
+				elif line.startswith("CE-HARNESS END") \
+						or " CE-HARNESS END" in line:
 					self.progress.runner_ended(self.lines)
 			if not line.startswith("CE-HOST "):
 				continue
@@ -3466,7 +3467,11 @@ def parse_serial(results_dir, report, parts=()):
 				timed_lines.append((last + shift, match.group(2)))
 		shift += last
 	for stamp, line in timed_lines:
-		match = re.match(r"^(CE-INFO|CE-HARNESS) (.*)$", line.rstrip("\r"))
+		# The runner's lines can land in the middle of another program's
+		# (batch 13: "package_daemon: [...] CE-INFO running
+		# pointer_logic_test" on UEFI), so they count after a space too.
+		match = re.search(r"(?:^|\s)(CE-INFO|CE-HARNESS) (.*)$",
+			line.rstrip("\r"))
 		if not match:
 			continue
 		kind, rest = match.group(1), match.group(2)

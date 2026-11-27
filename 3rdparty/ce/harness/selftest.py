@@ -1420,6 +1420,31 @@ shutil.rmtree(whole)
 shutil.rmtree(resumed)
 
 
+# batch 13, UEFI sweep leg: the runner's "running" line printed in the
+# middle of package_daemon's line still counts (harness.tests_ran)
+interleaved = tempfile.mkdtemp()
+lines = ["[   1.000] CE-HARNESS START Haiku",
+	"[   2.000] package_daemon: [214100813:    60] CE-INFO running alpha_test",
+	"[   3.000] CE-INFO alpha_test exited with 0",
+	"[   4.000] CE-HARNESS END"]
+with open(os.path.join(interleaved, "serial.timed.log"), "w") as timedFile:
+	timedFile.write("\r\n".join(lines) + "\r\n")
+with open(os.path.join(interleaved, "serial.log"), "w") as serialFile:
+	serialFile.write("\r\n".join(l[11:] for l in lines) + "\r\n")
+interleaved_report = {"installed_tests": ["alpha_test"], "selected_tests": []}
+ce_test.parse_serial(interleaved, interleaved_report)
+ran = [t for t in interleaved_report["tests"]
+	if t["name"] == "harness.tests_ran"]
+expect("timing: a runner line in the middle of another program's counts",
+	ran and ran[0]["pass"], ran and ran[0]["detail"])
+progress = feed(interleaved, ("package_daemon: x CE-INFO alpha_test exited "
+	"with 0\r\nfoo CE-HARNESS END\r\n").encode())
+expect("resume: a finished program printed mid-line is recorded",
+	progress.finished() == ["alpha_test"] and progress.complete(),
+	str(progress.data))
+shutil.rmtree(interleaved)
+
+
 # The guest runner's per-program watchdog, run on the host: the function
 # between runner.sh's "watchdog" markers, with a program that hangs and
 # one that finishes.
