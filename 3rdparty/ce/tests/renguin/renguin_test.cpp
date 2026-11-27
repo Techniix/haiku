@@ -547,7 +547,8 @@ run_chromium_window(const char* name, int seconds)
 	// this is the check that says why a windowed Chromium stops
 	std::string errors = run(std::string(kRoot) + "/bin/busybox sh -c \"grep "
 		"-E 'FATAL|ERROR|Check failed|Received signal|linux-status|"
-		"error_code|exit_code|1002|zygote|Zygote' /tmp/rg-chrome-win.err "
+		"error_code|exit_code|1002|zygote|Zygote|[Nn]etwork.service|"
+		"utility' /tmp/rg-chrome-win.err "
 		"| grep -v -E 'dbus|udev|angle_platform|egl_util|gl_display' "
 		"| cut -c 1-300 | head -n 30; tail -c 600 /tmp/rg-chrome-win.err\"");
 	size_t start = 0;
