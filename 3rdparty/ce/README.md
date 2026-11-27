@@ -644,8 +644,8 @@ one entry answered with Alt+SysRq+B.
 
 Between the marker line and the next `CE-HARNESS START`, only the expected
 panic and the debugger's welcome are not kernel problems; any other panic
-there still is. `crashlog.debugger_reboots` (host) wants both entries
-answered and three runner starts. Boots after such a reboot get a stall
+there still is. `crashlog.debugger_reboots` (host) wants all three entries
+answered and four runner starts. Boots after such a reboot get a stall
 limit of at least 240 s (they are slow in QEMU without KVM).
 `--other-systems` and `--installer-upgrade` put
 `data/ce-harness/no-final-tests` into their image copy, so these programs
@@ -857,7 +857,11 @@ of a 1 GiB guest was, so the bounce path went untested.
   the test in the kernel settings file and removed again), showing the
   message and backtrace below "No key was pressed"
   (`crashlog.unattended_restart`); on renga-* images System logs shows
-  and sets the setting (`crashlog.unattended_switch`).
+  and sets the setting (`crashlog.unattended_switch`). Before each entry
+  the test waits until `bootstate boot` has confirmed the start
+  (`crashlog.start_confirmed_<panic|user|unattended>`, up to 120 s):
+  otherwise two unconfirmed starts in a row open the recovery menu, which
+  `boot.menu` reports and which starts the last working state.
 - **wlan_reload** and **driver_override** (every image,
   `wlan_reload_test`, `driver_override_test`; roadmap F-58, the
   maintainer's mt7921e boot panic): `fbsd_wlantest`, a net80211 driver
