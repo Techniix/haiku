@@ -542,7 +542,8 @@ with open(sparePath, "rb") if problem is None else open(os.devnull, "rb") \
 expect("spare disk: a sparse 16 GiB file with the marker", problem is None
 	and os.path.getsize(sparePath) == ce_test.SPARE_DISK[1]
 	and start == ce_test.SPARE_DISK[2], str(problem))
-os.remove(sparePath)
+if problem is None:
+	os.remove(sparePath)
 # known bad: more allocated than allowed (a file system without sparse
 # files) is refused, and no file is left behind
 problem = ce_test.make_spare_disk(sparePath, max_allocated=0)
