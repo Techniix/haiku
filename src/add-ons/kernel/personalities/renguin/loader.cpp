@@ -249,8 +249,8 @@ needs_shared_libraries(int fd, const renguin_ehdr* ehdr,
 	static musl program has none of the markers either; it needs the
 	renguin-brand tool, like FreeBSD's brandelf.
 */
-status_t
-renguin_probe(const foreign_exec_args* args)
+static status_t
+probe_executable(const foreign_exec_args* args)
 {
 	if (args->header_size < sizeof(renguin_ehdr))
 		return B_NOT_SUPPORTED;
@@ -324,6 +324,21 @@ renguin_probe(const foreign_exec_args* args)
 	}
 
 	return B_NOT_SUPPORTED;
+}
+
+
+/*!	Batch 14: a claimed program is loaded next, so its team's pending
+	chroot() root must survive the release that comes before the load
+	(path.cpp, renguin_exec_claim_root()). That is the only state the
+	probe changes, and only Renguin's own.
+*/
+status_t
+renguin_probe(const foreign_exec_args* args)
+{
+	status_t status = probe_executable(args);
+	if (status == B_OK && args->team != NULL)
+		renguin_exec_claim_root(args->team->id);
+	return status;
 }
 
 
@@ -939,11 +954,12 @@ renguin_enter_userspace(Thread* thread, addr_t entry, addr_t stackPointer)
 void
 renguin_team_released(Team* team)
 {
-	// batch 14: a dying team's root still waiting for an exec (it execed
-	// a native program, which never loaded a Linux one). Not during an
-	// exec, where this runs before renguin_load() takes the root.
-	if (team->state >= TEAM_STATE_SHUTDOWN)
-		renguin_exec_drop_root(team->id);
+	// batch 14: the team's pending chroot() root, unless this release
+	// comes before the load of a Linux program (renguin_exec_claim_root()).
+	// A native exec releases the personality here for good: ~Team will
+	// not call this again, so its entry must go now (path.cpp).
+	renguin_exec_release_root(team->id,
+		team->state >= TEAM_STATE_SHUTDOWN);
 
 	renguin_team* data = (renguin_team*)team->personality_data;
 	if (data != NULL) {

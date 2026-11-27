@@ -30,4 +30,4 @@ libc-dualstack||0|tcp_connect\ntcp_listen\nudp\nsame_fd\nipv6_still\nok
 libc-link||0|link\nlinkat\ntimes\nexists\nln\nok
 libc-memgrow||0|grow_mapped\nremap\nsteps\nmincore\nok
 libc-madvise||0|anon_zero\npartial\nfile_private\nshared\nfork\nfree\nhints\nerrors\nok
-libc-chroot||0|errors\nroot\nlink\ndotdot\nsymlinks\nfchdir\nfork\nexec\nok
+libc-chroot||0|errors\nroot\nlink\ndotdot\nsymlinks\nfchdir\nfork\nexec\nnative\nok

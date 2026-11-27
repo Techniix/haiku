@@ -535,21 +535,33 @@ renguin_root_prefix()
 	the old data (foreign_personality_exec()). One entry per team with a
 	pending root, on a list without a fixed size, so that no team's root
 	can be dropped to make room for another's (a dropped root would let
-	the new program see the whole Linux root). An entry lives from the
-	execve() until the new program's load takes it, the execve() fails, or
-	the team dies (renguin_exec_drop_root() from renguin_team_released()).
-	If the team execs a native program, the entry waits: a Linux program
-	that program execs later is still in the root, as on Linux, where the
-	root belongs to the process, not to the program.
+	the new program see the whole Linux root).
+
+	An entry lives only while its team is in an execve(), and cannot
+	outlive the team:
+	- renguin_exec_keep_root() makes it, before _user_exec();
+	- renguin_probe() marks it claimed when the new program is a Linux one
+	  (renguin_exec_claim_root());
+	- renguin_load() takes it;
+	- renguin_team_released() frees an unclaimed one: the kernel calls it
+	  when the exec turns out native (the team leaves the personality, and
+	  ~Team will not call it again), and when the team dies;
+	- a failed execve() frees it;
+	- as a last guard, renguin_exec_keep_root() frees entries of teams that
+	  no longer exist.
+	A native program therefore runs, and starts Linux programs, outside
+	the chroot: Haiku's own VFS knows nothing of it.
 */
 struct exec_root {
 	exec_root*	next;
 	team_id		team;
+	bool		claimed;
 	char		root[B_PATH_NAME_LENGTH];
 };
 
 static mutex sExecRootLock = MUTEX_INITIALIZER("renguin exec roots");
 static exec_root* sExecRoots = NULL;
+static int32 sExecRootCount = 0;
 
 
 //! Unlinks and returns the team's entry; the caller holds sExecRootLock.
@@ -561,6 +573,7 @@ unlink_exec_root_locked(team_id team)
 		exec_root* entry = *link;
 		if (entry->team == team) {
 			*link = entry->next;
+			sExecRootCount--;
 			return entry;
 		}
 	}
@@ -568,7 +581,25 @@ unlink_exec_root_locked(team_id team)
 }
 
 
-/*!	Records  root (NULL or "": none) as the root  team's next program
+//! Frees the entries of teams that are gone; the caller holds the lock.
+static void
+prune_exec_roots_locked()
+{
+	exec_root** link = &sExecRoots;
+	while (*link != NULL) {
+		exec_root* entry = *link;
+		team_info info;
+		if (get_team_info(entry->team, &info) != B_OK) {
+			*link = entry->next;
+			sExecRootCount--;
+			free(entry);
+		} else
+			link = &entry->next;
+	}
+}
+
+
+/*!	Records \a root (NULL or "": none) as the root \a team's next program
 	gets. Fails with B_NO_MEMORY rather than lose a root: execve() then
 	fails, the program keeps running in its root.
 */
@@ -581,6 +612,7 @@ renguin_exec_keep_root(team_id team, const char* root)
 		if (entry == NULL)
 			return B_NO_MEMORY;
 		entry->team = team;
+		entry->claimed = false;
 		strlcpy(entry->root, root, sizeof(entry->root));
 	}
 
@@ -588,13 +620,29 @@ renguin_exec_keep_root(team_id team, const char* root)
 	{
 		MutexLocker locker(sExecRootLock);
 		old = unlink_exec_root_locked(team);
+		prune_exec_roots_locked();
 		if (entry != NULL) {
 			entry->next = sExecRoots;
 			sExecRoots = entry;
+			sExecRootCount++;
 		}
 	}
 	free(old);
 	return B_OK;
+}
+
+
+//! renguin_probe() claimed \a team's new program: renguin_load() follows.
+void
+renguin_exec_claim_root(team_id team)
+{
+	MutexLocker locker(sExecRootLock);
+	for (exec_root* entry = sExecRoots; entry != NULL; entry = entry->next) {
+		if (entry->team == team) {
+			entry->claimed = true;
+			break;
+		}
+	}
 }
 
 
@@ -617,16 +665,34 @@ renguin_exec_take_root(team_id team, char* root, size_t size)
 }
 
 
-//! A dying team's pending root, if it has one.
+/*!	The team's personality data is released: its entry goes, unless the
+	exec is loading a Linux program (claimed) and the team is alive.
+*/
 void
-renguin_exec_drop_root(team_id team)
+renguin_exec_release_root(team_id team, bool dying)
 {
-	exec_root* entry;
+	exec_root* entry = NULL;
 	{
 		MutexLocker locker(sExecRootLock);
-		entry = unlink_exec_root_locked(team);
+		for (exec_root* candidate = sExecRoots; candidate != NULL;
+				candidate = candidate->next) {
+			if (candidate->team == team) {
+				if (dying || !candidate->claimed)
+					entry = unlink_exec_root_locked(team);
+				break;
+			}
+		}
 	}
 	free(entry);
+}
+
+
+//! How many entries there are (/proc/self/status "RengaExecRoots", tests).
+int32
+renguin_exec_root_count()
+{
+	MutexLocker locker(sExecRootLock);
+	return sExecRootCount;
 }
 
 
@@ -648,7 +714,7 @@ renguin_exec_drop_root(team_id team)
 
 	The root is kept as a canonical host path string, not as a vnode
 	reference: nothing is pinned, nothing has to be released. fork()
-	copies it with the team data, execve() hands it to the new program
+	copies it with the team data, execve() hands it to a new Linux program
 	(renguin_exec_keep_root()), team exit frees it with the team data. If
 	the directory is removed, lookups under it fail.
 

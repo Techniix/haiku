@@ -27,6 +27,12 @@
  *  exec      a program exec()ed from inside the new root (a copy of this
  *            one) keeps it, and so does the program it execs in turn; a
  *            failed execve() leaves the caller in its root
+ *  native    200 fork()ed children exec Haiku's native /boot/system/bin/true
+ *            (a host path, outside the root) and exit 0; afterwards no
+ *            chroot() root waits for an exec any more: the system-wide
+ *            count Renguin adds to /proc/self/status ("RengaExecRoots")
+ *            is back where it was (batch 14 review: each such exec used
+ *            to leave a 1 KB entry behind until reboot)
  */
 
 #define _GNU_SOURCE
@@ -101,6 +107,20 @@ must_not_exist(const char* part, const char* path)
 			strerror(errno));
 		exit(1);
 	}
+}
+
+
+//! Renguin's count of chroot() roots waiting for an exec, or -1.
+static long
+exec_root_count(void)
+{
+	char status[4096];
+	if (read_file("/proc/self/status", status, sizeof(status)) != 0)
+		return -1;
+	const char* line = strstr(status, "\nRengaExecRoots:");
+	if (line == NULL)
+		return -1;
+	return strtol(line + strlen("\nRengaExecRoots:"), NULL, 10);
 }
 
 
@@ -292,6 +312,41 @@ main(int argc, char** argv)
 		printf("FAIL exec: child status %d\n", status);
 		return 1;
 	}
-	printf("exec\nok\n");
+	printf("exec\n");
+
+	// native: execs of a Haiku program from inside the root
+	long before = exec_root_count();
+	if (before < 0) {
+		printf("FAIL native: no RengaExecRoots line in /proc/self/status\n");
+		return 1;
+	}
+	for (int i = 0; i < 200; i++) {
+		child = fork();
+		if (child == 0) {
+			char* args[] = { (char*)"true", NULL };
+			execv("/boot/system/bin/true", args);
+			_exit(5);
+		}
+		if (child < 0)
+			fail("native: fork");
+		waitpid(child, &status, 0);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			printf("FAIL native: exec %d of /boot/system/bin/true: status "
+				"%d\n", i, status);
+			return 1;
+		}
+	}
+	long after = exec_root_count();
+	// (another team may be in an exec of its own at either moment)
+	if (after < 0 || after > before + 2) {
+		printf("FAIL native: %ld exec roots before 200 native execs, %ld "
+			"after\n", before, after);
+		return 1;
+	}
+	if (!is_inside("/hello")) {
+		printf("FAIL native: the caller lost its root\n");
+		return 1;
+	}
+	printf("native\nok\n");
 	return 0;
 }

@@ -1287,6 +1287,12 @@ generate_pid_status(proc_buffer& out, team_id pid, thread_id tid)
 		(unsigned)info.gid, (unsigned)info.gid, (unsigned)info.gid,
 		virtualSize / 1024, virtualSize / 1024, resident / 1024,
 		info.thread_count, smp_get_num_cpus() - 1);
+	// batch 14: Renga's own line (Linux programs read status by key): the
+	// chroot() roots waiting for an exec, system-wide. libc-chroot checks
+	// that execs of native programs leave none behind.
+	if (self)
+		out.Printf("RengaExecRoots:\t%" B_PRId32 "\n",
+			renguin_exec_root_count());
 }
 
 

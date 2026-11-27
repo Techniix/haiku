@@ -409,7 +409,9 @@ struct renguin_team* renguin_current_team();
 const char*	renguin_root_prefix();
 status_t	renguin_exec_keep_root(team_id team, const char* root);
 bool		renguin_exec_take_root(team_id team, char* root, size_t size);
-void		renguin_exec_drop_root(team_id team);
+void		renguin_exec_claim_root(team_id team);
+void		renguin_exec_release_root(team_id team, bool dying);
+int32		renguin_exec_root_count();
 int64		renguin_sys_chroot(uint64 path);
 status_t	renguin_resolve_in_root_of(const char* root,
 				const char* linuxPath, uint32 flags, char* hostPath,

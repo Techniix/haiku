@@ -88,8 +88,12 @@ view for the shim, not a sandbox (maintainer, 2026-11-27: step 1 unsandboxed).
 - **Across exec.** `execve()` records the root on a list keyed by team, and the new
   program's load takes it. The list has no fixed size, so no root is dropped to make room.
   `execve()` fails with `ENOMEM` rather than lose a root. A failed `execve()` leaves the
-  caller in its root. A dying team's entry is freed. If the team execs a native program, its
-  entry waits, so a Linux program started from it later is in the root again, as on Linux.
+  caller in its root. The probe marks the entry when the new program is a Linux one; the
+  release before the load frees an unmarked entry, which is the native-exec case (the team
+  leaves the personality, and team exit will not call Renguin again) and the dying case.
+  `renguin_exec_keep_root()` also frees entries of teams that no longer exist. So entries
+  live only during an exec. A native program, and any Linux program it starts, is outside
+  the chroot. `/proc/self/status` shows the system-wide count as `RengaExecRoots`.
 - **Contained:** absolute paths, `..` in them (it stops at the root), and absolute and
   relative link targets other than the two host prefixes below. `getcwd()` is relative to
   the root. The interpreter of a dynamic program is looked up in the root.
@@ -105,13 +109,25 @@ view for the shim, not a sandbox (maintainer, 2026-11-27: step 1 unsandboxed).
   runs as the user). The caller needs search permission on the directory (`EACCES`).
   `ENOENT`, `ENOTDIR` and `EFAULT` are as on Linux.
 - **Tests:** `libc-chroot` in the `renguin` suite covers escapes by `..` and by symbolic
-  links, `fchdir()`, `fork()` (two levels) and `exec()` (two levels, and a failed exec).
+  links, `fchdir()`, `fork()` (two levels), `exec()` (two levels, and a failed exec), and
+  200 native execs from inside the root that must leave no entry behind.
   `renguin.flatpak.*` covers the shim. `renguin_manager.flatpak_switch` covers the switch.
 
 ### Step 2: sandboxed
 
 Needs user and mount namespaces in Renguin (a per-team mount table over Haiku's VFS), or a
 Haiku-native sandbox the shim maps onto. Not before step 1 works on the maintainer's machine.
+
+Notes for step 2 (from the step 1 review):
+- Flatpak front ends (Flatseal, GNOME Software, `flatpak info --show-permissions`) still list
+  an application's permissions as if bwrap enforced them. Under step 1 nothing is
+  enforced. The user documentation must say so, and the Renguin Manager's switch text
+  already does.
+- `chroot()` without `CAP_SYS_CHROOT`, together with set-uid programs honoured on exec, is
+  the classic chroot privilege trick: a user builds a root with their own `/etc/passwd` or
+  libraries, and a set-uid program in it runs with them. Renguin's IDs are a view today, but
+  before step 2 (or any real set-uid support) `execve()` inside a chroot must ignore set-uid
+  and set-gid bits, or `chroot()` must require privilege.
 
 ## Steam
 
