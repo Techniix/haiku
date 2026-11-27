@@ -5,6 +5,12 @@
 renga_self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 
 # Every script runs from the root of the Renga tree, wherever it was called.
+# Git hooks run with GIT_DIR set (and, in a linked worktree, without
+# GIT_WORK_TREE), which makes "rev-parse --show-toplevel" answer the
+# current directory: from the pre-push hook in a worktree the root came out
+# as <tree>/tools/renga. The scripts find the repository from the tree
+# itself, so these are dropped.
+unset GIT_DIR GIT_WORK_TREE
 renga_root=$(git -C "$(dirname "$renga_self")" rev-parse --show-toplevel 2>/dev/null) || {
 	echo "$(basename "$0"): not inside the Renga git tree" >&2
 	exit 2

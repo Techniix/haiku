@@ -1,0 +1,45 @@
+#!/bin/sh
+# selftest: checks of the tools/renga scripts themselves.
+#
+# Usage: tools/renga/selftest
+#
+# 1. worktree-hook: renga-guard run the way the pre-push hook runs it in a
+#    linked worktree (GIT_DIR set, GIT_WORK_TREE not) finds its
+#    protected-paths list. Before lib.sh dropped GIT_DIR it looked for
+#    <worktree>/tools/renga/tools/renga/protected-paths and blocked every
+#    push from a worktree.
+#
+# Creates a temporary detached worktree of HEAD (or of RENGA_SELFTEST_REV,
+# to show a check failing on older scripts) and removes it again.
+# Exit status: 0 when every check passed, 1 otherwise.
+set -eu
+# shellcheck source=tools/renga/lib.sh
+. "$(dirname "$0")/lib.sh"
+
+case ${1:-} in
+-h|--help) renga_usage; exit 0 ;;
+esac
+
+failures=0
+check() {
+	if [ "$2" = 0 ]; then
+		echo "PASS $1"
+	else
+		echo "FAIL $1: $3"
+		failures=$((failures + 1))
+	fi
+}
+
+base=$(git rev-parse "${RENGA_SELFTEST_REV:-HEAD}")
+dir=$(mktemp -d "${TMPDIR:-/tmp}/renga-selftest.XXXXXX")
+trap 'git worktree remove --force "$dir/wt" >/dev/null 2>&1 || true; rm -rf "${dir:?}"' EXIT
+git worktree add -q --detach "$dir/wt" "$base"
+gitdir=$(git -C "$dir/wt" rev-parse --absolute-git-dir)
+out=$(cd "$dir/wt" && GIT_DIR=$gitdir tools/renga/renga-guard --head "$base" \
+	"$base" 2>&1) && status=0 || status=$?
+case $out in
+*"missing "*protected-paths*) status=1 ;;
+esac
+check worktree-hook "$status" "$(echo "$out" | tail -n 1)"
+
+[ $failures = 0 ]
