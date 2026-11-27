@@ -82,6 +82,8 @@ static const char* kKernelSettings
 	= "/boot/home/config/settings/kernel/drivers/kernel";
 static const char* kUnattendedParameter = "kdl_unattended_restart";
 static const int32 kUnattendedSeconds = 15;
+// how long a start may take to be confirmed (wait_for_confirmed_start())
+static const int32 kConfirmWaitSeconds = 120;
 
 // System logs' messages (src/apps/systemlogs/SystemLogs.cpp)
 static const uint32 kMsgSetUnattended = 'slun';
@@ -253,12 +255,62 @@ set_unattended(int32 seconds)
 }
 
 
+/*!	Waits until this start is confirmed in the boot state ("bootstate
+	boot", data/launch/bootstate: Deskbar has run for a few seconds), so a
+	debugger entry made on purpose comes from a start that worked, as a
+	user's crash on a running desktop does. The runner starts this test as
+	soon as the volumes are mounted: without the wait, the boots after the
+	first entry crashed about 2.5 s after the runner started, before the
+	confirmation, and with the third entry (batch 14, kdl_unattended) the
+	two unconfirmed starts in a row opened the boot loader's recovery menu
+	("recovery: 2 failed starts"), which started the last working state
+	instead of the latest one. Skipped on images without the bootstate tool
+	or without a boot state file.
+*/
+static void
+wait_for_confirmed_start(const char* how)
+{
+	if (access("/bin/bootstate", X_OK) != 0) {
+		info("no bootstate tool: not waiting for the start's confirmation");
+		return;
+	}
+	char name[64];
+	snprintf(name, sizeof(name), "start_confirmed_%s", how);
+	bigtime_t start = system_time();
+	std::string output;
+	while (true) {
+		output.clear();
+		run("/bin/bootstate show 2>&1", &output);
+		if (output.find("no boot state") != std::string::npos) {
+			info("no boot state on this volume: not waiting for the "
+				"start's confirmation");
+			return;
+		}
+		if (output.find("failed starts: 0\n") != std::string::npos)
+			break;
+		if (system_time() - start > kConfirmWaitSeconds * 1000000LL) {
+			size_t line = output.find("failed starts:");
+			report(name, false, "start not confirmed within %d s (%s)",
+				(int)kConfirmWaitSeconds, line == std::string::npos
+					? "no \"failed starts\" line"
+					: output.substr(line, output.find('\n', line) - line)
+						.c_str());
+			return;
+		}
+		snooze(500000);
+	}
+	report(name, true, "confirmed after %d s, before the debugger entry",
+		(int)((system_time() - start) / 1000000));
+}
+
+
 /*!	Enters the kernel debugger; the harness answers it with "reboot" (or,
 	\a how "unattended", does not answer at all).
 */
 static void
 enter_debugger(const char* how)
 {
+	wait_for_confirmed_start(how);
 	info("%s", kExpectedMarker + strlen("CE-INFO crashlog: "));
 	printf(strcmp(how, "unattended") == 0 ? "CE-HOST kdl_unattended\n"
 		: "CE-HOST kdl_reboot\n");

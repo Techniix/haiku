@@ -1155,6 +1155,11 @@ CRASH_SERIAL_GOOD = ("CE-HARNESS START\r\n"
 	"CE-INFO crashlog: entering the kernel debugger on purpose\r\n"
 	"CE-HOST kdl_reboot\r\nUSER: CE crash test\r\n"
 	"Welcome to Kernel Debugging Land...\r\nkdebug> reboot\r\n"
+	"CE-HARNESS START\r\n"
+	"CE-INFO crashlog: entering the kernel debugger on purpose\r\n"
+	"CE-HOST kdl_unattended\r\nUSER: CE crash test unattended\r\n"
+	"Welcome to Kernel Debugging Land...\r\n"
+	"Restarting (no key in the kernel debugger)...\r\n"
 	"CE-HARNESS START\r\nCE-HARNESS END\r\n")
 
 
@@ -1173,9 +1178,11 @@ def crash_checks(serial, entries, unanswered=0):
 
 ANSWERED = [{"answered": True, "error": None,
 		"message": "PANIC: requested from kdl driver."},
-	{"answered": True, "error": None, "message": "USER: CE crash test"}]
+	{"answered": True, "error": None, "message": "USER: CE crash test"},
+	{"answered": True, "error": None,
+		"message": "USER: CE crash test unattended"}]
 passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD, ANSWERED)
-expect("crashlog: two answered debugger entries pass", passed and not problems
+expect("crashlog: three answered debugger entries pass", passed and not problems
 	and kdl is None, "%s %s" % (detail, problems))
 passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD,
 	ANSWERED[:1] + [{"answered": False, "error": "no debugger prompt",
@@ -1184,14 +1191,16 @@ expect("crashlog: an unanswered debugger entry fails", not passed, detail)
 passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
 	"CE-HARNESS START\r\nCE-HARNESS END", "CE-HARNESS END"), ANSWERED)
 expect("crashlog: a reboot that never came back fails", not passed, detail)
-# batch 13, --smp 2: the third boot's start printed in the middle of a
-# driver's line by the other CPU
-passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
-	"kdebug> reboot\r\nCE-HARNESS START\r\nCE-HARNESS END",
-	"kdebug> reboot\r\netherpci: init_driver CE-HARNESS START Haiku\r\n"
-	"CE-HARNESS END"), ANSWERED)
+# batch 13, --smp 2: the last boot's start printed in the middle of a
+# driver's line by the other CPU (the variant must differ from the fixture,
+# or the case would pass on the fixture alone)
+MID_LINE = CRASH_SERIAL_GOOD.replace(
+	"kernel debugger)...\r\nCE-HARNESS START\r\nCE-HARNESS END",
+	"kernel debugger)...\r\netherpci: init_driver CE-HARNESS START Haiku"
+	"\r\nCE-HARNESS END")
+passed, problems, kdl, detail = crash_checks(MID_LINE, ANSWERED)
 expect("crashlog: a runner start in the middle of a driver's line counts",
-	passed, detail)
+	passed and MID_LINE != CRASH_SERIAL_GOOD, detail)
 passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD, ANSWERED,
 	unanswered=1)
 expect("crashlog: an announced entry that never came fails", not passed,
