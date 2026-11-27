@@ -669,7 +669,11 @@ ensure_linux_user()
 	emulated CPU a child that does not connect within Chromium's 15 s
 	launch timeout is killed (batch 10's finding for renderers), and the
 	navigation waits for the network service. One process fewer to launch
-	and connect. Not yet tested (batch 14).
+	and connect. Batch 14, QEMU with KVM: chrome.window_multi passes with
+	and without it (20261127-143228, -143623), so the cloud failure was the
+	slow emulation; kept for slow machines. Caveat: Chromium takes only the
+	last --enable-features on its command line, so one passed in "$@"
+	replaces this one.
 */
 static const char* kChromiumConf =
 	"# Written by Renga's \"linux\" command (switch \"chromium_flags\" in the\n"
