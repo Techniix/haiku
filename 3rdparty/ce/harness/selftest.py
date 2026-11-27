@@ -1118,6 +1118,14 @@ expect("crashlog: an unanswered debugger entry fails", not passed, detail)
 passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
 	"CE-HARNESS START\r\nCE-HARNESS END", "CE-HARNESS END"), ANSWERED)
 expect("crashlog: a reboot that never came back fails", not passed, detail)
+# batch 13, --smp 2: the third boot's start printed in the middle of a
+# driver's line by the other CPU
+passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD.replace(
+	"kdebug> reboot\r\nCE-HARNESS START\r\nCE-HARNESS END",
+	"kdebug> reboot\r\netherpci: init_driver CE-HARNESS START Haiku\r\n"
+	"CE-HARNESS END"), ANSWERED)
+expect("crashlog: a runner start in the middle of a driver's line counts",
+	passed, detail)
 passed, problems, kdl, detail = crash_checks(CRASH_SERIAL_GOOD, ANSWERED,
 	unanswered=1)
 expect("crashlog: an announced entry that never came fails", not passed,
