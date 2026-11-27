@@ -1312,6 +1312,25 @@ dontneed_area_range(VMArea* area, addr_t address, addr_t size,
 		return B_NO_MEMORY;
 	}
 
+	// Batch 14: the zero pages put in below must be committed like pages
+	// a fault brings in. Without it the cache held more pages than it had
+	// committed, and the next discard of the cache
+	// (VMAnonymousCache::Discard() -> Commit()) asserted "size >=
+	// page_count * B_PAGE_SIZE": a kernel debugger entry with Linux
+	// Chromium on real hardware (libc-madvise, fork part, reproduces it).
+	// Pages the discard below frees give their commitment back there.
+	// Only an overcommitting cache: one that committed its whole size up
+	// front already covers them (and would not give extra back). If the
+	// memory is not there, nothing has changed yet: B_NO_MEMORY with no
+	// pages needed tells the caller to give up (ENOMEM), not to retry.
+	if (needed > 0 && cache->temporary && cache->CanOvercommit()
+		&& cache->AddCommitment((off_t)needed * B_PAGE_SIZE,
+			VM_PRIORITY_USER) != B_OK) {
+		*_neededPages = 0;
+		cacheChainLocker.Unlock();
+		return B_NO_MEMORY;
+	}
+
 	unmap_pages(area, address, size);
 
 	// VMCache::Discard() can temporarily drop the lock: unlock the lower
@@ -6663,8 +6682,10 @@ _user_memory_advice(void* _address, size_t size, uint32 advice)
 					if (status != B_OK)
 						break;
 				}
-				if (status != B_NO_MEMORY)
+				if (status != B_NO_MEMORY || neededPages == 0) {
+					// done, or no memory to commit (batch 14): ENOMEM
 					break;
+				}
 
 				// Not enough pages reserved to shadow pages shared after
 				// fork(): reserve them without locks held, then start over
