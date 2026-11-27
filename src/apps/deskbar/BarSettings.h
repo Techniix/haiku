@@ -77,6 +77,8 @@ struct desk_settings {
 	bool switcherLinuxPrograms;
 		// the window switcher (Ctrl+Tab) lists running Wayland/Linux
 		// programs as applications of their own (Switcher.cpp)
+	bool rengaStartButton;
+		// the Renga start button; off: the classic leaf (BarMenuBar.cpp)
 };
 
 struct clock_settings {

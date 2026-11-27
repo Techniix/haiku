@@ -5,7 +5,7 @@
 """A small writer for HVIF, Haiku's vector icon format (the flat format of
 src/libs/icon/flat_icon: FlatIconFormat.h, FlatIconImporter.cpp), for icons
 made of polygons: solid colours or linear gradients, optionally outlined
-with HVIF's stroke transformer. Used by make_network_icons.py and
+with HVIF's stroke transformer; radial gradients too (batch 13). Used by make_network_icons.py and
 make_linuxkpi_manager_icon.py; Icon-O-Matic opens the result.
 
     icon = Icon()
@@ -94,6 +94,45 @@ class Gradient:
 
 def gradient(p0, p1, stops):
 	return Gradient(p0, p1, stops)
+
+
+class RadialGradient(Gradient):
+	"""A circular gradient around centre (stop offset 0) out to radius
+	(offset 255): HVIF's gradient type 1, whose space runs from 0 at the
+	centre to 64 on its circle."""
+
+	def __init__(self, centre, radius, stops):
+		Gradient.__init__(self, centre, centre, stops)
+		self.centre = centre
+		self.radius = radius
+
+	def matrix(self):
+		scale = self.radius / 64.0
+		return (scale, 0.0, 0.0, scale, self.centre[0], self.centre[1])
+
+	def key(self):
+		return ("r", self.centre, self.radius, tuple(self.stops))
+
+	def flat(self):
+		data = Gradient.flat(self)
+		return data[:1] + bytes([1]) + data[2:]
+
+	def colour_at(self, x, y):
+		t = math.hypot(x - self.centre[0], y - self.centre[1]) / self.radius
+		t = min(max(t, 0.0), 1.0) * 255
+		stops = self.stops
+		if t <= stops[0][0]:
+			return stops[0][1]
+		for (o0, c0), (o1, c1) in zip(stops, stops[1:]):
+			if t <= o1:
+				f = (t - o0) / max(o1 - o0, 1)
+				return tuple(int(c0[i] + (c1[i] - c0[i]) * f)
+					for i in range(4))
+		return stops[-1][1]
+
+
+def radial(centre, radius, stops):
+	return RadialGradient(centre, radius, stops)
 
 
 class Icon:

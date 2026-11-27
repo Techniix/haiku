@@ -204,7 +204,8 @@ DEVNOTIFY_SCREENSHOTS = ["audio_device_prompt", "audio_device_policy"]
 # Tracker's folder menus built ahead of time (F-59): its setting.
 TRACKER_MENU_SCREENSHOTS = ["tracker_prefetch_setting"]
 # The Deskbar's menu search window and its preferences (F-41, batch 9).
-DESKBAR_SCREENSHOTS = ["deskbar_search", "deskbar_preferences"]
+DESKBAR_SCREENSHOTS = ["deskbar_search", "deskbar_preferences", "start_button",
+	"start_button_classic"]
 # Tracker's folder sizes, the name-conflict question and the preferences
 # (F-66, batch 9).
 TRACKER_MODERN_SCREENSHOTS = ["tracker_folder_sizes",

@@ -80,6 +80,7 @@ private:
 			BCheckBox*		fMenuRestartInto;
 			BCheckBox*		fAppsRecentDocuments;
 			BCheckBox*		fAppsSwitcherLinux;
+			BCheckBox*		fMenuRengaButton;
 
 			BCheckBox*		fAppsSort;
 			BCheckBox*		fAppsSortTrackerFirst;

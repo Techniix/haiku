@@ -5,7 +5,7 @@ UsePrivateHeaders private shared ;
 UsePrivateSystemHeaders ;
 SubDirHdrs $(HAIKU_TOP) src kits tracker ;
 
-AddResources Deskbar : Deskbar.rdef icons.rdef ;
+AddResources Deskbar : Deskbar.rdef icons.rdef start_button.rdef ;
 
 SubDirC++Flags -DDB_ADDONS
 	-D_INCLUDES_CLASS_DEVICE_MAP=1

@@ -106,6 +106,9 @@ const uint32 kTestShowPreferences = 'Tdpf';
 const uint32 kTestWaylandClients = 'Twcl';
 // Renga (batch 13): the window switcher's Wayland programs
 const uint32 kToggleSwitcherLinuxPrograms = 'DStW';
+const uint32 kToggleRengaStartButton = 'DStB';
+const uint32 kTestStartButton = 'Tsbt';
+	// harness images only: what the start button shows
 const uint32 kSwitcherSettingChanged = 'SwSc';
 const uint32 kTestSwitcher = 'Twsw';
 	// harness images only: the switcher's groups (TSwitchManager)
