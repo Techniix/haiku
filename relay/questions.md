@@ -17,3 +17,9 @@ Try an H.264+AAC MP4 and a WebM page: speed, A/V sync, seeking, leaving the page
 Options: A) build and test now / B) later.
 Recommendation: A; if good, the session merges PR #1 and you publish with tools/update-repo.sh (haikuwebkit and haikuwebkit_devel -102).
 If no answer by: the end of batch 14, it stays an open PR and item 4 is listed as waiting for the hardware build.
+
+## Q-3 (2026-11-27 19:46 UTC)
+renga-guard blocks every push from a linked git worktree (it looks for tools/renga/tools/renga/protected-paths: Git hooks set GIT_DIR, which shifts the root). Fix ready as a local commit on branch infra/guard-worktree (in ~/renga/wtguard.IQHC): lib.sh unsets GIT_DIR/GIT_WORK_TREE, plus a new tools/renga/selftest whose check fails on the old scripts and passes on the new. It changes the guard itself, and this PC's permission settings (rightly) stop the session from pushing it under its own Architect-Approved line.
+Options: A) you push it and open the PR (cd ~/renga/wtguard.IQHC && git push origin HEAD:infra/guard-worktree) / B) leave it; the session pushes worktree commits from the main repository by SHA, which works.
+Recommendation: A when convenient; B meanwhile.
+If no answer by: the end of batch 14, B, and the commit stays local.
