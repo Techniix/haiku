@@ -326,7 +326,8 @@ cwd_is_root()
 	renguin_team* data = renguin_current_team();
 	struct stat st;
 	if (data != NULL && data->have_linux_root
-		&& vfs_read_stat(-1, RENGUIN_LINUX_ROOT, true, &st, true) == B_OK) {
+		&& vfs_read_stat(-1, renguin_root_prefix(), true, &st, true)
+			== B_OK) {
 		return st.st_dev == device && st.st_ino == node;
 	}
 	return vfs_read_stat(-1, "/", true, &st, true) == B_OK
