@@ -64,7 +64,8 @@
 	                          read, every 8 ms, and the mouse's reports came
 	                          out after the hand had stopped; reported as an
 	                          INFO line for comparison)
-	  latency.8000hz          the same at 8000 Hz (stress case)
+	  latency.8000hz          the same at 8000 Hz (stress case); both
+	                          take the median of three flicks (batch 13)
 
 	The driver is plugged in "queued" mode (like PS/2: every report is kept)
 	for the backlog and click checks and in "on demand" mode (like usb_hid:
@@ -93,9 +94,12 @@
 #include <pointer_acceleration.h>
 #include <kb_mouse_settings.h>
 
+#include <algorithm>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -798,6 +802,37 @@ test_latency(BRect screen)
 		BPoint final, expected;
 		bigtime_t latency = flick_latency(screen, runs[i].rate, runs[i].mode,
 			final, expected);
+		BString flicks;
+		if (runs[i].name != NULL) {
+			// Batch 13: the median of three flicks. One flick is one
+			// sample of the guest's scheduling: in QEMU without KVM, with
+			// two virtual CPUs on a loaded host, a single flick at 8000 Hz
+			// took 19.2 ms once (batch 12's --smp 2 run) and passed on the
+			// retry. A real regression (usb_hid polling once per read, the
+			// INFO line above: about 8 ms more every time) moves all three.
+			bigtime_t samples[3] = { latency, -1, -1 };
+			bool allEnded = final == expected;
+			for (int32 k = 1; k < 3; k++) {
+				BPoint otherFinal, otherExpected;
+				samples[k] = flick_latency(screen, runs[i].rate,
+					runs[i].mode, otherFinal, otherExpected);
+				allEnded &= otherFinal == otherExpected;
+			}
+			for (int32 k = 0; k < 3; k++) {
+				flicks << (k > 0 ? ", " : "") << (samples[k] >= 0
+					? BString().SetToFormat("%.1f", samples[k] / 1000.0)
+					: BString("never"));
+			}
+			// a flick that never got there counts as the longest
+			for (int32 k = 0; k < 3; k++) {
+				if (samples[k] < 0)
+					samples[k] = B_INFINITE_TIMEOUT;
+			}
+			std::sort(samples, samples + 3);
+			latency = samples[1] == B_INFINITE_TIMEOUT ? -1 : samples[1];
+			if (!allEnded)
+				final = BPoint(-1, -1);
+		}
 		if (runs[i].name == NULL) {
 			// usb_hid's polling before the fix, for comparison
 			printf("CE-INFO pointer_rate: polled once per read (usb_hid "
@@ -812,11 +847,12 @@ test_latency(BRect screen)
 		report(runs[i].name, latency >= 0 && latency <= kFrame
 			&& final == expected,
 			"a flick of %.0f counts in 25 ms at %" B_PRId32 " Hz: the pointer "
-			"was at the end %.1f ms after the hand stopped (one frame: %.1f "
-			"ms) and ended at (%.0f,%.0f), want (%.0f,%.0f)",
+			"was at the end %.1f ms after the hand stopped (median of three "
+			"flicks: %s ms; one frame: %.1f ms) and ended at (%.0f,%.0f), "
+			"want (%.0f,%.0f)",
 			expected.x - (screen.left + 100), runs[i].rate,
-			latency >= 0 ? latency / 1000.0 : -1.0, kFrame / 1000.0, final.x,
-			final.y, expected.x, expected.y);
+			latency >= 0 ? latency / 1000.0 : -1.0, flicks.String(),
+			kFrame / 1000.0, final.x, final.y, expected.x, expected.y);
 	}
 	// leave the pointer where the earlier checks did, for the suites after
 	// this one (pointer_test's first tablet move)
