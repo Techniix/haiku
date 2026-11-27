@@ -1,6 +1,6 @@
 SubDir HAIKU_TOP src apps installer ;
 
-UsePrivateHeaders interface shared storage tracker ;
+UsePrivateHeaders diskengine interface shared storage tracker ;
 UsePrivateSystemHeaders ;
 
 SubDirHdrs [ FDirName $(HAIKU_TOP) src kits tracker ] ;
@@ -8,6 +8,7 @@ SubDirHdrs [ FDirName $(HAIKU_TOP) src servers launch ] ;
 
 Application Installer :
 	CopyEngine.cpp
+	DestinationPlan.cpp
 	EULAWindow.cpp
 	InstallationInfo.cpp
 	InstallerApp.cpp
@@ -25,7 +26,7 @@ Application Installer :
 	# From launch_daemon
 	Utility.cpp
 
-	: be tracker translation shared [ TargetLibstdc++ ]
+	: be tracker translation shared libdiskengine.a [ TargetLibstdc++ ]
 		localestub package
 	: Installer.rdef
 ;
