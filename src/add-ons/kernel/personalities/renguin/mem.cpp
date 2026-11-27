@@ -440,17 +440,82 @@ renguin_sys_mincore(uint64 addr, uint64 length, uint64 vector)
 }
 
 
-/*!	madvise: accepted as a hint and ignored.
-	TODO: MADV_DONTNEED on private anonymous memory must make the pages read
-	back as zero (jemalloc and Go rely on it). FreeBSD emulates this in
-	linux_madvise_dontneed(); Haiku needs the equivalent on its VMCache.
+/*!	madvise() with Linux semantics (batch 13).
+
+	Until batch 13 every advice was accepted and ignored. MADV_DONTNEED is
+	not a hint on Linux: private pages read back as zero (anonymous memory)
+	or as the file's contents (private file mappings) afterwards. V8 and
+	PartitionAlloc decommit with it and take the pages to be zero when they
+	commit them again; Linux Chromium replaces malloc with PartitionAlloc,
+	so every library in it allocated from pages that still held a freed
+	allocation's pointers and lengths. That is the libxkbcommon (a parser
+	buffer pointer reloaded from its state as NULL) and libbrotlidec
+	crashes of batch 12, and the --single-process segfault seen on real
+	hardware has the same signature.
+
+	The work is Haiku's own madvise (vm.cpp, dontneed_area_range(), which
+	Renga gave Linux semantics for the native Chromium port): DONTNEED and
+	DONTNEED_LOCKED go to MADV_DONTNEED, FREE to MADV_FREE (the pages may
+	be dropped, which Linux allows). Hints that change nothing a program
+	can see return 0. Advice whose effect a program relies on and that
+	Haiku cannot give (WIPEONFORK, REMOVE, HWPOISON, ...) is EINVAL, as on
+	a Linux kernel without it, so callers take their fallback: BoringSSL,
+	for one, then reseeds after fork() itself. As on Linux, an unaligned
+	address is EINVAL and a range with unmapped pages ENOMEM.
 */
 int64
 renguin_sys_madvise(uint64 addr, uint64 length, uint64 advice)
 {
-	(void)length;
-	(void)advice;
 	if ((addr % B_PAGE_SIZE) != 0)
 		return -LX_EINVAL;
-	return 0;
+
+	uint32 haikuAdvice = 0;
+	switch (advice) {
+		case LX_MADV_DONTNEED:
+		case LX_MADV_DONTNEED_LOCKED:
+			haikuAdvice = MADV_DONTNEED;
+			break;
+		case LX_MADV_FREE:
+			haikuAdvice = MADV_FREE;
+			break;
+		case LX_MADV_NORMAL:
+		case LX_MADV_RANDOM:
+		case LX_MADV_SEQUENTIAL:
+		case LX_MADV_WILLNEED:
+		case LX_MADV_DONTFORK:
+		case LX_MADV_DOFORK:
+		case LX_MADV_MERGEABLE:
+		case LX_MADV_UNMERGEABLE:
+		case LX_MADV_HUGEPAGE:
+		case LX_MADV_NOHUGEPAGE:
+		case LX_MADV_DONTDUMP:
+		case LX_MADV_DODUMP:
+		case LX_MADV_KEEPONFORK:
+		case LX_MADV_COLD:
+		case LX_MADV_PAGEOUT:
+		case LX_MADV_POPULATE_READ:
+		case LX_MADV_POPULATE_WRITE:
+		case LX_MADV_COLLAPSE:
+			// hints: nothing a program can observe changes
+			break;
+		default:
+			// LX_MADV_REMOVE, LX_MADV_WIPEONFORK, LX_MADV_HWPOISON, ...
+			return -LX_EINVAL;
+	}
+
+	if (length == 0)
+		return 0;
+	size_t size = PAGE_ALIGN((size_t)length);
+	if (size < length || !is_user_range((addr_t)addr, size))
+		return -LX_ENOMEM;
+	if (!range_is_mapped((addr_t)addr, size))
+		return -LX_ENOMEM;
+	if (haikuAdvice == 0)
+		return 0;
+
+	status_t status = _user_memory_advice((void*)(addr_t)addr, size,
+		haikuAdvice);
+	if (status == B_NO_MEMORY)
+		return -LX_ENOMEM;
+	return renguin_encode(status);
 }
