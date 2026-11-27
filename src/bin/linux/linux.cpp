@@ -649,7 +649,7 @@ ensure_linux_user()
 	zygote's child never answers, the GPU process launch fails with 1002;
 	F-27), so Alpine's Chromium launcher gets --no-sandbox --no-zygote
 	--in-process-gpu --disable-gpu --ozone-platform=wayland through
-	/etc/chromium/renguin.conf (its launcher reads /etc/chromium/*.conf),
+	/etc/chromium/renguin.conf (its launcher reads every .conf there),
 	which also says why, once, in the terminal. Switch "chromium_flags"
 	(on).
 
@@ -721,11 +721,14 @@ write_root_file(const char* linuxPath, const char* text, mode_t mode)
 	std::string path = root_path(linuxPath);
 	FILE* file = fopen(path.c_str(), "r");
 	if (file != NULL) {
-		char current[4096];
-		size_t length = fread(current, 1, sizeof(current) - 1, file);
+		// (batch 14: the whole file; the bwrap shim is larger than 4 KB)
+		std::string current;
+		char buffer[4096];
+		size_t length;
+		while ((length = fread(buffer, 1, sizeof(buffer), file)) > 0)
+			current.append(buffer, length);
 		fclose(file);
-		current[length] = '\0';
-		if (strcmp(current, text) == 0)
+		if (current == text)
 			return;
 	}
 	// the parent directories (/etc/apk/commit_hooks.d, /etc/chromium)
@@ -826,6 +829,208 @@ ensure_shared_tmp()
 }
 
 
+/*!	Batch 14 (maintainer, 2026-11-27: Flatpak step 1, unsandboxed; design
+	docs/design/flatpak-and-steam-under-renguin.md). Switch "flatpak" in
+	the Renguin Manager, off by default. Flatpak runs every program through
+	bubblewrap, which needs namespaces Renguin does not have; Renga's own
+	bwrap (kBwrapShim) lays the mounts out as links in a private directory
+	and chroot()s into it (Renguin's chroot, batch 14): no sandbox, and it
+	says so. It is kept in /usr/local/lib/renguin/bwrap and copied to
+	/usr/bin/bwrap, where Flatpak looks for it; Alpine's bubblewrap, which
+	"apk add flatpak" brings, is moved aside to /usr/bin/bwrap.alpine. An
+	apk commit hook puts the shim back after apk changes. Off: the shim
+	and the hook go, Alpine's bwrap comes back.
+*/
+static const char* kBwrapShim = R"shim(#!/bin/sh
+# bwrap for Renguin (written by Renga's "linux" command, switch "flatpak"
+# in the Renguin Manager). Renguin has no namespaces yet, so this is not a
+# sandbox: it lays out the mounts Flatpak asks for as symbolic links in a
+# private directory and chroot()s into it (Renguin's chroot, batch 14).
+# Binds become links to host paths (Renguin follows targets under
+# /boot/system/ and /boot/home/ on the host); namespace, seccomp and
+# capability options are accepted and ignored.
+LINUX_ROOT=${RENGUIN_BWRAP_LINUX_ROOT-/boot/system/non-packaged/compat/linux}
+root=$(mktemp -d /tmp/renguin-bwrap.XXXXXX) || exit 1
+chdir=/
+clearenv=0
+envfile=$root.env
+: > "$envfile"
+[ -n "$RENGUIN_BWRAP_QUIET" ] || echo "bwrap (Renguin): no sandbox; \
+Flatpak programs run with your rights." >&2
+
+host() {
+	case "$1" in
+		/boot/*) printf '%s' "$1" ;;
+		/*) printf '%s%s' "$LINUX_ROOT" "$1" ;;
+		*) printf '%s/%s' "$(pwd)" "$1" ;;
+	esac
+}
+
+place() {
+	# $1 host target, $2 destination inside the new root
+	mkdir -p "$root$(dirname "$2")"
+	rm -rf "$root$2" 2>/dev/null
+	ln -s "$1" "$root$2"
+}
+
+quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# --args <fd>: more arguments, NUL-separated, read first
+expanded=""
+while [ $# -gt 0 ]; do
+	if [ "$1" = "--args" ]; then
+		list=$root.args
+		eval "tr '\\000' '\\n' <&$2" > "$list"
+		while IFS= read -r line; do
+			expanded="$expanded $(quote "$line")"
+		done < "$list"
+		shift 2
+		continue
+	fi
+	expanded="$expanded $(quote "$1")"
+	shift
+done
+eval "set -- $expanded"
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--) shift; break ;;
+		--bind|--ro-bind|--dev-bind|--bind-try|--ro-bind-try|--dev-bind-try)
+			case "$2" in
+				/dev|/dev/*|/proc|/proc/*) ;;
+				*) [ -e "$2" ] || case "$1" in *-try) shift 3; continue ;; esac
+				   place "$(host "$2")" "$3" ;;
+			esac
+			shift 3 ;;
+		--symlink)
+			mkdir -p "$root$(dirname "$3")"
+			rm -rf "$root$3" 2>/dev/null
+			ln -s "$2" "$root$3"
+			shift 3 ;;
+		--setenv)
+			printf 'export %s=%s\n' "$2" "$(quote "$3")" >> "$envfile"
+			shift 3 ;;
+		--unsetenv)
+			printf 'unset %s\n' "$2" >> "$envfile"
+			shift 2 ;;
+		--clearenv) clearenv=1; shift ;;
+		--chdir) chdir=$2; shift 2 ;;
+		--dir|--tmpfs|--mqueue)
+			rm -rf "$root$2" 2>/dev/null
+			mkdir -p "$root$2"
+			shift 2 ;;
+		--proc|--dev) shift 2 ;;
+		--file|--bind-data|--ro-bind-data)
+			mkdir -p "$root$(dirname "$3")"
+			eval "cat <&$2" > "$root$3"
+			shift 3 ;;
+		--chmod) chmod "$2" "$root$3" 2>/dev/null; shift 3 ;;
+		--info-fd|--json-status-fd)
+			eval "printf '{ \"child-pid\": %d }\\n' $$ >&$2"
+			eval "exec $2>&-"
+			shift 2 ;;
+		--block-fd|--userns-block-fd)
+			eval "head -c 1 <&$2" > /dev/null
+			shift 2 ;;
+		--seccomp|--add-seccomp-fd|--sync-fd|--userns|--userns2|--pidns|\
+		--exec-label|--file-label|--uid|--gid|--hostname|--lock-file|\
+		--cap-add|--cap-drop|--perms|--size|--remount-ro|--argv0|\
+		--bind-fd|--ro-bind-fd)
+			case "$1" in
+				--bind-fd|--ro-bind-fd) shift 3 ;;
+				*) shift 2 ;;
+			esac ;;
+		--*) shift ;;
+		*) break ;;
+	esac
+done
+
+[ $# -gt 0 ] || { echo "bwrap (Renguin): no command" >&2; exit 1; }
+for directory in /tmp /run /var/tmp; do
+	[ -e "$root$directory" ] || mkdir -p "$root$directory"
+done
+envtext=$(cat "$envfile")
+if [ -n "$RENGUIN_BWRAP_DRY_RUN" ]; then
+	# for the tests: the layout, the environment and the command
+	(cd "$root" && find . | sort | while read -r entry; do
+		if [ -L "$entry" ]; then
+			echo "$entry -> $(readlink "$entry")"
+		else
+			echo "$entry"
+		fi
+	done)
+	echo "env: $envtext"
+	echo "chdir: $chdir"
+	echo "command: $*"
+	exit 0
+fi
+rm -f "$envfile" "$root.args"
+if [ $clearenv = 1 ]; then
+	exec env -i RENGUIN_BWRAP_ENV="$envtext" RENGUIN_BWRAP_CHDIR="$chdir" \
+		chroot "$root" /bin/sh -c 'eval "$RENGUIN_BWRAP_ENV"; unset \
+RENGUIN_BWRAP_ENV; cd "$RENGUIN_BWRAP_CHDIR" 2>/dev/null; \
+unset RENGUIN_BWRAP_CHDIR; exec "$@"' bwrap "$@"
+fi
+export RENGUIN_BWRAP_ENV="$envtext" RENGUIN_BWRAP_CHDIR="$chdir"
+exec chroot "$root" /bin/sh -c 'eval "$RENGUIN_BWRAP_ENV"; unset \
+RENGUIN_BWRAP_ENV; cd "$RENGUIN_BWRAP_CHDIR" 2>/dev/null; \
+unset RENGUIN_BWRAP_CHDIR; exec "$@"' bwrap "$@"
+)shim";
+static const char* kBwrapShimMarker = "bwrap for Renguin";
+static const char* kFlatpakHook =
+	"#!/bin/sh\n"
+	"# Written by Renga's \"linux\" command (switch \"flatpak\"): keeps\n"
+	"# Renga's bwrap in place after apk changes (bubblewrap updates).\n"
+	"[ \"$1\" = post-commit ] || exit 0\n"
+	"[ -x /boot/system/bin/linux ] || exit 0\n"
+	"/boot/system/bin/linux --ensure-flatpak > /dev/null 2>&1 < /dev/null\n"
+	"exit 0\n";
+static const char* kFlatpakHookPath
+	= "/etc/apk/commit_hooks.d/renga-flatpak.hook";
+
+
+static bool
+file_contains(const std::string& path, const char* text)
+{
+	FILE* file = fopen(path.c_str(), "r");
+	if (file == NULL)
+		return false;
+	std::string content;
+	char buffer[4096];
+	size_t length;
+	while ((length = fread(buffer, 1, sizeof(buffer), file)) > 0)
+		content.append(buffer, length);
+	fclose(file);
+	return content.find(text) != std::string::npos;
+}
+
+
+static void
+ensure_flatpak()
+{
+	std::string bwrap = root_path("/usr/bin/bwrap");
+	std::string alpine = root_path("/usr/bin/bwrap.alpine");
+	if (!linux_setting("flatpak", false)) {
+		unlink(root_path(kFlatpakHookPath).c_str());
+		unlink(root_path("/usr/local/lib/renguin/bwrap").c_str());
+		if (file_contains(bwrap, kBwrapShimMarker)) {
+			unlink(bwrap.c_str());
+			if (exists(alpine))
+				rename(alpine.c_str(), bwrap.c_str());
+		}
+		return;
+	}
+	write_root_file("/usr/local/lib/renguin/bwrap", kBwrapShim, 0755);
+	if (exists(bwrap) && !file_contains(bwrap, kBwrapShimMarker))
+		rename(bwrap.c_str(), alpine.c_str());
+	write_root_file("/usr/bin/bwrap", kBwrapShim, 0755);
+	if (exists(root_path("/etc/apk")))
+		write_root_file(kFlatpakHookPath, kFlatpakHook, 0755);
+}
+
+
 static void
 usage()
 {
@@ -854,6 +1059,13 @@ main(int argc, char** argv)
 			"(Renguin is not installed).\n");
 		return 1;
 	}
+	if (argc > 1 && strcmp(argv[1], "--ensure-flatpak") == 0) {
+		// the apk hook and the Renguin Manager's Flatpak switch
+		if (!root_installed())
+			return 1;
+		ensure_flatpak();
+		return 0;
+	}
 	if (argc > 1 && strcmp(argv[1], "--setup") == 0) {
 		int status = setup();
 		if (status != 0 || argc == 2 || strcmp(argv[2], "--shell") != 0)
@@ -877,6 +1089,7 @@ main(int argc, char** argv)
 	ensure_chromium_flags();
 	ensure_apk_hook();
 	ensure_shared_tmp();
+	ensure_flatpak();
 	std::string shell = login_shell();
 	update_theme();
 	std::vector<std::string> environment = linux_environment(shell);
