@@ -14,6 +14,8 @@
 #include <FilePanel.h>
 #include <Notification.h>
 #include <PopUpMenu.h>
+
+#include "PendingChanges.h"
 #include <Window.h>
 
 #include "Support.h"
@@ -94,7 +96,23 @@ private:
 									BRow* currentRow);
 			void				_UpdateWindowZoomLimits();
 
+	// Renga (batch 13, F-24): changes queued and applied together through
+	// the shared disk engine (PendingChanges.h)
+			bool				_QueueAction(BMessage* message);
+			bool				_QueueOperation(
+									const RengaDisk::Operation& operation);
+			int32				_EngineIndex(partition_id partition);
+			void				_ApplyPending(BMessage* testReply = NULL);
+			void				_TestQueue(BMessage* message);
+			void				_UpdateQueueItems();
+
 private:
+			PendingChangesView*	fPending;
+			bool				fQueueChanges;
+			bool				fAllowRealDisks;
+			BMenuItem*			fQueueMenuItem;
+			BMenuItem*			fRealDisksMenuItem;
+
 			BDiskDeviceRoster	fDiskDeviceRoster;
 			BDiskDevice*		fCurrentDisk;
 			partition_id		fCurrentPartitionID;

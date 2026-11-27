@@ -18,6 +18,7 @@ class MainWindow;
 class DriveSetup : public BApplication {	
 public:
 								DriveSetup();
+	virtual	void			MessageReceived(BMessage* message);
 	virtual						~DriveSetup();
 
 	virtual	void				ReadyToRun();

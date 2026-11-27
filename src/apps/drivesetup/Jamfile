@@ -2,7 +2,7 @@ SubDir HAIKU_TOP src apps drivesetup ;
 
 AddSubDirSupportedPlatforms libbe_test ;
 
-UsePrivateHeaders interface shared storage tracker ;
+UsePrivateHeaders diskengine interface shared storage tracker ;
 
 Application DriveSetup :
 	AbstractParametersPanel.cpp
@@ -15,9 +15,10 @@ Application DriveSetup :
 	InitParametersPanel.cpp
 	MainWindow.cpp
 	PartitionList.cpp
+	PendingChanges.cpp
 	Support.cpp
 
-	: be localestub libcolumnlistview.a shared tracker
+	: be localestub libcolumnlistview.a shared tracker libdiskengine.a
 		[ TargetLibsupc++ ]
 	: DriveSetup.rdef
 ;
@@ -33,6 +34,7 @@ DoCatalogs DriveSetup :
 	InitParametersPanel.cpp
 	MainWindow.cpp
 	PartitionList.cpp
+	PendingChanges.cpp
 	Support.cpp
 ;
 

@@ -32,3 +32,16 @@ if $(CE_HARNESS) {
 		: disk_engine_test ;
 	AddFilesToHaikuImage system non-packaged bin : rengadisk ;
 }
+
+# DriveSetup's pending changes on the shared disk engine (batch 13, F-24
+# GUI first part), on a disk image only.
+UsePrivateHeaders diskengine ;
+Application drivesetup_queue_test :
+	drivesetup_queue_test.cpp
+	: be libdiskengine.a [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: drivesetup_queue_test ;
+}
