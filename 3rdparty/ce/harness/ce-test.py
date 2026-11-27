@@ -3381,7 +3381,8 @@ def parse_serial(results_dir, report, parts=()):
 		line = line.rstrip("\r")
 		if line.startswith(EXPECTED_KDL_MARKER):
 			in_expected_kdl = True
-		elif line.startswith("CE-HARNESS START"):
+		elif line.startswith("CE-HARNESS START") \
+				or " CE-HARNESS START " in line:
 			in_expected_kdl = False
 		if not in_expected_kdl:
 			kept.append(line)
@@ -4617,7 +4618,11 @@ def check_crashlog(results_dir, report):
 			text = logFile.read().decode("latin-1")
 	except OSError:
 		text = ""
-	starts = len(re.findall(r"^CE-HARNESS START", text, re.MULTILINE))
+	# A runner start can land in the middle of a kernel driver's line when
+	# two CPUs print at once (batch 13, --smp 2: "etherpci: init_driver
+	# CE-HARNESS START ..."), so it counts after a space too.
+	starts = len(re.findall(r"(?:^|[ \t])CE-HARNESS START\b", text,
+		re.MULTILINE))
 	answered = [e for e in entries if e["answered"] and not e["error"]]
 	messages = [e.get("message") for e in entries]
 	report.setdefault("host_checks", []).append({
