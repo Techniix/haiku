@@ -386,6 +386,15 @@ main()
 			ran = read_small("/tmp/ce-appimage-ran");
 		}
 		direct += " direct: " + ran;
+		// batch 14: where a Linux program's /tmp file goes, and whether
+		// the fake runs at all, without pipes in between
+		std::string diag = run(("rm -f /tmp/ce-diag; timeout 30 /bin/linux "
+			"/bin/sh -c 'echo hi > /tmp/ce-diag; echo w=$?; id -u; "
+			"ls -ld /tmp; ls -l /tmp/ce-diag' 2>&1; ls -l /tmp/ce-diag "
+			"/boot/system/non-packaged/compat/linux/tmp 2>&1; timeout 30 "
+			"/bin/linux '" + fake + "'; echo fake=$?; ls -l "
+			"/tmp/ce-appimage-ran 2>&1; rm -f /tmp/ce-diag").c_str());
+		direct += " diag: " + diag;
 		// one line: the harness keeps a check's first line only
 		for (size_t i = 0; i < direct.size(); i++) {
 			if (direct[i] == '\n')
