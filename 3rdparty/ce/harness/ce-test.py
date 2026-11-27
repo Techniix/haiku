@@ -29,7 +29,9 @@ Every run writes to <output>/ce-test-results/<timestamp>/ (and refreshes the
     sdl-out.raw     what it played on the second one (s16le, 2 ch, 48 kHz)
 
 The exit status is 0 only if the build succeeded, the guest finished its
-run without crashing, and every check passed.
+run without crashing, and every check passed. A partial (--only) run exits
+2 when its selection passed and 1 when it failed; a command-line error
+(an unknown option or test name) exits 64, never 2.
 """
 
 import argparse
@@ -5401,8 +5403,22 @@ def write_report(results_dir, report):
 	return summary, verdict["pass"]
 
 
+# Exit status of a command-line error. argparse's own is 2, which is also
+# "partial run, selection passed": renga-test read an unknown test name as
+# a passed selection (batch 14).
+USAGE_EXIT_STATUS = 64
+
+
+class HarnessArgumentParser(argparse.ArgumentParser):
+	"""argparse, with command-line errors exiting USAGE_EXIT_STATUS."""
+
+	def error(self, message):
+		self.print_usage(sys.stderr)
+		self.exit(USAGE_EXIT_STATUS, "%s: error: %s\n" % (self.prog, message))
+
+
 def main():
-	parser = argparse.ArgumentParser(description=__doc__,
+	parser = HarnessArgumentParser(description=__doc__,
 		formatter_class=argparse.RawDescriptionHelpFormatter)
 	parser.add_argument("--output", default=os.path.join(HAIKU_TOP,
 		"generated.x86_64"), help="configured Haiku output directory")

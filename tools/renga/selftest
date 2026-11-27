@@ -8,6 +8,8 @@
 #    protected-paths list. Before lib.sh dropped GIT_DIR it looked for
 #    <worktree>/tools/renga/tools/renga/protected-paths and blocked every
 #    push from a worktree.
+# 2. no-results-not-pass: renga-test reports a ce-test.py run that wrote no
+#    results (a command-line error) as failed, never as passed (0 or 2).
 #
 # Creates a temporary detached worktree of HEAD (or of RENGA_SELFTEST_REV,
 # to show a check failing on older scripts) and removes it again.
@@ -41,5 +43,21 @@ case $out in
 *"missing "*protected-paths*) status=1 ;;
 esac
 check worktree-hook "$status" "$(echo "$out" | tail -n 1)"
+
+# 2. no-results-not-pass: a ce-test.py command-line error (here an unknown
+#    option) writes no results and must not read as "selection passed"
+#    (exit 2). Before batch 14 argparse's status 2 came through unchanged.
+#    Needs a configured output directory (renga-test checks it); skipped
+#    without one.
+if [ -f "$RENGA_OUTPUT/build/BuildConfig" ]; then
+	out=$(cd "$dir/wt" && HAIKU_OUTPUT_DIR=$RENGA_OUTPUT tools/renga/renga-test \
+		epoll --no-such-option 2>&1) && status=0 || status=$?
+	case $status in
+	0|2) check no-results-not-pass 1 "renga-test exited $status for a run that never started (want a failure: not 0 or 2)" ;;
+	*) check no-results-not-pass 0 "" ;;
+	esac
+else
+	echo "SKIP no-results-not-pass: $RENGA_OUTPUT is not configured"
+fi
 
 [ $failures = 0 ]
