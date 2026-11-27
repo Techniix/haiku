@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include "WaylandServer.h"
 #include "Wayland.h"
 #include "HaikuShm.h"
@@ -123,6 +124,17 @@ void Application::MessageReceived(BMessage *msg)
 			if (msg->GetBool("push", false))
 				RengaClientsChanged();
 		}
+		msg->SendReply(&reply);
+		return;
+	}
+	case 'RgTz': {
+		// Renga harness (wayland_test toplevel_gone_resize, batch 14):
+		// the next destroyed xdg_toplevel's window gets a resize first
+		extern bool gRengaTestResizeAfterDestroy;
+		if (access("/boot/system/non-packaged/data/ce-harness", F_OK) == 0)
+			gRengaTestResizeAfterDestroy = true;
+		BMessage reply(B_REPLY);
+		reply.AddBool("armed", gRengaTestResizeAfterDestroy);
 		msg->SendReply(&reply);
 		return;
 	}
