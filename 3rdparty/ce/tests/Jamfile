@@ -20,6 +20,7 @@ SubInclude HAIKU_TOP 3rdparty ce tests kdl ;
 SubInclude HAIKU_TOP 3rdparty ce tests largefont ;
 SubInclude HAIKU_TOP 3rdparty ce tests linuxkpi ;
 SubInclude HAIKU_TOP 3rdparty ce tests media ;
+SubInclude HAIKU_TOP 3rdparty ce tests mesa ;
 SubInclude HAIKU_TOP 3rdparty ce tests nvme ;
 SubInclude HAIKU_TOP 3rdparty ce tests package_priority ;
 SubInclude HAIKU_TOP 3rdparty ce tests packagefs ;

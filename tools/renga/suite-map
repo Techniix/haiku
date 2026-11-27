@@ -81,6 +81,7 @@ src/kits/shared/                      @full largefont
 3rdparty/ce/tests/largefont/          largefont
 3rdparty/ce/tests/linuxkpi/           linuxkpi
 3rdparty/ce/tests/media/              media
+3rdparty/ce/tests/mesa/               mesa
 3rdparty/ce/tests/nvme/               nvme
 3rdparty/ce/tests/package_priority/   package_priority
 3rdparty/ce/tests/packagefs/          packagefs

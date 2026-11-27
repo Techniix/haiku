@@ -579,6 +579,10 @@ def build(args, results_dir, report):
 		jam.append("-sCE_EXTRA_PACKAGE_FILES=" + " ".join(files))
 		if not args.installer_upgrade and not args.linux_chromium:
 			jam.append("-sHAIKU_IMAGE_SIZE=%d" % TOOLCHAIN_IMAGE_SIZE)
+	if args.mesa_upgrade and not (args.installer_upgrade or args.toolchain
+			or args.linux_chromium):
+		# room for mesa 26.3.0, LLVM 21 and what the solver adds to them
+		jam.append("-sHAIKU_IMAGE_SIZE=%d" % MESA_UPGRADE_IMAGE_SIZE)
 	if args.linux_chromium:
 		# Alpine's Chromium in the Linux root (renguin_test chrome.*)
 		jam.append("-sRENGUIN_LINUX_CHROMIUM=1")
@@ -813,6 +817,9 @@ NO_FINAL_TESTS_FILE = "/myfs/system/non-packaged/data/ce-harness/no-final-tests"
 # --restore-points: restore_point_test runs only with this file
 RESTORE_POINTS_FLAG_FILE = \
 	"/myfs/system/non-packaged/data/ce-harness/restore-points"
+# --mesa-upgrade: mesa_upgrade_test runs only with this file
+MESA_UPGRADE_FLAG_FILE = \
+	"/myfs/system/non-packaged/data/ce-harness/mesa-upgrade"
 
 
 def make_patched_image(args, image, copy):
@@ -851,13 +858,17 @@ def make_patched_image(args, image, copy):
 				% OTHER_SYSTEMS_EFI_DEFAULT
 		files.append((copy + ".kernel-settings", KERNEL_SETTINGS_FILE,
 			settings, "boot_menu_timeout %d" % timeout))
-	if args.other_systems or args.installer_upgrade or args.restore_points:
+	if args.other_systems or args.installer_upgrade or args.restore_points \
+			or args.mesa_upgrade:
 		files.append((copy + ".no-final", NO_FINAL_TESTS_FILE,
 			"skip the tests that end the boot\n",
 			"skip the tests that end the boot"))
 	if args.restore_points:
 		files.append((copy + ".restore", RESTORE_POINTS_FLAG_FILE,
 			"restore point run\n", "restore point run"))
+	if args.mesa_upgrade:
+		files.append((copy + ".mesa", MESA_UPGRADE_FLAG_FILE,
+			"mesa upgrade run\n", "mesa upgrade run"))
 	if args.displays > 1:
 		# the virtio-gpu driver counts every output (QEMU enables only the
 		# first one without a window)
@@ -1505,6 +1516,9 @@ INSTALLER_OLDER_STATE = "state_2025-01-01_12:00:00"
 INSTALLER_IMAGE_SIZE = 1200
 # MB; the Chromium layer of the Linux root is about 500 MB extracted
 CHROMIUM_IMAGE_SIZE = 1600
+# MB; --mesa-upgrade downloads mesa 26.3.0, libglvnd and LLVM 21's
+# libraries (about 200 MB of packages) on top of a renga-* image (1400 MB)
+MESA_UPGRADE_IMAGE_SIZE = 2000
 # MB; HaikuPorts' Chromium build toolchain is about 280 MB of packages,
 # on top of a renga-* image (1400 MB)
 TOOLCHAIN_IMAGE_SIZE = 2000
@@ -1789,6 +1803,49 @@ def run_restore_point_boots(args, results_dir, report):
 				whole.write(("\n[ce-test] --- boot %s ---\n" % tag).encode())
 				whole.write(data)
 	os.remove(disk)
+
+
+MESA_UPGRADE_BOOTS = ("upgrade", "after")
+
+
+def run_mesa_upgrade_boots(args, results_dir, report):
+	"""--mesa-upgrade: two starts of one disk with the user-mode network,
+	its writes kept between them (a copy of the test image, made like the
+	patched image). mesa_upgrade_test runs the pkgman transaction and the
+	OpenGL checks in the first boot ("upgrade"), and checks the desktop,
+	the versions and OpenGL again in the second ("after"). Each boot's
+	serial log is appended to serial.log, as for --restore-points."""
+	disk = os.path.join(results_dir, "mesa-upgrade.img")
+	error = make_patched_image(args, image_path(args), disk)
+	if error is not None:
+		report["mesa_upgrade_setup"] = error
+		log(error)
+		return
+	report["mesa_upgrade_setup"] = "ok"
+	for tag in MESA_UPGRADE_BOOTS:
+		boot(args, results_dir, report, image=disk, tag=tag, persist=True)
+	for tag in MESA_UPGRADE_BOOTS:
+		for name in ("serial.log", "serial.timed.log"):
+			try:
+				with open(os.path.join(results_dir, tag, name), "rb") as part:
+					data = part.read()
+			except OSError:
+				continue
+			with open(os.path.join(results_dir, name), "ab") as whole:
+				whole.write(("\n[ce-test] --- boot %s ---\n" % tag).encode())
+				whole.write(data)
+	os.remove(disk)
+
+
+def check_mesa_upgrade_boots(args, report):
+	"""mesa_upgrade.setup: the --mesa-upgrade disk was made (its checks are
+	mesa_upgrade_test's own)."""
+	if not args.mesa_upgrade:
+		return
+	report.setdefault("host_checks", []).append({
+		"name": "mesa_upgrade.setup",
+		"pass": report.get("mesa_upgrade_setup") == "ok",
+		"detail": report.get("mesa_upgrade_setup", "not prepared")})
 
 
 def check_restore_point_boots(args, results_dir, report):
@@ -3342,7 +3399,10 @@ def _boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		"-audiodev", "wav,id=usbsnd%d,path=%s,out.frequency=48000,"
 			"out.channels=2,out.format=s16"
 			% (n, os.path.join(results_dir, "usb-%d.wav" % n)))] + [
-		"-nic", "none",
+	] + (["-nic", "user,model=e1000"] if args.mesa_upgrade
+		# --mesa-upgrade: QEMU's user-mode network (NAT, DHCP, DNS) for
+		# the Renga package repository
+		else ["-nic", "none"]) + [
 		# QEMU's educational PCI device (MMIO, MSI, DMA): lkpi_pcitest
 		# tests the LinuxKPI core against it (linuxkpi suite, F-26;
 		# check_linuxkpi()). A 24-bit DMA mask instead of 28 puts nearly
@@ -5388,6 +5448,12 @@ def main():
 			"boot loader counted them, the recovery menu starts the last "
 			"working state, then the boot menu (a one-shot choice) picks "
 			"the restore point (hard disk, BIOS or UEFI; see README)")
+	parser.add_argument("--mesa-upgrade", action="store_true",
+		help="renga-* images: boot one disk twice with QEMU's user-mode "
+			"network; mesa_upgrade_test moves the image's mesa 22.0.5 to "
+			"libglvnd and mesa 26.3.0 from the Renga repository in one "
+			"pkgman transaction, checks OpenGL, then the second boot (see "
+			"README). Needs the network; never part of the normal runs")
 	parser.add_argument("--displays", type=int, default=1, metavar="N",
 		help="N > 1: a virtio-gpu card with N outputs instead of the VGA "
 			"card, for app_server's several screens (displays_multi_test)")
@@ -5482,6 +5548,9 @@ def main():
 	args.output = os.path.abspath(args.output)
 	if args.linux_chromium and args.memory < 2048:
 		args.memory = 2048
+	if args.mesa_upgrade and args.memory < 2048:
+		# llvmpipe and the package solver
+		args.memory = 2048
 	if args.profile is None:
 		args.profile = "minimum-anyboot" \
 			if args.firmware == "uefi" or args.media == "cdrom" \
@@ -5496,7 +5565,7 @@ def main():
 		args.timeout = 3600 if args.profile.startswith("renga-") else 1800
 	available = installed_tests(args.profile,
 		final=not (args.other_systems or args.installer_upgrade
-			or args.restore_points))
+			or args.restore_points or args.mesa_upgrade))
 	if args.list_tests:
 		print("\n".join(available))
 		return 0
@@ -5513,6 +5582,12 @@ def main():
 			or args.installer_upgrade or args.other_systems
 			or args.two_installs or args.boot_menu_timeout):
 		parser.error("--restore-points boots one hard disk several times")
+	if args.mesa_upgrade and (not args.profile.startswith("renga-")
+			or args.media != "disk" or args.restore_points
+			or args.installer_upgrade or args.other_systems
+			or args.two_installs or args.loader_writes):
+		parser.error("--mesa-upgrade boots one hard disk of a renga-* image "
+			"twice")
 	if args.installer_upgrade and (args.media != "disk"
 			or args.disk_bus != "ide" or args.other_systems
 			or args.two_installs):
@@ -5531,7 +5606,8 @@ def main():
 			else "minimum-raw"
 
 	if resume_dir is not None and (args.restore_points or args.loader_writes
-			or args.installer_upgrade or args.other_systems):
+			or args.installer_upgrade or args.other_systems
+			or args.mesa_upgrade):
 		log("cannot resume: runs with several boots of their own "
 			"(--restore-points, --loader-writes, --installer-upgrade, "
 			"--other-systems) start again")
@@ -5564,6 +5640,7 @@ def main():
 		"other_systems": args.other_systems,
 		"installer_upgrade": args.installer_upgrade,
 		"restore_points": args.restore_points,
+		"mesa_upgrade": args.mesa_upgrade,
 		"loader_writes": args.loader_writes,
 		"boot_menu_timeout": args.boot_menu_timeout,
 		"pointer_devices": args.pointer_devices,
@@ -5618,6 +5695,8 @@ def main():
 					"unit=0"]
 		if args.restore_points:
 			run_restore_point_boots(args, results_dir, report)
+		elif args.mesa_upgrade:
+			run_mesa_upgrade_boots(args, results_dir, report)
 		elif args.loader_writes:
 			run_loader_write_boots(args, results_dir, report)
 			# only the boot loader ran: its checks are the whole run
@@ -5798,6 +5877,7 @@ def analyze(args, results_dir, report, available, progress):
 	check_two_installs(args, results_dir, report)
 	check_installer_boots(args, results_dir, report)
 	check_restore_point_boots(args, results_dir, report)
+	check_mesa_upgrade_boots(args, report)
 	if "linuxkpi_test" in selected:
 		check_linuxkpi(where("linuxkpi_test"), report)
 	if "crashlog_test" in selected and not args.installer_upgrade:

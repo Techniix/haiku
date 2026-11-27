@@ -1,0 +1,23 @@
+SubDir HAIKU_TOP 3rdparty ce tests mesa ;
+
+# Mesa option C (batch 14): the one pkgman transaction from the image's
+# mesa 22.0.5 to libglvnd 1.7.0-100 and mesa 26.3.0-101 (Renga repository),
+# then OpenGL through BGLView with no Vulkan ICD and with lavapipe only,
+# GLInfo, GLTeapot, and a second boot to the desktop. Needs the network:
+# it runs only in a "ce-test.py --mesa-upgrade" run and does nothing in
+# other runs. Second phase (a GUI test, renga-* images).
+UseBuildFeatureHeaders mesa ;
+
+Includes [ FGristFiles mesa_upgrade_test.cpp ]
+	: [ BuildFeatureAttribute mesa : headers ] ;
+
+Application mesa_upgrade_test :
+	mesa_upgrade_test.cpp
+	: be package network [ BuildFeatureAttribute mesa : library ]
+	[ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: mesa_upgrade_test ;
+}

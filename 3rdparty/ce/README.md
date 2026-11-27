@@ -42,6 +42,7 @@ From the root of the Haiku tree, after `configure` has created
 3rdparty/ce/harness/ce-test.py --restore-points --only bootstate_test,restore_point_test
 3rdparty/ce/harness/ce-test.py --loader-writes  # boot loader writes stay in the state file
 3rdparty/ce/harness/ce-test.py --displays 2 --only displays_multi_test  # several screens
+3rdparty/ce/harness/ce-test.py --profile renga-raw --mesa-upgrade --only mesa_upgrade  # network
 3rdparty/ce/harness/ce-test.py --usb-controller ohci    # USB tablet on OHCI
 3rdparty/ce/harness/ce-test.py --pointer-devices virtio # only the virtio tablet
 3rdparty/ce/harness/ce-test.py --only epoll,signalfd  # quick, PARTIAL run
@@ -682,6 +683,50 @@ package has `mt7921e`, its firmware and the Manager's data. The host check
 is above the mask; at edu's default 28 bits none of 64 `kmalloc()` buffers
 of a 1 GiB guest was, so the bounce path went untested.
 
+### The Mesa upgrade (network)
+
+`--mesa-upgrade` (renga-* images, hard disk) checks the batch 14 Mesa
+upgrade (roadmap decisions log, 2026-11-27, option C) the way a user makes
+it, from the published Renga repository. It is the only run with a
+network: QEMU's user-mode network (`-nic user,model=e1000`; NAT, DHCP and
+DNS from QEMU) instead of `-nic none`, so it depends on GitHub Pages and
+is never part of the normal runs or the sweep. The image is built with
+2000 MB (`MESA_UPGRADE_IMAGE_SIZE`), the guest gets at least 2 GB, and a
+copy of the image is booted twice with its writes kept, with
+`mesa_upgrade_test` enabled by a flag file (`data/ce-harness/mesa-upgrade`)
+and the tests that end a boot left out; pass `--only mesa_upgrade`:
+
+1. `upgrade`: once `techniix.github.io` resolves, one `pkgman install
+   libglvnd mesa mesa_devel mesa_eglvnd mesa_lavapipe` that also removes
+   mesa_swpipe. pkgman cannot name a package to remove in an install, and
+   `-y` fails on any solver problem, so the test answers it like a user:
+   tries ending in `q`/`no` (no change) read each problem, and the
+   solution taken is the one that allows the deinstallation of
+   mesa_swpipe (a vendor change or a replacement is also accepted,
+   anything else fails); the planned changes must remove nothing else;
+   then the real run with `yes`. Then the active versions, and OpenGL in
+   fresh processes (below), GLInfo and GLTeapot.
+2. `after`: the upgraded system boots to the desktop (app_server and the
+   session: Deskbar, or FirstBootPrompt in the first-login phase of
+   harness images, where the test then starts Deskbar and wants it
+   running), the versions are still active, and the OpenGL checks run
+   again.
+
+The solver upgrades more than the five packages: the plan of the first
+QEMU run (2026-11-27) also upgraded gcc_syslibs and gcc 13.3.0 to 15.3.0,
+expat and mpfr, and installed llvm21_libs, vulkan_loader and
+libglvnd_devel from HaikuPorts; only mesa_swpipe was removed.
+
+The OpenGL check is a child process per Vulkan loader setup: `no_icd`
+(`VK_ICD_FILENAMES` and `VK_DRIVER_FILES` name a file that does not exist)
+and `lavapipe` (only lavapipe's ICD file, `add-ons/vulkan/icd.d/lvp_icd.x86_64.json`). A double-buffered BGLView must
+report llvmpipe, OpenGL 4.x and GLSL 4.x, and a frame cleared to
+64,128,191 with a red square in the middle must read back with those
+colours (`glReadPixels` before `SwapBuffers`). GLInfo must still run after
+5 s; GLTeapot after 10 s, with its window (from scripting, captured with
+`BScreen::GetBitmap`) in at least 16 colours and 2% not its background.
+Host check: `mesa_upgrade.setup`.
+
 ## Current suites
 
 - **disk_engine** (every image, `disk_engine_test`, suite directory
@@ -701,6 +746,9 @@ of a 1 GiB guest was, so the bounce path went untested.
   Applications entry is "Renga Depot". Screenshot `renga_depot`.
 - **installer** (`installer_test`): see "Installing over an existing
   installation"; only with `--installer-upgrade`.
+- **mesa_upgrade** (renga-* images, `mesa_upgrade_test`, suite directory
+  `mesa`; batch 14): see "The Mesa upgrade (network)"; only with
+  `--mesa-upgrade`.
 - **installer_ui** (renga-* images, `installer_ui_test`): the harness
   attaches "CETarget", a 64 MiB BFS disk made with `bfs_shell
   --initialize` holding a system package file

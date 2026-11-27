@@ -533,6 +533,25 @@ for name, args, keywords, wanted in [
 			name),
 		ce_test.spare_disk_wanted(args, **keywords) == wanted)
 
+# --mesa-upgrade (batch 14): mesa_upgrade.setup fails when the disk of the
+# two boots was not made, and is no check at all in other runs.
+for label, setup, wanted in [("made", "ok", True),
+		("not made", "bfs_shell could not write", False),
+		("never prepared", None, False)]:
+	mesaReport = {} if setup is None else {"mesa_upgrade_setup": setup}
+	ce_test.check_mesa_upgrade_boots(types.SimpleNamespace(
+		mesa_upgrade=True), mesaReport)
+	mesaChecks = [c for c in mesaReport.get("host_checks", [])
+		if c["name"] == "mesa_upgrade.setup"]
+	expect("mesa_upgrade.setup %s when the disk was %s"
+			% ("passes" if wanted else "fails", label),
+		len(mesaChecks) == 1 and mesaChecks[0]["pass"] == wanted, mesaChecks)
+mesaReport = {}
+ce_test.check_mesa_upgrade_boots(types.SimpleNamespace(mesa_upgrade=False),
+	mesaReport)
+expect("mesa_upgrade.setup is no check without --mesa-upgrade",
+	not mesaReport.get("host_checks"), mesaReport)
+
 spareDirectory = tempfile.mkdtemp()
 sparePath = os.path.join(spareDirectory, "spare.img")
 problem = ce_test.make_spare_disk(sparePath)
