@@ -18,3 +18,17 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests
 		: image_writer_test ;
 }
+
+# Renga's shared disk-management engine (F-24, first part) through
+# rengadisk, on a disk image file only. rengadisk itself is put into the
+# harness image here (the regular images get it from build/jam).
+Application disk_engine_test :
+	disk_engine_test.cpp
+	: be [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: disk_engine_test ;
+	AddFilesToHaikuImage system non-packaged bin : rengadisk ;
+}

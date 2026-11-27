@@ -331,7 +331,7 @@ The full entries are in the [Feature register](#feature-register). This table is
 | F-21 | hrev tag workflow | Implemented | Dry run plus live tag |
 | F-22 | Graphical boot loader | First part QEMU Tested, Windows entry verified on real hardware (2026-11-11); graphical menu Designed | 10 `other_systems.*`/`other_media.*` (UEFI) and 9 (BIOS) with `--other-systems`; 9 `bootmenu.*` + screenshot (renga-raw) |
 | F-23 | Installer redesign | Early part (in-place replacement) QEMU Tested, upgrade verified on real hardware (2026-11-11; stale non-packaged driver issue in F-59); wizard Designed | `installer.*` with `--installer-upgrade` (27 BIOS, 28 UEFI checks in the installer suite); 4 `installer_ui.*` + screenshot (renga-raw) |
-| F-24 | Partition manager | Designed | None |
+| F-24 | Partition manager | Shared engine first part QEMU Tested (`rengadisk`); GUI Designed | 10 `disk_engine.*` (disk images only) |
 | F-25 | Lumina, rebuilt into Renga (window management, title bars, panel) | Snap layouts, window menu and visible workspaces QEMU Tested in app_server (`afec25b4`, 2026-11-20); panel, title-bar buttons, overview of windows not started | Host unit tests only |
 | F-26 | LinuxKPI_HaikuOS | QEMU Tested (core, in-tree build, Manager and `lkpictl`); `mt7921e` Implemented in Renga, hardware regression check pending | 31 `linuxkpi.*` (every image), 10 `linuxkpi_ui.*` + `linuxkpi_ui.screenshots` (renga-raw) |
 | F-27 | Renguin | In Development (static and dynamic Linux programs, networking QEMU Tested 2026-11-14) | `renguin` 32 |
@@ -1132,10 +1132,10 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Field | Value |
 | --- | --- |
 | Upstream maturity | DriveSetup B (immediate commits; no resize/move/SMART); userland GPT/MBR resize advertised but not implemented; BFS resize disabled; GPT move TODO |
-| Renga maturity | None |
-| Status | **Designed** |
-| Completed | Design (audit section 7): grow DriveSetup; pending-changes queue with one Apply; safety rules (queue, fsck before shrink, no resize while mounted, table backup before Apply, disk-image tests only) |
-| Remaining | Shared disk-management engine (below); userland `ValidateResizeChild`/`ResizeChild` (4); GPT attributes and backup repair (4); ext4/exFAT format (5); pending queue + resize UI (5); BFS resize unmounted (6); GPT move (6); SMART (6) |
+| Renga maturity | Shared engine, first part (2026-11-26, branch `batch/12-disk-engine`) |
+| Status | Engine first part **QEMU Tested**; GUI **Designed** |
+| Completed | Engine first part: `libdiskengine.a` (`headers/private/diskengine/DiskEngine.h`) and `rengadisk`: list disks with detected systems and warnings, attach images, planned steps (table, create, delete, format, name) with a preview, safety rules (never the boot disk, read-only or mounted, images only unless allowed), table backup, journal, restore (images). Design (audit section 7): grow DriveSetup; pending-changes queue with one Apply; safety rules (queue, fsck before shrink, no resize while mounted, table backup before Apply, disk-image tests only) |
+| Remaining | The partition manager GUI on the engine (DriveSetup revamp, pending-changes queue with one Apply, switches); restore on real disks (no userland rescan: after a restart); resize; userland `ValidateResizeChild`/`ResizeChild` (4); GPT attributes and backup repair (4); ext4/exFAT format (5); pending queue + resize UI (5); BFS resize unmounted (6); GPT move (6); SMART (6) |
 | Known bugs/limitations | Not applicable |
 | Dependencies | `F-01` (disk-image tests) |
 | Difficulty | 4-6 by item |

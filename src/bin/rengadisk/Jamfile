@@ -1,0 +1,10 @@
+SubDir HAIKU_TOP src bin rengadisk ;
+
+# rengadisk (Renga, F-24 first part): the shared disk-management engine's
+# command-line front end, for scripts and the harness.
+UsePrivateHeaders diskengine storage shared ;
+
+Application rengadisk :
+	rengadisk.cpp
+	: libdiskengine.a be [ TargetLibstdc++ ]
+;
