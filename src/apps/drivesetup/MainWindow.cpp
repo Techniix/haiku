@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <Alert.h>
 #include <AppFileInfo.h>
@@ -82,7 +83,20 @@ enum {
 	MSG_COMPLETE				= 'comp',
 
 	MSG_PARTITION_ROW_SELECTED	= 'prsl',
+
+	// Renga (batch 13, F-24)
+	MSG_TOGGLE_QUEUE			= 'tqch',
+	MSG_TOGGLE_REAL_DISKS		= 'trdk',
+	MSG_TEST_QUEUE				= 'Tdsq'
+		// harness images only: queue, apply and read the pending changes
 };
+
+
+static bool
+is_harness()
+{
+	return access("/boot/system/non-packaged/data/ce-harness", F_OK) == 0;
+}
 
 
 class ListPopulatorVisitor : public BDiskDeviceVisitor {
@@ -280,6 +294,15 @@ MainWindow::MainWindow()
 	// fDiskMenu->AddItem(fSurfaceTestMenuItem);
 	fDiskMenu->AddItem(fRescanMenuItem);
 
+	// Renga (batch 13, F-24): pending changes
+	fDiskMenu->AddSeparatorItem();
+	fQueueMenuItem = new BMenuItem(B_TRANSLATE("Queue changes, apply "
+		"together"), new BMessage(MSG_TOGGLE_QUEUE));
+	fDiskMenu->AddItem(fQueueMenuItem);
+	fRealDisksMenuItem = new BMenuItem(B_TRANSLATE("Allow queued changes on "
+		"real disks"), new BMessage(MSG_TOGGLE_REAL_DISKS));
+	fDiskMenu->AddItem(fRealDisksMenuItem);
+
 	fMenuBar->AddItem(fDiskMenu);
 
 	// Parition menu
@@ -360,6 +383,14 @@ MainWindow::MainWindow()
 	fListView = new PartitionListView();
 	AddChild(fListView);
 
+	// Renga (batch 13, F-24): the pending changes, below the list
+	fQueueChanges = true;
+	fAllowRealDisks = false;
+	fPending = new PendingChangesView();
+	AddChild(fPending);
+	fPending->SetTarget(this);
+	_UpdateQueueItems();
+
 	// configure PartitionListView
 	fListView->SetSelectionMode(B_SINGLE_SELECTION_LIST);
 	fListView->SetSelectionMessage(new BMessage(MSG_PARTITION_ROW_SELECTED));
@@ -418,7 +449,68 @@ MainWindow::~MainWindow()
 void
 MainWindow::MessageReceived(BMessage* message)
 {
+	// Renga (batch 13, F-24): with "Queue changes" on, the actions that
+	// write to a disk are queued instead
+	if (fQueueChanges && _QueueAction(message))
+		return;
+
 	switch (message->what) {
+		case MSG_TOGGLE_QUEUE:
+			if (fQueueChanges && fPending->HasChanges()) {
+				BAlert* alert = new BAlert("pending", B_TRANSLATE("Apply or "
+					"discard the pending changes first."), B_TRANSLATE("OK"));
+				alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+				alert->Go(NULL);
+				break;
+			}
+			fQueueChanges = !fQueueChanges;
+			_UpdateQueueItems();
+			break;
+
+		case MSG_TOGGLE_REAL_DISKS:
+			if (!fAllowRealDisks) {
+				BAlert* alert = new BAlert("real disks", B_TRANSLATE("Allow "
+					"queued changes on real disks?\n\nBy default they are "
+					"only applied to disk images. A mistake on a real disk "
+					"loses its data; the partition table is backed up before "
+					"the first write, but not the data."),
+					B_TRANSLATE("Cancel"), B_TRANSLATE("Allow"), NULL,
+					B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+				alert->SetShortcut(0, B_ESCAPE);
+				if (alert->Go() != 1)
+					break;
+			}
+			fAllowRealDisks = !fAllowRealDisks;
+			fPending->SetAllowRealDisks(fAllowRealDisks);
+			_UpdateQueueItems();
+			break;
+
+		case MSG_APPLY_PENDING:
+			_ApplyPending();
+			break;
+
+		case MSG_DISCARD_PENDING:
+			fPending->Clear();
+			break;
+
+		case MSG_QUEUE_DIALOG_DONE:
+		{
+			RengaDisk::Operation operation;
+			operation.kind = (RengaDisk::OperationKind)message->GetInt32(
+				"kind", RengaDisk::kSetName);
+			operation.index = message->GetInt32("index", -1);
+			operation.system = message->GetString("system", "");
+			operation.size = message->GetInt64("size", 0);
+			operation.name = message->GetString("name", "");
+			_QueueOperation(operation);
+			break;
+		}
+
+		case MSG_TEST_QUEUE:
+			if (is_harness())
+				_TestQueue(message);
+			break;
+
 		case MSG_MOUNT_ALL:
 			_MountAll();
 			break;
@@ -701,6 +793,10 @@ MainWindow::StoreSettings(BMessage* archive) const
 	if (archive->ReplaceMessage("column settings", &columnSettings) < B_OK)
 		archive->AddMessage("column settings", &columnSettings);
 
+	// Renga (batch 13): real disks are never allowed across restarts
+	if (archive->ReplaceBool("queue changes", fQueueChanges) < B_OK)
+		archive->AddBool("queue changes", fQueueChanges);
+
 	return B_OK;
 }
 
@@ -720,6 +816,9 @@ MainWindow::RestoreSettings(BMessage* archive)
 	BMessage columnSettings;
 	if (archive->FindMessage("column settings", &columnSettings) == B_OK)
 		fListView->LoadState(&columnSettings);
+
+	fQueueChanges = archive->GetBool("queue changes", true);
+	_UpdateQueueItems();
 
 	return B_OK;
 }
@@ -2024,3 +2123,252 @@ MainWindow::_UpdateWindowZoomLimits()
 	SetZoomLimits(maxWidth, maxHeight);
 }
 
+
+
+// #pragma mark - Renga (batch 13, F-24): pending changes
+
+
+void
+MainWindow::_UpdateQueueItems()
+{
+	fQueueMenuItem->SetMarked(fQueueChanges);
+	fRealDisksMenuItem->SetMarked(fAllowRealDisks);
+	fRealDisksMenuItem->SetEnabled(fQueueChanges);
+	if (fQueueChanges && fPending->IsHidden(fPending))
+		fPending->Show();
+	else if (!fQueueChanges && !fPending->IsHidden(fPending))
+		fPending->Hide();
+}
+
+
+//!	The engine's index (BPartition::Index()) of a direct child of the disk.
+int32
+MainWindow::_EngineIndex(partition_id partition)
+{
+	if (fCurrentDisk == NULL)
+		return -1;
+	BPartition* found = fCurrentDisk->FindDescendant(partition);
+	if (found == NULL || found->Parent() != fCurrentDisk)
+		return -1;
+	return found->Index();
+}
+
+
+bool
+MainWindow::_QueueOperation(const RengaDisk::Operation& operation)
+{
+	if (fCurrentDisk == NULL)
+		return false;
+	BPath path;
+	fCurrentDisk->GetPath(&path);
+	BString name;
+	if (fCurrentDisk->ContentName() != NULL
+		&& fCurrentDisk->ContentName()[0] != '\0') {
+		name = fCurrentDisk->ContentName();
+	} else
+		name = path.Path();
+	BString why;
+	if (!fPending->Add(path.Path(), name.String(), operation, why)) {
+		BAlert* alert = new BAlert("pending", why.String(), B_TRANSLATE("OK"));
+		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+		alert->Go(NULL);
+		return false;
+	}
+	return true;
+}
+
+
+/*!	The disk-writing actions in queue mode: true if \a message was queued
+	(or refused with a message) instead of being carried out now. Only
+	direct children of a disk are queued; anything the engine does not
+	cover (nested partitions, encryption) falls through to DriveSetup's own
+	immediate actions as before.
+*/
+bool
+MainWindow::_QueueAction(BMessage* message)
+{
+	if (fCurrentDisk == NULL)
+		return false;
+	switch (message->what) {
+		case MSG_DELETE:
+		{
+			int32 index = _EngineIndex(fCurrentPartitionID);
+			if (index < 0)
+				return false;
+			RengaDisk::Operation operation;
+			operation.kind = RengaDisk::kDeletePartition;
+			operation.index = index;
+			operation.size = 0;
+			_QueueOperation(operation);
+			return true;
+		}
+
+		case MSG_INITIALIZE:
+		{
+			BString system;
+			if (message->FindString("disk system", &system) != B_OK)
+				return false;
+			if (fCurrentPartitionID == fCurrentDisk->ID()) {
+				BDiskSystem diskSystem;
+				bool fileSystem = false;
+				fDiskDeviceRoster.RewindDiskSystems();
+				while (fDiskDeviceRoster.GetNextDiskSystem(&diskSystem)
+						== B_OK) {
+					if (system == diskSystem.PrettyName())
+						fileSystem = diskSystem.IsFileSystem();
+				}
+				if (fileSystem)
+					return false;
+				RengaDisk::Operation operation;
+				operation.kind = RengaDisk::kInitializePartitioning;
+				operation.index = -1;
+				operation.system = system;
+				operation.size = 0;
+				_QueueOperation(operation);
+				return true;
+			}
+			int32 index = _EngineIndex(fCurrentPartitionID);
+			if (index < 0)
+				return false;
+			BMessage* done = new BMessage(MSG_QUEUE_DIALOG_DONE);
+			done->AddInt32("kind", RengaDisk::kFormat);
+			done->AddInt32("index", index);
+			done->AddString("system", system);
+			BString title;
+			title.SetToFormat(B_TRANSLATE("Format as %s"), system.String());
+			show_queue_dialog(title.String(), false, "Untitled", done, this);
+			return true;
+		}
+
+		case MSG_CREATE:
+		{
+			PartitionListRow* row = dynamic_cast<PartitionListRow*>(
+				fListView->CurrentSelection());
+			if (fCurrentPartitionID > -2 || row == NULL
+				|| row->ParentID() != fCurrentDisk->ID()) {
+				return false;
+			}
+			BMessage* done = new BMessage(MSG_QUEUE_DIALOG_DONE);
+			done->AddInt32("kind", RengaDisk::kCreatePartition);
+			done->AddInt32("index", -1);
+			show_queue_dialog(B_TRANSLATE("New partition"), true, "",
+				done, this);
+			return true;
+		}
+
+		case MSG_CHANGE:
+		{
+			int32 index = _EngineIndex(fCurrentPartitionID);
+			if (index < 0)
+				return false;
+			BPartition* partition
+				= fCurrentDisk->FindDescendant(fCurrentPartitionID);
+			BMessage* done = new BMessage(MSG_QUEUE_DIALOG_DONE);
+			done->AddInt32("kind", RengaDisk::kSetName);
+			done->AddInt32("index", index);
+			show_queue_dialog(B_TRANSLATE("Partition name"), false,
+				partition != NULL && partition->Name() != NULL
+					? partition->Name() : "", done, this);
+			return true;
+		}
+	}
+	return false;
+}
+
+
+void
+MainWindow::_ApplyPending(BMessage* testReply)
+{
+	if (!fPending->HasChanges())
+		return;
+	BString why;
+	status_t status = fPending->Check(why);
+	if (status != B_OK) {
+		if (testReply != NULL) {
+			testReply->AddString("refused", why);
+			return;
+		}
+		BAlert* alert = new BAlert("refused", why.String(),
+			B_TRANSLATE("OK"), NULL, NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT);
+		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+		alert->Go(NULL);
+		return;
+	}
+	if (testReply == NULL) {
+		BString text(B_TRANSLATE("Write these changes to the disk?"));
+		text << "\n\n" << fPending->Preview();
+		BAlert* alert = new BAlert("apply", text.String(),
+			B_TRANSLATE("Cancel"), B_TRANSLATE("Apply"), NULL,
+			B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+		alert->SetShortcut(0, B_ESCAPE);
+		if (alert->Go() != 1)
+			return;
+	}
+	BString log;
+	status = fPending->Apply(log);
+	fPending->Clear();
+	_ScanDrives();
+	if (testReply != NULL) {
+		testReply->AddInt32("status", status);
+		testReply->AddString("log", log);
+		return;
+	}
+	BString text(status == B_OK ? B_TRANSLATE("The changes were written.")
+		: B_TRANSLATE("Applying the changes failed."));
+	text << "\n\n" << log;
+	BAlert* alert = new BAlert("applied", text.String(), B_TRANSLATE("OK"),
+		NULL, NULL, B_WIDTH_AS_USUAL,
+		status == B_OK ? B_INFO_ALERT : B_STOP_ALERT);
+	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+	alert->Go(NULL);
+}
+
+
+/*!	Harness images only (MSG_TEST_QUEUE): "disk" selects the disk with that
+	raw device path; "action" is "queue" (an operation: "kind", "index",
+	"system", "size", "name"), "apply", "discard" or "state". The reply
+	has the pending count and preview, and after "apply" the engine's
+	status and log ("refused" when its checks said no).
+*/
+void
+MainWindow::_TestQueue(BMessage* message)
+{
+	BMessage reply(B_REPLY);
+	const char* disk = message->GetString("disk", NULL);
+	if (disk != NULL) {
+		BDiskDevice device;
+		BPath path;
+		bool found = false;
+		fDiskDeviceRoster.RewindDevices();
+		while (fDiskDeviceRoster.GetNextDevice(&device) == B_OK) {
+			if (device.GetPath(&path) == B_OK
+				&& strcmp(path.Path(), disk) == 0) {
+				_SetToDiskAndPartition(device.ID(), device.ID(), -1);
+				found = true;
+				break;
+			}
+		}
+		reply.AddBool("found", found);
+	}
+	BString action = message->GetString("action", "state");
+	reply.AddBool("queue_mode", fQueueChanges);
+	if (action == "queue") {
+		RengaDisk::Operation operation;
+		operation.kind = (RengaDisk::OperationKind)message->GetInt32("kind",
+			RengaDisk::kSetName);
+		operation.index = message->GetInt32("index", -1);
+		operation.system = message->GetString("system", "");
+		operation.size = message->GetInt64("size", 0);
+		operation.name = message->GetString("name", "");
+		reply.AddBool("queued", _QueueOperation(operation));
+	} else if (action == "apply")
+		_ApplyPending(&reply);
+	else if (action == "discard")
+		fPending->Clear();
+	else if (action == "toggle")
+		PostMessage(MSG_TOGGLE_QUEUE);
+	reply.AddInt32("pending", fPending->CountChanges());
+	reply.AddString("preview", fPending->Preview());
+	reply.AddBool("pending_shown", !fPending->IsHidden(fPending));
+	message->SendReply(&reply);
+}

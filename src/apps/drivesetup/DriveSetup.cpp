@@ -157,3 +157,21 @@ main(int, char**)
 	app.Run();
 	return 0;
 }
+
+
+/*!	Renga (batch 13): the harness's pending-changes hook ('Tdsq', harness
+	images only, see MainWindow::_TestQueue()) is addressed to the
+	application; the window answers it.
+*/
+void
+DriveSetup::MessageReceived(BMessage* message)
+{
+	if (message->what == 'Tdsq' && fWindow != NULL) {
+		// forwarded: the reply still goes to the sender
+		BMessage* detached = DetachCurrentMessage();
+		BMessenger(fWindow).SendMessage(detached);
+		delete detached;
+		return;
+	}
+	BApplication::MessageReceived(message);
+}
