@@ -1158,6 +1158,15 @@ of a 1 GiB guest was, so the bounce path went untested.
   unaligned write on the 4K namespace, trim and flush. The harness then
   checks on the host that each backing file holds exactly what was written
   to that namespace and that the trimmed space was freed.
+- **pkgfs** (`packagefs`, batch 14): packagefs rolls back a package
+  activation that fails part-way. Three small packages made in the guest
+  (`package create`) and installed in the home location with `pkgman
+  install -H -y -R`: a symlink `data/ce_pf/inc/GL`, then a package with a
+  directory at that path, which must fail without leaving anything; once
+  the first is uninstalled `data/ce_pf` must be gone (the old code kept the
+  failed package's directories, held by freed nodes: a use-after-free panic
+  on the next activation, hardware report); a third package in the same
+  directories then installs and uninstalls cleanly.
 - **pkg_priority**: builds two small package repositories in the guest
   (`package create`, `package_repo create`) that offer the same package,
   with equal priorities in their own `repo.info` but configured priorities

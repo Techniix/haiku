@@ -1,0 +1,13 @@
+SubDir HAIKU_TOP 3rdparty ce tests packagefs ;
+
+# packagefs (batch 14): a package activation that fails part-way is rolled
+# back completely. Uses only the system's own command line tools.
+Application packagefs_rollback_test :
+	packagefs_rollback_test.cpp
+	: [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests
+		: packagefs_rollback_test ;
+}

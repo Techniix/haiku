@@ -22,6 +22,7 @@ SubInclude HAIKU_TOP 3rdparty ce tests linuxkpi ;
 SubInclude HAIKU_TOP 3rdparty ce tests media ;
 SubInclude HAIKU_TOP 3rdparty ce tests nvme ;
 SubInclude HAIKU_TOP 3rdparty ce tests package_priority ;
+SubInclude HAIKU_TOP 3rdparty ce tests packagefs ;
 SubInclude HAIKU_TOP 3rdparty ce tests pointer ;
 SubInclude HAIKU_TOP 3rdparty ce tests posix_compat ;
 SubInclude HAIKU_TOP 3rdparty ce tests renguin ;

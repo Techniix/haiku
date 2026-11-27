@@ -1136,8 +1136,24 @@ Volume::_RemovePackageContentRootNode(Package* package,
 
 	do {
 		if (packageNode == endPackageNode) {
-			// unlock all directories
-			while (directory != NULL) {
+			// Renga (batch 14): the end node's ancestors were added before it
+			// (pre-order) and must go too. Before, they stayed in their
+			// directories' package node lists after a failed activation
+			// ("Is a directory": a package directory where another package
+			// has a file or symlink); the failed package was freed, and the
+			// next activation touching those directories compared against
+			// the freed nodes (use-after-free panic in
+			// PackageDirectory::HasPrecedenceOver(), hardware report). The
+			// end node itself and the nodes after it were not added. Each
+			// ancestor's node is the directory we are in, a child of the
+			// parent directory, which is still locked.
+			packageNode = endPackageNode->Parent();
+			directory->WriteUnlock();
+			directory = directory->GetParentUnchecked();
+			while (packageNode != NULL) {
+				_RemovePackageNode(directory, packageNode,
+					directory->FindChild(packageNode->Name()), notify);
+				packageNode = packageNode->Parent();
 				directory->WriteUnlock();
 				directory = directory->GetParentUnchecked();
 			}
