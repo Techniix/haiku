@@ -1365,6 +1365,16 @@ VMCache::Commit(off_t size, int priority)
 }
 
 
+/*!	Renga (batch 14): \a size more bytes of commitment, whatever the
+	cache's overcommit state. The default goes through Commit().
+*/
+status_t
+VMCache::AddCommitment(off_t size, int priority)
+{
+	return Commit(Commitment() + size, priority);
+}
+
+
 void
 VMCache::TakeCommitmentFrom(VMCache* from, off_t commitment)
 {

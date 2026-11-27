@@ -19,7 +19,9 @@
  *  shared        a MAP_SHARED anonymous mapping keeps its contents (Linux
  *                drops only the page table entries)
  *  fork          after fork(), the child's MADV_DONTNEED zeroes its own
- *                copy and leaves the parent's pages alone
+ *                copy and leaves the parent's pages alone; written again
+ *                and advised again, partly and wholly (batch 14: the
+ *                second one panicked the kernel on real hardware)
  *  free          MADV_FREE is accepted (contents may be dropped)
  *  hints         the hint advices (NORMAL, RANDOM, SEQUENTIAL, WILLNEED,
  *                DONTFORK, DOFORK, HUGEPAGE, NOHUGEPAGE, DONTDUMP, DODUMP)
@@ -150,7 +152,40 @@ main(void)
 	if (child == 0) {
 		if (madvise(map, size, MADV_DONTNEED) != 0)
 			_exit(2);
-		_exit(all(map, size, 0) ? 0 : 3);
+		if (!all(map, size, 0))
+			_exit(3);
+		// batch 14 (a kernel debugger entry on real hardware with Linux
+		// Chromium): the first MADV_DONTNEED after fork() put zero pages
+		// into the child's cache without committing memory for them, and
+		// the next one's discard asserted in VMAnonymousCache::Commit()
+		// (size >= page_count * B_PAGE_SIZE). Write, then DONTNEED again,
+		// part of the range and all of it.
+		memset(map, 0x77, size);
+		if (madvise(map + 2 * kPage, 4 * kPage, MADV_DONTNEED) != 0
+			|| madvise(map, size, MADV_DONTNEED) != 0)
+			_exit(4);
+		if (!all(map, size, 0))
+			_exit(5);
+		// many cycles of writing, forking and advising, each fork's child
+		// doing the same once more: a commitment that drifted below the
+		// page count trips the kernel's assertion
+		for (int cycle = 0; cycle < 40; cycle++) {
+			memset(map, cycle, size);
+			pid_t grandchild = fork();
+			if (grandchild == 0) {
+				madvise(map + (cycle % 8) * kPage, 4 * kPage, MADV_DONTNEED);
+				map[0] = 1;
+				madvise(map, size, MADV_DONTNEED);
+				_exit(all(map, size, 0) ? 0 : 6);
+			}
+			int grandStatus = 0;
+			waitpid(grandchild, &grandStatus, 0);
+			if (!WIFEXITED(grandStatus) || WEXITSTATUS(grandStatus) != 0)
+				_exit(7);
+			if (madvise(map + 4 * kPage, 8 * kPage, MADV_DONTNEED) != 0)
+				_exit(8);
+		}
+		_exit(0);
 	}
 	int status = 0;
 	waitpid(child, &status, 0);

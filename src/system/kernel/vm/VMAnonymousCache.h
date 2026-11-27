@@ -51,6 +51,7 @@ public:
 	virtual	off_t				Commitment() const;
 	virtual	bool				CanOvercommit();
 	virtual	status_t			Commit(off_t size, int priority);
+	virtual	status_t			AddCommitment(off_t size, int priority);
 	virtual	void				TakeCommitmentFrom(VMCache* from, off_t commitment);
 
 	virtual	bool				StoreHasPage(off_t offset);

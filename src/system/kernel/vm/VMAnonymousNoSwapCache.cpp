@@ -100,6 +100,20 @@ VMAnonymousNoSwapCache::Commitment() const
 }
 
 
+/*!	Renga (batch 14): see VMAnonymousCache::AddCommitment(). */
+status_t
+VMAnonymousNoSwapCache::AddCommitment(off_t size, int priority)
+{
+	AssertLocked();
+	if (size <= 0)
+		return B_OK;
+	if (vm_try_reserve_memory(size, priority, 0) != B_OK)
+		return B_NO_MEMORY;
+	committed_size += size;
+	return B_OK;
+}
+
+
 bool
 VMAnonymousNoSwapCache::CanOvercommit()
 {

@@ -152,6 +152,10 @@ public:
 	virtual	off_t				Commitment() const;
 	virtual	bool				CanOvercommit();
 	virtual	status_t			Commit(off_t size, int priority);
+	// Renga (batch 14): commit \a size more bytes for pages put into the
+	// cache outside a fault (madvise(MADV_DONTNEED) after fork(), vm.cpp),
+	// also when the cache overcommits and Commit() would not grow
+			virtual	status_t		AddCommitment(off_t size, int priority);
 	virtual	void				TakeCommitmentFrom(VMCache* from, off_t commitment);
 
 	// backing store operations

@@ -790,6 +790,24 @@ VMAnonymousCache::Commit(off_t size, int priority)
 }
 
 
+/*!	Renga (batch 14): as Fault() does for an overcommitting cache, commits
+	\a size more bytes at once, so that pages added outside a fault keep
+	the cache's commitment at least its page count (Commit() asserts that;
+	for an overcommitting cache that has pre-committed it would not grow).
+*/
+status_t
+VMAnonymousCache::AddCommitment(off_t size, int priority)
+{
+	AssertLocked();
+	if (size <= 0)
+		return B_OK;
+	if (vm_try_reserve_memory_or_swap(size, priority, 0) != B_OK)
+		return B_NO_MEMORY;
+	fCommittedSize += size;
+	return B_OK;
+}
+
+
 void
 VMAnonymousCache::TakeCommitmentFrom(VMCache* _from, off_t commitment)
 {
