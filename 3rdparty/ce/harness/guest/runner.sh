@@ -39,6 +39,47 @@ if [ -x /boot/system/non-packaged/bin/ce_screensaver_off ]; then
 	/boot/system/non-packaged/bin/ce_screensaver_off
 fi
 
+# The per-program watchdog (batch 13): a test program still running after
+# $suite_timeout seconds is killed, recorded as the failed check
+# harness.watchdog.<program>, and the run goes on with the next one. Before
+# it, one hung program held the whole run until the host's timeout and every
+# program after it was lost. The limit is four times the longest program of
+# a renga-raw run (ce-test.py's SUITE_TIMEOUT_DEFAULT); "ce-test.py
+# --suite-timeout <s>" puts another one into the image. The watcher wakes
+# every 5 s and ends with the program. selftest.py runs this function on the
+# host (between the two "watchdog" marker lines) with a program that hangs.
+suite_timeout=1200
+if [ -f /boot/system/non-packaged/data/ce-harness/suite-timeout ]; then
+	suite_timeout=$(cat /boot/system/non-packaged/data/ce-harness/suite-timeout)
+fi
+# watchdog: begin
+run_watched() {
+	# $1: the program, $2...: its arguments. Returns its exit status (137
+	# when the watchdog killed it).
+	watched_name=$(basename "$1")
+	"$@" &
+	watched_pid=$!
+	(
+		waited=0
+		while kill -0 "$watched_pid" 2>/dev/null; do
+			if [ "$waited" -ge "$suite_timeout" ]; then
+				echo "CE-TEST harness.watchdog.$watched_name FAIL still running after ${suite_timeout}s, killed"
+				kill -9 "$watched_pid" 2>/dev/null
+				exit 0
+			fi
+			sleep 5
+			waited=$((waited + 5))
+		done
+	) &
+	watcher_pid=$!
+	wait "$watched_pid"
+	watched_status=$?
+	kill "$watcher_pid" 2>/dev/null
+	wait "$watcher_pid" 2>/dev/null
+	return $watched_status
+}
+# watchdog: end
+
 # Every test program installed by 3rdparty/ce/tests runs, one after the other.
 # A copy of the image made by "ce-test.py --only" carries a selection file
 # (one program name per line); then only those run, and the host labels the
@@ -57,7 +98,7 @@ crash_phase=/boot/system/non-packaged/data/ce-harness/crash-phase
 if [ -f "$crash_phase" ] && [ -x "$final_tests/crashlog_test" ]; then
 	echo "CE-INFO crash phase $(cat "$crash_phase"): only crashlog_test runs"
 	echo "CE-INFO running crashlog_test"
-	"$final_tests/crashlog_test"
+	run_watched "$final_tests/crashlog_test"
 	echo "CE-INFO crashlog_test exited with $?"
 	echo "CE-HARNESS END"
 	sync
@@ -75,7 +116,7 @@ for test in /boot/system/non-packaged/bin/ce-tests/*; do
 	fi
 	if [ -x "$test" ]; then
 		echo "CE-INFO running $(basename "$test")"
-		"$test"
+		run_watched "$test"
 		echo "CE-INFO $(basename "$test") exited with $?"
 	fi
 done
@@ -107,7 +148,7 @@ for test in "$media_tests"/*; do
 		started_media=yes
 	fi
 	echo "CE-INFO running $(basename "$test")"
-	"$test"
+	run_watched "$test"
 	echo "CE-INFO $(basename "$test") exited with $?"
 done
 
@@ -128,7 +169,7 @@ for test in "$final_tests"/*; do
 		[ "$wanted" = yes ] || continue
 	fi
 	echo "CE-INFO crash phase starts: $(basename "$test")"
-	"$test" --crash
+	run_watched "$test" --crash
 	echo "CE-INFO $(basename "$test") returned from its crash phase with $?"
 done
 

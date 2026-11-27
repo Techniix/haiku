@@ -23,10 +23,34 @@ import tempfile
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location("ce_test",
-	os.path.join(HERE, "ce-test.py"))
-ce_test = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(ce_test)
+
+
+def load_harness(path):
+	spec = importlib.util.spec_from_file_location("ce_test", path)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def rss_child(harness_path, directory):
+	"""Run as "selftest.py --rss-child <ce-test.py> <dir>": analyses the
+	long recordings in <dir> with that ce-test.py and prints the peak
+	resident memory in MB (see the harness memory case below). A separate
+	process, so that the peak is this analysis' alone."""
+	import resource
+	harness = load_harness(harness_path)
+	report = {}
+	harness.analyze_media_audio(directory, report)
+	harness.analyze_sound_audio(directory, report)
+	print("peak_rss_mb %.1f" % (resource.getrusage(resource.RUSAGE_SELF)
+		.ru_maxrss / 1024.0))
+
+
+if len(sys.argv) == 4 and sys.argv[1] == "--rss-child":
+	rss_child(sys.argv[2], sys.argv[3])
+	sys.exit(0)
+
+ce_test = load_harness(os.path.join(HERE, "ce-test.py"))
 
 RATE = 48000
 failures = 0
@@ -788,6 +812,13 @@ def sound_recordings(master=None, mute_leaks=False, stays_default=False):
 	wav += media_tone(4500, 4550, 1.6) + media_tone(4600, 0, 1.6) \
 		+ silence(0.3)
 	sdl += silence(1.6) + media_tone(0, 4650, 1.6) + silence(0.3)
+	# "Also play on" the second card (both cards), then off (the default
+	# one only); added to SOUND_PHASES with audio routing (batch 11) but
+	# not here until batch 13, which is why this case failed since then.
+	wav += media_tone(4920, 4970, 1.6) + silence(0.3) \
+		+ media_tone(5020, 5070, 1.6) + silence(0.3)
+	sdl += media_tone(4920, 4970, 1.6) + silence(0.3) + silence(1.6) \
+		+ silence(0.3)
 	directory = tempfile.mkdtemp()
 	write_wav(os.path.join(directory, "audio.wav"), wav)
 	with open(os.path.join(directory, "sdl-out.raw"), "wb") as raw:
@@ -1218,6 +1249,205 @@ expect("linuxkpi: no clamped DMA address passes", passed, detail)
 passed, detail = linuxkpi_clamp("KERN: edu: dma_map_bounce PASS\r\n"
 	"EDU: clamping DMA 0x0000000035a1f000 to 0x0000000005a1f000!\r\n")
 expect("linuxkpi: a clamped DMA address fails", not passed, detail)
+
+# #pragma mark - harness memory, resume and watchdog (batch 13)
+
+# The harness's own memory over a long run: batch 12's renga-raw runs ended
+# with ce-test.py killed by the host's memory cgroup at 6.2 GB, because the
+# analysis unpacked the hour-long recordings (600 MB sdl-out.raw) into
+# tuples of Python ints. Recordings of RSS_SECONDS of tones each must be
+# analysed in under RSS_LIMIT_MB; the old reader took about 1.5 GB for
+# these (shown failing on the old code in the batch 13 PR) and the limit
+# grows with nothing but the mapped files.
+RSS_SECONDS = 300
+RSS_LIMIT_MB = 512
+
+
+def long_recordings(directory, seconds):
+	second = b"".join(struct.pack("<hh",
+		int(12000 * math.sin(2 * math.pi * 1500 * i / RATE)),
+		int(12000 * math.sin(2 * math.pi * 2500 * i / RATE)))
+		for i in range(RATE))
+	header = b"RIFF" + struct.pack("<I", 0) + b"WAVE" + b"fmt " \
+		+ struct.pack("<IHHIIHH", 16, 1, 2, RATE, RATE * 4, 4, 16) \
+		+ b"data" + struct.pack("<I", 0)
+	with open(os.path.join(directory, "audio.wav"), "wb") as wavFile:
+		wavFile.write(header)
+		for _ in range(seconds):
+			wavFile.write(second)
+	with open(os.path.join(directory, "sdl-out.raw"), "wb") as rawFile:
+		for _ in range(seconds):
+			rawFile.write(second)
+
+
+def analysis_peak_rss(harness_path, directory):
+	result = subprocess.run([sys.executable, os.path.abspath(__file__),
+		"--rss-child", harness_path, directory], capture_output=True,
+		text=True, timeout=1200)
+	for line in result.stdout.splitlines():
+		if line.startswith("peak_rss_mb "):
+			return float(line.split()[1]), ""
+	return None, (result.stderr or result.stdout)[-300:]
+
+
+directory = tempfile.mkdtemp()
+try:
+	long_recordings(directory, RSS_SECONDS)
+	peak, error = analysis_peak_rss(os.path.join(HERE, "ce-test.py"),
+		directory)
+	expect("harness memory: %d s recordings analysed in under %d MB"
+		% (RSS_SECONDS, RSS_LIMIT_MB), peak is not None
+		and peak < RSS_LIMIT_MB, "peak %s MB %s" % (peak, error))
+finally:
+	shutil.rmtree(directory)
+peak = ce_test.peak_rss_mb()
+check = ce_test.harness_memory_check()
+expect("harness memory: the run's own peak check passes under the limit",
+	check["pass"] and check["name"] == "harness.peak_rss", check["detail"])
+saved = ce_test.HARNESS_RSS_LIMIT_MB
+ce_test.HARNESS_RSS_LIMIT_MB = 1
+expect("harness memory: a peak over the limit fails",
+	not ce_test.harness_memory_check()["pass"])
+ce_test.HARNESS_RSS_LIMIT_MB = saved
+
+
+# Restart-safe runs: SerialReader records each finished test program with
+# its serial line count; a run killed half-way and resumed is analysed from
+# both boots' logs (each part cut after its last finished program) to the
+# same checks as a run that was never interrupted.
+import io
+
+
+class FakeQemu:
+	def __init__(self, data):
+		self.stdout = io.BufferedReader(io.BytesIO(data))
+		self.stdin = io.BytesIO()
+
+
+def program(name, checks, finish=True):
+	lines = ["CE-INFO running %s" % name,
+		"CE-SUITE %s START" % name.replace("_test", "")]
+	for check, passed in checks:
+		lines.append("CE-TEST %s %s detail" % (check,
+			"PASS" if passed else "FAIL"))
+	if finish:
+		lines += ["CE-SUITE %s DONE failures=%d" % (name.replace("_test", ""),
+			sum(1 for _, p in checks if not p)),
+			"CE-INFO %s exited with 0" % name]
+	return lines
+
+
+def serial(lines):
+	return ("\r\n".join(lines) + "\r\n").encode()
+
+
+def feed(directory, data):
+	progress = ce_test.Progress(directory)
+	progress.start_part()
+	reader = ce_test.SerialReader(FakeQemu(data),
+		os.path.join(directory, "serial.log"), progress=progress)
+	reader.run()
+	return progress
+
+
+START = ["CE-HARNESS START Haiku", "noise"]
+alpha = program("alpha_test", [("alpha.one", True), ("alpha.two", True)])
+beta = program("beta_test", [("beta.one", True)])
+gamma = program("gamma_test", [("gamma.one", True), ("gamma.two", True)])
+names = ["alpha_test", "beta_test", "gamma_test"]
+
+whole = tempfile.mkdtemp()
+progress = feed(whole, serial(START + alpha + beta + gamma
+	+ ["CE-HARNESS END"]))
+expect("resume: every finished program is recorded, then the runner's end",
+	progress.finished() == names and progress.complete(),
+	str(progress.data))
+reloaded = ce_test.Progress(whole)
+expect("resume: progress.json is on disk after each program",
+	reloaded.finished() == names, str(reloaded.data))
+whole_report = {"installed_tests": names, "selected_tests": []}
+ce_test.parse_serial(whole, whole_report)
+
+resumed = tempfile.mkdtemp()
+# the first boot: alpha finished, beta half-way when the host restarted
+progress = feed(resumed, serial(START + alpha + program("beta_test",
+	[("beta.one", False)], finish=False)))
+expect("resume: a killed boot records only what finished",
+	progress.finished() == ["alpha_test"] and not progress.complete(),
+	str(progress.data))
+part = os.path.join(resumed, "part-1")
+os.makedirs(part)
+for name in ("serial.log", "serial.timed.log"):
+	os.replace(os.path.join(resumed, name), os.path.join(part, name))
+progress.parts()[-1]["dir"] = "part-1"
+progress._save()
+# the second boot runs what was left
+progress = ce_test.Progress(resumed)
+progress.start_part()
+reader = ce_test.SerialReader(FakeQemu(serial(START + beta + gamma
+	+ ["CE-HARNESS END"])), os.path.join(resumed, "serial.log"),
+	progress=progress)
+reader.run()
+parts = [(part, progress.parts()[0]["finished"][-1]["lines"])]
+resumed_report = {"installed_tests": names, "selected_tests": []}
+ce_test.parse_serial(resumed, resumed_report, parts)
+
+
+def counts(report):
+	tests = report["tests"]
+	return (len(tests), sum(1 for t in tests if t["pass"]),
+		sorted(t["name"] for t in tests))
+
+
+expect("resume: a resumed run has the same checks and counts as a whole one",
+	counts(resumed_report) == counts(whole_report),
+	"%s vs %s" % (counts(resumed_report)[:2], counts(whole_report)[:2]))
+ran = [t for t in resumed_report["tests"] if t["name"] == "harness.tests_ran"]
+expect("resume: all programs count as run across the two boots",
+	ran and ran[0]["pass"], ran and ran[0]["detail"])
+expect("resume: the killed boot's unfinished check is not counted",
+	not any(t["name"] == "beta.one" and not t["pass"]
+		for t in resumed_report["tests"]))
+shutil.rmtree(whole)
+shutil.rmtree(resumed)
+
+
+# The guest runner's per-program watchdog, run on the host: the function
+# between runner.sh's "watchdog" markers, with a program that hangs and
+# one that finishes.
+with open(os.path.join(HERE, "guest", "runner.sh")) as runnerFile:
+	runner = runnerFile.read()
+function = runner[runner.index("# watchdog: begin"):
+	runner.index("# watchdog: end")]
+directory = tempfile.mkdtemp()
+script = os.path.join(directory, "watchdog.sh")
+with open(script, "w") as scriptFile:
+	scriptFile.write("suite_timeout=5\n" + function + """
+printf '#!/bin/sh\\nexec sleep 600\\n' > "$1/hang_test"
+printf '#!/bin/sh\\necho CE-TEST quick.one PASS\\nexit 3\\n' > "$1/quick_test"
+chmod +x "$1/hang_test" "$1/quick_test"
+run_watched "$1/hang_test"
+echo "hang_test exited with $?"
+run_watched "$1/quick_test"
+echo "quick_test exited with $?"
+""")
+import time as _time
+began = _time.time()
+try:
+	result = subprocess.run(["sh", script, directory], capture_output=True,
+		text=True, timeout=60)
+	output = result.stdout
+except subprocess.TimeoutExpired:
+	output = "timed out"
+took = _time.time() - began
+expect("watchdog: a hung program is killed and reported as a failed check",
+	"CE-TEST harness.watchdog.hang_test FAIL still running after 5s, killed"
+		in output and "hang_test exited with 137" in output and took < 30,
+	"%.0f s: %r" % (took, output[-300:]))
+expect("watchdog: a program that ends keeps its exit status and no report",
+	"quick_test exited with 3" in output
+		and "watchdog.quick_test" not in output, repr(output[-300:]))
+shutil.rmtree(directory)
 
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)

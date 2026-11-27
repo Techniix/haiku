@@ -695,6 +695,12 @@ def selected_tests(text, available):
 
 
 SELECTION_FILE = "/myfs/system/non-packaged/data/ce-harness/only"
+# --suite-timeout: the runner's per-program watchdog limit in seconds
+# (guest/runner.sh; without the file it uses SUITE_TIMEOUT_DEFAULT).
+SUITE_TIMEOUT_FILE = "/myfs/system/non-packaged/data/ce-harness/suite-timeout"
+# Four times the longest test program of a renga-raw run (welcome_ui_test,
+# 309 s in batch 12); runner.sh has the same number.
+SUITE_TIMEOUT_DEFAULT = 1200
 KERNEL_SETTINGS_FILE = "/myfs/home/config/settings/kernel/drivers/kernel"
 VIRTIO_GPU_SETTINGS_FILE = \
 	"/myfs/home/config/settings/kernel/drivers/virtio_gpu"
@@ -755,9 +761,13 @@ def make_patched_image(args, image, copy):
 		# first one without a window)
 		files.append((copy + ".virtio", VIRTIO_GPU_SETTINGS_FILE,
 			"all_outputs true\n", "all_outputs true"))
-	if args.only:
+	selection = getattr(args, "resume_selection", None) or args.only
+	if selection:
 		files.append((copy + ".only", SELECTION_FILE,
-			"\n".join(args.only) + "\n", "\n".join(args.only)))
+			"\n".join(selection) + "\n", "\n".join(selection)))
+	if getattr(args, "suite_timeout", None):
+		files.append((copy + ".watchdog", SUITE_TIMEOUT_FILE,
+			"%d\n" % args.suite_timeout, "%d" % args.suite_timeout))
 
 	commands = ""
 	for host, target, text, expected in files:
@@ -2316,6 +2326,103 @@ class AudioFeeder(threading.Thread):
 		self.join(timeout=10)
 
 
+# Restart-safe runs (batch 13). The build host restarts every few hours
+# and a renga-raw run takes about one; a run killed half-way used to be lost
+# whole. Now every results directory carries:
+#
+#   run.json       ce-test.py's arguments and the image it booted (size and
+#                  time), written before the build
+#   progress.json  one entry per boot ("part") with the test programs that
+#                  finished in it and the serial line count right after each
+#                  one's "CE-INFO <name> exited with" line, and whether the
+#                  runner reached "CE-HARNESS END"; saved (write and rename)
+#                  each time a test program finishes
+#   boot.json      the boot report, once the boot is over
+#   host-requests.jsonl, expected-kdl.jsonl
+#                  the guest's host requests and announced debugger entries
+#                  as they happen, for a boot that never reached boot.json
+#
+# "ce-test.py --resume <dir>" (ce-gates.sh passes it after a restart) moves
+# what the interrupted boot left into <dir>/part-<n>/, boots the same image
+# with only the test programs that had not finished, and analyses the parts
+# together: the serial logs up to each part's last finished program, the
+# recordings and screenshots of each program where it ran. A run killed
+# after the guest finished (as in batch 12, during the analysis) only
+# analyses again. The verdict is a full run's, with the parts named.
+PROGRESS_FILE = "progress.json"
+RUN_FILE = "run.json"
+BOOT_FILE = "boot.json"
+HOST_REQUESTS_FILE = "host-requests.jsonl"
+EXPECTED_KDL_FILE = "expected-kdl.jsonl"
+EXITED_PATTERN = re.compile(r"^CE-INFO (\S+) exited with (-?\d+)")
+
+
+def write_json_atomically(path, data):
+	temporary = path + ".tmp"
+	with open(temporary, "w") as jsonFile:
+		json.dump(data, jsonFile, indent=1, default=str)
+		jsonFile.flush()
+		os.fsync(jsonFile.fileno())
+	os.replace(temporary, path)
+
+
+def load_json(path, default=None):
+	try:
+		with open(path) as jsonFile:
+			return json.load(jsonFile)
+	except (OSError, ValueError):
+		return default
+
+
+class Progress:
+	"""progress.json of a results directory (see PROGRESS_FILE): the parts
+	(boots) of the run, the last one being the boot in the results
+	directory itself (its "dir" is "")."""
+
+	def __init__(self, results_dir):
+		self.path = os.path.join(results_dir, PROGRESS_FILE)
+		self.lock = threading.Lock()
+		self.data = load_json(self.path, None) or {"version": 1, "parts": []}
+
+	def parts(self):
+		return self.data["parts"]
+
+	def finished(self):
+		"""Every test program that finished, in every part, in order."""
+		return [entry["test"] for part in self.data["parts"]
+			for entry in part["finished"]]
+
+	def complete(self):
+		return any(part.get("complete") for part in self.data["parts"])
+
+	def start_part(self):
+		with self.lock:
+			self.data["parts"].append({"dir": "", "finished": [],
+				"complete": False, "started": datetime.datetime.now()
+					.isoformat(timespec="seconds")})
+			self._save()
+
+	def test_finished(self, name, lines):
+		with self.lock:
+			if not self.data["parts"]:
+				return
+			self.data["parts"][-1]["finished"].append({"test": name,
+				"lines": lines})
+			self._save()
+
+	def runner_ended(self, lines):
+		with self.lock:
+			if not self.data["parts"]:
+				return
+			part = self.data["parts"][-1]
+			part["complete"] = True
+			part["end_lines"] = lines
+			self._save()
+
+	def _save(self):
+		write_json_atomically(self.path, self.data)
+
+
 class SerialReader(threading.Thread):
 	"""Copies the guest's serial output to a file and watches it.
 
@@ -2324,9 +2431,13 @@ class SerialReader(threading.Thread):
 	"""
 
 	def __init__(self, process, log_path, monitor_path=None, qmp_path=None,
-			feeder=None):
+			feeder=None, progress=None):
 		threading.Thread.__init__(self, daemon=True)
 		self.feeder = feeder
+		# Progress (restart-safe runs): told about every test program that
+		# finishes; self.lines counts the complete serial lines so far.
+		self.progress = progress
+		self.lines = 0
 		self.process = process
 		self.log_path = log_path
 		self.monitor_path = monitor_path
@@ -2457,9 +2568,16 @@ class SerialReader(threading.Thread):
 		lines = self.line.split(b"\n")
 		self.line = lines.pop()
 		for raw in lines:
+			self.lines += 1
 			line = raw.decode("latin-1").strip()
 			if self.menu_driver is not None:
 				self.menu_driver.feed(line)
+			if self.progress is not None:
+				exited = EXITED_PATTERN.match(line)
+				if exited:
+					self.progress.test_finished(exited.group(1), self.lines)
+				elif line.startswith("CE-HARNESS END"):
+					self.progress.runner_ended(self.lines)
 			if not line.startswith("CE-HOST "):
 				continue
 			words = line.split()[1:]
@@ -2506,9 +2624,20 @@ class SerialReader(threading.Thread):
 				threading.Thread(target=monitor_command, daemon=True,
 					args=(self.monitor_path, " ".join(words))).start()
 			self.host_requests.append(request)
+			self._persist(HOST_REQUESTS_FILE, request)
 			log("guest request %s: %s%s" % ("carried out" if accepted
 				else "refused", " ".join(words), ": " + request["error"]
 				if request.get("error") else ""))
+
+	def _persist(self, name, entry):
+		"""Appends \a entry as a JSON line to \a name in the boot's results
+		directory: what a boot that is killed leaves for --resume."""
+		try:
+			with open(os.path.join(os.path.dirname(self.log_path), name),
+					"a") as persistFile:
+				persistFile.write(json.dumps(entry, default=str) + "\n")
+		except OSError:
+			pass
 
 	def _usb_audio(self, action):
 		"""Plugs a QEMU usb-audio device in (the next audiodev, see
@@ -2590,6 +2719,17 @@ class SerialReader(threading.Thread):
 			with self.lock:
 				entry["text"] = self.expected_kdl_text
 				self.expected_kdl_text = ""
+			index = self.expected_kdls.index(entry) + 1
+			try:
+				with open(os.path.join(os.path.dirname(self.log_path),
+						"kdl-expected-%d.log" % index), "w") as kdlFile:
+					kdlFile.write(entry["text"].replace("\r", ""))
+			except OSError:
+				pass
+			self._persist(EXPECTED_KDL_FILE, {"answered": entry["answered"],
+				"error": entry["error"], "message": entry.get("message"),
+				"answer": entry.get("answer"),
+				"log": "kdl-expected-%d.log" % index})
 			self.last_output = time.time()
 			self.kdl_answering = False
 
@@ -2884,7 +3024,7 @@ class HostLoadSampler(threading.Thread):
 
 
 def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
-		menu_script=None, persist=False, kill_on=None):
+		menu_script=None, persist=False, kill_on=None, progress=None):
 	"""Boots the test image (or \a image: another disk, booted as it is)
 	and collects its serial output. A \a tag names a further boot of the
 	same run (--installer-upgrade): its logs are serial-<tag>.log, its
@@ -2920,6 +3060,8 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 
 	patched = None
 	if not plainImage and (args.boot_menu_timeout or args.only
+			or getattr(args, "resume_selection", None)
+			or getattr(args, "suite_timeout", None)
 			or args.other_systems or args.installer_upgrade
 			or args.displays > 1):
 		patched = os.path.join(results_dir, "patched.img")
@@ -3067,8 +3209,10 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		stdout=subprocess.PIPE, stderr=qemu_stderr, env=environment)
 	feeder.pid = process.pid
 	feeder.start()
+	if progress is not None:
+		progress.start_part()
 	reader = SerialReader(process, serial_log, monitor_path, qmp_path,
-		feeder)
+		feeder, progress)
 	menuDriver = None
 	if menu_script is not None or (args.other_systems and not tag):
 		menuDriver = BootMenuDriver(menu_script or args.firmware,
@@ -3186,6 +3330,8 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 	if otherMedia is not None:
 		for path in otherMedia.values():
 			os.remove(path)
+	bootReport["harness_peak_rss_mb"] = peak_rss_mb()
+	write_json_atomically(os.path.join(results_dir, BOOT_FILE), bootReport)
 	log("guest %s after %.0fs" % (status, time.time() - started))
 	return status == "exited" and reader.finished.is_set()
 
@@ -3193,17 +3339,40 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 # #pragma mark - analysis
 
 
-def parse_serial(results_dir, report):
-	serial_log = os.path.join(results_dir, "serial.log")
+def serial_segments(results_dir, name, parts=()):
+	"""The texts of serial log \a name ("serial.log" or "serial.timed.log")
+	of a run, one per boot: those of the earlier \a parts of a resumed run
+	((directory, lines) pairs, see Progress), each cut after its last
+	finished test program, then the results directory's own."""
+	segments = []
+	for directory, lines in parts:
+		try:
+			with open(os.path.join(directory, name), "rb") as logFile:
+				data = logFile.read()
+		except OSError:
+			data = b""
+		cut = 0
+		for _ in range(lines):
+			found = data.find(b"\n", cut)
+			if found < 0:
+				cut = len(data)
+				break
+			cut = found + 1
+		segments.append(data[:cut].decode("latin-1"))
+	try:
+		with open(os.path.join(results_dir, name), "rb") as logFile:
+			segments.append(logFile.read().decode("latin-1"))
+	except OSError:
+		segments.append("")
+	return segments
+
+
+def parse_serial(results_dir, report, parts=()):
 	tests = []
 	suites = {}
 	driver_lines = []
 	problems = []
-	try:
-		with open(serial_log, "rb") as logFile:
-			text = logFile.read().decode("latin-1")
-	except OSError:
-		text = ""
+	text = "".join(serial_segments(results_dir, "serial.log", parts))
 
 	in_expected_kdl = False
 	kept = []		# the text without the announced debugger entries
@@ -3281,18 +3450,24 @@ def parse_serial(results_dir, report):
 	# the host time comes from the time-stamped copy of the serial log.
 	timing = []
 	timed = {}
-	try:
-		with open(serial_log.replace(".log", ".timed.log"), "rb") as timedFile:
-			timed_text = timedFile.read().decode("latin-1")
-	except OSError:
-		timed_text = ""
-	for line in timed_text.splitlines():
-		match = re.match(r"^\[\s*([0-9.]+)\] (CE-INFO|CE-HARNESS) (.*)$",
-			line.rstrip("\r"))
+	# A resumed run's boots each start their clock at 0: later ones are
+	# shifted to follow the one before (the time between them is not
+	# counted).
+	shift = 0.0
+	timed_lines = []
+	for segment in serial_segments(results_dir, "serial.timed.log", parts):
+		last = 0.0
+		for line in segment.splitlines():
+			match = re.match(r"^\[\s*([0-9.]+)\] (.*)$", line)
+			if match:
+				last = float(match.group(1))
+				timed_lines.append((last + shift, match.group(2)))
+		shift += last
+	for stamp, line in timed_lines:
+		match = re.match(r"^(CE-INFO|CE-HARNESS) (.*)$", line.rstrip("\r"))
 		if not match:
 			continue
-		stamp, kind, rest = float(match.group(1)), match.group(2), \
-			match.group(3)
+		kind, rest = match.group(1), match.group(2)
 		if kind == "CE-HARNESS" and rest.startswith("START"):
 			# the first boot's (crashlog_test reboots the guest; the
 			# runner's time then spans every boot)
@@ -3415,20 +3590,70 @@ def check_linuxkpi(results_dir, report):
 			": " + clamps[0] if clamps else "")})
 
 
+def _numpy():
+	"""numpy, or None: the analysis works without it, only slower and with
+	more memory."""
+	try:
+		import numpy
+		return numpy
+	except ImportError:
+		return None
+
+
+def _channels_of_file(path, offset, channels):
+	"""The s16le samples of \a path from byte \a offset on, one sequence per
+	channel, without reading the whole file into memory.
+
+	A renga-raw run records for about an hour: sdl-out.raw grew to 600 MB
+	and audio.wav to 250 MB in batch 12. Unpacked into a tuple of Python
+	ints (about 36 bytes a sample) that made ce-test.py itself reach 6.2 GB
+	of anonymous memory and the host's memory cgroup killed it right after
+	crashlog_test's last boot, before any summary (batch 13). With numpy the
+	file is mapped read-only (numpy.memmap: page cache, not anonymous memory)
+	and each channel is a strided view of it, so nothing is copied; without
+	numpy an array('h') holds 2 bytes a sample. Either way, indexing gives
+	numbers and slicing gives a sequence with tolist(); callers that do
+	arithmetic on single samples convert a slice with tolist() first (numpy's
+	int16 would wrap around)."""
+	size = os.path.getsize(path)
+	frame_count = max(0, size - offset) // (2 * channels)
+	numpy = _numpy()
+	if numpy is not None:
+		if frame_count == 0:
+			empty = numpy.zeros(0, dtype="<i2")
+			return [empty for _ in range(channels)]
+		frames = numpy.memmap(path, dtype="<i2", mode="r", offset=offset,
+			shape=(frame_count, channels))
+		return [frames[:, c] for c in range(channels)]
+	values = array.array("h")
+	with open(path, "rb") as audioFile:
+		audioFile.seek(offset)
+		values.fromfile(audioFile, frame_count * channels)
+	if sys.byteorder != "little":
+		values.byteswap()
+	if channels == 1:
+		return [values]
+	samples = [values[c::channels] for c in range(channels)]
+	del values
+	return samples
+
+
 def read_wav(path):
-	"""Returns (rate, channels, samples) where samples is a list per channel.
+	"""Returns (rate, channels, samples) where samples is a sequence per
+	channel (see _channels_of_file).
 
 	QEMU only fixes up the WAV header sizes when it exits cleanly, so the
 	data chunk size is ignored and everything after its header is read.
+	Only the header is read here; the samples are mapped, not loaded.
 	"""
 	with open(path, "rb") as wavFile:
-		data = wavFile.read()
+		data = wavFile.read(65536)
 	if len(data) < 44 or data[0:4] != b"RIFF" or data[8:12] != b"WAVE":
 		raise ValueError("not a WAV file")
 
 	offset = 12
 	rate = channels = bits = None
-	payload = b""
+	body = None
 	while offset + 8 <= len(data):
 		chunk_id = data[offset:offset + 4]
 		chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
@@ -3437,24 +3662,32 @@ def read_wav(path):
 			_, channels, rate, _, _, bits = struct.unpack_from("<HHIIHH",
 				data, body)
 		elif chunk_id == b"data":
-			payload = data[body:]
 			break
 		offset = body + chunk_size + (chunk_size & 1)
+		body = None
 
 	if bits != 16 or channels is None:
 		raise ValueError("unsupported WAV format (%s bits)" % bits)
+	if body is None:
+		# no data chunk: an empty recording
+		body = os.path.getsize(path)
+	return rate, channels, _channels_of_file(path, body, channels)
 
-	frame_count = len(payload) // (2 * channels)
-	# array('h') keeps 2 bytes a sample; a tuple of Python ints took about
-	# 30 times that, and a full renga-raw recording (190 MB, batch 8) made
-	# the analysis run out of the host's 7 GB.
-	values = array.array("h")
-	values.frombytes(payload[:frame_count * channels * 2])
-	if sys.byteorder != "little":
-		values.byteswap()
-	del data, payload
-	samples = [values[c::channels] for c in range(channels)]
-	return rate, channels, samples
+
+def as_ints(samples):
+	"""A slice of samples as a list of Python ints (see _channels_of_file)."""
+	return samples.tolist() if hasattr(samples, "tolist") else list(samples)
+
+
+def peak_rss_mb():
+	"""This process's peak resident set size in MB (Linux: ru_maxrss is in
+	KB). Includes mapped recordings, which are page cache."""
+	try:
+		import resource
+		return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+			/ 1024.0, 1)
+	except (ImportError, OSError):
+		return None
 
 
 def goertzel_power(samples, rate, hertz):
@@ -3756,7 +3989,7 @@ def analyze_audio(results_dir, report, phases):
 	for start in range(0, frames - window + 1, window):
 		label = []
 		for channel in range(min(channels, 2)):
-			chunk = samples[channel][start:start + window]
+			chunk = as_ints(samples[channel][start:start + window])
 			energy = sum(x * x for x in chunk)
 			rms = math.sqrt(energy / window)
 			if rms < 300:
@@ -3822,13 +4055,8 @@ def analyze_audio(results_dir, report, phases):
 
 def read_raw_audio(path, rate=CAPTURE_RATE, channels=2):
 	"""Raw s16le audio as written by SDL's disk driver: (rate, channels,
-	samples per channel)."""
-	with open(path, "rb") as rawFile:
-		payload = rawFile.read()
-	frame_count = len(payload) // (2 * channels)
-	values = struct.unpack("<%dh" % (frame_count * channels),
-		payload[:frame_count * channels * 2])
-	return rate, channels, [values[c::channels] for c in range(channels)]
+	samples per channel), mapped rather than loaded (_channels_of_file)."""
+	return rate, channels, _channels_of_file(path, 0, channels)
 
 
 # How far a tone may be off its frequency in a card's recording: a stream
@@ -3839,6 +4067,11 @@ def read_raw_audio(path, rate=CAPTURE_RATE, channels=2):
 # only (and 0.2 % down): the candidates are 50 Hz apart, under 2 % at the
 # top, so a band both ways would let a tone take its neighbour's name.
 TONE_SPREAD = 0.01
+
+
+# Windows tone_windows() converts to float64 at a time (512 windows of
+# 4800 samples: 20 MB).
+TONE_WINDOWS_PER_PIECE = 512
 
 
 def tone_windows(samples, rate, candidates, window, spread=0.0):
@@ -3854,38 +4087,45 @@ def tone_windows(samples, rate, candidates, window, spread=0.0):
 	results = []
 	try:
 		import numpy
-		data = numpy.asarray(samples, dtype=numpy.float64)
+		data = numpy.asarray(samples)
 		count = len(data) // window
 		if count == 0:
 			return results
-		blocks = data[:count * window].reshape(count, window)
-		energy = (blocks * blocks).sum(axis=1)
 		n = numpy.arange(window)
-		powers = []
-		for hz in candidates:
-			best_power = None
-			for offset in offsets:
-				phasor = numpy.exp(-2j * numpy.pi * hz * (1 + offset) * n
-					/ rate)
-				power = numpy.abs(blocks @ phasor) ** 2
-				best_power = power if best_power is None \
-					else numpy.maximum(best_power, power)
-			powers.append(best_power)
-		powers = numpy.array(powers)
-		best = powers.argmax(axis=0)
-		for i in range(count):
-			rms = math.sqrt(energy[i] / window)
-			if rms < 100:
-				results.append((None, 0.0, rms))
-				continue
-			purity = 2 * powers[best[i], i] / (window * energy[i])
-			results.append((candidates[best[i]] if purity >= 0.5
-				else "other", float(purity), rms))
+		phasors = [[numpy.exp(-2j * numpy.pi * hz * (1 + offset) * n / rate)
+				for offset in offsets] for hz in candidates]
+		# A piece of TONE_WINDOWS_PER_PIECE windows at a time: converting a
+		# whole hour-long channel to float64 at once took 8 bytes a sample
+		# (twice, with the energy), gigabytes for a renga-raw recording.
+		for first in range(0, count, TONE_WINDOWS_PER_PIECE):
+			last = min(count, first + TONE_WINDOWS_PER_PIECE)
+			blocks = numpy.asarray(data[first * window:last * window],
+				dtype=numpy.float64).reshape(last - first, window)
+			energy = (blocks * blocks).sum(axis=1)
+			powers = []
+			for perOffset in phasors:
+				best_power = None
+				for phasor in perOffset:
+					power = numpy.abs(blocks @ phasor) ** 2
+					best_power = power if best_power is None \
+						else numpy.maximum(best_power, power)
+				powers.append(best_power)
+			powers = numpy.array(powers)
+			best = powers.argmax(axis=0)
+			for i in range(last - first):
+				rms = math.sqrt(energy[i] / window)
+				if rms < 100:
+					results.append((None, 0.0, rms))
+					continue
+				purity = 2 * powers[best[i], i] / (window * energy[i])
+				results.append((candidates[best[i]] if purity >= 0.5
+					else "other", float(purity), rms))
+			del blocks, energy, powers
 		return results
 	except ImportError:
 		pass
 	for start in range(0, len(samples) - window + 1, window):
-		chunk = samples[start:start + window]
+		chunk = as_ints(samples[start:start + window])
 		energy = sum(x * x for x in chunk)
 		rms = math.sqrt(energy / window)
 		if rms < 100:
@@ -3985,7 +4225,7 @@ def analyze_media_audio(results_dir, report):
 	start = max(0, (first["start"] - 3) * window)
 	end = min(len(samples[1]), (last["start"] + len(last["windows"]) + 3)
 		* window)
-	region = samples[1][start:end]
+	region = as_ints(samples[1][start:end])
 	peak = max((abs(x) for x in region), default=0)
 	step, where = max(((abs(region[i] - region[i - 1]), i)
 		for i in range(1, len(region))), default=(0, 0))
@@ -4256,7 +4496,7 @@ def zero_runs(samples, start, end, minimum):
 	"""Runs of more than \a minimum zero samples in samples[start:end]:
 	(count, longest)."""
 	count = longest = run = 0
-	for x in samples[start:end]:
+	for x in as_ints(samples[start:end]):
 		if x == 0:
 			run += 1
 			if run == minimum + 1:
@@ -4729,6 +4969,12 @@ def write_report(results_dir, report):
 		lines.append("- %s after %ss, runner finished: %s" % (
 			boot.get("status"), boot.get("seconds"),
 			boot.get("runner_finished")))
+		for part in report.get("resumed", []):
+			lines.append("- resumed run (--resume), boot %s: %d test "
+				"program(s) finished%s" % (part["part"],
+				len(part["finished"]), ", the runner ended"
+					if part["complete"] else ", then interrupted"
+					if part["part"] != "." else ""))
 		if "stall_after_seconds" in boot:
 			lines.append("- serial output stopped at %ss; the harness pressed "
 				"Alt+SysRq+D" % boot["stall_after_seconds"])
@@ -4918,7 +5164,32 @@ def main():
 			"renguin_test's chrome checks" % CHROMIUM_IMAGE_SIZE)
 	parser.add_argument("--verbose", action="store_true",
 		help="build the drivers under test with their TRACE() output on")
+	parser.add_argument("--suite-timeout", type=int, default=None,
+		metavar="SECONDS",
+		help="the guest runner's per-program watchdog: a test program "
+			"still running after SECONDS is killed, recorded as the failed "
+			"check harness.watchdog.<program> and the run goes on (default "
+			"%d, four times the longest program in a renga-raw run)"
+			% SUITE_TIMEOUT_DEFAULT)
+	parser.add_argument("--resume", default=None, metavar="DIR",
+		help="continue the run in results directory DIR that was killed "
+			"(a host restart, an out-of-memory kill): its arguments come "
+			"from DIR/run.json, the test programs that finished are kept "
+			"and only the others run, in a new boot of the same image; a "
+			"run killed after the guest finished is only analysed again "
+			"(see PROGRESS_FILE). Exit status 3: DIR cannot be resumed")
 	args = parser.parse_args()
+	resume_dir = None
+	if args.resume:
+		resume_dir = os.path.abspath(args.resume)
+		run = load_json(os.path.join(resume_dir, RUN_FILE))
+		if run is None or os.path.exists(os.path.join(resume_dir,
+				"summary.md")):
+			log("cannot resume %s: %s" % (resume_dir, "it has a summary "
+				"already" if run is not None else "no " + RUN_FILE))
+			return 3
+		args = parser.parse_args(run["argv"])
+		args.resume = resume_dir
 	args.output = os.path.abspath(args.output)
 	if args.linux_chromium and args.memory < 2048:
 		args.memory = 2048
@@ -4970,15 +5241,32 @@ def main():
 			if args.firmware == "uefi" or args.media == "cdrom" \
 			else "minimum-raw"
 
+	if resume_dir is not None and (args.restore_points or args.loader_writes
+			or args.installer_upgrade or args.other_systems):
+		log("cannot resume: runs with several boots of their own "
+			"(--restore-points, --loader-writes, --installer-upgrade, "
+			"--other-systems) start again")
+		return 3
+
 	started = datetime.datetime.now()
 	results_root = os.path.join(args.output, "ce-test-results")
-	results_dir = os.path.join(results_root,
-		started.strftime("%Y%m%d-%H%M%S"))
-	os.makedirs(results_dir, exist_ok=True)
+	if resume_dir is not None:
+		results_dir = resume_dir
+		run = load_json(os.path.join(results_dir, RUN_FILE))
+		started = datetime.datetime.fromisoformat(run["started"])
+	else:
+		results_dir = os.path.join(results_root,
+			started.strftime("%Y%m%d-%H%M%S"))
+		os.makedirs(results_dir, exist_ok=True)
+		run = {"argv": sys.argv[1:], "started":
+			started.isoformat(timespec="seconds")}
+		write_json_atomically(os.path.join(results_dir, RUN_FILE), run)
 	latest = os.path.join(results_root, "latest")
 	if os.path.islink(latest) or os.path.exists(latest):
 		os.remove(latest)
-	os.symlink(os.path.basename(results_dir), latest)
+	os.symlink(os.path.basename(results_dir)
+		if os.path.dirname(results_dir) == results_root else results_dir,
+		latest)
 
 	report = {"started": started.isoformat(timespec="seconds"),
 		"profile": args.profile, "firmware": args.firmware,
@@ -4995,17 +5283,45 @@ def main():
 		"installed_tests": available,
 		"selected_tests": args.only}
 
+	progress = Progress(results_dir)
+	expected = args.only or available
+	booted_before = resume_dir is not None and bool(progress.parts())
+	if booted_before:
+		error = resume_prepare(args, results_dir, run, progress)
+		if error is not None:
+			log("cannot resume %s: %s" % (results_dir, error))
+			return 3
+		report["build"] = run.get("build", {})
+	args.resume_selection = []
+
 	ok = True
-	if not args.no_build:
+	if not args.no_build and not booted_before:
 		ok = build(args, results_dir, report)
+		run["build"] = report.get("build", {})
+		run["image"] = image_identity(image_path(args))
+		write_json_atomically(os.path.join(results_dir, RUN_FILE), run)
+	elif not booted_before:
+		run["image"] = image_identity(image_path(args))
+		write_json_atomically(os.path.join(results_dir, RUN_FILE), run)
 	if ok and not args.compile_only:
 		disks = None
 		if args.installer_upgrade:
 			disks = make_installer_disks(args, results_dir, report)
 		extra = installer_drives(disks) if disks else []
+		finished = progress.finished()
+		remaining = [t for t in expected if t not in finished]
+		if booted_before:
+			log("resuming %s: %d of %d test programs finished in %d "
+				"boot(s)%s" % (results_dir, len(finished), len(expected),
+				len(progress.parts()), "; the runner had finished"
+					if progress.complete() else ", running " +
+					", ".join(remaining)))
+		skip_boot = booted_before and (progress.complete() or not remaining)
+		if booted_before and not skip_boot:
+			args.resume_selection = remaining
 		if args.profile.startswith("renga-") and not disks \
-				and not args.other_systems \
-				and "installer_ui_test" in (args.only or available):
+				and not args.other_systems and not skip_boot \
+				and "installer_ui_test" in (args.resume_selection or expected):
 			target = make_installer_ui_target(args, results_dir)
 			if target is not None:
 				extra += ["-drive", "file=%s,format=raw,if=none,id=cetarget"
@@ -5021,129 +5337,261 @@ def main():
 			print(summary)
 			log("results in " + results_dir)
 			return 0 if passed else 1
+		elif skip_boot:
+			report["boot"] = boot_info(results_dir)
 		else:
-			boot(args, results_dir, report, extra_drives=extra)
+			boot(args, results_dir, report, extra_drives=extra,
+				progress=progress)
 		if disks:
 			run_installer_boots(args, results_dir, report, disks)
-		parse_serial(results_dir, report)
-		parse_qemu_log(results_dir, report)
-		check_scratch_disks(results_dir, report)
-		check_pointer_devices(args, results_dir, report)
-		check_nvme_namespaces(results_dir, report)
-		check_image_identity(args, results_dir, report)
-		check_branding(args, results_dir, report)
-		check_two_installs(args, results_dir, report)
-		check_installer_boots(args, results_dir, report)
-		check_restore_point_boots(args, results_dir, report)
-		if "linuxkpi_test" in (args.only or available):
-			check_linuxkpi(results_dir, report)
-		if "crashlog_test" in (args.only or available) \
-				and not args.installer_upgrade:
-			check_crashlog(results_dir, report)
-			check_kdl_hint(results_dir, report)
-			if args.profile.startswith("renga-"):
-				check_screenshots(results_dir, report, CRASHLOG_SCREENSHOTS,
-					"crashlog.screenshots")
-		if args.other_systems:
-			check_other_systems(args, results_dir, report)
-		else:
-			check_boot_menu(args, results_dir, report)
-		if not args.only or "vsnd_test" in args.only:
-			analyze_audio(results_dir, report, VIRTIO_SOUND_PHASES)
-		if "usb_audio_test" in (args.only or available):
-			analyze_usb_audio(results_dir, report)
-		if "media_test" in (args.only or available):
-			analyze_media_audio(results_dir, report)
-		if "media_routing_test" in (args.only or available):
-			analyze_routing_audio(results_dir, report)
-			analyze_loopback_only_audio(results_dir, report)
-			check_screenshots(results_dir, report, ROUTING_SCREENSHOTS,
-				"media_routing.screenshots")
-		if "media_sound_test" in (args.only or available):
-			analyze_sound_audio(results_dir, report)
-			check_screenshots(results_dir, report, SOUND_SCREENSHOTS,
-				"sound_settings.screenshots")
-		if "media_ui_test" in (args.only or available):
-			check_screenshots(results_dir, report, MEDIA_UI_SCREENSHOTS,
-				"media_ui.screenshots")
-		if "media_usb_test" in (args.only or available):
-			analyze_media_usb_audio(results_dir, report)
-			check_screenshots(results_dir, report, MEDIA_USB_SCREENSHOTS,
-				"media_usb.screenshots")
-		if "media_devnotify_test" in (args.only or available):
-			check_screenshots(results_dir, report, DEVNOTIFY_SCREENSHOTS,
-				"devnotify.screenshots")
-		if "tracker_menu_test" in (args.only or available):
-			check_screenshots(results_dir, report, TRACKER_MENU_SCREENSHOTS,
-				"tracker_menu.screenshots")
-		if "tracker_modern_test" in (args.only or available):
-			check_screenshots(results_dir, report, TRACKER_MODERN_SCREENSHOTS,
-				"tracker_modern.screenshots")
-		if "deskbar_test" in (args.only or available):
-			check_screenshots(results_dir, report, DESKBAR_SCREENSHOTS,
-				"deskbar.screenshots")
-		if "media_vcam_test" in (args.only or available):
-			check_screenshots(results_dir, report, VCAM_SCREENSHOTS,
-				"virtual_camera.screenshots")
-		if "media_video_test" in (args.only or available):
-			check_screenshots(results_dir, report, CODYCAM_SCREENSHOTS,
-				"codycam.screenshots")
-		if "screen_capture_test" in (args.only or available):
-			check_screenshots(results_dir, report, CAPTURE_SCREENSHOTS,
-				"capture.screenshots")
-		if "sound_latency_test" in (args.only or available):
-			analyze_latency_audio(results_dir, report)
-			check_screenshots(results_dir, report, LATENCY_SCREENSHOTS,
-				"media_latency.screenshots")
-		if "media_stream_test" in (args.only or available):
-			check_screenshots(results_dir, report, STREAM_SCREENSHOTS,
-				"media_stream.screenshots")
-		if "media_html5_test" in (args.only or available):
-			check_screenshots(results_dir, report, HTML5_SCREENSHOTS,
-				"html5_media.screenshots")
-		if "installer_ui_test" in (args.only or available):
-			check_screenshots(results_dir, report, INSTALLER_SCREENSHOTS,
-				"installer_ui.screenshots")
-		if "bootmenu_ui_test" in (args.only or available):
-			check_screenshots(results_dir, report, BOOTMENU_SCREENSHOTS,
-				"bootmenu.screenshots")
-		if "renguin_manager_test" in (args.only or available):
-			check_screenshots(results_dir, report,
-				RENGUIN_MANAGER_SCREENSHOTS, "renguin_manager.screenshots")
-		if "welcome_ui_test" in (args.only or available):
-			check_screenshots(results_dir, report, WELCOME_SCREENSHOTS,
-				"welcome.screenshots")
-		if "renga_doctor_test" in (args.only or available):
-			check_screenshots(results_dir, report, RENGA_DOCTOR_SCREENSHOTS,
-				"renga_doctor.screenshots")
-		if "control_panel_ui_test" in (args.only or available):
-			check_screenshots(results_dir, report, CONTROL_PANEL_SCREENSHOTS,
-				"control_panel.screenshots")
-		if "hw_cursor_test" in (args.only or available) \
-				and "usb" in args.pointer_devices:
-			check_screenshots(results_dir, report, HW_CURSOR_SCREENSHOTS,
-				"hw_cursor.screenshots")
-			check_hw_cursor_drag(results_dir, report)
-		if "linuxkpi_ui_test" in (args.only or available):
-			check_screenshots(results_dir, report, LINUXKPI_SCREENSHOTS,
-				"linuxkpi_ui.screenshots")
-		if "displays_multi_test" in (args.only or available):
-			check_multi_screens(args, results_dir, report)
-		if args.displays <= 1:
-			check_native_mode(args, results_dir, report)
-		if "front_copy_test" in (args.only or available) \
-				and "usb" in args.pointer_devices:
-			check_front_copy(results_dir, report)
-		if "wayland_test" in (args.only or available):
-			check_screenshots(results_dir, report, WAYLAND_SCREENSHOTS
-				+ WAYLAND_LINUX_SCREENSHOTS, "wayland.screenshots")
+		analyze(args, results_dir, report, available, progress)
 
+	report.setdefault("host_checks", []).append(harness_memory_check())
 	summary, passed = write_report(results_dir, report)
 	print(summary)
 	log("results in " + results_dir)
 	if report["verdict"].get("partial"):
 		return 2 if report["verdict"]["selection_passed"] else 1
 	return 0 if passed else 1
+
+
+# The highest resident memory ce-test.py may reach in a run (batch 13: the
+# renga-raw analysis reached 6.2 GB in a 7 GB cgroup and was killed). The
+# recordings are mapped, so a renga-raw run's two (850 MB in batch 12)
+# count here as page cache; everything else stays small.
+HARNESS_RSS_LIMIT_MB = 2048
+
+
+def harness_memory_check():
+	"""harness.peak_rss: ce-test.py's own peak memory over the whole run,
+	boot and analysis, under HARNESS_RSS_LIMIT_MB."""
+	peak = peak_rss_mb()
+	return {"name": "harness.peak_rss",
+		"pass": peak is not None and peak < HARNESS_RSS_LIMIT_MB,
+		"detail": "ce-test.py peaked at %s MB of resident memory (limit %d "
+			"MB; recordings are mapped, not loaded)" % (peak,
+			HARNESS_RSS_LIMIT_MB)}
+
+
+def image_identity(path):
+	try:
+		info = os.stat(path)
+	except OSError:
+		return None
+	return {"path": path, "size": info.st_size, "mtime": info.st_mtime}
+
+
+# What stays in the results directory when an interrupted boot's files
+# move to part-<n>/ (resume_prepare).
+RESUME_KEEP = (RUN_FILE, PROGRESS_FILE, PROGRESS_FILE + ".tmp", "build.log")
+
+
+def resume_prepare(args, results_dir, run, progress):
+	"""Gets a killed run's results directory ready to go on: stops a QEMU
+	the killed ce-test.py left running, checks that the image is the one
+	the run booted, moves the interrupted boot's files to part-<n>/ and
+	converts its screenshots. Returns None or why it cannot go on."""
+	for pid in os.listdir("/proc"):
+		if not pid.isdigit() or int(pid) == os.getpid():
+			continue
+		try:
+			with open("/proc/%s/cmdline" % pid, "rb") as cmdline:
+				words = cmdline.read().split(b"\0")
+		except OSError:
+			continue
+		if words and words[0].endswith(b"qemu-system-x86_64") \
+				and any(results_dir.encode() + b"/" in w for w in words):
+			log("stopping QEMU %s of the interrupted run" % pid)
+			try:
+				os.kill(int(pid), 9)
+			except OSError:
+				pass
+	parts = progress.parts()
+	last = parts[-1]
+	if last["dir"] == "" and not last.get("complete"):
+		if run.get("image") != image_identity(image_path(args)):
+			return "the image changed since the run booted it (%s)" \
+				% image_path(args)
+		name = "part-%d" % len(parts)
+		target = os.path.join(results_dir, name)
+		os.makedirs(target, exist_ok=True)
+		for entry in os.listdir(results_dir):
+			if entry in RESUME_KEEP or entry.startswith("part-"):
+				continue
+			if entry.endswith(".img") or entry == "capture-in.raw":
+				# scratch disks and the capture feed: only for the boot
+				os.remove(os.path.join(results_dir, entry))
+				continue
+			os.replace(os.path.join(results_dir, entry),
+				os.path.join(target, entry))
+		convert_screenshots(glob.glob(os.path.join(target, "*.ppm")))
+		last["dir"] = name
+		last["interrupted"] = True
+		progress._save()
+	return None
+
+
+def boot_info(directory):
+	"""The boot report of the boot in \a directory: boot.json, or for a
+	boot that was killed what it left as it went."""
+	info = load_json(os.path.join(directory, BOOT_FILE))
+	if info is not None:
+		return info
+	info = {"status": "interrupted", "runner_finished": False}
+	for key, name in (("host_requests", HOST_REQUESTS_FILE),
+			("expected_kdl", EXPECTED_KDL_FILE)):
+		entries = []
+		try:
+			with open(os.path.join(directory, name)) as jsonLines:
+				for line in jsonLines:
+					try:
+						entries.append(json.loads(line))
+					except ValueError:
+						pass
+		except OSError:
+			pass
+		info[key] = entries
+	info["expected_kdl_unanswered"] = 0
+	info["screenshots"] = sorted(os.path.basename(p) for p in
+		glob.glob(os.path.join(directory, "screen-*.png")))
+	return info
+
+
+def analyze(args, results_dir, report, available, progress):
+	"""The host-side analysis of a run: the serial log (of every part of a
+	resumed run) and each test program's recordings and screenshots, from
+	the directory of the boot it ran in."""
+	where_map = {}
+	parts = []
+	for part in progress.parts():
+		directory = os.path.join(results_dir, part["dir"]) if part["dir"] \
+			else results_dir
+		for entry in part["finished"]:
+			where_map[entry["test"]] = directory
+		if part["dir"]:
+			parts.append((directory, part["finished"][-1]["lines"]
+				if part["finished"] else 0))
+
+	def where(test):
+		return where_map.get(test, results_dir)
+
+	boot_report = report.setdefault("boot", {})
+	if parts:
+		report["resumed"] = [{"part": part["dir"] or ".",
+				"finished": [e["test"] for e in part["finished"]],
+				"complete": part.get("complete", False)}
+			for part in progress.parts()]
+		# the guest's requests of every boot (the pointer checks)
+		requests = []
+		for directory, _ in parts:
+			requests += boot_info(directory).get("host_requests", [])
+		boot_report["host_requests"] = requests \
+			+ boot_report.get("host_requests", [])
+	report.setdefault("host_checks", [])
+
+	def reported(test):
+		"""The report, as seen from the boot \a test ran in."""
+		directory = where(test)
+		if directory == results_dir:
+			return report
+		view = dict(report)
+		view["boot"] = boot_info(directory)
+		return view
+
+	selected = args.only or available
+	parse_serial(results_dir, report, parts)
+	parse_qemu_log(results_dir, report)
+	check_scratch_disks(where("vblk_test"), report)
+	check_pointer_devices(args, where("pointer_test"), report)
+	check_nvme_namespaces(where("nvme_test"), report)
+	check_image_identity(args, results_dir, report)
+	check_branding(args, results_dir, report)
+	check_two_installs(args, results_dir, report)
+	check_installer_boots(args, results_dir, report)
+	check_restore_point_boots(args, results_dir, report)
+	if "linuxkpi_test" in selected:
+		check_linuxkpi(where("linuxkpi_test"), report)
+	if "crashlog_test" in selected and not args.installer_upgrade:
+		directory = where("crashlog_test")
+		check_crashlog(directory, reported("crashlog_test"))
+		check_kdl_hint(directory, reported("crashlog_test"))
+		if args.profile.startswith("renga-"):
+			check_screenshots(directory, report, CRASHLOG_SCREENSHOTS,
+				"crashlog.screenshots")
+	if args.other_systems:
+		check_other_systems(args, results_dir, report)
+	else:
+		check_boot_menu(args, results_dir, report)
+	if not args.only or "vsnd_test" in args.only:
+		analyze_audio(where("vsnd_test"), report, VIRTIO_SOUND_PHASES)
+	if "usb_audio_test" in selected:
+		analyze_usb_audio(where("usb_audio_test"), report)
+	if "media_test" in selected:
+		analyze_media_audio(where("media_test"), report)
+	if "media_routing_test" in selected:
+		analyze_routing_audio(where("media_routing_test"), report)
+		analyze_loopback_only_audio(where("media_routing_test"), report)
+		check_screenshots(where("media_routing_test"), report,
+			ROUTING_SCREENSHOTS, "media_routing.screenshots")
+	if "media_sound_test" in selected:
+		analyze_sound_audio(where("media_sound_test"), report)
+		check_screenshots(where("media_sound_test"), report,
+			SOUND_SCREENSHOTS, "sound_settings.screenshots")
+	for test, names, check in SCREENSHOT_CHECKS:
+		if test in selected:
+			check_screenshots(where(test), report, names, check)
+	if "media_usb_test" in selected:
+		analyze_media_usb_audio(where("media_usb_test"), report)
+	if "sound_latency_test" in selected:
+		analyze_latency_audio(where("sound_latency_test"), report)
+	if "hw_cursor_test" in selected and "usb" in args.pointer_devices:
+		check_screenshots(where("hw_cursor_test"), report,
+			HW_CURSOR_SCREENSHOTS, "hw_cursor.screenshots")
+		check_hw_cursor_drag(where("hw_cursor_test"), report)
+	if "displays_multi_test" in selected:
+		check_multi_screens(args, where("displays_multi_test"), report)
+	if args.displays <= 1:
+		check_native_mode(args, results_dir, report)
+	if "front_copy_test" in selected and "usb" in args.pointer_devices:
+		check_front_copy(where("front_copy_test"), report)
+	if "wayland_test" in selected:
+		check_screenshots(where("wayland_test"), report, WAYLAND_SCREENSHOTS
+			+ WAYLAND_LINUX_SCREENSHOTS, "wayland.screenshots")
+
+
+# Screenshot checks of one test program each: (program, screenshot names,
+# check name). The order is the one of the checks in the summary.
+SCREENSHOT_CHECKS = [
+	("media_ui_test", "MEDIA_UI_SCREENSHOTS", "media_ui.screenshots"),
+	("media_usb_test", "MEDIA_USB_SCREENSHOTS", "media_usb.screenshots"),
+	("media_devnotify_test", "DEVNOTIFY_SCREENSHOTS",
+		"devnotify.screenshots"),
+	("tracker_menu_test", "TRACKER_MENU_SCREENSHOTS",
+		"tracker_menu.screenshots"),
+	("tracker_modern_test", "TRACKER_MODERN_SCREENSHOTS",
+		"tracker_modern.screenshots"),
+	("deskbar_test", "DESKBAR_SCREENSHOTS", "deskbar.screenshots"),
+	("media_vcam_test", "VCAM_SCREENSHOTS", "virtual_camera.screenshots"),
+	("media_video_test", "CODYCAM_SCREENSHOTS", "codycam.screenshots"),
+	("screen_capture_test", "CAPTURE_SCREENSHOTS", "capture.screenshots"),
+	("sound_latency_test", "LATENCY_SCREENSHOTS",
+		"media_latency.screenshots"),
+	("media_stream_test", "STREAM_SCREENSHOTS", "media_stream.screenshots"),
+	("media_html5_test", "HTML5_SCREENSHOTS", "html5_media.screenshots"),
+	("installer_ui_test", "INSTALLER_SCREENSHOTS",
+		"installer_ui.screenshots"),
+	("bootmenu_ui_test", "BOOTMENU_SCREENSHOTS", "bootmenu.screenshots"),
+	("renguin_manager_test", "RENGUIN_MANAGER_SCREENSHOTS",
+		"renguin_manager.screenshots"),
+	("welcome_ui_test", "WELCOME_SCREENSHOTS", "welcome.screenshots"),
+	("renga_doctor_test", "RENGA_DOCTOR_SCREENSHOTS",
+		"renga_doctor.screenshots"),
+	("control_panel_ui_test", "CONTROL_PANEL_SCREENSHOTS",
+		"control_panel.screenshots"),
+	("linuxkpi_ui_test", "LINUXKPI_SCREENSHOTS", "linuxkpi_ui.screenshots"),
+]
+SCREENSHOT_CHECKS = [(test, globals()[names], check)
+	for test, names, check in SCREENSHOT_CHECKS]
 
 
 if __name__ == "__main__":

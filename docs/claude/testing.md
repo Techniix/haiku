@@ -61,6 +61,8 @@ each. Run it for any change under `src/apps`, `src/preferences`, `src/kits/track
 - **Four-way set:** default, `--smp 2`, `--firmware uefi`, `--profile renga-raw`, plus `selftest.py` once
   per tree: `tools/renga/renga-gate` (wraps `ce-gates.sh`). Resumable: configurations that passed on the
   exact same tree are skipped. Notes-only changes (the roadmap, `docs/partners/`) keep the tree key.
+  A configuration a restart killed is resumed from its last finished test program (`ce-test.py --resume`);
+  a hung test program is killed after `--suite-timeout` (1200 s) and reported as `harness.watchdog.*`.
 
 ## Which tests when (roadmap 1.2; standing rules)
 
