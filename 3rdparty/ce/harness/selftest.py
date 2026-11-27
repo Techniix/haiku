@@ -534,6 +534,50 @@ for name, args, keywords, wanted in [
 			name),
 		ce_test.spare_disk_wanted(args, **keywords) == wanted)
 
+# --mesa-upgrade (batch 14): mesa_upgrade.setup fails when the disk of the
+# two boots was not made, and is no check at all in other runs.
+for label, setup, wanted in [("made", "ok", True),
+		("not made", "bfs_shell could not write", False),
+		("never prepared", None, False)]:
+	mesaReport = {} if setup is None else {"mesa_upgrade_setup": setup}
+	ce_test.check_mesa_upgrade_boots(types.SimpleNamespace(
+		mesa_upgrade=True), mesaReport)
+	mesaChecks = [c for c in mesaReport.get("host_checks", [])
+		if c["name"] == "mesa_upgrade.setup"]
+	expect("mesa_upgrade.setup %s when the disk was %s"
+			% ("passes" if wanted else "fails", label),
+		len(mesaChecks) == 1 and mesaChecks[0]["pass"] == wanted, mesaChecks)
+# Runs are offline by design: only --mesa-upgrade gets a network. The
+# known-bad case: the flag must give user networking, so a nic_args() that
+# ignored it (or always gave a network) fails one of the two.
+expect("no network without --mesa-upgrade",
+	ce_test.nic_args(types.SimpleNamespace(mesa_upgrade=False))
+		== ["-nic", "none"])
+expect("no network when the option is absent (other callers)",
+	ce_test.nic_args(types.SimpleNamespace()) == ["-nic", "none"])
+expect("user networking with --mesa-upgrade",
+	ce_test.nic_args(types.SimpleNamespace(mesa_upgrade=True))
+		== ["-nic", "user,model=e1000"])
+# --only mesa_upgrade_test without --mesa-upgrade would pass with no checks
+# (renga-test mesa): refused
+for label, only, flag, refused in [
+		("--only mesa_upgrade_test", ["mesa_upgrade_test"], False, True),
+		("--only epoll_test,mesa_upgrade_test",
+			["epoll_test", "mesa_upgrade_test"], False, True),
+		("--mesa-upgrade --only mesa_upgrade_test", ["mesa_upgrade_test"],
+			True, False),
+		("--only epoll_test", ["epoll_test"], False, False),
+		("a full run", [], False, False)]:
+	error = ce_test.mesa_upgrade_selection_error(types.SimpleNamespace(
+		only=only, mesa_upgrade=flag))
+	expect("%s is %s" % (label, "refused" if refused else "accepted"),
+		(error is not None) == refused, error)
+mesaReport = {}
+ce_test.check_mesa_upgrade_boots(types.SimpleNamespace(mesa_upgrade=False),
+	mesaReport)
+expect("mesa_upgrade.setup is no check without --mesa-upgrade",
+	not mesaReport.get("host_checks"), mesaReport)
+
 spareDirectory = tempfile.mkdtemp()
 sparePath = os.path.join(spareDirectory, "spare.img")
 problem = ce_test.make_spare_disk(sparePath)

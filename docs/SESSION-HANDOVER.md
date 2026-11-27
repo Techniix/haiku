@@ -137,6 +137,7 @@ Remaining queue, in order:
 5. Mesa (option C), verified in QEMU on the batch 14 image:
    - Run the one transaction: `pkgman install` of libglvnd, mesa, mesa_devel, mesa_eglvnd and mesa_lavapipe from RengaPorts, with mesa_swpipe removed in the same transaction.
    - Then the two BGLView checks: no ICD, and lavapipe only.
+   - Done (2026-11-27, `batch/14-mesa-optc`): `ce-test.py --profile renga-raw --mesa-upgrade --only mesa_upgrade` passes, QEMU Tested; the solver also takes gcc_syslibs 15.3.0, llvm21_libs and vulkan_loader from HaikuPorts.
 6. `batch/13-chrome-window`, then `batch/13-installer-destination`.
 7. Flatpak step 1 (`wip/flatpak-step1`).
 8. Steam 64-bit groundwork.
