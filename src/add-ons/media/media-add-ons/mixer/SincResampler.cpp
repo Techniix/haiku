@@ -48,7 +48,9 @@ SincResampler::SincResampler(uint32 sourceFormat, uint32 destFormat)
 	fPosition(kHalf),
 	fStep(0),
 	fTable(NULL),
-	fCutoff(0)
+	fCutoff(0),
+	fSmoothedError(0),
+	fErrorValid(false)
 {
 	if (destFormat != media_raw_audio_format::B_AUDIO_FLOAT) {
 		ERROR("SincResampler: the destination format must be float\n");
@@ -84,8 +86,11 @@ SincResampler::~SincResampler()
 void
 SincResampler::SetRates(float inputRate, float outputRate)
 {
-	fStep = inputRate > 0 && outputRate > 0 ? (double)inputRate / outputRate
-		: 0;
+	double step = inputRate > 0 && outputRate > 0
+		? (double)inputRate / outputRate : 0;
+	if (step != fStep)
+		fErrorValid = false;
+	fStep = step;
 }
 
 
@@ -204,6 +209,20 @@ SincResampler::_Resample(Resampler* object, const void* src,
 	if (self->fStep > 0) {
 		double level = self->fQueued - self->fPosition;
 		double error = level - (kHalf + 4 + srcSampleCount);
+		// Batch 13: the level error is smoothed over about 64 buffers
+		// before it nudges the step. Taken raw, every buffer's rounding
+		// and every late buffer under load moved the output frequency a
+		// little; a 15 kHz tone shows that phase jitter 14 times as
+		// strongly as a 1.1 kHz one (media_resample.sinc_15khz read
+		// -49.1 dB under the full renga-raw load in batch 12, -50 being
+		// the bound). Drift between counts and ratio is slow, so the
+		// smoothed error still corrects it.
+		if (!self->fErrorValid) {
+			self->fSmoothedError = error;
+			self->fErrorValid = true;
+		} else
+			self->fSmoothedError += (error - self->fSmoothedError) / 64.0;
+		error = self->fSmoothedError;
 		double nudge = error * 2e-5;
 		if (nudge > 0.002)
 			nudge = 0.002;

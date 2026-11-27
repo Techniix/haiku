@@ -309,8 +309,17 @@ main()
 	printf("CE-SUITE " SUITE " START\n");
 	fflush(stdout);
 
+	// Batch 13: the media services may still be starting (alone in a
+	// partial run, this test came 1 s after media_server and found no
+	// mixer: "Name not found"); wait up to 30 s for the mixer's setting.
 	int32 original = -1;
-	status_t status = algorithm_parameter(&original, false);
+	status_t status = B_ERROR;
+	for (int32 attempt = 0; attempt < 60; attempt++) {
+		status = algorithm_parameter(&original, false);
+		if (status == B_OK)
+			break;
+		snooze(500000);
+	}
 	report("setting", status == B_OK, "the mixer's resampling algorithm: %"
 		B_PRId32 " (%s)", original, strerror(status));
 

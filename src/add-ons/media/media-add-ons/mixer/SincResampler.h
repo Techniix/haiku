@@ -51,6 +51,9 @@ private:
 			double				fStep;			// nominal; 0: unknown
 			float*				fTable;			// (phases + 1) x taps
 			float				fCutoff;
+			double				fSmoothedError;
+				// queue level error, averaged (batch 13)
+			bool				fErrorValid;
 };
 
 
