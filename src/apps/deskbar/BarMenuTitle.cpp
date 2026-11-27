@@ -54,6 +54,8 @@ TBarMenuTitle::TBarMenuTitle(float width, float height, const BBitmap* icon,
 	fWidth(width),
 	fHeight(height),
 	fIcon(icon),
+	fLitIcon(NULL),
+	fHovered(false),
 	fMenu(menu),
 	fBarView(barView),
 	fInitStatus(B_NO_INIT)
@@ -67,6 +69,25 @@ TBarMenuTitle::TBarMenuTitle(float width, float height, const BBitmap* icon,
 
 TBarMenuTitle::~TBarMenuTitle()
 {
+}
+
+
+void
+TBarMenuTitle::SetIcon(const BBitmap* icon, const BBitmap* litIcon)
+{
+	if (icon == NULL)
+		return;
+	fIcon = icon;
+	fLitIcon = litIcon;
+	if (fMenu != NULL && fBarView != NULL)
+		fInitStatus = B_OK;
+}
+
+
+void
+TBarMenuTitle::SetHovered(bool hovered)
+{
+	fHovered = hovered;
 }
 
 
@@ -128,15 +149,24 @@ TBarMenuTitle::DrawContent()
 
 	menu->SetDrawingMode(B_OP_ALPHA);
 
+	// Renga (batch 13): the Renga start button is lit while the pointer is
+	// over it or the menu is open, and moves down a pixel while pressed
+	const BBitmap* icon = fIcon;
+	bool rengaButton = fLitIcon != NULL;
+	if (rengaButton && (fHovered || IsSelected()))
+		icon = fLitIcon;
+
 	const BRect frame(Frame());
-	BRect iconRect(fIcon->Bounds().OffsetToCopy(frame.LeftTop()));
+	BRect iconRect(icon->Bounds().OffsetToCopy(frame.LeftTop()));
 
 	float widthOffset = rintf((frame.Width() - iconRect.Width()) / 2);
 	float heightOffset = rintf((frame.Height() - iconRect.Height()) / 2);
 
 	// cut-off the leaf
 	bool isLeafMenu = dynamic_cast<TDeskbarMenu*>(fMenu) != NULL;
-	if (isLeafMenu)
+	if (rengaButton)
+		iconRect.OffsetBy(widthOffset, heightOffset + (IsSelected() ? 1 : 0));
+	else if (isLeafMenu)
 		iconRect.OffsetBy(widthOffset, frame.Height() - iconRect.Height() + 2);
 	else
 		iconRect.OffsetBy(widthOffset, heightOffset);
@@ -149,7 +179,7 @@ TBarMenuTitle::DrawContent()
 		menu->ConstrainClippingRegion(&clipping);
 	}
 
-	menu->DrawBitmapAsync(fIcon, iconRect);
+	menu->DrawBitmapAsync(icon, iconRect);
 	menu->ConstrainClippingRegion(NULL);
 }
 

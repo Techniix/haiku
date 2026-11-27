@@ -72,6 +72,7 @@ All rights reserved.
 #include <wayland_clients.h>
 #include "tracker_private.h"
 
+#include "BarMenuBar.h"
 #include "BarView.h"
 #include "DeskbarMenu.h"
 #include "MenuSearch.h"
@@ -270,6 +271,7 @@ TBarApp::SaveSettings()
 		// Renga (batch 13)
 		prefs.AddBool("switcherLinuxPrograms",
 			fSettings.switcherLinuxPrograms);
+		prefs.AddBool("rengaStartButton", fSettings.rengaStartButton);
 
 		prefs.Flatten(fSettingsFile);
 	}
@@ -344,6 +346,7 @@ TBarApp::InitSettings()
 	settings.appRecentDocuments = fDefaultSettings.appRecentDocuments = true;
 	settings.switcherLinuxPrograms
 		= fDefaultSettings.switcherLinuxPrograms = true;
+	settings.rengaStartButton = fDefaultSettings.rengaStartButton = true;
 
 	clock_settings clock;
 	clock.showSeconds = false;
@@ -432,6 +435,8 @@ TBarApp::InitSettings()
 			settings.switcherLinuxPrograms = prefs.GetBool(
 				"switcherLinuxPrograms",
 				fDefaultSettings.switcherLinuxPrograms);
+			settings.rengaStartButton = prefs.GetBool("rengaStartButton",
+				fDefaultSettings.rengaStartButton);
 		}
 
 		// constrain width setting within limits
@@ -840,6 +845,7 @@ TBarApp::MessageReceived(BMessage* message)
 		case kToggleRestartInto:
 		case kToggleAppRecentDocuments:
 		case kToggleSwitcherLinuxPrograms:
+		case kToggleRengaStartButton:
 		{
 			bool* setting = message->what == kToggleSearch
 				? &fSettings.showSearch
@@ -851,6 +857,8 @@ TBarApp::MessageReceived(BMessage* message)
 					? &fSettings.showRestartInto
 				: message->what == kToggleSwitcherLinuxPrograms
 					? &fSettings.switcherLinuxPrograms
+				: message->what == kToggleRengaStartButton
+					? &fSettings.rengaStartButton
 				: &fSettings.appRecentDocuments;
 			int32 value;
 			if (message->FindInt32("be:value", &value) == B_OK)
@@ -867,6 +875,12 @@ TBarApp::MessageReceived(BMessage* message)
 			}
 			if (message->what == kToggleSwitcherLinuxPrograms)
 				fSwitcherMessenger.SendMessage(kSwitcherSettingChanged);
+			if (message->what == kToggleRengaStartButton
+				&& fBarWindow->Lock()) {
+				if (fBarView->BarMenuBar() != NULL)
+					fBarView->BarMenuBar()->UpdateStartButton();
+				fBarWindow->Unlock();
+			}
 			if (fPreferencesWindow != NULL)
 				fPreferencesWindow->PostMessage(kUpdatePreferences);
 			SaveSettings();
@@ -875,6 +889,18 @@ TBarApp::MessageReceived(BMessage* message)
 
 		case kRestartInto:
 			_RestartInto(message);
+			break;
+
+		case kTestStartButton:
+			if (_IsHarness()) {
+				BMessage reply(B_REPLY);
+				if (fBarWindow->Lock()) {
+					if (fBarView->BarMenuBar() != NULL)
+						fBarView->BarMenuBar()->GetStartButtonInfo(&reply);
+					fBarWindow->Unlock();
+				}
+				message->SendReply(&reply);
+			}
 			break;
 
 		case kTestSwitcher:

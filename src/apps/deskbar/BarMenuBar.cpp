@@ -46,6 +46,7 @@ All rights reserved.
 
 #include "icons.h"
 
+#include "BarApp.h"
 #include "BarMenuTitle.h"
 #include "BarView.h"
 #include "BarWindow.h"
@@ -109,7 +110,10 @@ TBarMenuBar::TBarMenuBar(BRect frame, const char* name, TBarView* barView)
 	fAppListMenuItem(NULL),
 	fSeparatorItem(NULL),
 	fTeamIconData(NULL),
-	fTeamIconSize(0)
+	fTeamIconSize(0),
+	fLeafIcon(NULL),
+	fStartIcon(NULL),
+	fStartIconLit(NULL)
 {
 	SetItemMargins(0.0f, 0.0f, 0.0f, 0.0f);
 	SetFont(be_bold_font);
@@ -134,13 +138,93 @@ TBarMenuBar::TBarMenuBar(BRect frame, const char* name, TBarView* barView)
 		}
 	}
 
+	fLeafIcon = icon;
 	fDeskbarMenuItem = new TBarMenuTitle(0.0f, 0.0f, icon, beMenu, fBarView);
 	AddItem(fDeskbarMenuItem);
+	UpdateStartButton();
 }
 
 
 TBarMenuBar::~TBarMenuBar()
 {
+	// the title item keeps pointers to these; it goes with the menu bar
+	delete fStartIcon;
+	delete fStartIconLit;
+}
+
+
+/*!	Renga (batch 13): one of the start button's HVIF icons as a square
+	bitmap of \a side pixels.
+*/
+BBitmap*
+TBarMenuBar::_StartButtonIcon(int32 resourceID, float side)
+{
+	size_t dataSize;
+	const void* data = AppResSet()->FindResource(B_VECTOR_ICON_TYPE,
+		resourceID, &dataSize);
+	if (data == NULL)
+		return NULL;
+	BBitmap* icon = new BBitmap(BRect(0, 0, side - 1, side - 1), B_RGBA32);
+	if (icon->InitCheck() != B_OK
+		|| BIconUtils::GetVectorIcon((const uint8*)data, dataSize, icon)
+			!= B_OK) {
+		delete icon;
+		return NULL;
+	}
+	return icon;
+}
+
+
+/*!	Renga (batch 13): the start button. Renga's (the maintainer's option C,
+	the boot animation's three leaves around a point of light) is a square
+	at the panel's height, which follows the bold font's size like the
+	classic leaf does (HiDPI), drawn for light or dark menu colours, with
+	a lit icon for hover and press. With the setting off, the classic leaf.
+*/
+//!	Harness images only (kTestStartButton): what the start button shows.
+void
+TBarMenuBar::GetStartButtonInfo(BMessage* reply)
+{
+	bool renga = fStartIcon != NULL && fDeskbarMenuItem->Icon() == fStartIcon;
+	const BBitmap* icon = fDeskbarMenuItem->Icon();
+	reply->AddBool("renga", renga);
+	reply->AddBool("lit", renga && fStartIconLit != NULL);
+	reply->AddFloat("width", icon != NULL ? icon->Bounds().Width() + 1 : 0);
+	reply->AddFloat("height", icon != NULL ? icon->Bounds().Height() + 1 : 0);
+	reply->AddFloat("expected_side",
+		std::max(22.f, ceilf(22 * be_bold_font->Size() / 12.f)));
+	reply->AddFloat("button_height", fDeskbarMenuItem->Frame().Height() + 1);
+	reply->AddBool("dark", ui_color(B_MENU_BACKGROUND_COLOR).IsDark());
+}
+
+
+void
+TBarMenuBar::UpdateStartButton()
+{
+	TBarApp* app = dynamic_cast<TBarApp*>(be_app);
+	bool renga = app == NULL || app->Settings()->rengaStartButton;
+	if (renga) {
+		float side = std::max(22.f, ceilf(22 * be_bold_font->Size() / 12.f));
+		bool dark = ui_color(B_MENU_BACKGROUND_COLOR).IsDark();
+		BBitmap* icon = _StartButtonIcon(dark ? R_StartButtonDark
+			: R_StartButtonLight, side);
+		BBitmap* lit = _StartButtonIcon(dark ? R_StartButtonDarkLit
+			: R_StartButtonLightLit, side);
+		if (icon != NULL && lit != NULL) {
+			fDeskbarMenuItem->SetIcon(icon, lit);
+			delete fStartIcon;
+			delete fStartIconLit;
+			fStartIcon = icon;
+			fStartIconLit = lit;
+			Invalidate();
+			return;
+		}
+		delete icon;
+		delete lit;
+	}
+	if (fLeafIcon != NULL)
+		fDeskbarMenuItem->SetIcon(fLeafIcon, NULL);
+	Invalidate();
 }
 
 
@@ -270,6 +354,14 @@ void
 TBarMenuBar::MouseMoved(BPoint where, uint32 code, const BMessage* message)
 {
 	// the following code parallels that in ExpandoMenuBar for DnD tracking
+
+	// Renga (batch 13): the start button's hover light
+	bool hovered = code != B_EXITED_VIEW && fDeskbarMenuItem != NULL
+		&& fDeskbarMenuItem->Frame().Contains(where);
+	if (fDeskbarMenuItem != NULL && hovered != fDeskbarMenuItem->IsHovered()) {
+		fDeskbarMenuItem->SetHovered(hovered);
+		Invalidate(fDeskbarMenuItem->Frame());
+	}
 
 	if (!message) {
 		// force a cleanup

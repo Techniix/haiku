@@ -40,6 +40,13 @@
 	                               feature off and on again
 	  deskbar.preferences          the Deskbar preferences show the switches
 	                               (screenshot deskbar_preferences)
+	  deskbar.start_button         (batch 13) the Renga start button by
+	                               default: a square icon at the panel's
+	                               height, from the font size, with its lit
+	                               variant (screenshot start_button)
+	  deskbar.start_button_switch  the setting off: the classic leaf (wide),
+	                               on again: the Renga button (screenshot
+	                               start_button_classic in between)
 
 	Output format: see 3rdparty/ce/README.md.
 */
@@ -82,6 +89,8 @@ static const uint32 kTestSearch = 'Tsrq';
 static const uint32 kTestSearchWindow = 'Tsrw';
 static const uint32 kTestAppRecentDocuments = 'Tjmp';
 static const uint32 kConfigShow = 'PrSh';
+static const uint32 kToggleRengaStartButton = 'DStB';
+static const uint32 kTestStartButton = 'Tsbt';
 
 // MenuSearch.h
 enum {
@@ -505,6 +514,42 @@ main(int argc, char** argv)
 	switchesPass &= !jumpOff.GetBool("menu", true)
 		&& jumpOn.GetBool("menu", false);
 	report("switches", switchesPass, "off/on: %s", switchDetail.String());
+
+	// The start button (batch 13).
+	BMessage buttonRequest(kTestStartButton);
+	BMessage button;
+	ask(buttonRequest, button);
+	float side = button.GetFloat("expected_side", -1);
+	bool square = button.GetFloat("width", 0) == side
+		&& button.GetFloat("height", 0) == side;
+	printf("CE-HOST screenshot start_button\n");
+	fflush(stdout);
+	snooze(500000);
+	report("start_button", button.GetBool("renga", false) && square
+			&& button.GetBool("lit", false)
+			&& side <= button.GetFloat("button_height", 0) + 2,
+		"renga %d, icon %gx%g (want %g square, the button is %g tall), lit "
+		"%d, %s panel", (int)button.GetBool("renga", false),
+		button.GetFloat("width", 0), button.GetFloat("height", 0), side,
+		button.GetFloat("button_height", 0), (int)button.GetBool("lit", false),
+		button.GetBool("dark", false) ? "dark" : "light");
+	toggle(kToggleRengaStartButton, false);
+	snooze(300000);
+	BMessage classic;
+	ask(buttonRequest, classic);
+	printf("CE-HOST screenshot start_button_classic\n");
+	fflush(stdout);
+	snooze(500000);
+	toggle(kToggleRengaStartButton, true);
+	snooze(300000);
+	BMessage again;
+	ask(buttonRequest, again);
+	report("start_button_switch", !classic.GetBool("renga", true)
+			&& classic.GetFloat("width", 0) > classic.GetFloat("height", 0)
+			&& again.GetBool("renga", false),
+		"off: renga %d, icon %gx%g (the leaf is wide); on again: renga %d",
+		(int)classic.GetBool("renga", true), classic.GetFloat("width", 0),
+		classic.GetFloat("height", 0), (int)again.GetBool("renga", false));
 
 	// The preferences.
 	BMessenger(kDeskbarSignature).SendMessage(kConfigShow);

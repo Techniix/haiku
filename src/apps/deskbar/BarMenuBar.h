@@ -81,7 +81,14 @@ public:
 
 	const	BBitmap*		FetchTeamIcon();
 
+	// Renga (batch 13): the start button, Renga's or the classic leaf
+	// (Deskbar setting rengaStartButton); also after a colour change
+			void			UpdateStartButton();
+			void			GetStartButtonInfo(BMessage* reply);
+
 private:
+			BBitmap*		_StartButtonIcon(int32 resourceID, float side);
+
 			TBarView*		fBarView;
 			TBarMenuTitle*	fDeskbarMenuItem;
 			TBarMenuTitle*	fAppListMenuItem;
@@ -89,6 +96,10 @@ private:
 
 	const	uint8*			fTeamIconData;
 			size_t			fTeamIconSize;
+
+			BBitmap*		fLeafIcon;
+			BBitmap*		fStartIcon;
+			BBitmap*		fStartIconLit;
 };
 
 

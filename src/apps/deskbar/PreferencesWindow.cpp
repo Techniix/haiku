@@ -93,6 +93,9 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 		B_TRANSLATE("Recent documents in each application's menu"),
 		new BMessage(kToggleAppRecentDocuments));
 	// Renga (batch 13)
+	fMenuRengaButton = new BCheckBox("rengaStartButton",
+		B_TRANSLATE("Renga start button (off: the classic leaf)"),
+		new BMessage(kToggleRengaStartButton));
 	fAppsSwitcherLinux = new BCheckBox("switcherLinuxPrograms",
 		B_TRANSLATE("Window switcher lists Linux programs"),
 		new BMessage(kToggleSwitcherLinuxPrograms));
@@ -154,6 +157,7 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	fMenuRestartInto->SetValue(fSettings.showRestartInto);
 	fAppsRecentDocuments->SetValue(fSettings.appRecentDocuments);
 	fAppsSwitcherLinux->SetValue(fSettings.switcherLinuxPrograms);
+	fMenuRengaButton->SetValue(fSettings.rengaStartButton);
 
 	// Applications settings
 	fAppsSort->SetValue(fSettings.sortRunningApps);
@@ -177,6 +181,7 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 	fMenuRestartInto->SetTarget(be_app);
 	fAppsRecentDocuments->SetTarget(be_app);
 	fAppsSwitcherLinux->SetTarget(be_app);
+	fMenuRengaButton->SetTarget(be_app);
 	fAppsSort->SetTarget(be_app);
 	fAppsSortTrackerFirst->SetTarget(be_app);
 	fAppsShowExpanders->SetTarget(be_app);
@@ -242,6 +247,7 @@ PreferencesWindow::PreferencesWindow(BRect frame)
 						.End()
 					.End()
 				.Add(fMenuRestartInto)
+				.Add(fMenuRengaButton)
 				.Add(BSpaceLayoutItem::CreateVerticalStrut(
 					B_USE_SMALL_SPACING))
 				.Add(new BButton(B_TRANSLATE("Edit in Tracker"
@@ -447,6 +453,7 @@ PreferencesWindow::_EnableDisableDependentItems()
 		fMenuRestartInto->SetValue(settings->showRestartInto);
 		fAppsRecentDocuments->SetValue(settings->appRecentDocuments);
 		fAppsSwitcherLinux->SetValue(settings->switcherLinuxPrograms);
+		fMenuRengaButton->SetValue(settings->rengaStartButton);
 	}
 	fMenuSearchCalculator->SetEnabled(fMenuSearch->Value() != B_CONTROL_OFF);
 	fMenuSearchFiles->SetEnabled(fMenuSearch->Value() != B_CONTROL_OFF);
@@ -480,7 +487,8 @@ PreferencesWindow::_IsDefaultable()
 		|| defaults->searchFiles != settings->searchFiles
 		|| defaults->showRestartInto != settings->showRestartInto
 		|| defaults->appRecentDocuments != settings->appRecentDocuments
-		|| defaults->switcherLinuxPrograms != settings->switcherLinuxPrograms;
+		|| defaults->switcherLinuxPrograms != settings->switcherLinuxPrograms
+		|| defaults->rengaStartButton != settings->rengaStartButton;
 }
 
 
@@ -511,7 +519,8 @@ PreferencesWindow::_IsRevertable()
 		|| fSettings.showRestartInto != settings->showRestartInto
 		|| fSettings.appRecentDocuments != settings->appRecentDocuments
 		|| fSettings.switcherLinuxPrograms
-			!= settings->switcherLinuxPrograms;
+			!= settings->switcherLinuxPrograms
+		|| fSettings.rengaStartButton != settings->rengaStartButton;
 }
 
 
@@ -711,6 +720,8 @@ PreferencesWindow::_UpdatePreferences(desk_settings* settings)
 			fAppsRecentDocuments },
 		{ current->switcherLinuxPrograms, settings->switcherLinuxPrograms,
 			fAppsSwitcherLinux },
+		{ current->rengaStartButton, settings->rengaStartButton,
+			fMenuRengaButton },
 	};
 	for (size_t i = 0; i < sizeof(renga) / sizeof(renga[0]); i++) {
 		if (renga[i].current != renga[i].wanted) {

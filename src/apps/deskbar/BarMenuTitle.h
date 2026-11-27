@@ -55,6 +55,14 @@ public:
 	void SetContentSize(float width, float height);
 	void Draw();
 
+	// Renga (batch 13): the Renga start button: a square icon centred in
+	// the button, and a lit one for hover and press (NULL: the classic
+	// leaf, cut off at the bottom)
+	void SetIcon(const BBitmap* icon, const BBitmap* litIcon);
+	void SetHovered(bool hovered);
+	bool IsHovered() const { return fHovered; }
+	const BBitmap* Icon() const { return fIcon; }
+
 	status_t Invoke(BMessage* message);
 
 protected:
@@ -65,6 +73,8 @@ private:
 	float fWidth;
 	float fHeight;
 	const BBitmap* fIcon;
+	const BBitmap* fLitIcon;
+	bool fHovered;
 	BMenu* fMenu;
 	TBarView* fBarView;
 	status_t fInitStatus;
