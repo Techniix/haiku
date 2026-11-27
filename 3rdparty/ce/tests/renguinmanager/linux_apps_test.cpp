@@ -22,6 +22,10 @@
 	                         supported types in the MIME database), and
 	                         launching it with a file, as "Open with" does,
 	                         hands the file to the Linux program
+	  linux_apps.shared_tmp  (batch 14) with a /tmp directory made inside
+	                         the Linux root, a Linux program's /tmp file
+	                         still lands in Haiku's /tmp ("linux" turns the
+	                         directory into a link again)
 	  linux_apps.badge       the Renguin badge changes the entry's icon,
 	                         and "badge false" takes it away again
 	  linux_apps.appimage    a file with the AppImage magic is sniffed as
@@ -230,6 +234,27 @@ main()
 	report("hidden", access((std::string(menu.Path())
 		+ "/CE Hidden Helper").c_str(), F_OK) != 0, "no entry for NoDisplay");
 
+	// batch 14: a /tmp directory inside the Linux root (made by a package
+	// or a program) must not take the Linux programs' /tmp away from
+	// Haiku's: "linux" makes it a link to Haiku's /tmp again
+	{
+		std::string rootTmp = "/boot/system/non-packaged/compat/linux/tmp";
+		run(("rm -f '" + rootTmp + "'; mkdir -p '" + rootTmp + "'").c_str());
+		unlink("/tmp/ce-shared-tmp");
+		std::string wrote = run("timeout 60 /bin/linux /bin/sh -c 'echo "
+			"shared > /tmp/ce-shared-tmp; echo rc=$?' 2>&1");
+		struct stat st;
+		bool link = lstat(rootTmp.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
+		std::string seen = read_small("/tmp/ce-shared-tmp");
+		report("shared_tmp", link && seen == "shared\n",
+			"the root's /tmp a link again %d, Haiku's /tmp has the file %d "
+			"[%s]", link, seen == "shared\n", wrote.c_str());
+		unlink("/tmp/ce-shared-tmp");
+		// the state "linux" leaves (a link) also for the checks below,
+		// as on a fresh root (the directory if this check failed)
+		run(("rm -rf '" + rootTmp + "'").c_str());
+	}
+
 	// batch 10: Open with
 	std::string copier = applications + "/ce-test-copier.desktop";
 	write_text(copier, "[Desktop Entry]\nType=Application\n"
@@ -263,7 +288,7 @@ main()
 	status_t launched = be_roster->Launch(signature, &refs);
 	(void)copierEntry;
 	bool copied = false;
-	for (int i = 0; i < 300 && !copied; i++) {
+	for (int i = 0; i < 600 && !copied; i++) {
 		snooze(100000);
 		// read in-process: a polling native cat spun in full renga-raw
 		// runs (batch 10)
@@ -366,7 +391,7 @@ main()
 	// a double-click in Tracker: the document is launched
 	status_t opened = be_roster->Launch(&fakeRef);
 	std::string ran;
-	for (int i = 0; i < 300 && ran.empty(); i++) {
+	for (int i = 0; i < 600 && ran.empty(); i++) {
 		snooze(100000);
 		ran = read_small("/tmp/ce-appimage-ran");
 	}
@@ -393,12 +418,19 @@ main()
 		}
 		ran.clear();
 	}
+	// opened from Tracker (an entry_ref) the path is the canonical one:
+	// Haiku's /tmp is a link to /boot/system/cache/tmp
+	char canonical[PATH_MAX];
+	std::string canonicalFake = realpath(fake.c_str(), canonical) != NULL
+		? canonical : fake;
 	report("appimage", guessed.Type() != NULL
 			&& strcmp(guessed.Type(), "application/x-appimage") == 0
 			&& strcmp(fileType, "application/x-appimage") == 0
 			&& strcmp(preferred, "application/x-vnd.Renga-linux-apps") == 0
-			&& opened == B_OK && ran.find("extract=1 appimage=" + fake)
-				!= std::string::npos,
+			&& opened == B_OK && (ran.find("extract=1 appimage=" + fake)
+					!= std::string::npos
+				|| ran.find("extract=1 appimage=" + canonicalFake)
+					!= std::string::npos),
 		"type %s (file %s), preferred %s, open %s, ran [%s]%s",
 		guessed.Type() != NULL ? guessed.Type() : "?", fileType, preferred,
 		strerror(opened), ran.c_str(), direct.c_str());

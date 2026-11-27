@@ -43,6 +43,7 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <string>
@@ -774,6 +775,42 @@ ensure_apk_hook()
 }
 
 
+/*!	Batch 14: Linux programs share Haiku's /tmp. The root is set up without
+	/tmp and /var/tmp (setup(), build-root.sh), so a Linux program's /tmp
+	path falls through to Haiku's /tmp. Once something creates a /tmp
+	directory inside the root (a package's install script, a program that
+	makes its own temporary directory tree), every Linux program's /tmp
+	files land in that directory instead, invisible to Haiku programs: the
+	AppImage runtime's and the Open with launcher's files in the harness
+	(linux_apps.appimage and linux_apps.open_with failed in every full
+	renga-raw run since batch 11, and passed alone). Here, at each start of
+	a Linux program through this command, such a directory becomes a link
+	to Haiku's /tmp (a link target under /boot/system/ is a host path to
+	Renguin); one with files in it is kept, renamed, so nothing is lost.
+*/
+static void
+ensure_shared_tmp()
+{
+	static const char* const kShared[] = { "/tmp", "/var/tmp" };
+	for (size_t i = 0; i < sizeof(kShared) / sizeof(kShared[0]); i++) {
+		std::string path = root_path(kShared[i]);
+		struct stat st;
+		if (lstat(path.c_str(), &st) != 0 || S_ISLNK(st.st_mode))
+			continue;
+		if (S_ISDIR(st.st_mode) && rmdir(path.c_str()) != 0) {
+			// not empty: keep its files aside
+			char aside[PATH_MAX];
+			snprintf(aside, sizeof(aside), "%s.renga-%ld", path.c_str(),
+				(long)time(NULL));
+			if (rename(path.c_str(), aside) != 0)
+				continue;
+		} else if (!S_ISDIR(st.st_mode))
+			continue;
+		symlink("/boot/system/cache/tmp", path.c_str());
+	}
+}
+
+
 static void
 usage()
 {
@@ -824,6 +861,7 @@ main(int argc, char** argv)
 	ensure_linux_user();
 	ensure_chromium_flags();
 	ensure_apk_hook();
+	ensure_shared_tmp();
 	std::string shell = login_shell();
 	update_theme();
 	std::vector<std::string> environment = linux_environment(shell);
