@@ -2927,6 +2927,9 @@ Upstream behaviours observed and changed for Renga only: upstream adds WebPositi
 | 2026-11-27 | Mesa in the batch 14 image (architect, option C): keep mesa 22.0.5; users move to libglvnd 1.7.0-100 + mesa 26.3.0-101 from RengaPorts in one pkgman transaction (mesa_swpipe removed in it) | Status PR and hand-over describe the transaction |
 | 2026-11-27 | Mesa in the image, batch 15 (maintainer, 13:30 ET, option A): the image moves to gcc_syslibs 15 (libstdc++ 6.0.34), llvm21 libs and the current Vulkan loader from current HaikuPorts; the build gets a RengaPorts repository rule for the `x86_64/current` layout; BuildFeatures `mesa` uses libglvnd_devel; the image ships libglvnd 1.7.0-100 and mesa 26.3.0-101; full four-way sweep before that image | Batch 15 |
 | 2026-11-27 | Mesa cross-build: try building mesa-26.3.0 for Renga on the Linux host near the end of batch 14, time-boxed to about 2 h; document it if it works, else what blocked it | Batch 14 list |
+| 2026-11-27 | Local session (maintainer's PC, KVM) takes over from the cloud session; the maintainer follows through the `infra/maintainer-relay` branch (questions, answers, status) | Relay A-3 |
+| 2026-11-27 | The local session is the architect, protected paths included (design, regression test failing on the old code, review subagent, `Architect-Approved: yes`); the maintainer is asked only about direction, hard-to-undo decisions, hardware tests or a blocked command's allow rule | Relay A-1, A-3 |
+| 2026-11-27 | Packages that must be built on Renga (haikuwebkit, Mesa, ...) are built by the local session in a Renga VM under QEMU with KVM, with HaikuPorter (VENDOR "Techniix", ALLOW_UNTESTED, no -S), tested in QEMU where possible and published with `tools/update-repo.sh`; the maintainer does only the hardware test (relay A-2, M-1) | The Mesa cross-build time-box is dropped; the procedure is to be written into `docs/claude/build-and-release.md` with the first such build |
 
 ---
 
