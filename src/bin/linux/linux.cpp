@@ -659,6 +659,16 @@ ensure_linux_user()
 	Nothing but Chromium's launcher reads /etc/chromium. The file is
 	replaced by a rename, and only when its text changes, so a launcher
 	sourcing it at the same moment never sees it half written.
+
+	Batch 13: the network service runs inside the browser process
+	(--enable-features=NetworkServiceInProcess). In the batch 13 harness
+	run of chrome.window_multi (20261127-080322) the browser stayed up but
+	logged "Network service crashed or was terminated, restarting service"
+	about 40 s in, and the page's script had not run after 90 s: under one
+	emulated CPU a child that does not connect within Chromium's 15 s
+	launch timeout is killed (batch 10's finding for renderers), and the
+	navigation waits for the network service. One process fewer to launch
+	and connect. Not yet tested (batch 14).
 */
 static const char* kChromiumConf =
 	"# Written by Renga's \"linux\" command (switch \"chromium_flags\" in the\n"
@@ -672,7 +682,8 @@ static const char* kChromiumConf =
 		"\"$HOME/.config/renguin/chromium-noted\"\n"
 	"fi\n"
 	"CHROMIUM_FLAGS=\"$CHROMIUM_FLAGS --no-sandbox --no-zygote "
-		"--in-process-gpu --disable-gpu --ozone-platform=wayland\"\n";
+		"--in-process-gpu --disable-gpu --ozone-platform=wayland "
+		"--enable-features=NetworkServiceInProcess\"\n";
 
 
 static bool
