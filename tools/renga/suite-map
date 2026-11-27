@@ -101,6 +101,10 @@ src/kits/shared/                      @full largefont
 3rdparty/ce/artwork/                  welcome installer largefont
 3rdparty/ce/repositories/             package_priority
 
+# --- The shared disk engine (F-24 part 1) and its command line --------------
+src/libs/diskengine/                  storage
+src/bin/rengadisk/                    storage
+
 # --- Applications (every GUI change also runs largefont) ----------------
 src/apps/                             largefont
 src/apps/controlpanel/                controlpanel

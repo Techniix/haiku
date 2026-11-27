@@ -11,6 +11,8 @@
 #       "--firmware uefi" "--profile renga-raw"
 #
 # Why: the build host restarts every few hours and kills running test runs.
+# A configuration that was running when that happened is resumed from its
+# last finished test program (ce-test.py --resume; see run_once below).
 # This script records every finished configuration under a key made from
 # the exact tree being tested (HEAD's files, the uncommitted diff and the
 # untracked files; project notes excluded, see below). Run it again after a restart with the same arguments and it skips
@@ -100,9 +102,45 @@ else
 fi
 
 run_once() {
-	# $1: argument string. Prints the result directory.
+	# $1: argument string, $2: the name of the configuration. Prints the
+	# result directory. A run of this configuration that a restart (or an
+	# out-of-memory kill) stopped is resumed instead of started again
+	# (ce-test.py --resume, batch 13): $state/<name>.running names its
+	# results directory while it runs; ce-test.py keeps the finished test
+	# programs and runs only the others. If the run cannot be resumed
+	# (exit status 3: no run.json, a changed image) it starts again.
+	if [ -f "$state/$2.running" ]; then
+		previous=$(cat "$state/$2.running")
+		if [ -d "$previous" ] && [ ! -f "$previous/summary.md" ]; then
+			echo "[$1]: resuming the interrupted run $(basename "$previous")" >&2
+			echo "resumed $(basename "$previous")" >> "$state/$2.resumes"
+			status=0
+			$harness/ce-test.py --resume "$previous" > /dev/null 2>&1 \
+				|| status=$?
+			if [ $status != 3 ]; then
+				rm -f "$state/$2.running"
+				echo "$previous"
+				return
+			fi
+			echo "[$1]: $(basename "$previous") cannot be resumed, starting again" >&2
+		fi
+	fi
+	# The results directory is named after the start time: written down as
+	# soon as ce-test.py has made it (the build comes first).
+	before=$(readlink -f $results/latest 2>/dev/null || true)
 	# shellcheck disable=SC2086
-	$harness/ce-test.py $1 > /dev/null 2>&1
+	$harness/ce-test.py $1 > /dev/null 2>&1 &
+	pid=$!
+	while kill -0 $pid 2>/dev/null; do
+		now=$(readlink -f $results/latest 2>/dev/null || true)
+		if [ -n "$now" ] && [ "$now" != "$before" ] \
+				&& [ ! -f "$state/$2.running" ]; then
+			echo "$now" > "$state/$2.running"
+		fi
+		sleep 5
+	done
+	wait $pid
+	rm -f "$state/$2.running"
 	readlink -f $results/latest
 }
 
@@ -127,13 +165,13 @@ for args in "$@"; do
 		echo "[$args]: passed earlier on this tree ($(cat "$state/$name.pass")), skipped"
 		continue
 	fi
-	dir=$(run_once "$args")
+	dir=$(run_once "$args" "$name")
 	verdict=$(grep -m1 'Verdict' "$dir/summary.md" 2>/dev/null)
 	if ! passed "$dir/summary.md" 2>/dev/null \
 		&& only_flaky "$dir/summary.md" 2>/dev/null; then
 		echo "[$args]: only known-flaky checks failed in $(basename "$dir"), retrying once"
 		echo "first run $(basename "$dir"): $verdict" >> "$state/$name.retries"
-		dir=$(run_once "$args")
+		dir=$(run_once "$args" "$name")
 		verdict=$(grep -m1 'Verdict' "$dir/summary.md" 2>/dev/null)
 	fi
 	if passed "$dir/summary.md" 2>/dev/null; then
@@ -160,6 +198,7 @@ done
 			echo "[$args] not run"
 		fi
 		[ -f "$state/$name.retries" ] && sed 's/^/    retried after /' "$state/$name.retries"
+		[ -f "$state/$name.resumes" ] && sed 's/^/    after a restart: /' "$state/$name.resumes"
 	done
 } > "$state/summary.txt"
 echo

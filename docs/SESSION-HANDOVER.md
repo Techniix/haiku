@@ -69,6 +69,8 @@ Later: bundled apps `F-44`, Secure Boot `F-53`, NVIDIA-hardware GPU features `F-
 
 Later: `F-44`, `F-53`, `F-47`/`F-35`.
 
+13. (maintainer, 2026-11-26) Chrome, Linux apps and Steam groundwork under Renguin; no Wine: harness memory/resume/watchdog first, the Switcher for Linux programs, the Renguin memory bug and Linux Chromium, Flatpak with a GUI and multilib for Steam, start button option C (Renga button by default), the two timing/quality checks; then F-24 GUI, F-23, F-22, Renga Depot, F-66/F-41, F-44 (roadmap decisions log).
+
 ## Batches 2-10: continue from here (finished)
 
 Moved verbatim to [docs/history/handover-batches.md](history/handover-batches.md); the newest two batches stay below.

@@ -304,7 +304,18 @@ without a kernel crash, and every check passed.
 4. If the kernel drops into its debugger, the harness asks for a backtrace
    and the thread list, then stops the VM and puts that output in the report.
 5. The harness parses `CE-TEST <name> PASS|FAIL <detail>` lines, analyzes the
-   recorded audio, and writes the report.
+   recorded audio, and writes the report. Recordings are mapped, not loaded
+   (an hour of renga-raw audio is about 850 MB); `harness.peak_rss` fails if
+   ce-test.py itself goes over 2 GB.
+
+Restart-safe runs (batch 13): the runner kills a test program still running
+after 1200 s (`--suite-timeout`) and reports `harness.watchdog.<program>`;
+the host keeps `run.json`, `progress.json` (finished programs per boot) and
+`boot.json` in the results directory. `ce-test.py --resume <dir>` continues a
+killed run: the interrupted boot moves to `<dir>/part-<n>/`, the same image
+boots with only the unfinished programs, and the parts are analysed together
+(a run killed after the guest finished is only analysed again). `ce-gates.sh`
+does this by itself after a restart (`<state>/<config>.running`).
 
 ## Debugging aids
 
