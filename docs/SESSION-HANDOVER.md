@@ -125,3 +125,5 @@ Hardware results on the batch 11 image (maintainer, 2026-11-21 evening), first i
   6. Running Linux programs do not appear in the Deskbar task list (all windows belong to the compositor's team): give each Linux client its own Deskbar entry and icon.
 
 Next steps: finish the Renguin Manager items above, commit; build and test Renga Depot's first part; then the four-way sweep and the image `build/<date>-batch12` (build.txt starts with `iso: renga-<name>-anyboot.iso`).
+
+**2026-11-26 (cloud session):** the Renguin Manager items and Renga Depot's first part above are done on `batch/12-renguinscale-depot` (QEMU Tested; `renguin_manager.*`, `large_font.*`, `renga_depot.*`); the WIP branch is superseded. The stale branch `batch/12-depot-renguinscale` (same content, one commit with a wrong message) could not be deleted from the cloud host: delete it. Remaining Renga Depot work: one catalogue with apk/Flatpak, choose-source menu, richer pages, scheduled updates, repository manager with priorities, developer side, pkgman multi-source search, switches, HVIF icon.

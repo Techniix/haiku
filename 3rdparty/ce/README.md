@@ -651,6 +651,13 @@ of a 1 GiB guest was, so the bounce path went untested.
   that is not an image, a step naming a missing partition), restoring a
   saved table, BFS format, detach. `rengadisk` is put into harness images
   by the test's Jamfile.
+- **renga_depot** (renga-* images, `renga_depot_test`, suite directory
+  `package_priority`; batch 12): Renga Depot's first part, through
+  HaikuDepot's harness hook ('Trdp', harness images only): the window and
+  its first menu are "Renga Depot", that menu has "Update all…" next to
+  "Check for updates…", the repository column is "Source" with the labels
+  Haiku, HaikuPorts, RengaPorts (others by name), and the Deskbar's
+  Applications entry is "Renga Depot". Screenshot `renga_depot`.
 - **installer** (`installer_test`): see "Installing over an existing
   installation"; only with `--installer-upgrade`.
 - **installer_ui** (renga-* images, `installer_ui_test`): the harness

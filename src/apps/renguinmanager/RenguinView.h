@@ -13,6 +13,7 @@
 class BButton;
 class BCheckBox;
 class BListView;
+class BMenuField;
 class BMessageRunner;
 class BStringView;
 class BTabView;
@@ -41,6 +42,17 @@ public:
 	static	bool				SwitchValue(const char* key);
 	static	void				PrintSwitches();
 
+	// Renguin display scale (batch 12): the scale for Linux programs, and
+	// a program's own (0: none), from the settings file the Wayland
+	// compositor reads
+	static	float				DisplayScale(const char* program = NULL);
+	// the program name the compositor matches: an Exec line's program
+	static	BString				ProgramOfExec(const char* exec);
+	// set and applied at once (0.5-4; a program's own 0 is removed)
+	static	bool				SetDisplayScale(float scale);
+	static	bool				SetProgramDisplayScale(const char* program,
+									float scale);
+
 private:
 			BView*				_SystemTab();
 			BView*				_ProgramsTab();
@@ -54,6 +66,8 @@ private:
 			void				_RefreshProcesses();
 			void				_ProgramSelected();
 			void				_SaveProgram();
+			void				_SetDisplayScale(float scale);
+			void				_MarkDisplayScale();
 
 			BTabView*			fTabs;
 			BStringView*		fLayer;
@@ -74,6 +88,9 @@ private:
 			BTextControl*		fProgramOptions;
 			BButton*			fProgramApply;
 			BString				fSelectedProgram;
+			BString				fSelectedExec;
+			BMenuField*			fProgramScale;
+			BMenuField*			fDisplayScale;
 
 			BListView*			fProcesses;
 			BButton*			fEndProcess;
