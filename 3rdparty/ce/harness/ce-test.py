@@ -384,6 +384,26 @@ EXPECTED_KDL_QUIET_SECONDS = 10
 EXPECTED_KDL_STALL = 240
 KDL_MAX_BACKTRACES = 120
 PANIC_PATTERN = re.compile(r"PANIC: (.*)")
+# The runner's and the tests' lines go to the serial port through
+# /dev/dprintf, and another CPU or a program's syslog line can be in the
+# middle of printing (batch 13: "wlan: CE-TEST wlan_reload.attached ...",
+# "etherpci: init_driver CE-HARNESS START ...", "package_daemon: [...]
+# CE-INFO running pointer_logic_test"). runner_text() is the marker and
+# what follows it, at a line's start or after whitespace; never in a
+# "KERN: " syslog echo of the kernel's own log.
+RUNNER_MARKER = re.compile(
+	r"(?:^|\s)(CE-(?:TEST|SUITE|HOST|INFO|HARNESS) .*)$")
+
+
+def runner_text(line):
+	if line.startswith("CE-"):
+		return line
+	if line.startswith("KERN: "):
+		return None
+	match = RUNNER_MARKER.search(line)
+	return match.group(1) if match else None
+
+
 TEST_PATTERN = re.compile(r"^CE-TEST (\S+) (PASS|FAIL) ?(.*)")
 SUITE_PATTERN = re.compile(r"^CE-SUITE (\S+) (START|DONE)(.*)")
 
@@ -2355,7 +2375,7 @@ RUN_FILE = "run.json"
 BOOT_FILE = "boot.json"
 HOST_REQUESTS_FILE = "host-requests.jsonl"
 EXPECTED_KDL_FILE = "expected-kdl.jsonl"
-EXITED_PATTERN = re.compile(r"(?:^|\s)CE-INFO (\S+) exited with (-?\d+)")
+EXITED_PATTERN = re.compile(r"^CE-INFO (\S+) exited with (-?\d+)")
 
 
 def write_json_atomically(path, data):
@@ -2573,16 +2593,16 @@ class SerialReader(threading.Thread):
 			line = raw.decode("latin-1").strip()
 			if self.menu_driver is not None:
 				self.menu_driver.feed(line)
+			runner = runner_text(line) or ""
 			if self.progress is not None:
-				exited = EXITED_PATTERN.search(line)
+				exited = EXITED_PATTERN.match(runner)
 				if exited:
 					self.progress.test_finished(exited.group(1), self.lines)
-				elif line.startswith("CE-HARNESS END") \
-						or " CE-HARNESS END" in line:
+				elif runner.startswith("CE-HARNESS END"):
 					self.progress.runner_ended(self.lines)
-			if not line.startswith("CE-HOST "):
+			if not runner.startswith("CE-HOST "):
 				continue
-			words = line.split()[1:]
+			words = runner.split()[1:]
 			accepted = host_request_allowed(words)
 			request = {"request": " ".join(words), "accepted": accepted}
 			if accepted and words[0] == "audio_in":
@@ -3380,22 +3400,25 @@ def parse_serial(results_dir, report, parts=()):
 	kept = []		# the text without the announced debugger entries
 	for line in text.splitlines():
 		line = line.rstrip("\r")
-		if line.startswith(EXPECTED_KDL_MARKER):
+		runner = runner_text(line) or ""
+		if runner.startswith(EXPECTED_KDL_MARKER):
 			in_expected_kdl = True
-		elif line.startswith("CE-HARNESS START") \
-				or " CE-HARNESS START " in line:
+		elif runner.startswith("CE-HARNESS START"):
 			in_expected_kdl = False
 		if not in_expected_kdl:
 			kept.append(line)
-		# Test output is only accepted at the start of a line: the same text
-		# can show up again inside other log lines (e.g. syslog echoes).
-		match = TEST_PATTERN.match(line)
+		# Test output: at a line's start, or after whitespace when another
+		# line was being printed (runner_text()); an exact repeat of a
+		# check found mid-line is not counted twice.
+		match = TEST_PATTERN.match(runner)
 		if match:
-			tests.append({"name": match.group(1),
+			test = {"name": match.group(1),
 				"pass": match.group(2) == "PASS",
-				"detail": match.group(3).strip()})
+				"detail": match.group(3).strip()}
+			if runner == line or test not in tests:
+				tests.append(test)
 			continue
-		match = SUITE_PATTERN.match(line)
+		match = SUITE_PATTERN.match(runner)
 		if match:
 			suites.setdefault(match.group(1), []).append(
 				(match.group(2) + match.group(3)).strip())
@@ -3524,7 +3547,8 @@ def settle_media_changed(text, tests):
 	<path>". Either reader seeing the change shows the driver reported it,
 	so a miss in the test counts as a pass if the kernel logged the change
 	for the disk the test resized (the first scratch disk it found)."""
-	resized = re.search(r"^CE-INFO (\S+): scratch disk", text, re.MULTILINE)
+	resized = re.search(r"(?:^|[ \t])CE-INFO (\S+): scratch disk", text,
+		re.MULTILINE)
 	for test in tests:
 		if test["name"] != "vblk.resize_media_changed" or test["pass"] \
 				or resized is None:
@@ -3760,7 +3784,7 @@ def repository_priorities(text):
 	priorities = {}
 	current = None
 	for line in text[start:].splitlines()[1:]:
-		if line.startswith("CE-"):
+		if runner_text(line) is not None:
 			break
 		name = re.match(r"^ (?:\[User\]| {6}) (\S+)\s*$", line)
 		if name:
