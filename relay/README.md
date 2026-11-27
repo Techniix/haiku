@@ -8,7 +8,9 @@ Only these three files live here; the branch never merges anywhere.
   the maintainer's decision. The cloud session relays it to the maintainer's
   phone within the hour.
 - `answers.md`: the cloud session appends the maintainer's answer under the
-  same ID. The local session checks it before acting on that decision.
+  same ID (`## A-<n>`), and also new instructions or hardware reports he
+  sends from his phone (`## M-<n>`; photos and crash reports go under
+  `relay/files/`). The local session reads new entries between pieces.
 - `status.md`: the local session appends one line for events the maintainer
   should hear about without being asked (an image pushed, a batch finished,
   a blocking failure). The cloud session relays new lines.
