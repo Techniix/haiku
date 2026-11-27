@@ -86,6 +86,92 @@ Batch 11 (2026-11-21) is finished. Commits: Renga Depot decision (`f3b1ae0c`), b
 
 Open, queued by the coordinator in batch 11 and not done: the large-font UI audit of every Renga window with a harness mode (Control Panel sidebar width, resizable window, minimum size; only the Windows page menus done); Linux Chromium zygote and separate GPU process (flags work around it); the initial-size mismatch of Linux Chromium's window (needs a hardware retest with the scale fix); several inputs at once (no buffers reach the mixer); AppImage through the roster; Open with copy flaky; ptrace, sysfs/udev, V4L2, Debian/Arch roots, Renguin badge on window tab/list; Chrome 10 of 10; system bus socket in the Linux root.
 
+## Batch 14: continue from here
+
+**Cloud session, 2026-11-27 (stopped so that the maintainer's local PC session can take over).** QEMU Tested unless marked.
+
+Merged into `ce/main`:
+- #21 AppImage and Open with: `B_ARGV_ONLY` dropped the document, and the root `/tmp` was not shared
+- #22 madvise KDL: shadow zero pages are committed. The private `VMCache` vtable changed; Quasar only calls `vm_*` functions, so it needs no rebuild.
+- #24 packagefs: a failed activation now rolls back its ancestors. This was a use-after-free, and upstream has the same bug.
+- #25 Quasar partner note
+
+Open PRs:
+- #23 Wayland `FrameResized` null guard, with test `wayland.toplevel_gone_resize`
+- #26 KDL work:
+  - every USB keyboard and every keyboard report
+  - xHCI cancel without the hang
+  - an unattended restart after `kdl_unattended_restart` seconds (default 60), with a System logs switch
+  - usb_hid logging per interface and two stuck-transfer fixes
+  - tests: `kdl_keyboard.multi_report`/`keyboards`, `crashlog.kdl_usb_keyboard`/`unattended_restart`/`unattended_switch`
+  - results: default 47/0 (20261127-133612); renga-raw: only `pointer.usb.pos.top_left` fails (see below)
+
+RengaPorts `main`, pushed:
+- `46b04c8` mesa 26.3.0-101
+- `dbbf830` libglvnd 1.7.0-100 (`_NP` patch)
+
+The maintainer published both (packages `4cfa3022`). Hardware Tested, extracted: GLInfo shows llvmpipe on LLVM 21.1.8 with OpenGL 4.6, and GLTeapot runs with no ICD and with lavapipe only.
+
+Branches, not merged:
+- `wip/flatpak-step1`: Renguin `chroot()`, the `bwrap` shim and the Manager switch. Never built. It needs a rebase (`linux.cpp` conflicts with #21), a build, the renguin and renguinmanager suites, and a PR with the exact `Architect-Approved: yes` line and a quick default boot run. Its top commit describes it.
+- `batch/13-chrome-window`: the network service in-process for Linux Chromium. Pushed, not tested.
+- `batch/13-installer-destination`: F-23 Destination layouts on the engine. Pushed, not compiled.
+- `wip/appimage-diagnostics`: stale diagnostics from before #21. Nothing to merge; the maintainer may delete it.
+
+Open finding: `pointer.usb.pos.top_left` fails on clean `ce/main` (`8921f7ee`, 20261127-141111: "device 0,0 -> pointer 340,300"). It passed in the morning (20261127-110708). Bisect between those runs; #21-#25 are the candidates.
+
+Remaining queue, in order:
+1. Merge #23 and #26 after review.
+2. Check the 8BitDo replug syslog against #26's per-interface lines (the maintainer was asked for it).
+3. Wi-Fi (MT7922, mt7921e):
+   - prefer 5 and 6 GHz, choosing by band and RSSI, with VHT/HE registration
+   - AMPDU-RX reorder release and queue-depth counters
+   - hardware CCMP
+   - fix the counters (signal 0 dBm, rate "legacy 1000", 0 packets)
+   - per-frame cost
+4. haikuwebkit 1.10.0-102 (recipe only; the maintainer rebuilds):
+   - The data source blocks for ranges not yet downloaded.
+   - Video frames are presented by PTS against the audio clock.
+   - `media_html5_test` gets a slow progressive H.264+AAC clip.
+   - 101 is published: audio is fine on hardware, video choppy and too fast.
+5. Mesa (option C), verified in QEMU on the batch 14 image:
+   - Run the one transaction: `pkgman install` of libglvnd, mesa, mesa_devel, mesa_eglvnd and mesa_lavapipe from RengaPorts, with mesa_swpipe removed in the same transaction.
+   - Then the two BGLView checks: no ICD, and lavapipe only.
+6. `batch/13-chrome-window`, then `batch/13-installer-destination`.
+7. Flatpak step 1 (`wip/flatpak-step1`).
+8. Steam 64-bit groundwork.
+9. The two load-dependent media checks (`media_drift.estimate`, `media_mixing.duck_switch_off`).
+10. Mesa cross-build on the Linux host, time-boxed to about 2 h (decisions log).
+11. F-23, F-22, Renga Depot, F-66/F-41, F-44.
+12. End of batch: four-way sweep, image `<date>-batch14`, status PR.
+
+Batch 15: option A for Mesa (decisions log, 2026-11-27):
+- gcc_syslibs 15, llvm21 libs and the Vulkan loader from current HaikuPorts
+- a RengaPorts repository rule for `x86_64/current`
+- BuildFeatures `mesa` via libglvnd_devel
+- the image ships libglvnd 1.7.0-100 and mesa 26.3.0-101
+- a full sweep before that image
+
+Maintainer decisions today (2026-11-27), all in the decisions log:
+- Flatpak step 1 (09:37)
+- Steam order (09:37)
+- the batch 14 order
+- Mesa option C now and option A in batch 15
+- the Mesa cross-build time-box
+
+Host lessons:
+- Use a private temp directory (`/home/claude/b13-tmp` this session).
+- `origin` fetches `+refs/heads/*`. `git fetch origin` before branching from `origin/ce/main`, and branch each piece from it.
+- Run long jobs in the background with a time limit. Read only the `renga-summary` output, and open logs only for a named failing check.
+- Run one QEMU at a time (7 GB host). Do not edit sources a running `renga-test` is still building; it rebuilds the image first.
+- Free only your own result directories, with `"${d:?}"` in `rm`.
+- Old-code runs: copy the new files aside, put `HEAD`'s versions in, run, and restore. Check `git status` afterwards.
+- Merge procedure:
+  - Push the branch and open the PR through `gh api .../pulls`.
+  - Protected paths need the design and the exact line `Architect-Approved: yes` in the PR; `renga-guard` runs as the pre-push hook.
+  - The architect reviews and merges with a merge commit.
+- Never force-push. Add a descriptive commit instead of rewriting a pushed WIP branch.
+
 ## Batch 13: continue from here
 
 **Cloud session, 2026-11-27.** Merged into `ce/main` (PRs #10-#19), each QEMU Tested in its PR:
