@@ -768,12 +768,12 @@ build_stack(Thread* thread, const foreign_exec_args* args,
 	Haiku path. Returns a kernel FD.
 */
 static int
-open_interpreter(const char* interpreter, bool haveLinuxRoot, char* hostPath,
-	size_t hostPathSize)
+open_interpreter(const char* interpreter, bool haveLinuxRoot,
+	const char* root, char* hostPath, size_t hostPathSize)
 {
 	if (haveLinuxRoot
-		&& renguin_resolve_in_root(interpreter, RENGUIN_PATH_FOLLOW_LEAF,
-			hostPath, hostPathSize) == B_OK) {
+		&& renguin_resolve_in_root_of(root, interpreter,
+			RENGUIN_PATH_FOLLOW_LEAF, hostPath, hostPathSize) == B_OK) {
 		int fd = _kern_open(-1, hostPath, O_RDONLY, 0);
 		if (fd >= 0)
 			return fd;
@@ -812,9 +812,12 @@ renguin_load(foreign_exec_args* args)
 	renguin_proc_init_team(data);
 	renguin_timers_init(data);
 
+	// batch 13: the root a chroot()ed team had before execve()
+	renguin_exec_take_root(team->id, data->root, sizeof(data->root));
 	struct stat rootStat;
-	data->have_linux_root = vfs_read_stat(-1, RENGUIN_LINUX_ROOT, true,
-		&rootStat, true) == B_OK && S_ISDIR(rootStat.st_mode);
+	data->have_linux_root = vfs_read_stat(-1, data->root[0] != '\0'
+			? data->root : RENGUIN_LINUX_ROOT, true, &rootStat, true) == B_OK
+		&& S_ISDIR(rootStat.st_mode);
 
 	linux_image_info executable;
 	status_t status = load_elf_image(team, args->fd, false, &executable);
@@ -836,7 +839,7 @@ renguin_load(foreign_exec_args* args)
 		MemoryDeleter hostPathDeleter(hostPath);
 
 		int fd = open_interpreter(executable.interpreter,
-			data->have_linux_root, hostPath, B_PATH_NAME_LENGTH);
+			data->have_linux_root, data->root, hostPath, B_PATH_NAME_LENGTH);
 		if (fd < 0) {
 			ERROR("\"%s\" needs the Linux interpreter %s, which is missing. "
 				"Install a Linux userland in " RENGUIN_LINUX_ROOT "\n",

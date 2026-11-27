@@ -908,7 +908,7 @@ renguin_syscall(struct iframe* frame)
 			result = -LX_ENOSYS;
 			break;
 		case LINUX_chroot:
-			result = -LX_EPERM;
+			result = renguin_sys_chroot(a1);
 			break;
 
 		// --- Sockets (net.cpp) ---

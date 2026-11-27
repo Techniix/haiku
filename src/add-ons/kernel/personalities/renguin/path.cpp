@@ -26,6 +26,7 @@
 
 
 #include "renguin.h"
+#include "linux_defs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +34,8 @@
 #include <KernelExport.h>
 
 #include <AutoDeleter.h>
+#include <util/AutoLock.h>
+#include <lock.h>
 
 #include <kernel.h>
 #include <syscalls.h>
@@ -93,14 +96,15 @@ static const int kMaxRestarts = 8;
 */
 static status_t
 resolve_walk(const char* linuxPath, uint32 flags, char* hostPath,
-	size_t hostPathSize, bool inRoot, int depth)
+	size_t hostPathSize, bool inRoot, int depth, const char* root = NULL)
 {
 	if (linuxPath == NULL || linuxPath[0] != '/')
 		return B_BAD_VALUE;
 	if (depth > kMaxRestarts)
 		return B_LINK_LIMIT;
 
-	const char* prefix = inRoot ? RENGUIN_LINUX_ROOT : "";
+	const char* prefix = inRoot
+		? (root != NULL ? root : renguin_root_prefix()) : "";
 	const size_t rootLength = strlen(prefix);
 	const size_t kBufferSize = B_PATH_NAME_LENGTH;
 
@@ -241,11 +245,11 @@ resolve_walk(const char* linuxPath, uint32 flags, char* hostPath,
 			// (pending holds the target and the rest of the path now)
 			if (!inRoot && link[0] == '/') {
 				status = resolve_walk(pending, flags, hostPath,
-					hostPathSize, true, depth + 1);
+					hostPathSize, true, depth + 1, root);
 				if (status == B_OK || status == RENGUIN_STATUS_IN_PROC)
 					return status;
 				return resolve_walk(pending, flags, hostPath, hostPathSize,
-					false, depth + 1);
+					false, depth + 1, root);
 			}
 
 			// An absolute target restarts at the Linux root; a relative one
@@ -286,6 +290,19 @@ renguin_resolve_in_root(const char* linuxPath, uint32 flags, char* hostPath,
 }
 
 
+/*!	batch 13: as renguin_resolve_in_root(), under \a root (a host path;
+	NULL or "": the Linux root), for the loader, which runs before the
+	team's new data (and so its chroot() root) is in place.
+*/
+status_t
+renguin_resolve_in_root_of(const char* root, const char* linuxPath,
+	uint32 flags, char* hostPath, size_t hostPathSize)
+{
+	return resolve_walk(linuxPath, flags, hostPath, hostPathSize, true, 0,
+		root != NULL && root[0] != '\0' ? root : RENGUIN_LINUX_ROOT);
+}
+
+
 static bool
 linux_root_exists()
 {
@@ -300,8 +317,9 @@ linux_root_exists()
 void
 renguin_host_to_linux_path(char* path)
 {
-	const size_t rootLength = strlen(RENGUIN_LINUX_ROOT);
-	if (strncmp(path, RENGUIN_LINUX_ROOT, rootLength) != 0)
+	const char* root = renguin_root_prefix();
+	const size_t rootLength = strlen(root);
+	if (strncmp(path, root, rootLength) != 0)
 		return;
 	if (path[rootLength] == '\0') {
 		strcpy(path, "/");
@@ -403,8 +421,9 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 	}
 
 	// Already a host path into the Linux root: leave it alone.
-	const size_t rootLength = strlen(RENGUIN_LINUX_ROOT);
-	if (strncmp(path, RENGUIN_LINUX_ROOT, rootLength) == 0
+	const char* root = renguin_root_prefix();
+	const size_t rootLength = strlen(root);
+	if (strncmp(path, root, rootLength) == 0
 		&& (path[rootLength] == '\0' || path[rootLength] == '/')) {
 		return B_OK;
 	}
@@ -439,7 +458,7 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 	const char* first = path + 1;
 	size_t firstLength = strcspn(first, "/");
 	if (firstLength == 0 || (size_t)snprintf(translated, B_PATH_NAME_LENGTH,
-			"%s/%.*s", RENGUIN_LINUX_ROOT, (int)firstLength, first)
+			"%s/%.*s", root, (int)firstLength, first)
 				>= B_PATH_NAME_LENGTH
 		|| vfs_read_stat(-1, translated, false, &st, true) == B_OK) {
 		return B_OK;
@@ -448,7 +467,7 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 		0);
 	if (status == RENGUIN_STATUS_IN_PROC
 		|| (status == B_OK
-			&& strncmp(translated, RENGUIN_LINUX_ROOT, rootLength) == 0
+			&& strncmp(translated, root, rootLength) == 0
 			&& (translated[rootLength] == '\0'
 				|| translated[rootLength] == '/'))) {
 		strlcpy(path, translated, pathSize);
@@ -492,4 +511,134 @@ renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
 	uint64 copy = renguin_scratch_put(scratch, path, strlen(path) + 1);
 	*_status = copy == 0 ? B_BAD_ADDRESS : status;
 	return copy;
+}
+
+
+// #pragma mark - chroot (batch 13)
+
+
+/*!	The current team's "/" as a host path: the directory chroot() chose,
+	else the Linux root.
+*/
+const char*
+renguin_root_prefix()
+{
+	renguin_team* data = renguin_current_team();
+	if (data != NULL && data->root[0] != '\0')
+		return data->root;
+	return RENGUIN_LINUX_ROOT;
+}
+
+
+// Roots handed from a team's execve() to the new program's load
+// (renguin_load() makes the team's data anew). A team execs once at a
+// time; a few slots are plenty.
+static mutex sExecRootLock = MUTEX_INITIALIZER("renguin exec roots");
+static struct {
+	team_id	team;
+	char	root[B_PATH_NAME_LENGTH];
+} sExecRoots[8];
+
+
+void
+renguin_exec_keep_root(team_id team, const char* root)
+{
+	MutexLocker locker(sExecRootLock);
+	int32 free = -1;
+	for (int32 i = 0; i < 8; i++) {
+		if (sExecRoots[i].team == team || (free < 0
+				&& sExecRoots[i].team <= 0)) {
+			free = i;
+			if (sExecRoots[i].team == team)
+				break;
+		}
+	}
+	if (free < 0)
+		free = 0;
+	if (root == NULL || root[0] == '\0') {
+		if (sExecRoots[free].team == team)
+			sExecRoots[free].team = 0;
+		return;
+	}
+	sExecRoots[free].team = team;
+	strlcpy(sExecRoots[free].root, root, sizeof(sExecRoots[free].root));
+}
+
+
+bool
+renguin_exec_take_root(team_id team, char* root, size_t size)
+{
+	MutexLocker locker(sExecRootLock);
+	for (int32 i = 0; i < 8; i++) {
+		if (sExecRoots[i].team != team)
+			continue;
+		strlcpy(root, sExecRoots[i].root, size);
+		sExecRoots[i].team = 0;
+		return true;
+	}
+	return false;
+}
+
+
+/*!	chroot(): the directory becomes the team's "/" for every later path
+	lookup (path.cpp walks under it, absolute link targets restart at it,
+	and a target under /boot/system/ or /boot/home/ is a host path, so a
+	root of symbolic links can lead anywhere, which the bwrap shim uses).
+	Linux asks for CAP_SYS_CHROOT; Renguin lets any program do it, since a
+	Haiku team can open any host path anyway: this is a view, not a
+	sandbox. The directory must exist; "/" (the current root) is allowed.
+*/
+int64
+renguin_sys_chroot(uint64 userPath)
+{
+	renguin_team* data = renguin_current_team();
+	if (data == NULL)
+		return -LX_EPERM;
+	char* path = (char*)malloc(B_PATH_NAME_LENGTH);
+	if (path == NULL)
+		return -LX_ENOMEM;
+	MemoryDeleter pathDeleter(path);
+	status_t status = renguin_get_user_path(userPath,
+		RENGUIN_PATH_FOLLOW_LEAF, path, B_PATH_NAME_LENGTH);
+	if (status == RENGUIN_STATUS_IN_PROC)
+		return -LX_EINVAL;
+	if (status != B_OK)
+		return renguin_encode(status);
+	if (path[0] != '/') {
+		// relative: against the working directory
+		char* absolute = (char*)malloc(B_PATH_NAME_LENGTH);
+		if (absolute == NULL)
+			return -LX_ENOMEM;
+		MemoryDeleter absoluteDeleter(absolute);
+		if (vfs_normalize_path(path, absolute, B_PATH_NAME_LENGTH, true,
+				true) != B_OK) {
+			return -LX_ENOENT;
+		}
+		strlcpy(path, absolute, B_PATH_NAME_LENGTH);
+	}
+	struct stat st;
+	status = vfs_read_stat(-1, path, true, &st, true);
+	if (status != B_OK)
+		return renguin_encode(status);
+	if (!S_ISDIR(st.st_mode))
+		return -LX_ENOTDIR;
+	// the canonical host path, without links or "..", so that the prefix
+	// tests above compare like with like
+	char* canonical = (char*)malloc(B_PATH_NAME_LENGTH);
+	if (canonical == NULL)
+		return -LX_ENOMEM;
+	MemoryDeleter canonicalDeleter(canonical);
+	if (vfs_normalize_path(path, canonical, B_PATH_NAME_LENGTH, true, true)
+			!= B_OK) {
+		return -LX_ENOENT;
+	}
+	size_t length = strlen(canonical);
+	while (length > 1 && canonical[length - 1] == '/')
+		canonical[--length] = '\0';
+	if (strcmp(canonical, RENGUIN_LINUX_ROOT) == 0 || strcmp(canonical, "/")
+			== 0) {
+		data->root[0] = '\0';
+	} else
+		strlcpy(data->root, canonical, sizeof(data->root));
+	return 0;
 }

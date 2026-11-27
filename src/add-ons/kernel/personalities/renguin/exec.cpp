@@ -878,6 +878,8 @@ renguin_sys_execve(uint64 userPath, uint64 userArgv, uint64 userEnvp)
 
 	renguin_team* data = renguin_current_team();
 	mode_t umask = data != NULL ? data->umask : 022;
+	// batch 13: a chroot()ed team keeps its root in the new program
+	renguin_exec_keep_root(team, data != NULL ? data->root : NULL);
 
 	// _user_exec() does not return on success, so nothing on this stack
 	// is destroyed after it. Free the kernel copies first; everything exec
@@ -890,6 +892,7 @@ renguin_sys_execve(uint64 userPath, uint64 userArgv, uint64 userEnvp)
 		(const char* const*)base, flatSize, argCount, envCount, umask);
 
 	// Only reached on failure.
+	renguin_exec_keep_root(team, NULL);
 	vm_delete_area(team, area, true);
 	return renguin_encode(status);
 }

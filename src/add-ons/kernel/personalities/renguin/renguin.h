@@ -162,7 +162,10 @@ struct renguin_team {
 								// (Haiku's fork copies only the FS base)
 	image_id app_image;			// registered B_APP_IMAGE, or -1
 	addr_t	vdso_base;			// the vDSO's address (vdso.cpp), or 0
-	bool	have_linux_root;	// RENGUIN_LINUX_ROOT existed at exec time
+	bool	have_linux_root;	// the root (below) existed at exec time
+	char	root[B_PATH_NAME_LENGTH];
+		// batch 13: the host directory chroot() made this team's "/";
+		// "" is RENGUIN_LINUX_ROOT. Inherited on fork(), kept on exec().
 	bool	as_user;			// batch 11: uid/gid 0 shown as 1000 (the Renga
 								// user as a normal Linux user; switch
 								// "linux_user", RENGUIN_ROOT=1 keeps root)
@@ -398,6 +401,17 @@ int64		renguin_sys_msgctl(uint64 id, uint64 command, uint64 buffer);
 // syscall.cpp
 void		renguin_syscall(struct iframe* frame);
 struct renguin_team* renguin_current_team();
+
+// batch 13: chroot() (path.cpp). The current team's root as a host path
+// (RENGUIN_LINUX_ROOT unless it called chroot()); exec keeps a team's
+// root across the new program's load.
+const char*	renguin_root_prefix();
+void		renguin_exec_keep_root(team_id team, const char* root);
+bool		renguin_exec_take_root(team_id team, char* root, size_t size);
+int64		renguin_sys_chroot(uint64 path);
+status_t	renguin_resolve_in_root_of(const char* root,
+				const char* linuxPath, uint32 flags, char* hostPath,
+				size_t hostPathSize);
 
 // usermem.cpp: checked copies to and from the Linux program's memory. Unlike
 // a bare user_memcpy(), these refuse kernel addresses. They return B_OK or
