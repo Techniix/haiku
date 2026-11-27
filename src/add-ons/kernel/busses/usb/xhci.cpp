@@ -1329,8 +1329,22 @@ XHCI::CheckDebugTransfer(Transfer* transfer)
 void
 XHCI::CancelDebugTransfer(Transfer* transfer)
 {
-	while (CheckDebugTransfer(transfer) == B_DEV_PENDING)
+	// Renga (batch 14): an interrupt transfer completes only when the
+	// device sends a report. Waiting for it without a limit hung the
+	// debugger's exit for every keyboard nobody typed on, now that the
+	// debugger polls them all. Wait a little (about 20 ms), then hand the
+	// TD to the normal path without the debugger's transfer: when it
+	// completes, FinishTransfers() frees a TD without a transfer.
+	for (int32 i = 0; i < 100; i++) {
+		if (CheckDebugTransfer(transfer) != B_DEV_PENDING)
+			return;
 		spin(100);
+	}
+
+	xhci_td* td = (xhci_td*)transfer->CallbackCookie();
+	if (td != NULL)
+		td->transfer = NULL;
+	transfer->SetCallback(NULL, NULL);
 }
 
 

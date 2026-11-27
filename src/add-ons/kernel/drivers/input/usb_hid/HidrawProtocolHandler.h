@@ -36,7 +36,8 @@ public:
 	// leak typing; and only while raw controller access is on (the
 	// Gamepads preferences, kernel driver settings file "gamepad",
 	// "raw_access false" to turn it off).
-	static	bool				IsAllowed(HIDDevice& device, uint16 vendor);
+	static	bool				IsAllowed(HIDDevice& device, uint16 vendor,
+									const char** _reason = NULL);
 
 	virtual	status_t			Open(uint32 flags, uint32* cookie);
 	virtual	status_t			Close(uint32* cookie);

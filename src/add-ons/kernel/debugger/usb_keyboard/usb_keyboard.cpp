@@ -11,18 +11,30 @@
 
 #include <usb_kdl_keyboard.h>
 
-static bool sUseUSBKeyboard = false;
-// Renga (batch 4): the transfer lands in sUSBRawData and is turned into
-// boot form in sUSBTransferData with usb_hid's layout of the keyboard
-// (report ID, modifier byte, key array or bitmap), see usb_kdl_keyboard.h.
-static uint8 sUSBRawData[64];
-static size_t sUSBRawLength = 0;
-static usb_kdl_keyboard_layout sLayout;
+// Renga (batch 4): the transfer lands in a raw buffer and is turned into
+// boot form with usb_hid's layout of the keyboard (report ID, modifier
+// byte, key array or bitmap), see usb_kdl_keyboard.h.
+// Renga (batch 14): every keyboard usb_hid knows, each with all keyboard
+// reports of its interface, polled in turn; before only the best-scored
+// report of the best keyboard was read (an 8BitDo dongle sending its
+// bitmap reports and a second keyboard typed nothing).
 static const size_t kBootLength = 2 + USB_KDL_MAX_KEYS;
+static const size_t kMaxRawLength = 64;
+
+struct debug_keyboard {
+	void*					pipe;
+	size_t					raw_length;
+	usb_kdl_keyboard		keyboard;
+	usb_kdl_keyboard_state	state;
+	uint8					raw[kMaxRawLength];
+	uint8					last[kBootLength];
+};
+
+static debug_keyboard sKeyboards[USB_KDL_MAX_KEYBOARDS];
+static int32 sKeyboardCount = 0;
+static int32 sNextKeyboard = 0;
 static uint8 sUSBTransferData[kBootLength];
-static uint8 sLastTransferData[kBootLength];
 static size_t sUSBTransferLength = kBootLength;
-static void *sUSBPipe = NULL;
 
 // simple ring buffer
 static int sBufferedChars[32];
@@ -156,58 +168,91 @@ static uint8 sKeyTable[] = {
 static size_t sKeyTableSize = sizeof(sKeyTable) / sizeof(sKeyTable[0]);
 
 
+//!	Finds usb_hid's pipe object for \a keyboard; false if it has none.
+static bool
+add_keyboard(const usb_kdl_keyboard& keyboard)
+{
+	if (sKeyboardCount >= USB_KDL_MAX_KEYBOARDS || keyboard.pipe == 0
+		|| keyboard.layout_count == 0 || keyboard.transfer_size == 0
+		|| keyboard.transfer_size > kMaxRawLength) {
+		return false;
+	}
+
+	set_debug_variable("_usbPipeID", keyboard.pipe);
+	unset_debug_variable("_usbPipe");
+	evaluate_debug_command("get_usb_pipe_for_id");
+	void* pipe = (void*)get_debug_variable("_usbPipe", 0);
+	if (pipe == NULL)
+		return false;
+
+	debug_keyboard& entry = sKeyboards[sKeyboardCount++];
+	memset(&entry, 0, sizeof(entry));
+	entry.pipe = pipe;
+	entry.raw_length = keyboard.transfer_size;
+	entry.keyboard = keyboard;
+	return true;
+}
+
+
 static void
 enter_debugger(void)
 {
+	sKeyboardCount = 0;
+	sNextKeyboard = 0;
 	if (!has_debugger_command("get_usb_keyboard_config")
 		|| !has_debugger_command("get_usb_pipe_for_id")
 		|| !has_debugger_command("usb_process_transfer")) {
 		return;
 	}
 
-	unset_debug_variable("_usbPipe");
+	unset_debug_variable("_usbKeyboardTable");
 	unset_debug_variable("_usbReportSize");
-
 	evaluate_debug_command("get_usb_keyboard_config");
-	sUSBRawLength = get_debug_variable("_usbReportSize", 0);
-	if (sUSBRawLength == 0 || sUSBRawLength > sizeof(sUSBRawData))
-		return;
 
-	// the layout; a usb_hid without it means the boot layout
-	memset(&sLayout, 0, sizeof(sLayout));
-	sLayout.report_id = get_debug_variable("_usbReportID", 0);
-	sLayout.modifier_offset = (int16)(int64)get_debug_variable(
+	const usb_kdl_keyboard_table* table = (const usb_kdl_keyboard_table*)
+		get_debug_variable("_usbKeyboardTable", 0);
+	if (table != NULL && table->version == USB_KDL_KEYBOARD_TABLE_VERSION) {
+		for (uint32 i = 0; i < table->count && i < USB_KDL_MAX_KEYBOARDS; i++)
+			add_keyboard(table->keyboards[i]);
+		return;
+	}
+
+	// a usb_hid without the table: its one keyboard, one layout (without
+	// one at all, the boot layout)
+	usb_kdl_keyboard keyboard;
+	memset(&keyboard, 0, sizeof(keyboard));
+	size_t reportSize = get_debug_variable("_usbReportSize", 0);
+	if (reportSize == 0 || reportSize > kMaxRawLength)
+		return;
+	keyboard.pipe = get_debug_variable("_usbPipeID", 0);
+	keyboard.transfer_size = reportSize;
+	keyboard.layout_count = 1;
+	usb_kdl_keyboard_layout& layout = keyboard.layouts[0];
+	layout.score = 1;
+	layout.report_id = get_debug_variable("_usbReportID", 0);
+	layout.modifier_offset = (int16)(int64)get_debug_variable(
 		"_usbModifierOffset", 0);
-	sLayout.key_offset = (int16)(int64)get_debug_variable("_usbKeyOffset",
-		2);
-	sLayout.key_count = get_debug_variable("_usbKeyCount",
-		sUSBRawLength > 2 ? sUSBRawLength - 2 : 0);
-	sLayout.bitmap = get_debug_variable("_usbKeyBitmap", 0);
-	sLayout.bitmap_first_usage = get_debug_variable("_usbBitmapFirstUsage",
-		0);
-	sLayout.bitmap_bits = get_debug_variable("_usbBitmapBits", 0);
-	if (sLayout.key_offset < 0)
+	layout.key_offset = (int16)(int64)get_debug_variable("_usbKeyOffset", 2);
+	layout.key_count = get_debug_variable("_usbKeyCount",
+		reportSize > 2 ? reportSize - 2 : 0);
+	layout.bitmap = get_debug_variable("_usbKeyBitmap", 0);
+	layout.bitmap_first_usage = get_debug_variable("_usbBitmapFirstUsage", 0);
+	layout.bitmap_bits = get_debug_variable("_usbBitmapBits", 0);
+	if (layout.key_offset < 0)
 		return;
-	memset(sLastTransferData, 0, sizeof(sLastTransferData));
-
-	evaluate_debug_command("get_usb_pipe_for_id");
-	sUSBPipe = (void *)get_debug_variable("_usbPipe", 0);
-	if (sUSBPipe == NULL)
-		return;
-
-	sUseUSBKeyboard = true;
+	add_keyboard(keyboard);
 }
 
 
 static void
 exit_debugger(void)
 {
-	if (sUseUSBKeyboard) {
-		// make sure a possibly pending transfer is canceled
-		set_debug_variable("_usbPipe", (uint64)sUSBPipe);
+	// make sure pending transfers are canceled
+	for (int32 i = 0; i < sKeyboardCount; i++) {
+		set_debug_variable("_usbPipe", (uint64)sKeyboards[i].pipe);
 		evaluate_debug_command("usb_process_transfer cancel");
-		sUseUSBKeyboard = false;
 	}
+	sKeyboardCount = 0;
 }
 
 
@@ -223,13 +268,18 @@ write_key(int key)
 static int
 debugger_getchar(void)
 {
-	if (!sUseUSBKeyboard)
+	if (sKeyboardCount == 0)
 		return -1;
 
 	if (sBufferedCharCount == 0) {
-		set_debug_variable("_usbPipe", (uint64)sUSBPipe);
-		set_debug_variable("_usbTransferData", (uint64)sUSBRawData);
-		set_debug_variable("_usbTransferLength", (uint64)sUSBRawLength);
+		// one keyboard per call, in turn; each keeps its transfer pending
+		debug_keyboard& keyboard = sKeyboards[sNextKeyboard];
+		sNextKeyboard = (sNextKeyboard + 1) % sKeyboardCount;
+
+		set_debug_variable("_usbPipe", (uint64)keyboard.pipe);
+		set_debug_variable("_usbTransferData", (uint64)keyboard.raw);
+		set_debug_variable("_usbTransferLength",
+			(uint64)keyboard.raw_length);
 
 		status_t status = evaluate_debug_command("usb_process_transfer");
 		if (status == B_DEV_PENDING)
@@ -242,8 +292,9 @@ debugger_getchar(void)
 		}
 
 		// another report of the same interface (media keys): not ours
-		size_t keyEnd = usb_kdl_keyboard_normalize(&sLayout, sUSBRawData,
-			sUSBRawLength, sUSBTransferData, sizeof(sUSBTransferData));
+		size_t keyEnd = usb_kdl_keyboard_merge(&keyboard.keyboard,
+			&keyboard.state, keyboard.raw, keyboard.raw_length,
+			sUSBTransferData, sizeof(sUSBTransferData));
 		if (keyEnd == 0)
 			return -1;
 
@@ -265,7 +316,7 @@ debugger_getchar(void)
 		}
 
 		uint8 *current = sUSBTransferData;
-		uint8 *compare = sLastTransferData;
+		uint8 *compare = keyboard.last;
 
 		// Renga (F-59): Alt+SysRq+B in the debugger (SysRq is the
 		// Print Screen usage, 0x46); the debugger's closing lines name
@@ -329,7 +380,7 @@ debugger_getchar(void)
 		}
 
 		for (uint32 i = 0; i < sUSBTransferLength; i++)
-			sLastTransferData[i] = sUSBTransferData[i];
+			keyboard.last[i] = sUSBTransferData[i];
 	}
 
 	if (sBufferedCharCount == 0)

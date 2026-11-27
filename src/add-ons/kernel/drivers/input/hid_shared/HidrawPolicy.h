@@ -28,17 +28,28 @@
 
 
 static inline bool
-hidraw_policy_allows(HIDParser& parser, uint16 vendor)
+hidraw_policy_allows(HIDParser& parser, uint16 vendor,
+	const char** _reason = NULL)
 {
+	// batch 14: the reason goes into the syslog line usb_hid writes per
+	// interface, so that a report says which interface went where
+	const char* reason = NULL;
+	if (_reason == NULL)
+		_reason = &reason;
+
 	HIDCollection* root = parser.RootCollection();
-	if (root == NULL)
+	if (root == NULL) {
+		*_reason = "no collections";
 		return false;
+	}
 
 	bool gameController = false;
 	bool onlyVendor = true;
 	uint32 count = root->CountChildrenFlat(COLLECTION_APPLICATION);
-	if (count == 0)
+	if (count == 0) {
+		*_reason = "no application collections";
 		return false;
+	}
 	for (uint32 i = 0; i < count; i++) {
 		HIDCollection* collection
 			= root->ChildAtFlat(COLLECTION_APPLICATION, i);
@@ -62,18 +73,24 @@ hidraw_policy_allows(HIDParser& parser, uint16 vendor)
 				case 0x80:	// System Control (power, sleep)
 					// never: raw reports would show typing and pointing,
 					// and a keyboard's interface stays the keyboard's
+					*_reason = "keyboard, mouse or system control";
 					return false;
 			}
 		} else if (page == B_HID_USAGE_PAGE_DIGITIZER
 			|| page == B_HID_USAGE_PAGE_CONSUMER) {
+			*_reason = "digitizer or consumer control";
 			return false;
 		}
 	}
 
-	if (gameController)
+	if (gameController) {
+		*_reason = "game controller";
 		return true;
-	if (!onlyVendor)
+	}
+	if (!onlyVendor) {
+		*_reason = "not a game controller";
 		return false;
+	}
 
 	// Pads that only describe vendor collections (some Nintendo and Sony
 	// modes, 8BitDo in Switch mode before its handshake): by vendor.
@@ -84,8 +101,10 @@ hidraw_policy_allows(HIDParser& parser, uint16 vendor)
 		case 0x20d6:	// PowerA
 		case 0x28de:	// Valve
 		case 0x2dc8:	// 8BitDo
+			*_reason = "vendor-defined collections of a pad vendor";
 			return true;
 	}
+	*_reason = "vendor-defined collections";
 	return false;
 }
 

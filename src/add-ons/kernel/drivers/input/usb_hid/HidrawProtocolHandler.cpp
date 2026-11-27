@@ -93,7 +93,8 @@ HidrawProtocolHandler::~HidrawProtocolHandler()
 
 
 bool
-HidrawProtocolHandler::IsAllowed(HIDDevice& device, uint16 vendor)
+HidrawProtocolHandler::IsAllowed(HIDDevice& device, uint16 vendor,
+	const char** _reason)
 {
 	// the user's switch
 	void* settings = load_driver_settings("gamepad");
@@ -101,12 +102,15 @@ HidrawProtocolHandler::IsAllowed(HIDDevice& device, uint16 vendor)
 		bool allowed = get_driver_boolean_parameter(settings, "raw_access",
 			true, true);
 		unload_driver_settings(settings);
-		if (!allowed)
+		if (!allowed) {
+			if (_reason != NULL)
+				*_reason = "raw access switched off";
 			return false;
+		}
 	}
 
 	// batch 11: the policy is shared with the harness (HidrawPolicy.h)
-	return hidraw_policy_allows(device.Parser(), vendor);
+	return hidraw_policy_allows(device.Parser(), vendor, _reason);
 }
 
 

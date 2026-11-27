@@ -42,6 +42,7 @@ HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
 		fProtocolHandlerList(NULL),
 		fOutputPipe(0),
 		fHidraw(NULL),
+		fHidrawReason("not set up"),
 		fOutputDone(-1),
 		fOutputStatus(B_OK)
 {
@@ -241,9 +242,10 @@ HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
 			break;
 		}
 	}
+	fHidrawReason = "no report descriptor";
 	if (rawDescriptor != NULL
 		&& HidrawProtocolHandler::IsAllowed(*this,
-			deviceDescriptor->vendor_id)) {
+			deviceDescriptor->vendor_id, &fHidrawReason)) {
 		fHidraw = new(std::nothrow) HidrawProtocolHandler(*this,
 			rawDescriptor, rawDescriptorLength, fTransferBufferSize);
 		if (fHidraw != NULL && fHidraw->InitCheck() == B_OK) {
@@ -332,6 +334,10 @@ HIDDevice::MaybeScheduleTransfer(HIDReport*)
 	if (result != B_OK) {
 		TRACE_ALWAYS("failed to schedule interrupt transfer 0x%08" B_PRIx32
 			"\n", result);
+		// Renga (batch 14): let the next reader try again; the flag stayed
+		// set and the device never got another transfer (it stopped typing
+		// until it was replugged)
+		atomic_set(&fTransferScheduled, 0);
 		return result;
 	}
 
@@ -387,11 +393,16 @@ HIDDevice::_TransferCallback(void *cookie, status_t status, void *data,
 	HIDDevice *device = (HIDDevice *)cookie;
 	if (status == B_DEV_STALLED && !device->fRemoved) {
 		// try clearing stalls right away, the report listeners will resubmit
-		gUSBModule->queue_request(device->fDevice,
+		status_t result = gUSBModule->queue_request(device->fDevice,
 			USB_REQTYPE_STANDARD | USB_REQTYPE_ENDPOINT_OUT,
 			USB_REQUEST_CLEAR_FEATURE, USB_FEATURE_ENDPOINT_HALT,
 			device->fEndpointAddress, 0, NULL, _UnstallCallback, device);
-		return;
+		if (result == B_OK)
+			return;
+		// Renga (batch 14): without the unstall callback nothing cleared
+		// fTransferScheduled, and the device was never read again
+		TRACE_ALWAYS("cannot queue the unstall request: %s\n",
+			strerror(result));
 	}
 
 	atomic_set(&device->fTransferScheduled, 0);

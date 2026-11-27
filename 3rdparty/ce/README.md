@@ -818,6 +818,16 @@ of a 1 GiB guest was, so the bounce path went untested.
   read back: members, CRC of an inflated entry), and screenshots
   `crash_notification`, `systemlogs_crash`, `systemlogs_live`,
   `systemlogs_previous` (`crashlog.screenshots`).
+  Batch 14: runs with this suite get two USB keyboards on their own xHCI
+  controller (`kdlkbd1`, `kdlkbd2`); the first debugger entry is answered
+  by typing "reboot" on the second through QMP `input-send-event`
+  (`crashlog.kdl_usb_keyboard`; before, the debugger polled only one USB
+  keyboard). A fourth boot: the third entry gets no key and the kernel
+  restarts by itself after `kdl_unattended_restart` seconds (15, set by
+  the test in the kernel settings file and removed again), showing the
+  message and backtrace below "No key was pressed"
+  (`crashlog.unattended_restart`); on renga-* images System logs shows
+  and sets the setting (`crashlog.unattended_switch`).
 - **wlan_reload** and **driver_override** (every image,
   `wlan_reload_test`, `driver_override_test`; roadmap F-58, the
   maintainer's mt7921e boot panic): `fbsd_wlantest`, a net80211 driver

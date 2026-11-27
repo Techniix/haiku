@@ -37,33 +37,46 @@
 
 
 #ifdef KEYBOARD_SUPPORTS_KDL
-static size_t sDebugKeyboardReportSize = 0;
 static int32 sDebuggerCommandAdded = 0;
 // Renga (batch 4): the debugger keyboard is the most keyboard-like one
 // (KeyboardDebugLayout), not the first interface with keyboard usages (a
 // gaming mouse's keyboard interface came first on real hardware), and the
 // debugger is told its report layout.
-static usb_kdl_keyboard_layout sDebugLayout;
-static const void* sDebugHandler = NULL;
+// Renga (batch 14): every keyboard, best first, with all keyboard reports
+// of its interface (usb_kdl_keyboard.h). Changed under the driver lock
+// (device added/removed); the debugger reads it with everything stopped.
+static usb_kdl_keyboard_table sDebugKeyboards;
 
 #ifdef USB_KDL
-static usb_id sDebugKeyboardPipe = 0;
-
 static int
 debug_get_keyboard_config(int argc, char **argv)
 {
-	set_debug_variable("_usbPipeID", (uint64)sDebugKeyboardPipe);
-	set_debug_variable("_usbReportSize", (uint64)sDebugKeyboardReportSize);
-	set_debug_variable("_usbReportID", sDebugLayout.report_id);
+	set_debug_variable("_usbKeyboardTable", (uint64)(addr_t)&sDebugKeyboards);
+
+	// the best keyboard's best report, for an older usb_keyboard add-on
+	usb_kdl_keyboard_layout best;
+	memset(&best, 0, sizeof(best));
+	uint64 pipe = 0;
+	uint16 reportSize = 0;
+	if (sDebugKeyboards.count > 0) {
+		const usb_kdl_keyboard& keyboard = sDebugKeyboards.keyboards[0];
+		pipe = keyboard.pipe;
+		reportSize = keyboard.transfer_size;
+		for (uint32 i = 0; i < keyboard.layout_count; i++) {
+			if (keyboard.layouts[i].score > best.score)
+				best = keyboard.layouts[i];
+		}
+	}
+	set_debug_variable("_usbPipeID", pipe);
+	set_debug_variable("_usbReportSize", reportSize);
+	set_debug_variable("_usbReportID", best.report_id);
 	set_debug_variable("_usbModifierOffset",
-		(uint64)(int64)sDebugLayout.modifier_offset);
-	set_debug_variable("_usbKeyOffset",
-		(uint64)(int64)sDebugLayout.key_offset);
-	set_debug_variable("_usbKeyCount", sDebugLayout.key_count);
-	set_debug_variable("_usbKeyBitmap", sDebugLayout.bitmap);
-	set_debug_variable("_usbBitmapFirstUsage",
-		sDebugLayout.bitmap_first_usage);
-	set_debug_variable("_usbBitmapBits", sDebugLayout.bitmap_bits);
+		(uint64)(int64)best.modifier_offset);
+	set_debug_variable("_usbKeyOffset", (uint64)(int64)best.key_offset);
+	set_debug_variable("_usbKeyCount", best.key_count);
+	set_debug_variable("_usbKeyBitmap", best.bitmap);
+	set_debug_variable("_usbBitmapFirstUsage", best.bitmap_first_usage);
+	set_debug_variable("_usbBitmapBits", best.bitmap_bits);
 	return 0;
 }
 #endif
@@ -120,11 +133,11 @@ KeyboardProtocolHandler::KeyboardProtocolHandler(HIDReport &inputReport,
 	}
 
 #ifdef KEYBOARD_SUPPORTS_KDL
-	// Set up the kernel debugger's keyboard here, so that it is ready on
-	// panics or crashes that don't go through the emergency keys: the most
-	// keyboard-like report wins (a later, better one replaces an earlier).
+	// Set up the kernel debugger's keyboards here, so that they are ready on
+	// panics or crashes that don't go through the emergency keys: every
+	// keyboard report goes into the table, best keyboard first.
 	compute_keyboard_debug_layout(inputReport, outputReport, fDebugLayout);
-	if (debugUsable && fDebugLayout.score > sDebugLayout.score)
+	if (debugUsable && fDebugLayout.score > 0)
 		_MakeDebugKeyboard();
 #endif
 
@@ -186,13 +199,13 @@ KeyboardProtocolHandler::KeyboardProtocolHandler(HIDReport &inputReport,
 void
 KeyboardProtocolHandler::_MakeDebugKeyboard()
 {
+	uint64 pipe = 0;
 #ifdef USB_KDL
-	sDebugKeyboardPipe = fInputReport.Device()->InterruptPipe();
+	pipe = fInputReport.Device()->InterruptPipe();
 #endif
-	sDebugKeyboardReportSize
-		= fInputReport.Parser()->MaxReportSize(HID_REPORT_TYPE_INPUT);
-	sDebugLayout = fDebugLayout;
-	sDebugHandler = this;
+	usb_kdl_keyboard_table_add(&sDebugKeyboards, pipe,
+		fInputReport.Parser()->MaxReportSize(HID_REPORT_TYPE_INPUT), this,
+		&fDebugLayout);
 }
 #endif
 
@@ -202,14 +215,8 @@ KeyboardProtocolHandler::~KeyboardProtocolHandler()
 	free(fLastKeys);
 
 #ifdef KEYBOARD_SUPPORTS_KDL
-	if (sDebugHandler == this) {
-		// unplugged: the next keyboard to appear takes over
-		memset(&sDebugLayout, 0, sizeof(sDebugLayout));
-		sDebugHandler = NULL;
-#ifdef USB_KDL
-		sDebugKeyboardPipe = 0;
-#endif
-	}
+	// unplugged: its reports leave the debugger's table
+	usb_kdl_keyboard_table_remove(&sDebugKeyboards, this);
 #endif
 
 #ifdef KEYBOARD_SUPPORTS_KDL
