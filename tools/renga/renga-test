@@ -82,6 +82,9 @@ if [ -n "$latest" ] && [ "$latest" != "$before" ] && [ -f "$latest/summary.md" ]
 else
 	echo "renga-test: ce-test.py wrote no new results (status $status); last lines of $log:"
 	tail -n 15 "$log"
+	# Nothing ran, so nothing passed: a run without results is never
+	# "selection passed" (2), whatever ce-test.py's status said.
+	case $status in 0|2) status=1 ;; esac
 fi
 echo "renga-test: exit status $status (2 = partial run, selection passed)"
 exit "$status"
