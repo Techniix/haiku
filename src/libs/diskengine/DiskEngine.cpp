@@ -45,7 +45,7 @@ namespace RengaDisk {
 static const off_t kTableArea = 1024 * 1024;
 	// saved from each end of the disk: MBR and EBRs at the start, GPT
 	// header and table at both ends
-static const off_t kAlignment = 1024 * 1024;
+static const off_t kAlignment = kPartitionAlignment;
 static const char kBackupMagic[8] = { 'R', 'G', 'D', 'T', 'B', 'L', '0', '1' };
 
 

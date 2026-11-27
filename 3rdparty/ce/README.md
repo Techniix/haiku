@@ -272,23 +272,31 @@ state other than "Latest state" as chosen). In any other run
 ### The Installer's Destination layouts
 
 `installer_destination_test` (every run, roadmap F-23) checks the
-wizard's Destination layouts on the shared disk engine through
+Destination layouts planned for the Installer's wizard, on the shared
+disk engine, through the command line (the only caller so far),
 `Installer --plan-disk <disk> --layout erase|free [--name] [--apply]`. Its
 disks are image files (three of 4 GiB, one of 1 GiB, attached as file
 disks) on the harness's spare disk: `SPARE_DISK`, a sparse 16 GiB file
 attached as one more virtio disk after the scratch disks, with a marker in
-its first block. The test formats it as BFS "CESpare" only when the marker
-is there; the file is removed after the boot. The boot volume has no room
-for such images, and ramfs commits memory for a file's whole size. No
-real disk is written. Checks: `attach`, `erase_preview` (nothing written),
-`erase_apply` (GPT, FAT32 "EFI" of type "EFI system data", 256 MiB, and
-BFS "Renga"), `erase_backup` (a table and a journal ending "complete" in
+its first block. It is attached only to the test image's own boot of a
+full run or of one that selects `installer_destination_test`, never in
+`--two-installs`, `--other-systems`, `--installer-upgrade`,
+`--restore-points` or `--loader-writes` boots, and removed after the boot
+(also on an error or Ctrl-C). Where the results directory's file system
+makes no sparse files, it is not attached and `host.spare_disk` fails.
+The test formats it as BFS "CESpare" only when the marker is there, and
+reports `attach` as failed when there is no spare disk. The boot volume
+has no room for such images, and ramfs commits memory for a file's whole
+size. No real disk is written. Checks: `attach`, `erase_preview` (nothing
+written), `erase_apply` (GPT, FAT32 "EFI" of type "EFI system data",
+256 MiB, and BFS "Renga", or "Renga 2" when the boot volume is "Renga"), `erase_backup` (a table and a journal ending "complete" in
 `~/config/settings/Renga/disk-backups`, removed again afterwards),
-`refuses_boot_disk`, `refuses_small`, `refuses_free_without_table`,
+`refuses_boot_disk` (a preview only, so no write path to the boot disk
+is ever taken), `refuses_small`, `refuses_taken_name`, `refuses_free_without_table`,
 `free_after_partitions` (a deleted first partition leaves a hole, the new
 volume goes behind the kept partition), `free_space_at_start` (the
 largest free space starts at block 34 of the table; the new volume goes
-there) and `install` (`Installer --unattended --target Renga` onto the
+there) and `install` (`Installer --unattended --target <name>` onto the
 new volume: packages, first boot flag, log, home).
 
 Each run writes to `generated.x86_64/ce-test-results/<timestamp>/`, and

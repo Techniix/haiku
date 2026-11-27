@@ -12,8 +12,8 @@
 	only when the marker is there). The boot volume has no room for 4 GiB
 	images, and a RAM file system commits memory for a file's whole size.
 	The engine and the Installer write only to the image files, and the
-	boot disk refusal stops before any write. Without the spare disk (an
-	older harness) the test only says so.
+	boot disk is only ever asked for a preview (refused before it is
+	shown). Without the spare disk, attach fails and nothing else runs.
 
 	  installer_destination.attach            four images on the spare disk
 	                                          (4 GiB
@@ -39,9 +39,10 @@
 	                                          ~/config/settings/Renga/
 	                                          disk-backups, with a journal
 	                                          that ends "complete"
-	  installer_destination.refuses_boot_disk the disk the system runs from
-	                                          is refused as such (not for
-	                                          its size), nothing written
+	  installer_destination.refuses_boot_disk a preview (no --apply) for the
+	                                          disk the system runs from is
+	                                          refused as such (not for its
+	                                          size), before any preview
 	  installer_destination.refuses_small     a 1 GiB disk is refused: an
 	                                          installation needs 2.25 GiB
 	  installer_destination.refuses_free_without_table
@@ -533,10 +534,13 @@ main()
 	// the disks: image files on the harness's spare disk
 	BString spare = find_spare_disk();
 	if (spare.Length() == 0) {
-		printf("CE-INFO no spare disk (ce-test.py SPARE_DISK), nothing to "
-			"test\n");
-		printf("CE-SUITE %s DONE failures=0\n", SUITE);
-		return 0;
+		// the harness attaches it whenever this test is selected: without
+		// it nothing here is tested, which must not pass silently
+		report("attach", false, "no spare disk (ce-test.py SPARE_DISK: a "
+			"16 GiB virtio disk starting with \"%.*s\")",
+			(int)sizeof(kSpareMarker) - 2, kSpareMarker);
+		printf("CE-SUITE %s DONE failures=%d\n", SUITE, sFailures);
+		return 1;
 	}
 	BString spareRoot;
 	status_t mounted = prepare_spare_disk(spare, spareRoot);
@@ -699,10 +703,13 @@ main()
 	if (bootDisk.Length() > 0) {
 		BString was = describe_disk(bootDisk);
 		std::set<std::string> beforeBoot = backup_files(backups);
-		status = plan_disk(bootDisk, "--layout erase --apply", output);
+		// a preview only: the refusal comes before it, and no write path
+		// to the real boot disk is ever taken
+		status = plan_disk(bootDisk, "--layout erase", output);
 		report("refuses_boot_disk", status == 1
 				&& output.FindFirst("started from") >= 0
 				&& output.FindFirst("volume:") < 0
+				&& output.FindFirst("new partition table") < 0
 				&& describe_disk(bootDisk) == was
 				&& backup_files(backups) == beforeBoot,
 			"%s: exit %d: %s", bootDisk.String(), status,

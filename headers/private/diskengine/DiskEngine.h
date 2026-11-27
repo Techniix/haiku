@@ -105,6 +105,11 @@ enum OperationKind {
 };
 
 
+//!	Where new partitions start: on a multiple of this from the disk's
+//!	start (what other systems' tools do; good for SSDs and 4K sectors).
+static const off_t kPartitionAlignment = 1024 * 1024;
+
+
 //!	Operation::index of a kFormat or kSetName step: the partition the
 //!	plan's latest kCreatePartition step made. Its index is only known once
 //!	it exists (a GUID partition table puts a new partition into its first

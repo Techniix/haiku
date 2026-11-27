@@ -7,7 +7,7 @@
 
 
 /*!	Renga (batch 13, roadmap F-23, the wizard's Destination step, first
-	part): the destination layouts the installer wizard offers, as plans of
+	part): the destination layouts the installer wizard is to offer, as plans of
 	the shared disk engine (headers/private/diskengine/DiskEngine.h), so
 	that the Installer prepares a disk exactly as the partition manager
 	would, with the same safety rules, table backup and journal.
@@ -20,8 +20,9 @@
 	           "alongside" without resizing)
 
 	The wizard's window (pages Welcome, Destination, Summary, Progress)
-	and "alongside" with a resize come later; DestinationPlan is shared by
-	the command line (Installer --plan-disk) and the window.
+	and "alongside" with a resize come later. For now only the command
+	line (Installer --plan-disk, InstallerCLI.cpp) calls these functions;
+	the window's Destination page is to use them too.
 */
 
 
@@ -51,7 +52,7 @@ bool volume_name_exists(const char* name);
 //!	\a wanted, or "<wanted> 2", "<wanted> 3", ...: a volume name no
 //!	partition has yet. The installation medium's own volume is "Renga",
 //!	and "Installer --unattended --target <name>" needs the new volume's
-//!	name to be unique.
+//!	name to be unique. (Called by InstallerCLI.cpp only so far.)
 BString unique_volume_name(const char* wanted);
 
 //!	"erase" or "free"; false for anything else.

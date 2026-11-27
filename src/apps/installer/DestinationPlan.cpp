@@ -17,8 +17,8 @@
 
 const off_t kMinimumInstallSize = 2048LL * 1024 * 1024;
 const off_t kEFIPartitionSize = 256LL * 1024 * 1024;
-static const off_t kAlignment = 1024 * 1024;
-	// the disk engine starts every partition on a MiB boundary
+static const off_t kAlignment = RengaDisk::kPartitionAlignment;
+	// where the disk engine starts every partition
 
 
 bool

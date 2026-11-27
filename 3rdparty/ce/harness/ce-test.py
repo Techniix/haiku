@@ -310,10 +310,63 @@ SCRATCH_ALLOCATED_RANGE = (4 * 1024 * 1024, 6 * 1024 * 1024)
 # guest puts BFS on it and its 4 GiB disk image files there, since the disk
 # engine and the Installer write only to image files and the boot volume
 # has no room for them; the marker in its first block is how the test
-# recognises it (it never formats a disk without it). Removed after the
-# boot.
+# recognises it (it never formats a disk without it). Only on the test
+# image's own boot of a run that runs installer_destination_test
+# (spare_disk_wanted()); removed after the boot, whatever happens.
 SPARE_DISK = ("spare", 16 * 1024 * 1024 * 1024,
 	b"CE-SPARE-DISK installer_destination\n")
+SPARE_DISK_TEST = "installer_destination_test"
+# What the new file may have allocated: the marker's block (a file system
+# that does not make sparse files would allocate all 16 GiB)
+SPARE_DISK_MAX_ALLOCATED = 1024 * 1024
+
+
+def spare_disk_wanted(args, plain_image=False, tag="", persist=False):
+	"""Whether a boot gets the spare disk: only the test image's own boot
+	(no other disk booted as it is, no tagged further boot, no persistent
+	writes) of a run whose selection has installer_destination_test (or
+	of a full run), and never in the modes that boot other disks or count
+	boot loader starts."""
+	if plain_image or tag or persist:
+		return False
+	if args.two_installs or args.other_systems or args.installer_upgrade \
+			or args.restore_points or args.loader_writes:
+		return False
+	# as make_patched_image() writes the runner's selection: a resumed
+	# run's remaining tests, else --only (a list of program names once
+	# main() has parsed it; resume_selection is [] then)
+	selection = getattr(args, "resume_selection", None) or args.only
+	if isinstance(selection, str):
+		selection = [w.strip() for w in selection.split(",") if w.strip()]
+	if not selection:
+		return True
+	return any(name in (SPARE_DISK_TEST, SPARE_DISK_TEST[:-len("_test")])
+		for name in selection)
+
+
+def make_spare_disk(path, max_allocated=SPARE_DISK_MAX_ALLOCATED):
+	"""Creates the spare disk at \a path: a sparse file of SPARE_DISK's size
+	with its marker in the first block. Returns None, or the problem in
+	words; then there is no file (nothing is attached)."""
+	size, marker = SPARE_DISK[1], SPARE_DISK[2]
+	try:
+		with open(path, "wb") as disk:
+			disk.truncate(size)
+			disk.write(marker)
+		allocated = os.stat(path).st_blocks * 512
+	except OSError as error:
+		problem = "cannot create %s: %s" % (path, error)
+	else:
+		if allocated <= max_allocated:
+			return None
+		problem = ("%s has %d bytes allocated after truncating it to %d "
+			"(want at most %d): the file system does not make sparse "
+			"files" % (path, allocated, size, max_allocated))
+	try:
+		os.remove(path)
+	except OSError:
+		pass
+	return problem
 
 # --two-installs: BFS volume name of the second install attached in front of
 # the test image.
@@ -3163,6 +3216,31 @@ class HostLoadSampler(threading.Thread):
 
 def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 		menu_script=None, persist=False, kill_on=None, progress=None):
+	"""_boot() with the spare disk (SPARE_DISK) when spare_disk_wanted():
+	made before and removed after the boot, also on an exception or
+	Ctrl-C. A spare disk that cannot be made is a failed host check
+	(host.spare_disk) and is not attached."""
+	spare = None
+	if spare_disk_wanted(args, image is not None, tag, persist):
+		spare = os.path.join(results_dir, SPARE_DISK[0] + ".img")
+		problem = make_spare_disk(spare)
+		if problem is not None:
+			log("spare disk not attached: " + problem)
+			report.setdefault("host_checks", []).append({
+				"name": "host.spare_disk", "pass": False,
+				"detail": "not attached: " + problem})
+			spare = None
+	try:
+		return _boot(args, results_dir, report, image, extra_drives, tag,
+			menu_script, persist, kill_on, progress, spare)
+	finally:
+		if spare is not None and os.path.exists(spare):
+			os.remove(spare)
+
+
+def _boot(args, results_dir, report, image=None, extra_drives=(), tag="",
+		menu_script=None, persist=False, kill_on=None, progress=None,
+		spare=None):
 	"""Boots the test image (or \a image: another disk, booted as it is)
 	and collects its serial output. A \a tag names a further boot of the
 	same run (--installer-upgrade): its logs are serial-<tag>.log, its
@@ -3286,15 +3364,12 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 				"discard=unmap" % (path, name),
 			"-device", "virtio-blk-pci,drive=%s,%s" % (name, properties),
 		]
-	spare = os.path.join(results_dir, SPARE_DISK[0] + ".img")
-	with open(spare, "wb") as disk:
-		disk.truncate(SPARE_DISK[1])
-		disk.write(SPARE_DISK[2])
-	qemu += [
-		"-drive", "file=%s,if=none,id=%s,format=raw,snapshot=off,"
-			"discard=unmap" % (spare, SPARE_DISK[0]),
-		"-device", "virtio-blk-pci,drive=%s" % SPARE_DISK[0],
-	]
+	if spare is not None:
+		qemu += [
+			"-drive", "file=%s,if=none,id=%s,format=raw,snapshot=off,"
+				"discard=unmap" % (spare, SPARE_DISK[0]),
+			"-device", "virtio-blk-pci,drive=%s" % SPARE_DISK[0],
+		]
 	if "usb" in args.pointer_devices:
 		qemu += ["-device", "%s,id=ptrusb" % USB_CONTROLLERS[args.usb_controller]]
 	if kdl_usb_keyboards_wanted(args):
@@ -3450,9 +3525,8 @@ def boot(args, results_dir, report, image=None, extra_drives=(), tag="",
 	bootReport["capture_feed"] = {
 		"most_read_seconds": round(feeder.most_read / (CAPTURE_RATE * 4), 1),
 		"tones_written": feeder.changes, "error": feeder.error}
-	for copy in (decoy, patched, spare):
-		# Full copies of the image, only needed while the guest runs (the
-		# spare disk too: up to a full installation's worth)
+	for copy in (decoy, patched):
+		# Full copies of the image, only needed while the guest runs.
 		if copy is not None:
 			os.remove(copy)
 	bootReport["screenshots"] = convert_screenshots(shots
