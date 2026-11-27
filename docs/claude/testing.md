@@ -23,7 +23,9 @@ Each run writes `<output>/ce-test-results/<timestamp>/` and points `latest` at i
 | `screen-*.png`, `audio.wav`, `sdl-out.raw` | Screenshots and recordings the checks used |
 
 Exit status: 0 only for a full run where everything passed. A partial (`--only`) run exits 2 when its
-selection passed and 1 when it failed: **a partial run never counts as a full pass**.
+selection passed and 1 when it failed: **a partial run never counts as a full pass**. A command-line error
+(an unknown option, or a test program the image does not have) exits 64; `renga-test` reports any run
+that wrote no results as failed.
 
 `3rdparty/ce/harness/selftest.py` tests the harness's own analysis against known-good and known-bad input.
 Every new host-side check gets a known-bad case there. It has one known failure on a clean tree ("sound

@@ -19,6 +19,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import argparse
 import tempfile
 import types
 
@@ -1593,6 +1594,30 @@ expect("watchdog: a program that ends keeps its exit status and no report",
 	"quick_test exited with 3" in output
 		and "watchdog.quick_test" not in output, repr(output[-300:]))
 shutil.rmtree(directory)
+
+# Command-line errors exit USAGE_EXIT_STATUS, not argparse's 2, which is
+# also "partial run, selection passed" (batch 14: renga-test read an
+# unknown test name as a passed selection). Known bad: the plain argparse
+# parser exits 2.
+def usage_exit_status(parserClass):
+	parser = parserClass(prog="ce-test.py")
+	parser.add_argument("--only")
+	saved = sys.stderr
+	sys.stderr = io.StringIO()
+	try:
+		parser.parse_args(["--no-such-option"])
+	except SystemExit as error:
+		return error.code
+	finally:
+		sys.stderr = saved
+	return None
+
+expect("usage: an unknown option exits 64, not 2",
+	usage_exit_status(ce_test.HarnessArgumentParser) == 64,
+	str(usage_exit_status(ce_test.HarnessArgumentParser)))
+expect("usage: plain argparse would exit 2 (known bad)",
+	usage_exit_status(argparse.ArgumentParser) == 2,
+	str(usage_exit_status(argparse.ArgumentParser)))
 
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)
