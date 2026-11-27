@@ -1424,6 +1424,10 @@ script = os.path.join(directory, "watchdog.sh")
 with open(script, "w") as scriptFile:
 	scriptFile.write("suite_timeout=5\n" + function + """
 printf '#!/bin/sh\\nexec sleep 600\\n' > "$1/hang_test"
+printf '#!/bin/sh\\nkill -INT $$\\necho survived\\n' > "$1/sigint_test"
+chmod +x "$1/sigint_test"
+run_watched "$1/sigint_test"
+echo "sigint_test exited with $?"
 printf '#!/bin/sh\\necho CE-TEST quick.one PASS\\nexit 3\\n' > "$1/quick_test"
 chmod +x "$1/hang_test" "$1/quick_test"
 run_watched "$1/hang_test"
@@ -1444,6 +1448,9 @@ expect("watchdog: a hung program is killed and reported as a failed check",
 	"CE-TEST harness.watchdog.hang_test FAIL still running after 5s, killed"
 		in output and "hang_test exited with 137" in output and took < 30,
 	"%.0f s: %r" % (took, output[-300:]))
+expect("watchdog: the program gets SIGINT as usual (not ignored)",
+	"sigint_test exited with 130" in output and "survived" not in output,
+	repr(output[-300:]))
 expect("watchdog: a program that ends keeps its exit status and no report",
 	"quick_test exited with 3" in output
 		and "watchdog.quick_test" not in output, repr(output[-300:]))

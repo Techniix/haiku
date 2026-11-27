@@ -55,11 +55,23 @@ fi
 # watchdog: begin
 run_watched() {
 	# $1: the program, $2...: its arguments. Returns its exit status (137
-	# when the watchdog killed it).
+	# when the watchdog killed it). The program runs in the foreground:
+	# started with "&", a non-interactive shell would start it with SIGINT
+	# and SIGQUIT ignored, which a program inherits across exec (the
+	# renguin dyn.sys sigint_read checks failed that way in the first
+	# batch 13 renga-raw run). A small sh writes its process ID and execs
+	# the program, so the watcher kills the program itself.
 	watched_name=$(basename "$1")
-	"$@" &
-	watched_pid=$!
+	watched_pidfile=/tmp/ce-watched.$$.pid
+	rm -f "$watched_pidfile"
 	(
+		waited=0
+		while [ ! -s "$watched_pidfile" ] && [ "$waited" -lt 50 ]; do
+			sleep 0.2
+			waited=$((waited + 1))
+		done
+		watched_pid=$(cat "$watched_pidfile" 2>/dev/null)
+		[ -n "$watched_pid" ] || exit 0
 		waited=0
 		while kill -0 "$watched_pid" 2>/dev/null; do
 			if [ "$waited" -ge "$suite_timeout" ]; then
@@ -72,10 +84,11 @@ run_watched() {
 		done
 	) &
 	watcher_pid=$!
-	wait "$watched_pid"
+	sh -c 'echo $$ > "$0"; exec "$@"' "$watched_pidfile" "$@"
 	watched_status=$?
 	kill "$watcher_pid" 2>/dev/null
 	wait "$watcher_pid" 2>/dev/null
+	rm -f "$watched_pidfile"
 	return $watched_status
 }
 # watchdog: end
