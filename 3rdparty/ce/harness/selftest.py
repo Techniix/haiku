@@ -1445,6 +1445,36 @@ expect("resume: a finished program printed mid-line is recorded",
 shutil.rmtree(interleaved)
 
 
+# batch 13: every runner marker printed in the middle of another line
+# counts once (sweep: "wlan: CE-TEST wlan_reload.attached ..."), a
+# "KERN: " syslog echo does not, and an exact repeat is not counted twice
+midline = tempfile.mkdtemp()
+with open(os.path.join(midline, "serial.log"), "w") as serialFile:
+	serialFile.write("CE-SUITE alpha START\r\n"
+		"wlan: CE-TEST alpha.one PASS detail\r\n"
+		"KERN: CE-TEST alpha.echo FAIL a syslog echo\r\n"
+		"CE-TEST alpha.two FAIL broken\r\n"
+		"syslog: CE-TEST alpha.two FAIL broken\r\n"
+		"etherpci: init_driver CE-SUITE alpha DONE failures=1\r\n")
+midline_report = {}
+ce_test.parse_serial(midline, midline_report)
+names = sorted(t["name"] for t in midline_report["tests"]
+	if t["name"].startswith("alpha."))
+expect("markers: mid-line checks count once, KERN: echoes not at all",
+	names == ["alpha.one", "alpha.two"]
+		and midline_report["suites"].get("alpha") == ["START",
+			"DONE failures=1"], "%s %s" % (names, midline_report["suites"]))
+shutil.rmtree(midline)
+hostline = tempfile.mkdtemp()
+reader = ce_test.SerialReader(FakeQemu(b"usb_hid: x CE-HOST screenshot "
+	b"probe_one\r\n"), os.path.join(hostline, "serial.log"))
+reader.run()
+expect("markers: a CE-HOST request printed mid-line is carried out",
+	[r["request"] for r in reader.host_requests] == ["screenshot probe_one"],
+	str(reader.host_requests))
+shutil.rmtree(hostline)
+
+
 # The guest runner's per-program watchdog, run on the host: the function
 # between runner.sh's "watchdog" markers, with a program that hangs and
 # one that finishes.
