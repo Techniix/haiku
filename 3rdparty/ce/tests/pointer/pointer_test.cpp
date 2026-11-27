@@ -317,6 +317,21 @@ test_device(const PointerDevice& device, BRect frame)
 	report(name.String(), running, "%s", running ? inputName.String()
 		: "no running input_server pointing device for it");
 
+	// A tablet reports only a change of its own position. The first check
+	// (top_left, device 0,0) is what QEMU's tablet holds before it was ever
+	// moved, so when an earlier program left the pointer elsewhere with
+	// another device (pointer_rate_test ends at 340,300 with the mouse),
+	// that first move sent no report and the pointer stayed. Put this
+	// device somewhere else first; it then differs from 0,0 whatever it held.
+	BPoint center = pixel(kPositions[4], frame);
+	move_absolute(device, device_coordinate(center.x - frame.left,
+			frame.Width() + 1),
+		device_coordinate(center.y - frame.top, frame.Height() + 1));
+	BPoint primed = wait_for_pointer(center, 0, 5);
+	printf("CE-INFO pointer: %s primed at %.0f,%.0f (want %.0f,%.0f)\n",
+		device.id, primed.x, primed.y, center.x, center.y);
+	fflush(stdout);
+
 	for (size_t i = 0; i < B_COUNT_OF(kPositions); i++)
 		check_position(device, "pos", kPositions[i], frame);
 
