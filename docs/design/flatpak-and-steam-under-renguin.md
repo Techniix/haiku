@@ -1,0 +1,129 @@
+# Flatpak and Steam under Renguin: design and what is missing
+
+Batch 13, piece 3 (maintainer, 2026-11-26). Roadmap `F-27`, "Getting Linux apps" and
+"Games and Windows programs". Status: design. Nothing here is implemented yet; each step below
+names the work it needs and how it will be tested.
+
+## Where Renguin stands (ce/main, batch 13)
+
+- One Linux root per system, fixed at `/boot/system/non-packaged/compat/linux`. Path lookup is
+  per call (`path.cpp`, a FreeBSD-style "emul path"). Absolute link targets under `/boot/` are
+  host paths.
+- `chroot()` returns `EPERM`. `unshare`, `setns`, `clone` namespace flags, `mount`,
+  `pivot_root` and `seccomp` are not there (`COVERAGE.md`).
+- 64-bit programs only. Programs come from Alpine `apk` (musl) or static glibc; AppImages are
+  extracted and run.
+- Memory: `madvise(MADV_DONTNEED)` has Linux semantics from batch 13 (it was ignored).
+  Mappings beyond a file's end are refused (the batch 11 attempt panicked the VM's commitment
+  accounting and was reverted).
+
+## Flatpak
+
+Flatpak runs every application, and its own install triggers, through bubblewrap (`bwrap`).
+`bwrap` builds the sandbox from a user namespace and a mount namespace:
+- `--ro-bind <runtime>/files /usr`
+- `--bind <app>/files /app`
+- tmpfs `/tmp`
+- `/proc`, `/dev`, `--symlink`, `--setenv`, `--seccomp <fd>`
+
+It then executes the program inside. Flatpak itself (`flatpak`, `ostree`) is ordinary
+userspace; it needs HTTPS and a writable repository under `~/.local/share/flatpak`.
+
+### Step 1: unsandboxed Flatpak (no namespaces)
+
+1. **Per-process root in Renguin** (kernel module, protected path).
+   - Each Linux team gets a root prefix: today's constant `RENGUIN_LINUX_ROOT` becomes a
+     field of the team's Renguin data, inherited on `fork()` and kept on `exec()`.
+   - `chroot(path)` sets it to the host path of `path`, which must be a directory the
+     caller can read.
+   - `path.cpp` resolves against the field instead of the constant. `/proc/self/root`,
+     `getcwd()` and the mount table (`procfs.cpp`) follow it.
+   - Programs outside a chroot see no change.
+   - Tests: a `libc-chroot` program (chroot into a directory of the root, open a file by its
+     absolute path, symlinks with absolute targets, `..` stops at the new root, `fork` and
+     `exec` keep it). Plus a quick default-profile boot run.
+2. **`bwrap` shim** (`/usr/bin/bwrap` in the Linux root, a small static program).
+   - It interprets the bubblewrap options Flatpak uses (`--ro-bind`, `--bind`,
+     `--dev-bind`, `--symlink`, `--dir`, `--tmpfs`, `--setenv`, `--unsetenv`, `--chdir`,
+     `--args <fd>`, `--file`, `--bind-data`, `--die-with-parent`, `--new-session`,
+     `--as-pid-1`; namespace and `--seccomp` options are accepted and ignored).
+   - It builds a private directory under `/tmp/renguin-bwrap-<pid>/` with a symlink or a
+     copied file for each mount, then `chroot()`s into it and `execve()`s the command.
+   - Binds become symlinks to the host paths. That works because absolute targets under
+     `/boot/` are host paths.
+   - Sandboxing is not provided. The shim says so on stderr once per launch, and the
+     Renguin Manager shows it.
+   - Tests: a shell script under the harness runs the shim with Flatpak's own argument
+     list for a runtime/app pair laid out by hand.
+3. **Flatpak and OSTree in the Linux root**: Alpine's `flatpak`, `ostree` and their
+   libraries, added to the root's pins (about 15 MB). Alpine's real `bwrap` is not
+   installed; the shim takes its path.
+4. **Flathub remote and a test application.**
+   - `flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`
+     runs when the Renguin Manager switch "Flatpak" is first turned on (off by default:
+     it downloads runtimes of several hundred MB).
+   - The harness has no network. Its test application is a tiny OSTree repository built on
+     the build host from a static "hello" program and a minimal runtime, as `--linux-root`
+     builds the Linux root today. Building it needs `ostree` on the build host (not
+     installed on the cloud host, hence not done in batch 13).
+   - Tests: `flatpak install --noninteractive` from that repository, `flatpak run`, and
+     the program's output.
+5. **GUI path.**
+   - Renguin Manager, "Linux programs" tab: a Flatpak switch, a Flathub search field
+     (`flatpak search`), Install and Remove, and the installed list. Installed programs'
+     `.desktop` files go to `~/.local/share/flatpak/exports/share/applications`. linux-apps
+     reads that directory as well, so they get Deskbar entries.
+   - Renga Depot: the "Flatpak" source of the catalogue (decisions log, 2026-11-21) uses
+     the same commands.
+   - Both switchable.
+
+### Step 2: sandboxed
+
+Needs user and mount namespaces in Renguin (a per-team mount table over Haiku's VFS), or a
+Haiku-native sandbox the shim maps onto. Not before step 1 works on the maintainer's machine.
+
+## Steam
+
+The Steam client is 32-bit (`steam`, `steamwebhelper` is 64-bit Chromium). Its runtime
+("Steam Linux Runtime", pressure-vessel) starts games in containers through `bwrap`.
+
+What is missing, in order:
+
+1. **32-bit Linux programs (i386).**
+   - Haiku's x86_64 kernel has an ia32 compatibility mode (`_COMPAT_MODE`,
+     `entry_compat.S`, `signals_compat.cpp`). It is built only when the image has an x86
+     secondary architecture (`build/jam/ArchitectureRules`).
+   - Renguin needs, on top of that:
+     - an ELF32 loader path
+     - the i386 system call entry (`int 0x80` and `sysenter`/`syscall` from 32-bit code
+       segments), with i386 syscall numbers and structure layouts (`stat64`, `iovec`,
+       `msghdr`, signal frames, `ucontext`)
+     - `set_thread_area`/`modify_ldt` for 32-bit TLS
+     - 32-bit `mmap` limits (below 4 GB)
+   - Design and kernel work: XL. It needs the architect and a kernel brief.
+2. **Multilib Linux root.** Alpine has no 32-bit packages on x86_64. Steam needs a
+   glibc-based root with i386 and x86_64 libraries (Debian or Ubuntu `multiarch`, or Arch
+   `lib32-*`). Renguin runs static glibc programs today; dynamic glibc needs the glibc
+   `ld-linux` loader paths, `/etc/ld.so.cache` and the glibc-specific system calls
+   (`rseq`, `clone3`) checked. The roadmap's Debian/Arch roots item (`F-27`) covers it.
+3. **Libraries Steam needs.**
+   - 32-bit and 64-bit: libc6, libstdc++6, libgcc, zlib, libX11 and XWayland (Steam is an
+     X11 program; Renguin has no XWayland yet), libGL/Mesa (llvmpipe until the GPU
+     stage), libvulkan, libdbus, libnss3, libcurl, libudev (stub), libpulse (until the
+     PipeWire/Pulse bridge), libgtk2 (the client's tray), libva.
+   - `steamwebhelper` is Chromium (CEF): it needs the same work as Linux Chromium
+     (zygote, GPU process, shared memory growth).
+4. **Containers.** pressure-vessel and the runtime's `bwrap`: Flatpak step 1 (`chroot`
+   and the shim) first. With `STEAM_RUNTIME=0` and `PRESSURE_VESSEL` off, games can start
+   without them.
+5. **Kernel interfaces games use.**
+   - `/dev/input/event*` (done, evdev bridge)
+   - `/dev/uinput` (done)
+   - `/dev/dri` render nodes (with the GPU stage, Quasar)
+   - `/sys/class/input` and udev enumeration (open)
+   - `futex_waitv` (Proton's fsync; open)
+   - `ptrace` (not needed by Steam itself)
+
+First useful milestone: a 64-bit native Linux game from Steam's files, started outside the
+client with the runtime's libraries, under Renguin with a glibc root. It needs items 2 and 3
+(64-bit only), XWayland, and Mesa. The client itself needs item 1.
