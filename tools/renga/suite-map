@@ -45,6 +45,7 @@ src/add-ons/kernel/busses/            @full
 src/add-ons/kernel/generic/           @full syncobj
 src/add-ons/kernel/network/           @full posix_compat wifi
 src/add-ons/kernel/file_systems/      @full
+src/add-ons/kernel/file_systems/packagefs/ @full packagefs package_priority
 src/add-ons/kernel/partitioning_systems/ @full installer storage
 src/add-ons/kernel/debugger/          @full kdl
 src/add-ons/kernel/personalities/     @full renguin renguinmanager
@@ -79,6 +80,7 @@ src/kits/shared/                      @full largefont
 3rdparty/ce/tests/media/              media
 3rdparty/ce/tests/nvme/               nvme
 3rdparty/ce/tests/package_priority/   package_priority
+3rdparty/ce/tests/packagefs/          packagefs
 3rdparty/ce/tests/pointer/            pointer
 3rdparty/ce/tests/posix_compat/       posix_compat
 3rdparty/ce/tests/rengadoctor/        rengadoctor

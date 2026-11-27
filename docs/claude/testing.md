@@ -37,7 +37,7 @@ without `_test`); `tools/renga/renga-test` also accepts suite directory names an
 
 | Suites (directories) | Notes |
 | --- | --- |
-| `posix_compat`, `virtio_block`, `virtio_sound`, `nvme`, `pointer`, `shortcut_keys`, `syncobj`, `kdl`, `storage`, `package_priority`, `renguin`, `linuxkpi`, `bootstate` | Run on the default `minimum-raw` image (some checks only on renga-*) |
+| `posix_compat`, `virtio_block`, `virtio_sound`, `nvme`, `pointer`, `shortcut_keys`, `syncobj`, `kdl`, `storage`, `package_priority`, `packagefs`, `renguin`, `linuxkpi`, `bootstate` | Run on the default `minimum-raw` image (some checks only on renga-*) |
 | `media`, `controlpanel`, `largefont`, `welcome`, `deskbar`, `tracker`, `webpositive`, `gamepad`, `appserver`, `wayland`, `dbus`, `devel`, `agents`, `rengadoctor`, `renguinmanager`, `bootmenu`, `crashlog`, `usb_audio`, `uvc`, `hda_eld`, `wifi`, `toolchain` | Renga's own programs: most need `--profile renga-raw` |
 | `installer` | `installer_test` only with `--installer-upgrade`; `installer_ui_test` on renga-* |
 | `bootstate` | `restore_point_test` only with `--restore-points` |
