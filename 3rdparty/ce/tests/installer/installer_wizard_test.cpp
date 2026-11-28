@@ -86,6 +86,7 @@
 #include <VolumeRoster.h>
 
 #include <dirent.h>
+#include <fs_info.h>
 #include <fs_volume.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -519,20 +520,27 @@ mount_spare_disk()
 }
 
 
-//!	A 4 GiB image on the spare disk, attached: its disk path, or "".
+//!	A 3 GiB image on the spare disk (room for a 512 MiB volume and an
+//!	installation), attached: its disk path, or "" (\a problem says why).
 static BString
-attach_image(const BString& spare, const char* name, BString& imagePath)
+attach_image(const BString& spare, const char* name, BString& imagePath,
+	BString& problem)
 {
 	imagePath = spare;
 	imagePath << "/" << name;
 	BFile file(imagePath.String(), B_CREATE_FILE | B_ERASE_FILE
 		| B_READ_WRITE);
-	if (file.InitCheck() != B_OK || file.SetSize(kDiskSize) != B_OK)
-		return "";
+	status_t status = file.InitCheck();
+	if (status == B_OK)
+		status = file.SetSize(3LL * 1024 * 1024 * 1024);
 	file.Unset();
 	BString device;
-	if (RengaDisk::AttachImage(imagePath.String(), device) != B_OK)
+	if (status == B_OK)
+		status = RengaDisk::AttachImage(imagePath.String(), device);
+	if (status != B_OK) {
+		problem << "; " << name << ": " << strerror(status);
 		return "";
+	}
 	return device;
 }
 
@@ -613,19 +621,24 @@ static void
 check_spare_disk_cases(const BString& firmware)
 {
 	BString spare = mount_spare_disk();
-	BString alongPath, stalePath;
+	BString alongPath, stalePath, problem;
 	BString along = spare.Length() > 0
-		? attach_image(spare, "along.img", alongPath) : BString();
+		? attach_image(spare, "along.img", alongPath, problem) : BString();
 	BString stale = spare.Length() > 0
-		? attach_image(spare, "stale.img", stalePath) : BString();
+		? attach_image(spare, "stale.img", stalePath, problem) : BString();
 	BString backups = spare;
 	backups << "/backups";
 	mkdir(backups.String(), 0755);
 	bool ready = along.Length() > 0 && stale.Length() > 0
 		&& prepare_gpt_with(along, "KeepAlong", backups) == B_OK
 		&& prepare_gpt_with(stale, "KeepStale", backups) == B_OK;
-	report("images", ready, "spare disk at \"%s\": %s, %s", spare.String(),
-		along.String(), stale.String());
+	fs_info info;
+	off_t freeSpace = spare.Length() > 0
+		&& fs_stat_dev(dev_for_path(spare.String()), &info) == 0
+		? info.free_blocks * info.block_size : -1;
+	report("images", ready, "spare disk at \"%s\" (%" B_PRIdOFF " MiB "
+		"free): %s, %s%s", spare.String(), freeSpace / kMiB, along.String(),
+		stale.String(), problem.String());
 
 	if (ready) {
 		// the plan goes stale on the Summary page
