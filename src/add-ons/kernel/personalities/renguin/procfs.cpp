@@ -326,7 +326,8 @@ cwd_is_root()
 	renguin_team* data = renguin_current_team();
 	struct stat st;
 	if (data != NULL && data->have_linux_root
-		&& vfs_read_stat(-1, RENGUIN_LINUX_ROOT, true, &st, true) == B_OK) {
+		&& vfs_read_stat(-1, renguin_root_prefix(), true, &st, true)
+			== B_OK) {
 		return st.st_dev == device && st.st_ino == node;
 	}
 	return vfs_read_stat(-1, "/", true, &st, true) == B_OK
@@ -1286,6 +1287,12 @@ generate_pid_status(proc_buffer& out, team_id pid, thread_id tid)
 		(unsigned)info.gid, (unsigned)info.gid, (unsigned)info.gid,
 		virtualSize / 1024, virtualSize / 1024, resident / 1024,
 		info.thread_count, smp_get_num_cpus() - 1);
+	// batch 14: Renga's own line (Linux programs read status by key): the
+	// chroot() roots waiting for an exec, system-wide. libc-chroot checks
+	// that execs of native programs leave none behind.
+	if (self)
+		out.Printf("RengaExecRoots:\t%" B_PRId32 "\n",
+			renguin_exec_root_count());
 }
 
 

@@ -26,6 +26,7 @@
 
 
 #include "renguin.h"
+#include "linux_defs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +34,8 @@
 #include <KernelExport.h>
 
 #include <AutoDeleter.h>
+#include <util/AutoLock.h>
+#include <lock.h>
 
 #include <kernel.h>
 #include <syscalls.h>
@@ -93,14 +96,15 @@ static const int kMaxRestarts = 8;
 */
 static status_t
 resolve_walk(const char* linuxPath, uint32 flags, char* hostPath,
-	size_t hostPathSize, bool inRoot, int depth)
+	size_t hostPathSize, bool inRoot, int depth, const char* root = NULL)
 {
 	if (linuxPath == NULL || linuxPath[0] != '/')
 		return B_BAD_VALUE;
 	if (depth > kMaxRestarts)
 		return B_LINK_LIMIT;
 
-	const char* prefix = inRoot ? RENGUIN_LINUX_ROOT : "";
+	const char* prefix = inRoot
+		? (root != NULL ? root : renguin_root_prefix()) : "";
 	const size_t rootLength = strlen(prefix);
 	const size_t kBufferSize = B_PATH_NAME_LENGTH;
 
@@ -241,11 +245,11 @@ resolve_walk(const char* linuxPath, uint32 flags, char* hostPath,
 			// (pending holds the target and the rest of the path now)
 			if (!inRoot && link[0] == '/') {
 				status = resolve_walk(pending, flags, hostPath,
-					hostPathSize, true, depth + 1);
+					hostPathSize, true, depth + 1, root);
 				if (status == B_OK || status == RENGUIN_STATUS_IN_PROC)
 					return status;
 				return resolve_walk(pending, flags, hostPath, hostPathSize,
-					false, depth + 1);
+					false, depth + 1, root);
 			}
 
 			// An absolute target restarts at the Linux root; a relative one
@@ -286,6 +290,19 @@ renguin_resolve_in_root(const char* linuxPath, uint32 flags, char* hostPath,
 }
 
 
+/*!	batch 14: as renguin_resolve_in_root(), under \a root (a host path;
+	NULL or "": the Linux root), for the loader, which runs before the
+	team's new data (and so its chroot() root) is in place.
+*/
+status_t
+renguin_resolve_in_root_of(const char* root, const char* linuxPath,
+	uint32 flags, char* hostPath, size_t hostPathSize)
+{
+	return resolve_walk(linuxPath, flags, hostPath, hostPathSize, true, 0,
+		root != NULL && root[0] != '\0' ? root : RENGUIN_LINUX_ROOT);
+}
+
+
 static bool
 linux_root_exists()
 {
@@ -300,8 +317,9 @@ linux_root_exists()
 void
 renguin_host_to_linux_path(char* path)
 {
-	const size_t rootLength = strlen(RENGUIN_LINUX_ROOT);
-	if (strncmp(path, RENGUIN_LINUX_ROOT, rootLength) != 0)
+	const char* root = renguin_root_prefix();
+	const size_t rootLength = strlen(root);
+	if (strncmp(path, root, rootLength) != 0)
 		return;
 	if (path[rootLength] == '\0') {
 		strcpy(path, "/");
@@ -403,8 +421,9 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 	}
 
 	// Already a host path into the Linux root: leave it alone.
-	const size_t rootLength = strlen(RENGUIN_LINUX_ROOT);
-	if (strncmp(path, RENGUIN_LINUX_ROOT, rootLength) == 0
+	const char* root = renguin_root_prefix();
+	const size_t rootLength = strlen(root);
+	if (strncmp(path, root, rootLength) == 0
 		&& (path[rootLength] == '\0' || path[rootLength] == '/')) {
 		return B_OK;
 	}
@@ -439,7 +458,7 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 	const char* first = path + 1;
 	size_t firstLength = strcspn(first, "/");
 	if (firstLength == 0 || (size_t)snprintf(translated, B_PATH_NAME_LENGTH,
-			"%s/%.*s", RENGUIN_LINUX_ROOT, (int)firstLength, first)
+			"%s/%.*s", root, (int)firstLength, first)
 				>= B_PATH_NAME_LENGTH
 		|| vfs_read_stat(-1, translated, false, &st, true) == B_OK) {
 		return B_OK;
@@ -448,7 +467,7 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 		0);
 	if (status == RENGUIN_STATUS_IN_PROC
 		|| (status == B_OK
-			&& strncmp(translated, RENGUIN_LINUX_ROOT, rootLength) == 0
+			&& strncmp(translated, root, rootLength) == 0
 			&& (translated[rootLength] == '\0'
 				|| translated[rootLength] == '/'))) {
 		strlcpy(path, translated, pathSize);
@@ -492,4 +511,275 @@ renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
 	uint64 copy = renguin_scratch_put(scratch, path, strlen(path) + 1);
 	*_status = copy == 0 ? B_BAD_ADDRESS : status;
 	return copy;
+}
+
+
+// #pragma mark - chroot (batch 14)
+
+
+/*!	The current team's "/" as a host path: the directory chroot() chose,
+	else the Linux root.
+*/
+const char*
+renguin_root_prefix()
+{
+	renguin_team* data = renguin_current_team();
+	if (data != NULL && data->root[0] != '\0')
+		return data->root;
+	return RENGUIN_LINUX_ROOT;
+}
+
+
+/*!	Roots handed from a team's execve() to the new program's load:
+	renguin_load() makes the team's data anew, after the kernel has freed
+	the old data (foreign_personality_exec()). One entry per team with a
+	pending root, on a list without a fixed size, so that no team's root
+	can be dropped to make room for another's (a dropped root would let
+	the new program see the whole Linux root).
+
+	An entry lives only while its team is in an execve(), and cannot
+	outlive the team:
+	- renguin_exec_keep_root() makes it, before _user_exec();
+	- renguin_probe() marks it claimed when the new program is a Linux one
+	  (renguin_exec_claim_root());
+	- renguin_load() takes it;
+	- renguin_team_released() frees an unclaimed one: the kernel calls it
+	  when the exec turns out native (the team leaves the personality, and
+	  ~Team will not call it again), and when the team dies;
+	- a failed execve() frees it;
+	- as a last guard, renguin_exec_keep_root() frees entries of teams that
+	  no longer exist.
+	A native program therefore runs, and starts Linux programs, outside
+	the chroot: Haiku's own VFS knows nothing of it.
+*/
+struct exec_root {
+	exec_root*	next;
+	team_id		team;
+	bool		claimed;
+	char		root[B_PATH_NAME_LENGTH];
+};
+
+static mutex sExecRootLock = MUTEX_INITIALIZER("renguin exec roots");
+static exec_root* sExecRoots = NULL;
+static int32 sExecRootCount = 0;
+
+
+//! Unlinks and returns the team's entry; the caller holds sExecRootLock.
+static exec_root*
+unlink_exec_root_locked(team_id team)
+{
+	for (exec_root** link = &sExecRoots; *link != NULL;
+			link = &(*link)->next) {
+		exec_root* entry = *link;
+		if (entry->team == team) {
+			*link = entry->next;
+			sExecRootCount--;
+			return entry;
+		}
+	}
+	return NULL;
+}
+
+
+//! Frees the entries of teams that are gone; the caller holds the lock.
+static void
+prune_exec_roots_locked()
+{
+	exec_root** link = &sExecRoots;
+	while (*link != NULL) {
+		exec_root* entry = *link;
+		team_info info;
+		if (get_team_info(entry->team, &info) != B_OK) {
+			*link = entry->next;
+			sExecRootCount--;
+			free(entry);
+		} else
+			link = &entry->next;
+	}
+}
+
+
+/*!	Records \a root (NULL or "": none) as the root \a team's next program
+	gets. Fails with B_NO_MEMORY rather than lose a root: execve() then
+	fails, the program keeps running in its root.
+*/
+status_t
+renguin_exec_keep_root(team_id team, const char* root)
+{
+	exec_root* entry = NULL;
+	if (root != NULL && root[0] != '\0') {
+		entry = (exec_root*)malloc(sizeof(exec_root));
+		if (entry == NULL)
+			return B_NO_MEMORY;
+		entry->team = team;
+		entry->claimed = false;
+		strlcpy(entry->root, root, sizeof(entry->root));
+	}
+
+	exec_root* old;
+	{
+		MutexLocker locker(sExecRootLock);
+		old = unlink_exec_root_locked(team);
+		prune_exec_roots_locked();
+		if (entry != NULL) {
+			entry->next = sExecRoots;
+			sExecRoots = entry;
+			sExecRootCount++;
+		}
+	}
+	free(old);
+	return B_OK;
+}
+
+
+//! renguin_probe() claimed \a team's new program: renguin_load() follows.
+void
+renguin_exec_claim_root(team_id team)
+{
+	MutexLocker locker(sExecRootLock);
+	for (exec_root* entry = sExecRoots; entry != NULL; entry = entry->next) {
+		if (entry->team == team) {
+			entry->claimed = true;
+			break;
+		}
+	}
+}
+
+
+/*!	Moves \a team's pending root into \a root (left unchanged when there is
+	none). Returns whether there was one.
+*/
+bool
+renguin_exec_take_root(team_id team, char* root, size_t size)
+{
+	exec_root* entry;
+	{
+		MutexLocker locker(sExecRootLock);
+		entry = unlink_exec_root_locked(team);
+	}
+	if (entry == NULL)
+		return false;
+	strlcpy(root, entry->root, size);
+	free(entry);
+	return true;
+}
+
+
+/*!	The team's personality data is released: its entry goes, unless the
+	exec is loading a Linux program (claimed) and the team is alive.
+*/
+void
+renguin_exec_release_root(team_id team, bool dying)
+{
+	exec_root* entry = NULL;
+	{
+		MutexLocker locker(sExecRootLock);
+		for (exec_root* candidate = sExecRoots; candidate != NULL;
+				candidate = candidate->next) {
+			if (candidate->team == team) {
+				if (dying || !candidate->claimed)
+					entry = unlink_exec_root_locked(team);
+				break;
+			}
+		}
+	}
+	free(entry);
+}
+
+
+//! How many entries there are (/proc/self/status "RengaExecRoots", tests).
+int32
+renguin_exec_root_count()
+{
+	MutexLocker locker(sExecRootLock);
+	return sExecRootCount;
+}
+
+
+/*!	chroot(): the directory becomes the team's "/" for every later
+	absolute path lookup (resolve_walk() walks under it, ".." stops at it,
+	absolute link targets restart at it).
+
+	It is a view of the file system for the bwrap shim (Flatpak step 1),
+	not a sandbox; docs/design/flatpak-and-steam-under-renguin.md lists
+	what it does not contain:
+	- Absolute link targets under /boot/system/ and /boot/home/ are host
+	  paths, as in the Linux root (the shim's binds are such links).
+	- An absolute path that does not exist in the root is a host path, as
+	  in the Linux root (renguin_translate_path()).
+	- Relative paths are Haiku's: ".." from a working directory at the
+	  root leaves it, and a working directory or a descriptor opened
+	  outside the root (before chroot(), or with fchdir() to it) stays
+	  usable, as on Linux.
+
+	The root is kept as a canonical host path string, not as a vnode
+	reference: nothing is pinned, nothing has to be released. fork()
+	copies it with the team data, execve() hands it to a new Linux program
+	(renguin_exec_keep_root()), team exit frees it with the team data. If
+	the directory is removed, lookups under it fail.
+
+	Linux asks for CAP_SYS_CHROOT. Renguin lets any program do it, since
+	the bwrap shim runs as the user and a Haiku team can open any host
+	path anyway; as on Linux the caller needs search permission on the
+	directory (EACCES). A directory whose host path is the Linux root (or
+	Haiku's "/") ends the chroot; chroot("/") inside one changes nothing.
+*/
+int64
+renguin_sys_chroot(uint64 userPath)
+{
+	renguin_team* data = renguin_current_team();
+	if (data == NULL)
+		return -LX_EPERM;
+	char* buffers = (char*)malloc(B_PATH_NAME_LENGTH * 2);
+	if (buffers == NULL)
+		return -LX_ENOMEM;
+	MemoryDeleter buffersDeleter(buffers);
+	char* path = buffers;
+	char* canonical = buffers + B_PATH_NAME_LENGTH;
+
+	status_t status = renguin_get_user_path(userPath,
+		RENGUIN_PATH_FOLLOW_LEAF, path, B_PATH_NAME_LENGTH);
+	if (status == RENGUIN_STATUS_IN_PROC)
+		return -LX_EINVAL;
+	if (status != B_OK)
+		return renguin_encode(status);
+	if (path[0] == '\0')
+		return -LX_ENOENT;
+
+	// The canonical host path, without links or "..", so that the prefix
+	// tests in this file compare like with like. A relative path is
+	// relative to the team's working directory (kernel = false: the
+	// team's I/O context, not the kernel's).
+	status = vfs_normalize_path(path, canonical, B_PATH_NAME_LENGTH, true,
+		false);
+	if (status != B_OK)
+		return renguin_encode(status);
+	struct stat st;
+	status = vfs_read_stat(-1, canonical, true, &st, false);
+	if (status != B_OK)
+		return renguin_encode(status);
+	if (!S_ISDIR(st.st_mode))
+		return -LX_ENOTDIR;
+	// search permission, checked with the caller's effective IDs
+	if (_kern_access(-1, canonical, X_OK, true) != B_OK)
+		return -LX_EACCES;
+
+	size_t length = strlen(canonical);
+	while (length > 1 && canonical[length - 1] == '/')
+		canonical[--length] = '\0';
+
+	// Under the team lock: fork() copies the team data under it.
+	// (Lookups in other threads read the root without it. The buffer's
+	// last byte is never written by strlcpy(), so a concurrent reader sees
+	// a terminated string, at worst a mix of the old and new root.)
+	MutexLocker locker(data->lock);
+	if (strcmp(canonical, RENGUIN_LINUX_ROOT) == 0
+		|| strcmp(canonical, "/") == 0) {
+		data->root[0] = '\0';
+	} else
+		strlcpy(data->root, canonical, sizeof(data->root));
+	// Path translation is on from now on, also in a program that started
+	// without a Linux root (the root is a directory that exists).
+	data->have_linux_root = true;
+	return 0;
 }

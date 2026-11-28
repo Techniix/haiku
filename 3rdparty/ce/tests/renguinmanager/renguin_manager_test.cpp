@@ -19,6 +19,8 @@
 	                                sets the file the compositor reads (scale
 	                                and a program's own) and removes it at
 	                                100% with no program scale left
+	  renguin_manager.flatpak_switch (batch 14) the Flatpak switch is off by
+	                                default and on after "flatpak true"
 */
 
 
@@ -148,13 +150,25 @@ main()
 		"2>/dev/null", NULL);
 	run("mkdir -p ~/config/settings/kernel/drivers ~/config/settings/Renguin "
 		"&& echo 'vdso false' > ~/config/settings/kernel/drivers/renguin "
-		"&& echo 'badge false' > ~/config/settings/Renguin/settings", NULL);
+		"&& printf 'badge false\\nflatpak true\\n' "
+			"> ~/config/settings/Renguin/settings", NULL);
 	BString changed = run("/boot/system/apps/RenguinManager --status "
 		"2>/dev/null", NULL);
 	report("switches_read", changed.FindFirst("switch\tvdso\toff") >= 0
 			&& changed.FindFirst("switch\tbadge\toff") >= 0
 			&& changed.FindFirst("switch\txattrs\ton") >= 0,
 		"after writing vdso false and badge false");
+	// batch 14: the Flatpak switch (step 1, no sandbox) is the one switch
+	// off by default: off while the settings do not name it (the status
+	// above, read before this test wrote any), on once "flatpak true" is
+	// written
+	report("flatpak_switch", (userSettings.FindFirst("flatpak") >= 0
+				|| output.FindFirst("switch\tflatpak\toff") >= 0)
+			&& changed.FindFirst("switch\tflatpak\ton") >= 0,
+		"default %s, after \"flatpak true\": %s",
+		output.FindFirst("switch\tflatpak\toff") >= 0 ? "off"
+			: output.FindFirst("switch\tflatpak\ton") >= 0 ? "on" : "missing",
+		changed.FindFirst("switch\tflatpak\ton") >= 0 ? "on" : "not on");
 	if (kernelSettings.IsEmpty())
 		run("rm -f ~/config/settings/kernel/drivers/renguin", NULL);
 	if (userSettings.IsEmpty())

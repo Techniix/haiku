@@ -113,7 +113,7 @@ RengaPorts `main`, pushed:
 The maintainer published both (packages `4cfa3022`). Hardware Tested, extracted: GLInfo shows llvmpipe on LLVM 21.1.8 with OpenGL 4.6, and GLTeapot runs with no ICD and with lavapipe only.
 
 Branches, not merged:
-- `wip/flatpak-step1`: Renguin `chroot()`, the `bwrap` shim and the Manager switch. Never built. It needs a rebase (`linux.cpp` conflicts with #21), a build, the renguin and renguinmanager suites, and a PR with the exact `Architect-Approved: yes` line and a quick default boot run. Its top commit describes it.
+- `wip/flatpak-step1`: superseded by `batch/14-flatpak-step1` (PR #36); the maintainer may delete it.
 - `batch/13-chrome-window`: the network service in-process for Linux Chromium. Pushed, not tested.
 - `batch/13-installer-destination`: F-23 Destination layouts on the engine. Pushed, not compiled.
 - `wip/appimage-diagnostics`: stale diagnostics from before #21. Nothing to merge; the maintainer may delete it.
@@ -139,7 +139,7 @@ Remaining queue, in order:
    - Then the two BGLView checks: no ICD, and lavapipe only.
    - Done (2026-11-27, `batch/14-mesa-optc`): `ce-test.py --profile renga-raw --mesa-upgrade --only mesa_upgrade` passes, QEMU Tested; the solver also takes gcc_syslibs 15.3.0, llvm21_libs and vulkan_loader from HaikuPorts.
 6. `batch/13-chrome-window`, then `batch/13-installer-destination`.
-7. Flatpak step 1 (`wip/flatpak-step1`).
+7. Flatpak step 1: PR #36 (`batch/14-flatpak-step1`), QEMU Tested (`renguin.libc-chroot`, `renguin.flatpak.*`, `renguin_manager.flatpak_switch`). It waits for architect review; the OSTree test app comes next.
 8. Steam 64-bit groundwork.
 9. The two load-dependent media checks (`media_drift.estimate`, `media_mixing.duck_switch_off`).
    - Done (2026-11-27, `fix/media-load-checks`): `estimate` reproduced and fixed under KVM plus host load (not yet run under TCG): "16 samples, 1 restarts", the card's start-up burst restarting the drift window; a 2 s warm-up in MixerTap, and the check now waits for the full window. `duck_switch_off` not reproduced in 22 runs; its report now gives purity, recorded length and ducking state, and `record()` waits for the audio it asked for. Neither is on `KNOWN_FLAKY`. QEMU Tested.

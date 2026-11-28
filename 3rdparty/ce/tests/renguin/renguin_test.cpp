@@ -96,7 +96,9 @@
 */
 
 
+#include <FindDirectory.h>
 #include <OS.h>
+#include <Path.h>
 #include <debugger.h>
 #include <image.h>
 
@@ -107,6 +109,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <string>
@@ -600,6 +603,89 @@ run_chromium_check()
 }
 
 
+/*!	Batch 14: Flatpak step 1 (unsandboxed). The Renguin switch "flatpak"
+	on, "linux --ensure-flatpak" puts Renga's bwrap at /usr/bin/bwrap in
+	the Linux root; it then lays out a root of links as Flatpak's calls do
+	(a usr-merged runtime as Flatpak's are: the Alpine root's /bin bound at
+	/usr/bin, its /lib bound, /bin a relative link to usr/bin, a tmpfs,
+	an environment variable, a working directory) and runs a command
+	inside it with Renguin's chroot(). The switch is put back afterwards.
+	  flatpak.bwrap_installed   the shim is /usr/bin/bwrap
+	  flatpak.bwrap_runs        the command ran in the new root: its
+	                            environment, working directory and a file
+	                            only the new root has
+	  flatpak.switch_off        off again: the shim is gone
+*/
+//! Whether \a path exists and contains \a text (no grep on minimum images).
+static bool
+file_has(const std::string& path, const char* text)
+{
+	FILE* file = fopen(path.c_str(), "r");
+	if (file == NULL)
+		return false;
+	std::string content;
+	char buffer[4096];
+	size_t length;
+	while ((length = fread(buffer, 1, sizeof(buffer), file)) > 0)
+		content.append(buffer, length);
+	fclose(file);
+	return content.find(text) != std::string::npos;
+}
+
+
+static void
+run_flatpak_checks()
+{
+	if (access("/boot/system/bin/linux", X_OK) != 0
+		|| access((std::string(kRoot) + "/bin/busybox").c_str(), F_OK)
+			!= 0) {
+		printf("CE-INFO renguin: no linux command or busybox root; "
+			"flatpak.* not checked\n");
+		fflush(stdout);
+		return;
+	}
+	BPath settings;
+	find_directory(B_USER_SETTINGS_DIRECTORY, &settings, true);
+	std::string dir = std::string(settings.Path()) + "/Renguin";
+	std::string path = dir + "/settings";
+	std::string previous = run("cat '" + path + "' 2>/dev/null");
+	mkdir(dir.c_str(), 0755);
+	FILE* file = fopen(path.c_str(), "w");
+	if (file != NULL) {
+		fprintf(file, "%s\nflatpak true\n", previous.c_str());
+		fclose(file);
+	}
+	run("/boot/system/bin/linux --ensure-flatpak 2>&1");
+	const std::string bwrapPath = std::string(kRoot) + "/usr/bin/bwrap";
+	report("flatpak.bwrap_installed", file_has(bwrapPath, "bwrap for Renguin"),
+		"/usr/bin/bwrap is Renga's: %s",
+		access(bwrapPath.c_str(), X_OK) == 0 ? "executable" : "missing");
+
+	std::string output = run("cd /tmp && timeout 60 /bin/linux /bin/sh -c '"
+		"RENGUIN_BWRAP_QUIET=1 bwrap --ro-bind /bin /usr/bin "
+		"--ro-bind /lib /lib --symlink usr/bin /bin --tmpfs /work --setenv RG_FLATPAK inside "
+		"--chdir /work --unshare-all --die-with-parent -- /bin/sh -c "
+		"\"echo env=\\$RG_FLATPAK; pwd; [ -d /work ] && [ -e /usr/bin/sh ] "
+		"&& [ ! -e /etc/apk ] && echo own-root\"' 2>&1");
+	report("flatpak.bwrap_runs", output.find("env=inside") != std::string::npos
+			&& output.find("/work") != std::string::npos
+			&& output.find("own-root") != std::string::npos,
+		"%s", one_line(output).c_str());
+
+	file = fopen(path.c_str(), "w");
+	if (file != NULL) {
+		fputs(previous.c_str(), file);
+		fclose(file);
+	}
+	if (previous.empty())
+		unlink(path.c_str());
+	run("/boot/system/bin/linux --ensure-flatpak 2>&1");
+	report("flatpak.switch_off", !file_has(bwrapPath, "bwrap for Renguin"),
+		"after switching off: /usr/bin/bwrap %s",
+		access(bwrapPath.c_str(), F_OK) == 0 ? "is there" : "is gone");
+}
+
+
 /*!	The application ladder (roadmap F-27), rungs 1-3, in images whose
 	Linux root carries them (the Chromium root, ce-test.py
 	--linux-chromium): bash, git, python3, curl and apk.
@@ -868,6 +954,7 @@ main()
 	run_root_checks();
 	run_chromium_check();
 	run_ladder_checks();
+	run_flatpak_checks();
 
 	std::string native = run("/bin/uname -s 2>&1");
 	report("native_after", !native.empty()
