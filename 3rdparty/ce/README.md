@@ -322,6 +322,10 @@ without a kernel crash, and every check passed.
 1. `jam` compiles the test targets first, for fast feedback, then builds the
    image (`@minimum-raw` by default) with `CE_HARNESS=1`. That variable makes
    `3rdparty/ce` add the test programs and the runner to the image.
+   With `--firmware uefi` the harness then reads the image's EFI system
+   partition and stops at once with `harness.esp_loader` if
+   `EFI/BOOT/BOOTX64.EFI` is missing, empty or not a PE image (OVMF would
+   otherwise wait out the boot timeout).
 2. QEMU boots the image headless with a snapshot disk, the serial console on
    a pipe, and two virtio sound cards: one records into `audio.wav` (QEMU's
    `wav` backend, which has no input), the other runs on QEMU's SDL

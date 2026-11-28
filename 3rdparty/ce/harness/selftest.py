@@ -1850,5 +1850,143 @@ expect("usage: plain argparse would exit 2 (known bad)",
 	usage_exit_status(argparse.ArgumentParser) == 2,
 	str(usage_exit_status(argparse.ArgumentParser)))
 
+# harness.esp_loader (batch 14): before a UEFI boot the harness reads the
+# image's EFI system partition and fails at once when EFI/BOOT/BOOTX64.EFI
+# is missing, empty or not a PE image. Known bad: the 0-byte loader a build
+# put in haiku-minimum-anyboot.iso on 2026-11-28.
+def esp_disk(loader, partition_type=0xef, name=b"BOOTX64 EFI"):
+	"""An MBR disk with one FAT12 partition holding EFI/BOOT/<name>, the
+	layout fat_shell gives the ESP (a volume label, short names after
+	long-name entries)."""
+	sector = 512
+	reserved, fat_sectors, root_entries, total = 1, 1, 16, 64
+	boot = bytearray(sector)
+	boot[0:3] = b"\xeb\x3c\x90"
+	struct.pack_into("<HBHBHHBH", boot, 11, sector, 1, reserved, 2,
+		root_entries, total, 0xf8, fat_sectors)
+	boot[510:512] = b"\x55\xaa"
+	data = reserved + 2 * fat_sectors + root_entries * 32 // sector
+
+	def fat12(entries):
+		table = bytearray(sector)
+		for n, value in enumerate(entries):
+			offset = n + n // 2
+			word = struct.unpack_from("<H", table, offset)[0]
+			word = (word & 0x000f) | (value << 4) if n & 1 \
+				else (word & 0xf000) | value
+			struct.pack_into("<H", table, offset, word)
+		return bytes(table)
+
+	# clusters 2 and 3: the EFI and BOOT directories; 4 on: the loader
+	clusters = (len(loader) + sector - 1) // sector
+	chain = [0xff8, 0xfff, 0xfff, 0xfff]
+	if clusters:
+		chain += [5 + i for i in range(clusters - 1)] + [0xfff]
+
+	def entry(short, attributes, cluster, size=0):
+		raw = bytearray(32)
+		raw[0:11] = short
+		raw[11] = attributes
+		struct.pack_into("<HI", raw, 26, cluster, size)
+		return bytes(raw)
+
+	long_name = bytearray(32)
+	long_name[0], long_name[11] = 0x41, 0x0f
+	root = entry(b"HAIKU ESP  ", 0x08, 0) + entry(b"EFI        ", 0x10, 2)
+	efi = entry(b".          ", 0x10, 2) + entry(b"BOOT       ", 0x10, 3)
+	boot_dir = bytes(long_name) + entry(name, 0x20, 4 if loader else 0,
+		len(loader))
+	fs = bytearray(total * sector)
+	fs[0:sector] = boot
+	fs[sector:2 * sector] = fat12(chain)
+	fs[2 * sector:3 * sector] = fat12(chain)
+	fs[3 * sector:3 * sector + len(root)] = root
+	for cluster, content in ((2, efi), (3, boot_dir), (4, loader)):
+		start = (data + cluster - 2) * sector
+		fs[start:start + len(content)] = content
+	mbr = bytearray(sector)
+	struct.pack_into("<BBBBBBBBII", mbr, 446, 0x80, 0, 0, 0, partition_type,
+		0, 0, 0, 8, total)
+	mbr[510:512] = b"\x55\xaa"
+	return bytes(mbr) + bytes(7 * sector) + bytes(fs)
+
+def esp_check(disk):
+	directory = tempfile.mkdtemp()
+	path = os.path.join(directory, "esp-test.iso")
+	with open(path, "wb") as image:
+		image.write(disk)
+	try:
+		return ce_test.check_esp_loader(path)
+	finally:
+		shutil.rmtree(directory)
+
+pe = b"MZ" + bytes(range(256)) * 6
+for label, disk, want in (
+		("a non-empty PE loader passes", esp_disk(pe), True),
+		("a 0-byte loader fails (known bad)", esp_disk(b""), False),
+		("a loader that is not a PE image fails", esp_disk(b"\0" * 900),
+			False),
+		("no EFI system partition fails", esp_disk(pe, 0x83), False),
+		("an ESP without BOOTX64.EFI fails",
+			esp_disk(pe, name=b"BOOTIA32EFI"), False)):
+	check = esp_check(disk)
+	expect("esp_loader: " + label, check["pass"] == want
+		and check["name"] == "harness.esp_loader", check["detail"])
+check = esp_check(esp_disk(pe))
+expect("esp_loader: the detail gives the loader's size",
+	"%d bytes" % len(pe) in check["detail"], check["detail"])
+
+# Corrupt images fail harness.esp_loader with a reason instead of crashing
+# the harness (PR #46 review). Known bad, on the first version: a huge GPT
+# table LBA raised ValueError from seek(), an entry size of 0xffffffff and
+# a FAT32 FAT size of 0xffffffff raised MemoryError, and a looping FAT32
+# directory chain was read as long as the volume.
+def corrupt_disk(kind):
+	sector = 512
+	mbr = bytearray(sector)
+	mbr[510:512] = b"\x55\xaa"
+	if kind in ("gpt_lba", "gpt_entry_size"):
+		struct.pack_into("<BBBBBBBBII", mbr, 446, 0, 0, 2, 0, 0xee,
+			0xff, 0xff, 0xff, 1, 0xffffffff)
+		header = bytearray(sector)
+		header[0:8] = b"EFI PART"
+		table, size = (1 << 62, 128) if kind == "gpt_lba" \
+			else (2, 0xffffffff)
+		struct.pack_into("<QII", header, 72, table, 128, size)
+		return bytes(mbr) + bytes(header) + bytes(32 * sector)
+	struct.pack_into("<BBBBBBBBII", mbr, 446, 0x80, 0, 0, 0, 0xef,
+		0, 0, 0, 8, 0xffffffff)
+	boot = bytearray(sector)
+	boot[0:3] = b"\xeb\x58\x90"
+	reserved, fat_sectors = 2, 1
+	if kind == "fat32_fat_size":
+		fat_sectors = 0xffffffff
+	# FAT32: no root directory region, more than 65525 clusters
+	struct.pack_into("<HBHBHHBH", boot, 11, sector, 1, reserved, 1, 0, 0,
+		0xf8, 0)
+	struct.pack_into("<II", boot, 32, 200000, fat_sectors)
+	struct.pack_into("<I", boot, 44, 2)
+	boot[510:512] = b"\x55\xaa"
+	fat = bytearray(sector)
+	# clusters 0 and 1 reserved; the root directory's cluster 2 points to
+	# itself
+	struct.pack_into("<III", fat, 0, 0x0ffffff8, 0x0fffffff, 2)
+	fs = bytes(boot) + bytes(sector) + bytes(fat) + bytes(4 * sector)
+	return bytes(mbr) + bytes(7 * sector) + fs
+
+for kind, label in (
+		("gpt_lba", "a GPT table LBA of 2^62"),
+		("gpt_entry_size", "a GPT entry size of 0xffffffff"),
+		("fat32_fat_size", "a FAT32 FAT size of 0xffffffff"),
+		("fat32_loop", "a looping FAT32 directory chain")):
+	try:
+		check = esp_check(corrupt_disk(kind))
+		outcome = (check["pass"] is False
+			and check["name"] == "harness.esp_loader"
+			and bool(check["detail"]), check["detail"])
+	except BaseException as error:
+		outcome = (False, "raised %s: %s" % (type(error).__name__, error))
+	expect("esp_loader: %s fails cleanly" % label, outcome[0], outcome[1])
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)
