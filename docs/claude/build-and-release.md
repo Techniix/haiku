@@ -77,14 +77,21 @@ The standard way to build a package that must be built on Renga (maintainer, 202
 inside a Renga VM under QEMU+KVM on the Linux host, driven headless over SSH with
 [`tools/renga/renga-buildvm`](../../tools/renga/renga-buildvm) (`--help` lists every command).
 
+Host prerequisites: read-write access to `/dev/kvm` without sudo (membership of the `kvm` group; check
+with `test -r /dev/kvm -a -w /dev/kvm`), `qemu-system-x86_64` and `qemu-img`, `python3` (the QEMU
+monitor), the OpenSSH client tools (`ssh`, `scp`, `ssh-keygen`, `ssh-keyscan`), and `bfs_shell` built
+first (`jam -q '<build>bfs_shell'`, in this tree or the main worktree), which `prepare` uses to edit the
+image.
+
 Sizes: 8 vCPUs and 12 GB RAM by default (`CPUS`, `MEMORY`; leave room for the harness on the same host).
 The system disk is a copy of a `renga-raw` image: its 1.4 GB BFS volume had about 650 MB free, and about
 150 MB after HaikuPorter, git, the haikuwebkit build dependencies and ffmpeg's tools were installed. A
 sparse 120 GB qcow2 data disk (`DATA_SIZE`) holds the BFS volume "Ports" at `/Ports`: the ports trees
 (`~/ports` links to `/Ports/ports`), HaikuPorter's work directories, `TMPDIR` and a 16 GB swap file (6 GB
 allocated after the haikuwebkit build). Networking is QEMU's user mode; only SSH is forwarded
-(`127.0.0.1:2222`). Every drive is a file in the VM directory (`RENGA_BUILDVM_DIR`, default `../buildvm`
-next to the tree; on the maintainer's host `/home/Techniix/renga/buildvm/vm`).
+(`127.0.0.1:2222`). Every drive is a file in the VM directory, `RENGA_BUILDVM_DIR` (default: `buildvm` in
+the directory that holds the tree, that is `$(dirname <tree>)/buildvm`; the maintainer's host sets
+`/home/Techniix/renga/buildvm/vm`).
 
 ```sh
 # once (any recent renga-raw build; a harness image is fine)
@@ -110,7 +117,19 @@ tools/renga/renga-buildvm stop && tools/renga/renga-buildvm start   # swap moves
 VM's SSH key (`ssh/id_ed25519` in the VM directory) and SSH host keys into the image (the openssh
 package's post-install script does not finish on a first boot without a user session, so sshd would
 never start), and adds a boot job that mounts "Ports" and writes `BUILDVM-READY`, the network setup and
-the volumes to `serial.log`. The root user is `baron`, home `/boot/home`. An SSH session has no
+the volumes to `serial.log`. It then lists the image's files with `bfs_shell` and fails (removing the
+half-made `system.image`) unless the boot job, `authorized_keys` and the host keys (private keys mode 600)
+are there and the harness job is gone. `prepare` refuses while `system.image` exists; it creates
+`data.qcow2` only when there is none, so preparing again after removing `system.image` keeps the "Ports"
+volume and everything on it. To start the data disk over as well, remove `data.qcow2` by hand.
+
+SSH checks the guest's host key: `prepare` keeps the public host keys in `ssh/ssh_host_*_key.pub`, and
+every command writes `ssh/known_hosts` from them as `[localhost]:<SSH_PORT>` and `[127.0.0.1]:<SSH_PORT>`
+and connects with `StrictHostKeyChecking=yes`. A VM directory prepared before this has no host keys on
+the host: the tool then still works, without the check and with a warning on each command, until
+`renga-buildvm trust-host` (once, while the VM runs) records the guest's keys with `ssh-keyscan` on
+127.0.0.1 (trust on first use over loopback). `setup` initialises the data disk only when it is not
+the boot device and its first 4 MiB compare equal to zeros (`cmp`); any error counts as "not empty". The root user is `baron`, home `/boot/home`. An SSH session has no
 `LIBRARY_PATH`: set the whole list when overriding it (see the test below). Check `pkgman`'s plan before
 applying it: the image also lists upstream Haiku's repository, and a plan that replaces the `haiku`
 package must be refused.
@@ -157,6 +176,10 @@ Known problems (2026-11-27):
 - The system volume cannot be grown: `resizefs /boot` reports that the disk system does not support
   resizing, and BFS's `BFS_IOCTL_RESIZE` back door panics the kernel (`ASSERT FAILED Journal.h:31`, the
   journal lock is not held). With about 150 MB free, larger builds (Mesa) need a larger image.
+- `pkgman`, while installing HaikuPorter and the build dependencies, also upgraded libraries of the
+  guest (sqlite, expat, ffmpeg6 6.1.6 and others; the exact list was not kept). Packages built afterwards
+  require the newer versions, `sqlite >= 3.53.4` and `haiku >= hrev60381_519`: install them on a Renga
+  system that has these, or build in a VM whose image already matches the target.
 - HaikuPorter (python3.14 3.14.10) crashed with a segment violation in `_Py_type_getattro` right after
   "cleaning chroot folder" of the haikuwebkit build (exit status 149; the harness image's debug_server
   setting kills crashing programs), before moving the packages; both packages were complete.

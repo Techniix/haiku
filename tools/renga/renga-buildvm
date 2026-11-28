@@ -6,12 +6,18 @@
 #
 #   prepare <image>   copy a renga-raw image (renga.image) into the VM
 #                     directory, remove the harness job, put the SSH keys and
-#                     a boot job into it, and create the sparse data disk
-#                     (qcow2, $DATA_SIZE)
+#                     a boot job into it, check them with bfs_shell, and
+#                     create the sparse data disk (qcow2, $DATA_SIZE) unless
+#                     data.qcow2 already exists (it is never overwritten)
 #   start             boot the VM in the background (KVM, user networking,
 #                     SSH on localhost:$SSH_PORT) and wait for SSH
+#   trust-host        only for a VM directory prepared before the host keys
+#                     were kept: record the running guest's host keys once
+#                     (ssh-keyscan on 127.0.0.1); until then, SSH does not
+#                     check the host key and every command warns
 #   setup             once, after the first start: initialise the data disk
-#                     as the BFS volume "Ports" (only while it is empty);
+#                     as the BFS volume "Ports" (only while its first 4 MiB
+#                     are zero and it is not the boot disk);
 #                     ~/ports links to /Ports/ports; a 16 GB swap file on it
 #                     (from the next boot) and the build wrapper
 #                     /Ports/build.sh <name> <haikuporter args> (output in
@@ -23,11 +29,18 @@
 #   stop              shut the guest down (QEMU quit after 60 s)
 #   status            is it running; disk sizes
 #
-# Environment: RENGA_BUILDVM_DIR (default: ../buildvm next to the tree),
-# MEMORY (12G), CPUS (8), SSH_PORT (2222), DATA_SIZE (120G). The VM's files:
-# system.image (raw BFS, boot disk),
-# data.qcow2 (the "Ports" volume, mounted at /Ports; ~/ports links to
-# /Ports/ports), ssh/id_ed25519 (key), serial.log, monitor.sock, qemu.pid.
+# Environment: RENGA_BUILDVM_DIR (default: "buildvm" in the directory that
+# holds the tree, $(dirname <tree>)/buildvm), MEMORY (12G), CPUS (8),
+# SSH_PORT (2222), DATA_SIZE (120G). The VM's files: system.image (raw BFS,
+# boot disk), data.qcow2 (the "Ports" volume, mounted at /Ports; ~/ports
+# links to /Ports/ports), ssh/id_ed25519 (client key),
+# ssh/ssh_host_*_key.pub (the guest's host keys) and ssh/known_hosts (made
+# from them for SSH_PORT), serial.log, monitor.sock, qemu.pid.
+#
+# Host prerequisites: read-write access to /dev/kvm without sudo (membership
+# of the kvm group), qemu-system-x86_64, qemu-img, python3, ssh, scp,
+# ssh-keygen, ssh-keyscan, and bfs_shell built in this tree or the main
+# worktree (jam -q '<build>bfs_shell').
 #
 # The guest is the image's normal desktop (root user "baron", home /boot/home);
 # sshd comes from the image's openssh package. Nothing touches real disks:
@@ -46,24 +59,75 @@ DATA_SIZE=${DATA_SIZE:-120G}
 # the image's root user (HAIKU_ROOT_USER_NAME, build/jam/images/definitions/common-tail)
 VM_USER=${VM_USER:-baron}
 key=$dir/ssh/id_ed25519
-sshopts="-i $key -p $SSH_PORT -o StrictHostKeyChecking=no
-	-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5
-	-o ServerAliveInterval=30 -o ServerAliveCountMax=10"
+known_hosts=$dir/ssh/known_hosts
+# set by host_keys: the known_hosts file and whether the host key is checked
+ssh_known=/dev/null
+ssh_strict=no
 
+# Is this VM's QEMU running? Only a live process whose command line names
+# this VM's system.image counts, so a stale qemu.pid naming another program
+# is never taken for the VM. Nothing is ever sent to the process.
 running() {
-	[ -f "$dir/qemu.pid" ] && kill -0 "$(cat "$dir/qemu.pid")" 2>/dev/null
+	[ -f "$dir/qemu.pid" ] || return 1
+	pid=$(cat "$dir/qemu.pid" 2>/dev/null) || return 1
+	case $pid in ""|*[!0-9]*) return 1 ;; esac
+	kill -0 "$pid" 2>/dev/null || return 1
+	tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null |
+		grep -qF "file=$dir/system.image,"
 }
 
+# Writes ssh/known_hosts from the kept host keys for the current SSH_PORT
+# (as [localhost]:port and [127.0.0.1]:port) and checks the host key
+# strictly against it. A VM directory prepared before the host keys were
+# kept has none: then SSH does not check the host key, with a warning,
+# until "trust-host" records them.
+host_keys() {
+	set -- "$dir"/ssh/ssh_host_*_key.pub
+	if [ ! -f "$1" ]; then
+		renga_note "warning: no host keys in $dir/ssh, the guest's host key is not checked; run \"trust-host\" once while the VM runs"
+		return 0
+	fi
+	new=$known_hosts.new.$$
+	for f; do
+		read -r type value _ < "$f" || continue
+		printf '[localhost]:%s %s %s\n[127.0.0.1]:%s %s %s\n' \
+			"$SSH_PORT" "$type" "$value" "$SSH_PORT" "$type" "$value"
+	done > "$new"
+	if cmp -s "$new" "$known_hosts"; then rm -f "$new"
+	else mv -f "$new" "$known_hosts"; fi
+	ssh_known=$known_hosts
+	ssh_strict=yes
+}
+
+# run_ssh <ssh|scp> <port option> [args]: the program with the VM's options
+run_ssh() {
+	prog=$1 port_option=$2
+	shift 2
+	"$prog" -i "$key" "$port_option" "$SSH_PORT" \
+		-o "UserKnownHostsFile=$ssh_known" -o "StrictHostKeyChecking=$ssh_strict" \
+		-o LogLevel=ERROR -o ConnectTimeout=5 \
+		-o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$@"
+}
+
+# guest <command>: with stdin (for here-documents and interactive use);
+# guest_n <command>: stdin from /dev/null
 guest() {
-	# shellcheck disable=SC2086
-	ssh $sshopts "$VM_USER@localhost" "$@"
+	run_ssh ssh -p "$VM_USER@localhost" "$@"
+}
+
+guest_n() {
+	run_ssh ssh -p -n "$VM_USER@localhost" "$@"
 }
 
 monitor() {
+	[ -S "$dir/monitor.sock" ] || { renga_note "no QEMU monitor socket $dir/monitor.sock"; return 1; }
 	python3 -I - "$dir/monitor.sock" "$*" <<-'EOF'
 	import socket, sys, time
 	s = socket.socket(socket.AF_UNIX)
-	s.connect(sys.argv[1])
+	try:
+	    s.connect(sys.argv[1])
+	except OSError as e:
+	    sys.exit("renga-buildvm: QEMU monitor: %s" % e)
 	s.settimeout(2)
 	time.sleep(0.2)
 	try:
@@ -79,12 +143,14 @@ monitor() {
 	EOF
 }
 
+# bfs_shell from this tree's build output, else from the main worktree's
 bfs_shell() {
-	shell=$(ls "$RENGA_OUTPUT"/objects/*/*/release/tools/bfs_shell/bfs_shell \
-		2>/dev/null | head -n 1)
-	[ -n "$shell" ] || shell=$(ls "$(git worktree list --porcelain | sed -n \
-		'1s/^worktree //p')"/generated.x86_64/objects/*/*/release/tools/bfs_shell/bfs_shell \
-		2>/dev/null | head -n 1)
+	main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+	shell=
+	for f in "$RENGA_OUTPUT"/objects/*/*/release/tools/bfs_shell/bfs_shell \
+		"$main"/generated.x86_64/objects/*/*/release/tools/bfs_shell/bfs_shell; do
+		[ -x "$f" ] && { shell=$f; break; }
+	done
 	[ -n "$shell" ] || renga_die "bfs_shell not built (jam -q '<build>bfs_shell')"
 	"$shell" "$@"
 }
@@ -92,17 +158,27 @@ bfs_shell() {
 cmd=${1:-}
 [ $# -gt 0 ] && shift
 case $cmd in
+start|setup|ssh|put|get|stop) host_keys ;;
+esac
+case $cmd in
 -h|--help|"") renga_usage; exit 0 ;;
 
 prepare)
 	[ $# -eq 1 ] || renga_die "usage: prepare <renga.image>"
+	[ -f "$1" ] || renga_die "no image $1"
 	running && renga_die "the VM is running; stop it first"
-	[ -e "$dir/system.image" ] && renga_die "$dir/system.image exists; remove it to start over"
+	[ -e "$dir/system.image" ] && renga_die "$dir/system.image exists; remove it to start over (data.qcow2, the Ports volume, is kept)"
 	mkdir -p "$dir/ssh"
 	[ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C renga-buildvm -f "$key"
-	# a raw image with the BFS volume at offset 0 (renga-raw is unpartitioned)
-	cp --sparse=always "$1" "$dir/system.image"
 	work=$(mktemp -d)
+	trap 'rm -rf "$work"' EXIT
+	# on a failure, the half-prepared system.image made here goes again
+	fail() {
+		rm -f "$dir/system.image"
+		renga_die "$@"
+	}
+	# a raw image with the BFS volume at offset 0 (renga-raw is unpartitioned)
+	cp --sparse=always "$1" "$dir/system.image" || fail "copying $1 failed"
 	cp "$key.pub" "$work/authorized_keys"
 	# host keys made here: the openssh package's post-install script
 	# (sshd_keymaker.sh) does not finish on a first boot without a user
@@ -120,7 +196,7 @@ prepare)
 		no_safemode
 	}
 	EOF
-	bfs_shell "$dir/system.image" > "$work/log" 2>&1 <<-EOF
+	bfs_shell "$dir/system.image" > "$work/log" 2>&1 <<-EOF || true
 	rm /myfs/system/settings/launch/ce-harness
 	cp -f :$work/job /myfs/system/settings/launch/renga-buildvm
 	mkdir /myfs/home/config/settings/ssh
@@ -135,14 +211,47 @@ prepare)
 	chmod 600 /myfs/system/settings/ssh/ssh_host_ed25519_key
 	chmod 600 /myfs/system/settings/ssh/ssh_host_ecdsa_key
 	chmod 600 /myfs/system/settings/ssh/ssh_host_rsa_key
-	ls /myfs/system/settings/launch
 	sync
 	quit
 	EOF
-	grep -q renga-buildvm "$work/log" || { cat "$work/log"; renga_die "bfs_shell failed"; }
-	rm -rf "$work"
-	qemu-img create -q -f qcow2 "$dir/data.qcow2" "$DATA_SIZE"
-	renga_note "prepared $dir (data disk $DATA_SIZE); next: start, then setup"
+	# check the result in a second session: every file is listed
+	# ("<mode> <uid> <gid> <size> <date> <time> <name>"), the private keys
+	# with mode 600, and the harness job is gone
+	bfs_shell "$dir/system.image" > "$work/check" 2>&1 <<-EOF || true
+	ls /myfs/system/settings/launch
+	ls /myfs/home/config/settings/ssh
+	ls /myfs/system/settings/ssh
+	quit
+	EOF
+	listed() {	# listed <mode pattern> <name>
+		awk -v m="$1" -v n="$2" '$NF == n && $1 ~ m { found = 1 }
+			END { exit !found }' "$work/check"
+	}
+	missing=
+	listed '^-' renga-buildvm || missing="$missing renga-buildvm"
+	listed '^-rw-------' authorized_keys || missing="$missing authorized_keys"
+	for type in ed25519 ecdsa rsa; do
+		listed '^-rw-------' "ssh_host_${type}_key" || missing="$missing ssh_host_${type}_key"
+		listed '^-' "ssh_host_${type}_key.pub" || missing="$missing ssh_host_${type}_key.pub"
+	done
+	listed . ce-harness && missing="$missing (ce-harness still present)"
+	if [ -n "$missing" ]; then
+		cat "$work/log" "$work/check" >&2
+		fail "bfs_shell did not put these into the image:$missing"
+	fi
+	# the host's copy of the guest's host keys, for ssh/known_hosts
+	for type in ed25519 ecdsa rsa; do
+		cp "$work/ssh_host_${type}_key.pub" "$dir/ssh/"
+	done
+	rm -f "$known_hosts"
+	if [ -e "$dir/data.qcow2" ]; then
+		renga_note "kept the existing data disk $dir/data.qcow2"
+	else
+		qemu-img create -q -f qcow2 "$dir/data.qcow2" "$DATA_SIZE" ||
+			fail "qemu-img create failed"
+		renga_note "created the data disk $dir/data.qcow2 ($DATA_SIZE)"
+	fi
+	renga_note "prepared $dir; next: start, then setup"
 	;;
 
 start)
@@ -165,7 +274,7 @@ start)
 		-pidfile "$dir/qemu.pid" -daemonize
 	renga_note "booting (pid $(cat "$dir/qemu.pid")); waiting for SSH on port $SSH_PORT"
 	i=0
-	until guest true 2>/dev/null; do
+	until guest_n true 2>/dev/null; do
 		i=$((i + 1))
 		[ $i -lt 60 ] || renga_die "no SSH after 5 minutes; see $dir/serial.log"
 		running || renga_die "QEMU exited; see $dir/serial.log"
@@ -175,15 +284,23 @@ start)
 	;;
 
 setup)
-	# the data disk (the second virtio disk) is initialised only while its
-	# first 4 MiB are all zero, that is, never once it holds anything
-	guest 'dev=/dev/disk/virtual/virtio_block/1/raw
+	# the data disk (the second virtio disk) is initialised only while it
+	# is not the boot disk and its first 4 MiB are all zero, that is, never
+	# once it holds anything; cmp fails closed (a read error, a short disk
+	# or a missing cmp all count as "not empty"); expanded in the guest
+	# shellcheck disable=SC2016
+	guest_n 'dev=/dev/disk/virtual/virtio_block/1/raw
 		mounted() { df /Ports 2>/dev/null | grep -q "Volume Name: *\"Ports\""; }
 		[ -e "$dev" ] || { echo "no data disk"; exit 1; }
 		mounted || mountvolume Ports 2>/dev/null
 		if ! mounted; then
-			if dd if="$dev" bs=1M count=4 2>/dev/null | tr -d "\0" | grep -q .; then
-				echo "$dev is not empty: not initialising it"; exit 1
+			boot=$(df /boot 2>/dev/null | sed -n "s/^ *Device: *//p")
+			[ -n "$boot" ] || { echo "cannot tell the boot device: not initialising $dev"; exit 1; }
+			case $boot in
+			"$dev"|"${dev%/raw}"/*) echo "$dev is the boot disk: not initialising it"; exit 1 ;;
+			esac
+			if ! cmp -s -n 4194304 "$dev" /dev/zero; then
+				echo "$dev is not empty (or unreadable): not initialising it"; exit 1
 			fi
 			rmdir /Ports/ports /Ports/tmp /Ports 2>/dev/null
 			mkfs -t bfs -q "$dev" Ports && mountvolume Ports
@@ -193,32 +310,71 @@ setup)
 		[ -e ~/ports ] || ln -s /Ports/ports ~/ports
 		mountvolume -l'
 	# swap on the data volume (the system volume is too small for one);
-	# it takes effect at the next boot
-	guest 'mkdir -p ~/config/settings/kernel/drivers && cat > ~/config/settings/kernel/drivers/virtual_memory' <<-EOF
-	vm on
-	swap_auto no
-	swap_size $((16 * 1024 * 1024 * 1024))
-	swap_volume_name Ports
-	swap_volume_device /dev/disk/virtual/virtio_block/1/raw
-	swap_volume_filesystem bfs
-	swap_volume_capacity $(guest 'df /Ports' | sed -n 's/.*Total Blocks:.*(\([0-9]*\) blocks).*/\1/p' | awk '{ print $1 * 2048 }')
-	EOF
+	# it takes effect at the next boot. The capacity is the volume's size
+	# in bytes (2 KiB blocks); without it the settings are not written.
+	capacity=$(guest_n 'df /Ports' |
+		sed -n 's/.*Total Blocks:.*(\([0-9]*\) blocks).*/\1/p' |
+		awk 'NR == 1 && $1 > 0 { print $1 * 2048 }')
+	if [ -z "$capacity" ]; then
+		renga_note "warning: no size in the output of \"df /Ports\": swap settings not written (swap stays on the system volume)"
+	else
+		guest 'mkdir -p ~/config/settings/kernel/drivers && cat > ~/config/settings/kernel/drivers/virtual_memory' <<-EOF
+		vm on
+		swap_auto no
+		swap_size $((16 * 1024 * 1024 * 1024))
+		swap_volume_name Ports
+		swap_volume_device /dev/disk/virtual/virtio_block/1/raw
+		swap_volume_filesystem bfs
+		swap_volume_capacity $capacity
+		EOF
+	fi
 	# the build wrapper: /Ports/build.sh <name> <haikuporter arguments>
 	guest 'cat > /Ports/build.sh && chmod +x /Ports/build.sh' <<-'EOF'
 	#!/bin/sh
 	# Runs HaikuPorter in ~/ports/haikuports: output in /Ports/<name>.log,
-	# exit status in /Ports/<name>.status once it is done.
-	name=$1; shift
+	# exit status in /Ports/<name>.status once it is done. <name> is letters,
+	# digits, ".", "_", "+" and "-", not starting with "." or "-".
+	name=${1:-}
+	case $name in
+	""|.*|-*|*[!A-Za-z0-9._+-]*)
+		echo "usage: build.sh <name> <haikuporter arguments> (bad name \"$name\")" >&2
+		exit 64 ;;
+	esac
+	shift
 	export TMPDIR=/Ports/tmp
 	cd /boot/home/ports/haikuports || exit 1
-	rm -f /Ports/$name.status
-	date +"start %s %c" > /Ports/$name.log
-	haikuporter "$@" >> /Ports/$name.log 2>&1 < /dev/null
+	rm -f "/Ports/$name.status"
+	date +"start %s %c" > "/Ports/$name.log"
+	haikuporter "$@" >> "/Ports/$name.log" 2>&1 < /dev/null
 	rc=$?
-	date +"end %s %c" >> /Ports/$name.log
-	echo $rc > /Ports/$name.status
+	date +"end %s %c" >> "/Ports/$name.log"
+	echo $rc > "/Ports/$name.status"
 	EOF
 	renga_note "data volume ready; restart (stop, start) to move swap to it"
+	;;
+
+trust-host)
+	# trust on first use, for VM directories prepared before prepare kept
+	# the host keys; the keys come from the running guest over loopback
+	running || renga_die "the VM is not running; start it first"
+	set -- "$dir"/ssh/ssh_host_*_key.pub
+	[ -f "$1" ] && renga_die "host keys already kept in $dir/ssh; remove ssh/ssh_host_*_key.pub to record them again"
+	mkdir -p "$dir/ssh"
+	scan=$(ssh-keyscan -p "$SSH_PORT" -t ed25519,ecdsa,rsa 127.0.0.1 2>/dev/null) || true
+	[ -n "$scan" ] || renga_die "ssh-keyscan found no host keys on 127.0.0.1:$SSH_PORT"
+	echo "$scan" | while read -r _ type value; do
+		case $type in
+		ssh-ed25519) name=ed25519 ;;
+		ecdsa-sha2-*) name=ecdsa ;;
+		ssh-rsa) name=rsa ;;
+		*) continue ;;
+		esac
+		echo "$type $value renga-buildvm-host" > "$dir/ssh/ssh_host_${name}_key.pub"
+	done
+	host_keys
+	[ "$ssh_strict" = yes ] || renga_die "no usable host keys recorded"
+	guest_n true || renga_die "SSH with the recorded host keys failed"
+	renga_note "recorded the guest's host keys in $dir/ssh; SSH now checks them ($known_hosts)"
 	;;
 
 ssh) guest "$@" ;;
@@ -226,14 +382,12 @@ ssh) guest "$@" ;;
 put)
 	[ $# -eq 2 ] || renga_die "usage: put <host path> <guest path>"
 	cd "$caller_dir"
-	# shellcheck disable=SC2086
-	scp -q -r $(echo "$sshopts" | sed 's/-p /-P /') "$1" "$VM_USER@localhost:$2"
+	run_ssh scp -P -q -r "$1" "$VM_USER@localhost:$2"
 	;;
 get)
 	[ $# -eq 2 ] || renga_die "usage: get <guest path> <host path>"
 	cd "$caller_dir"
-	# shellcheck disable=SC2086
-	scp -q -r $(echo "$sshopts" | sed 's/-p /-P /') "$VM_USER@localhost:$1" "$2"
+	run_ssh scp -P -q -r "$VM_USER@localhost:$1" "$2"
 	;;
 
 screendump)
@@ -248,10 +402,15 @@ monitor) monitor "$@" ;;
 
 stop)
 	running || { renga_note "not running"; exit 0; }
-	guest 'shutdown' 2>/dev/null || monitor system_powerdown >/dev/null
+	guest_n 'shutdown' 2>/dev/null || monitor system_powerdown >/dev/null ||
+		renga_note "neither SSH nor the monitor answered; waiting for QEMU to exit"
 	i=0
 	while running && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
-	running && monitor quit >/dev/null
+	if running; then
+		monitor quit >/dev/null ||
+			renga_die "QEMU (pid $(cat "$dir/qemu.pid")) is still running and its monitor does not answer"
+		sleep 1
+	fi
 	renga_note "stopped"
 	;;
 
