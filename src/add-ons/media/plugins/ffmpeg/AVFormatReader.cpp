@@ -166,6 +166,7 @@ protected:
 
 			int64_t				_ConvertToStreamTimeBase(bigtime_t time) const;
 			bigtime_t			_ConvertFromStreamTimeBase(int64_t time) const;
+			bigtime_t			_FileDuration() const;
 
 protected:
 			BMediaIO*			fSource;
@@ -491,8 +492,11 @@ StreamBase::Duration() const
 		if (fStream->start_time != AV_NOPTS_VALUE)
 			time += fStream->start_time;
 		return _ConvertFromStreamTimeBase(time);
-	} else if ((int64)fContext->duration != AV_NOPTS_VALUE)
-		return (bigtime_t)fContext->duration;
+	} else {
+		bigtime_t duration = _FileDuration();
+		if (duration > 0)
+			return duration;
+	}
 
 	return 0;
 }
@@ -964,22 +968,58 @@ StreamBase::_NextPacket(bool reuse)
 int64_t
 StreamBase::_ConvertToStreamTimeBase(bigtime_t time) const
 {
-	int64 timeStamp = int64_t((double)time * fStream->time_base.den
-		/ (1000000.0 * fStream->time_base.num) + 0.5);
-	if (fStream->start_time != AV_NOPTS_VALUE)
-		timeStamp += fStream->start_time;
-	return timeStamp;
+	// Renga: av_rescale_rnd() (rounding to nearest, as the double before
+	// did) through the helper the decoder shares, see Utilities.h.
+	return microseconds_to_stream_time(time, fStream->time_base.num,
+		fStream->time_base.den, fStream->start_time);
 }
 
 
 bigtime_t
 StreamBase::_ConvertFromStreamTimeBase(int64_t time) const
 {
-	if (fStream->start_time != AV_NOPTS_VALUE)
-		time -= fStream->start_time;
+	// Renga: "1000000LL * time * num / den" overflowed for a 1 ns time base
+	// after about 2.6 hours. The helper truncates the same way without
+	// overflowing, and the decoder converts a video frame's pts with it
+	// too, so frame times and the chunks' start times stay identical.
+	return stream_time_to_microseconds(time, fStream->time_base.num,
+		fStream->time_base.den, fStream->start_time);
+}
 
-	return bigtime_t(1000000LL * time
-		* fStream->time_base.num / fStream->time_base.den);
+
+/*!	Renga: the file's duration for this stream, or -1 if the file has none.
+
+	fContext->duration (AV_TIME_BASE is microseconds) counts from the file's
+	time 0, but every time this stream reports has its start offset taken
+	off (_ConvertFromStreamTimeBase()), so the offset is taken off here too:
+	a Matroska file, whose streams have no duration of their own, with video
+	starting at 2 s reported a duration 2 s too long. The file's duration
+	is used only for a stream without one, that is when it came from the
+	file's header (libavformat gives every stream a duration when it
+	computes the file's from the streams' times), and a header duration, the
+	Matroska and WebM segment's one or FLV's "duration", counts from 0, not
+	from fContext->start_time, so that is not added: with the stream
+	starting at 2 s and an audio stream at 0, the file starts at 0, and the
+	video is still 2 s shorter than the file.
+
+	Unlike Duration(), this ignores B_MEDIA_MUTABLE_SIZE: GetStreamInfo()
+	derives the frame count from it for a source of unknown size too (a
+	stream over HTTP, a plain BDataIO), where a count of 0 made MediaPlayer
+	show the video as a still image.
+*/
+bigtime_t
+StreamBase::_FileDuration() const
+{
+	if ((int64)fContext->duration == AV_NOPTS_VALUE)
+		return -1;
+	bigtime_t duration = (bigtime_t)fContext->duration;
+	if (fStream->start_time != AV_NOPTS_VALUE) {
+		bigtime_t offset = stream_time_to_microseconds(fStream->start_time,
+			fStream->time_base.num, fStream->time_base.den, AV_NOPTS_VALUE);
+		if (offset > 0 && offset < duration)
+			duration -= offset;
+	}
+	return duration;
 }
 
 
@@ -1360,14 +1400,49 @@ AVFormatReader::Stream::GetStreamInfo(int64* frameCount,
 	}
 	#endif
 
-	*frameCount = fStream->nb_frames * fStream->codecpar->frame_size;
+	// Renga: for video nb_frames counts the frames (frame_size is 0 there,
+	// so the product was always 0); for audio it counts packets.
+	if (fStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+		*frameCount = fStream->nb_frames;
+	else
+		*frameCount = fStream->nb_frames * fStream->codecpar->frame_size;
 	if (*frameCount == 0) {
-		// Calculate from duration and frame rate
-		if (fStream->duration != AV_NOPTS_VALUE) {
-			*frameCount = (int64)(fStream->duration * frameRate
-				* fStream->time_base.num / fStream->time_base.den);
-		} else if (fContext->duration != AV_NOPTS_VALUE) {
-			*frameCount = (int64)(fContext->duration * frameRate);
+		// Calculate from the duration and the frame rate: the stream's
+		// duration, or the file's (see _FileDuration(); it was
+		// fContext->duration, microseconds, times the frame rate: a million
+		// times the frame count). Independent of Duration(), which is 0
+		// for a source of unknown size.
+		// Renga: for video, and audio without a duration of its own, one
+		// more than the nearest count. Containers end the duration at the
+		// last frame's start as often as at its end (30 frames at 15 fps:
+		// 1.933 s, which rounds to 29), and a count one low loses the last
+		// frame where callers stop at CountFrames() (MediaConverter,
+		// MediaTrackAudioSupplier); one high is harmless there. Audio with
+		// a duration of its own (WAV, MP4, ...) keeps the truncated count,
+		// as upstream: that duration ends at the last sample, so the count
+		// is at most a fraction of a frame low, and readers that loop
+		// until they have CountFrames() frames (BSimpleGameSound, 8-bit) are not
+		// handed one that never comes.
+		bigtime_t length = fStream->duration != AV_NOPTS_VALUE
+			? stream_time_to_microseconds(fStream->duration,
+				fStream->time_base.num, fStream->time_base.den,
+				AV_NOPTS_VALUE)
+			: _FileDuration();
+		bool audio = fStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO;
+		if (length > 0 && audio && fStream->duration != AV_NOPTS_VALUE) {
+			*frameCount = (int64)(length * frameRate / 1000000.0);
+		} else if (length > 0)
+			*frameCount = (int64)(length * frameRate / 1000000.0 + 0.5) + 1;
+		if (length > 0 && fStream->duration == AV_NOPTS_VALUE && audio) {
+			// The file's duration from the header ends at the last
+			// packet's start as well, and an audio packet is many frames:
+			// a WebM file with 95688 Opus frames said 1.961 s, 94129
+			// frames, and MediaTrackAudioSupplier, which reads no further
+			// than CountFrames(), lost the last 32 ms. One packet of the
+			// longest kind more (Opus allows 120 ms; frame_size where
+			// libavformat knows it and it is longer).
+			*frameCount += max_c((int64)fStream->codecpar->frame_size,
+				(int64)(frameRate * 0.12));
 		}
 		TRACE("  frameCount calculated: %" B_PRIu64 ", from context: %" B_PRIu64 "\n",
 			*frameCount, fStream->nb_frames);

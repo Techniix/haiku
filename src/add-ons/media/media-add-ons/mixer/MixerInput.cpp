@@ -40,6 +40,7 @@ MixerInput::MixerInput(MixerCore* core, const media_input& input,
 	fLastDataAvailableTime(-1),
 	fFractionalFrames(0.0),
 	fResampler(NULL),
+	fResamplerClamps(false),
 	fRtmPool(NULL),
 	fUserOverridesChannelDestinations(false),
 	fTeam(-1),
@@ -89,6 +90,7 @@ MixerInput::MixerInput(MixerCore* core, const media_input& input,
 		fInputChannelInfo[i].destination_mask = 0;
 			// will be set by _UpdateInputChannelDestinationMask()
 		fInputChannelInfo[i].gain = 1.0;
+		fInputChannelInfo[i].last_gain = 1.0;
 	}
 
 	UpdateResamplingAlgorithm();
@@ -267,6 +269,16 @@ MixerInput::BufferReceived(BBuffer* buffer)
 //		start + duration_for_frames(fInput.format.u.raw_audio.frame_rate,
 //		frames_per_buffer(fInput.format.u.raw_audio)), offset,
 //		offset + out_frames);
+	// Renga: nothing stored yet (a new connection, or the position set
+	// again): the stream starts at its gain, without a ramp. The saved
+	// volume of its application is set before the first buffer
+	// (MixerSettings::LoadConnectionSettings()); ramping from the initial
+	// 1.0 to it played the first buffer up to ten times too loud.
+	if (fLastDataFrameWritten < 0) {
+		for (int i = 0; i < fInputChannelCount; i++)
+			fInputChannelInfo[i].last_gain = fInputChannelInfo[i].gain;
+	}
+
 	if (offset + out_frames > fMixBufferFrameCount) {
 		int out_frames1 = fMixBufferFrameCount - offset;
 		int out_frames2 = out_frames - out_frames1;
@@ -296,13 +308,16 @@ MixerInput::BufferReceived(BBuffer* buffer)
 		offset *= sizeof(float) * fInputChannelCount;
 
 		for (int i = 0; i < fInputChannelCount; i++) {
+			float gain = fInputChannelInfo[i].gain;
+			bool ramp = gain != fInputChannelInfo[i].last_gain;
+			float base = ramp ? _RampBaseGain(i) : gain;
 			fResampler[i]->Resample(
 				reinterpret_cast<char*>(data)
 					+ i * bytes_per_sample(fInput.format.u.raw_audio),
 				bytes_per_frame(fInput.format.u.raw_audio), in_frames1,
 				reinterpret_cast<char*>(fInputChannelInfo[i].buffer_base)
 					+ offset, fInputChannelCount * sizeof(float), out_frames1,
-				fInputChannelInfo[i].gain);
+				base);
 
 			fResampler[i]->Resample(
 				reinterpret_cast<char*>(data)
@@ -311,8 +326,12 @@ MixerInput::BufferReceived(BBuffer* buffer)
 				bytes_per_frame(fInput.format.u.raw_audio), in_frames2,
 				reinterpret_cast<char*>(fInputChannelInfo[i].buffer_base),
 				fInputChannelCount * sizeof(float), out_frames2,
-				fInputChannelInfo[i].gain);
-
+				base);
+			if (ramp) {
+				_RampInputChannelGain(i, offset
+					/ (sizeof(float) * fInputChannelCount), out_frames1,
+					out_frames2, gain, base);
+			}
 		}
 	} else {
 //		printf("at %10Ld, data arrived for %10Ld to %10Ld, storing at "
@@ -331,13 +350,21 @@ MixerInput::BufferReceived(BBuffer* buffer)
 		// convert offset from frames into bytes
 		offset *= sizeof(float) * fInputChannelCount;
 		for (int i = 0; i < fInputChannelCount; i++) {
+			float gain = fInputChannelInfo[i].gain;
+			bool ramp = gain != fInputChannelInfo[i].last_gain;
+			float base = ramp ? _RampBaseGain(i) : gain;
 			fResampler[i]->Resample(
 				reinterpret_cast<char*>(data)
 					+ i * bytes_per_sample(fInput.format.u.raw_audio),
 				bytes_per_frame(fInput.format.u.raw_audio), in_frames,
 				reinterpret_cast<char*>(fInputChannelInfo[i].buffer_base)
 					+ offset, fInputChannelCount * sizeof(float),
-				out_frames, fInputChannelInfo[i].gain);
+				out_frames, base);
+			if (ramp) {
+				_RampInputChannelGain(i, offset
+					/ (sizeof(float) * fInputChannelCount), out_frames, 0,
+					gain, base);
+			}
 		}
 	}
 	fLastDataAvailableTime = start + buffer_duration;
@@ -354,6 +381,8 @@ MixerInput::UpdateResamplingAlgorithm()
 	}
 	// create resamplers
 	fResampler = new Resampler*[fInputChannelCount];
+	// Renga: all but the sinc resampler clamp (see _RampBaseGain())
+	fResamplerClamps = fCore->Settings()->ResamplingAlgorithm() != 3;
 	for (int i = 0; i < fInputChannelCount; i++) {
 		switch (fCore->Settings()->ResamplingAlgorithm()) {
 			case 3:
@@ -482,6 +511,65 @@ MixerInput::GetInputChannelType(int channel)
 	if (channel < 0 || channel >= fInputChannelCount)
 		return 0;
 	return GetChannelType(channel, fInputChannelMask);
+}
+
+
+/*!	Renga: the gain a buffer whose gain ramps is resampled with (see
+	_RampInputChannelGain()). The sinc resampler does not clamp: unity.
+	The others (Resampler, Interpolate) clamp to -1..1 after their gain;
+	resampled with the smaller of the two gains, a sample clamps there
+	only if it clamps at every point of the ramp, so clamping again after
+	the ramp gives exactly what one gain per sample would have (above a
+	floor, so that a ramp from or to silence keeps the signal).
+*/
+float
+MixerInput::_RampBaseGain(int channel) const
+{
+	if (!fResamplerClamps)
+		return 1.0f;
+	return max_c(0.001f, min_c(fInputChannelInfo[channel].gain,
+		fInputChannelInfo[channel].last_gain));
+}
+
+
+/*!	Renga: scales the frames just stored for input channel \a channel
+	(\a frames1 from \a offset in the mix buffer, then \a frames2 from its
+	start, where the ring wrapped), resampled with gain \a base, from the
+	previous buffer's gain to \a gain, linearly, and remembers \a gain as
+	the next start. The resampler applies one gain to a whole buffer, so a
+	volume change of an input channel (the per-application volume,
+	SetInputChannelGain()) was a step from one stored buffer to the next:
+	media.click_free_volume recorded 0.0764 where the tone alone makes at
+	most 0.0603, whenever the change landed at a buffer boundary where the
+	tone was far from 0. The mixer's own gains ramp in MixerCore::_Mix()
+	already. A buffer without frames leaves the ramp to the next one.
+*/
+void
+MixerInput::_RampInputChannelGain(int channel, int offset, int frames1,
+	int frames2, float gain, float base)
+{
+	int total = frames1 + frames2;
+	if (total <= 0)
+		return;
+	float last = fInputChannelInfo[channel].last_gain;
+	fInputChannelInfo[channel].last_gain = gain;
+	float delta = (gain - last) / total;
+	float current = last;
+	bool clamp = fResamplerClamps;
+	float* sample = fInputChannelInfo[channel].buffer_base
+		+ offset * fInputChannelCount;
+	for (int part = 0; part < 2; part++) {
+		int frames = part == 0 ? frames1 : frames2;
+		for (int j = 0; j < frames; j++) {
+			current += delta;
+			float value = *sample * (current / base);
+			if (clamp)
+				value = max_c(-1.0f, min_c(1.0f, value));
+			*sample = value;
+			sample += fInputChannelCount;
+		}
+		sample = fInputChannelInfo[channel].buffer_base;
+	}
 }
 
 

@@ -54,10 +54,16 @@ Application screen_capture_test :
 ;
 
 # The encode/decode API (F-31 phase 4) and the FFmpeg plug-in's encoders.
-# Its start offset check remuxes a clip with libavformat, hence FFmpeg.
+# Its start offset check remuxes a clip with libavformat, its B-frame check
+# encodes one with libavcodec, hence FFmpeg; its time conversion check uses
+# the plug-in's Utilities.h (which includes "avcodec.h").
 UseBuildFeatureHeaders ffmpeg ;
 Includes [ FGristFiles media_codec_test.cpp ]
 	: [ BuildFeatureAttribute ffmpeg : headers ] ;
+ObjectHdrs [ FGristFiles media_codec_test$(SUFOBJ) ]
+	: [ FDirName $(HAIKU_TOP) src add-ons media plugins ffmpeg ]
+		[ FDirName [ BuildFeatureAttribute ffmpeg : headers : path ]
+			libavcodec ] ;
 Application media_codec_test :
 	media_codec_test.cpp
 	: be media [ BuildFeatureAttribute ffmpeg : libraries ]

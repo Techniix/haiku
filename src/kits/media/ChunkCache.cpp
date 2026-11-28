@@ -78,9 +78,18 @@ ChunkCache::NextChunk(Reader* reader, void* cookie)
 
 	if (fChunkCache.empty()) {
 		TRACE("ChunkCache is empty, going direct to reader\n");
-		if (ReadNextChunk(reader, cookie)) {
+		// Renga: ReadNextChunk() queues the chunk with the reader's status
+		// and returns false for any status but B_OK, B_LAST_BUFFER_ERROR
+		// at the end of the stream included. Only when nothing was queued
+		// (no memory for the chunk) is there nothing to return. Returning
+		// NULL at the end of the stream made MediaExtractor report
+		// B_NO_MEMORY instead of B_LAST_BUFFER_ERROR whenever the decoder
+		// read the end directly (before the extractor thread had queued
+		// it), so the decoder did not flush: the last picture of a video
+		// with B frames, held back for reordering, was lost.
+		ReadNextChunk(reader, cookie);
+		if (!fChunkCache.empty())
 			return NextChunk(reader, cookie);
-		}
 	} else {
 		chunk = fChunkCache.front();
 		fChunkCache.pop();
