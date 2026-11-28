@@ -86,7 +86,7 @@ programs += [ RenguinLinuxProgram libc-madvise : libc-madvise.c : libc
 # chroot(), the base of Renga's bwrap for Flatpak (batch 14): escapes,
 # fork and exec.
 programs += [ RenguinLinuxProgram libc-chroot : libc-chroot.c : libc
-	: -static ] ;
+	: -static -pthread ] ;
 # Hard links as copies on BFS (batch 11).
 programs += [ RenguinLinuxProgram libc-link : libc-link.c : libc
 	: -static ] ;

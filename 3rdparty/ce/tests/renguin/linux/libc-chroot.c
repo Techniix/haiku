@@ -33,10 +33,21 @@
  *            count Renguin adds to /proc/self/status ("RengaExecRoots")
  *            is back where it was (batch 14 review: each such exec used
  *            to leave a 1 KB entry behind until reboot)
+ *  native_live  while a child that exec()ed the native
+ *            /boot/system/bin/sleep is still running, no entry waits for
+ *            it (pruning dead teams alone would leave one)
+ *  thread_exec  a second thread's failed execve() while the main thread
+ *            execs (20 tries, the second thread passing a large argument
+ *            list, so it is in the kernel when the main thread waits for
+ *            it to die): the main thread's new program is still in the
+ *            root (the second thread used to replace and then free the
+ *            main thread's pending root)
  */
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <pthread.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -110,6 +121,27 @@ must_not_exist(const char* part, const char* path)
 }
 
 
+/*!	thread_exec's second thread: execve() of this program with a large
+	argument list, again and again (each fails: only the main thread may
+	exec), until the team's exec kills it.
+*/
+static void*
+exec_spinner(void* unused)
+{
+	(void)unused;
+	static char argument[200];
+	static char* args[1002];
+	memset(argument, 'x', sizeof(argument) - 1);
+	args[0] = (char*)"/bin/self";
+	for (int i = 1; i < 1001; i++)
+		args[i] = argument;
+	args[1001] = NULL;
+	while (1)
+		execv("/bin/self", args);
+	return NULL;
+}
+
+
 //! Renguin's count of chroot() roots waiting for an exec, or -1.
 static long
 exec_root_count(void)
@@ -142,6 +174,8 @@ main(int argc, char** argv)
 		printf("FAIL exec: second exec: %s\n", strerror(errno));
 		return 1;
 	}
+	if (argc > 1 && strcmp(argv[1], "threadexec") == 0)
+		return is_inside("/hello") ? 0 : 6;
 	if (argc > 1 && strcmp(argv[1], "grandchild") == 0) {
 		if (!is_inside("/hello")) {
 			printf("FAIL exec: /hello not the new root's after two execs\n");
@@ -347,6 +381,67 @@ main(int argc, char** argv)
 		printf("FAIL native: the caller lost its root\n");
 		return 1;
 	}
-	printf("native\nok\n");
+	printf("native\n");
+
+	// native_live: an entry for a native program still running
+	before = exec_root_count();
+	child = fork();
+	if (child == 0) {
+		char* args[] = { (char*)"sleep", (char*)"5", NULL };
+		execv("/boot/system/bin/sleep", args);
+		_exit(5);
+	}
+	if (child < 0)
+		fail("native_live: fork");
+	{
+		// until the child is the native sleep (its name in /proc)
+		char path[64];
+		snprintf(path, sizeof(path), "/proc/%d/comm", (int)child);
+		int i;
+		for (i = 0; i < 100; i++) {
+			if (read_file(path, buffer, sizeof(buffer)) == 0
+				&& strncmp(buffer, "sleep", 5) == 0) {
+				break;
+			}
+			usleep(50000);
+		}
+		after = exec_root_count();
+		kill(child, SIGKILL);
+		waitpid(child, &status, 0);
+		if (i == 100) {
+			printf("FAIL native_live: the child never became sleep "
+				"(comm \"%s\")\n", buffer);
+			return 1;
+		}
+		if (after < 0 || after > before) {
+			printf("FAIL native_live: %ld exec roots before, %ld while the "
+				"native sleep runs\n", before, after);
+			return 1;
+		}
+	}
+	printf("native_live\n");
+
+	// thread_exec: a second thread's execve() during the main thread's
+	for (int i = 0; i < 20; i++) {
+		child = fork();
+		if (child == 0) {
+			pthread_t thread;
+			if (pthread_create(&thread, NULL, exec_spinner, NULL) != 0)
+				_exit(7);
+			usleep(20000);
+			char* args[] = { (char*)"/bin/self", (char*)"threadexec", NULL };
+			execv("/bin/self", args);
+			_exit(8);
+		}
+		if (child < 0)
+			fail("thread_exec: fork");
+		waitpid(child, &status, 0);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			printf("FAIL thread_exec: try %d: status %d (6: the new program "
+				"is outside the root)\n", i, status);
+			return 1;
+		}
+	}
+	printf("thread_exec\nok\n");
 	return 0;
 }

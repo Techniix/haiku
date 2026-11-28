@@ -747,6 +747,19 @@ exec_error(status_t status)
 int64
 renguin_sys_execve(uint64 userPath, uint64 userArgv, uint64 userEnvp)
 {
+	// Haiku execs only from the team's main thread (exec_team() returns
+	// B_NOT_ALLOWED otherwise, before anything changes). Answer that here,
+	// before any work: above all before renguin_exec_keep_root(), which a
+	// second thread must never reach. Its keep and the failure cleanup
+	// below would replace and then free the root the main thread recorded
+	// for its own exec in progress, and the main thread's new program
+	// would run outside the chroot (batch 14 review).
+	{
+		Thread* current = thread_get_current_thread();
+		if (current != current->team->main_thread)
+			return renguin_encode(B_NOT_ALLOWED);
+	}
+
 	// Kernel buffers: the Linux path, the resolved host path, a string
 	// buffer for copying arguments, and the start of the file (+1 for a
 	// NUL).
@@ -879,9 +892,17 @@ renguin_sys_execve(uint64 userPath, uint64 userArgv, uint64 userEnvp)
 	renguin_team* data = renguin_current_team();
 	mode_t umask = data != NULL ? data->umask : 022;
 	// batch 14: a chroot()ed team keeps its root in the new program;
-	// without memory for that, execve() fails rather than lose the root
-	if (renguin_exec_keep_root(team, data != NULL ? data->root : NULL)
-			!= B_OK) {
+	// without memory for that, execve() fails rather than lose the root.
+	// The root is copied under the team lock, which chroot() writes it
+	// under, so another thread's chroot() cannot hand over a torn path.
+	// (hostPath is free again: the user area has its copy.)
+	char* root = hostPath;
+	root[0] = '\0';
+	if (data != NULL) {
+		MutexLocker locker(data->lock);
+		strlcpy(root, data->root, B_PATH_NAME_LENGTH);
+	}
+	if (renguin_exec_keep_root(team, root) != B_OK) {
 		vm_delete_area(team, area, true);
 		return -LX_ENOMEM;
 	}

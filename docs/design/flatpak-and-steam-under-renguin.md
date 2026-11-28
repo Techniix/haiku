@@ -110,7 +110,10 @@ view for the shim, not a sandbox (maintainer, 2026-11-27: step 1 unsandboxed).
   `ENOENT`, `ENOTDIR` and `EFAULT` are as on Linux.
 - **Tests:** `libc-chroot` in the `renguin` suite covers escapes by `..` and by symbolic
   links, `fchdir()`, `fork()` (two levels), `exec()` (two levels, and a failed exec), and
-  200 native execs from inside the root that must leave no entry behind.
+  200 native execs from inside the root that must leave no entry behind, no entry while a
+  native program from the root runs, and a second thread's failed `execve()` during the main
+  thread's exec (only the main thread may exec; the second thread is answered before it can
+  touch the main thread's entry).
   `renguin.flatpak.*` covers the shim. `renguin_manager.flatpak_switch` covers the switch.
 
 ### Step 2: sandboxed
