@@ -13,6 +13,10 @@
 #   --sweep <text>     a "sweep:" line for build.txt (the gate summary)
 #   --notes <file>     release notes for build.txt's "notes:" section
 #
+# Before any step: the renga-builds clone must be clean, must not have the
+# branch yet, and must have a commit identity (user.name and user.email,
+# set in the clone; renga-image sets none).
+#
 # Steps (docs/claude/build-and-release.md):
 #   1. 3rdparty/ce/build/build-handover-image renga-anyboot (refuses a tree
 #      that is not clean, so the image names exactly one commit);
@@ -64,6 +68,34 @@ branch=build/$name
 git -C "$builds" rev-parse -q --verify "refs/heads/$branch" >/dev/null \
 	&& renga_die "$builds already has a branch $branch"
 
+# The commit in step 4 needs an identity in the clone. Without one, git
+# stopped there ("Author identity unknown") after the clone had been
+# switched to the new branch and the parts staged, leaving the branch
+# without a commit. Check it before anything in the clone changes: an
+# explicit name and email for author and committer (environment, or the
+# clone's git config at any level), not one git would guess from the host.
+# Nothing is set here; the message says how.
+builds_has() { # <AUTHOR|COMMITTER> <NAME|EMAIL>
+	eval "v=\${GIT_$1_$2:-}"
+	[ -n "$v" ] && return 0
+	[ "$2" = EMAIL ] && [ -n "${EMAIL:-}" ] && return 0
+	key=$(echo "$1.$2" | tr '[:upper:]' '[:lower:]')
+	[ -n "$(git -C "$builds" config --get "$key" 2>/dev/null)" ] && return 0
+	[ -n "$(git -C "$builds" config --get "user.${key#*.}" 2>/dev/null)" ]
+}
+for role in AUTHOR COMMITTER; do
+	if ! builds_has $role NAME || ! builds_has $role EMAIL \
+		|| ! git -C "$builds" var "GIT_${role}_IDENT" >/dev/null 2>&1; then
+		last=$(git -C "$builds" log -1 --format='%an <%ae>' --branches='build/*' 2>/dev/null || true)
+		renga_note "$builds has no commit identity (user.name and user.email), so the build commit would fail."
+		renga_note "set one in that clone, then run renga-image again:"
+		renga_note "  git -C $builds config user.name \"<name>\""
+		renga_note "  git -C $builds config user.email \"<email>\""
+		[ -z "$last" ] || renga_note "(the newest build branch there was committed as: $last)"
+		renga_die "no commit identity in $builds; nothing was changed there"
+	fi
+done
+
 # 1. The image, from a clean tree.
 if [ $build = yes ]; then
 	echo "renga-image: building renga-anyboot (log: $RENGA_OUTPUT/renga-image.log)"
@@ -80,6 +112,13 @@ image=$RENGA_OUTPUT/renga-anyboot.iso
 revision=$(cat "$RENGA_OUTPUT/build/haiku-revision" 2>/dev/null || echo unknown)
 commit=$(git rev-parse --short=8 HEAD)
 day=$(git log -1 --format=%cd --date=short HEAD)
+# The build's revision file normally already ends in "(Renga <commit>
+# <date>)" (build/scripts/determine_haiku_revision, F-59); add that suffix
+# only when it is missing, so build.txt names it once.
+case $revision in
+*"(Renga "*) revision_line=$revision ;;
+*) revision_line="$revision (Renga $commit $day)" ;;
+esac
 
 # Disk: the parts need about the image's size again in renga-builds.
 need=$(( $(stat -c %s "$image") / 1024 + 102400 ))
@@ -105,7 +144,7 @@ printf '%s  %s\n' "$hash" "$iso" > "$iso.sha256"
 	echo "name: $name"
 	echo "title: Renga $name"
 	echo "profile: renga-anyboot"
-	echo "revision: $revision (Renga $commit $day)"
+	echo "revision: $revision_line"
 	[ -z "$sweep" ] || echo "sweep: $sweep"
 	if [ -n "$notes" ]; then
 		echo "notes:"
@@ -122,12 +161,12 @@ printf '%s  %s\n' "$hash" "$iso" > "$iso.sha256"
 # 4. Commit with explicit paths.
 git add -- build.txt "$iso.sha256" parts
 git commit -q -m "Build $name (Renga $commit)" \
-	-m "renga-anyboot, $revision. split -b 95M -d -a 3; sha256 and build.txt (first line \"iso:\")." \
+	-m "renga-anyboot, $revision_line. split -b 95M -d -a 3; sha256 and build.txt (first line \"iso:\")." \
 	-- build.txt "$iso.sha256" parts
 parts=$(find parts -name "$iso.part*" | wc -l | tr -d ' ')
 echo "renga-image: $branch committed in $builds: $iso, $parts parts"
 echo "  sha256 $hash"
-echo "  revision $revision (Renga $commit)"
+echo "  revision $revision_line"
 
 if [ $push = yes ]; then
 	git push -q -u origin "$branch"
