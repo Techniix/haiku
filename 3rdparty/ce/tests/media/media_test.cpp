@@ -143,10 +143,12 @@ play_buffer(void* cookie, void* buffer, size_t size,
 
 
 /*!	A child: plays "tone <left Hz> <right Hz>" (0: silent channel) read
-	from stdin until "quit" or the end of input, then fades out.
+	from stdin until "quit" or the end of input, then fades out. With
+	\a leftHertz, it plays that on the left from its very first buffer, at
+	full amplitude (no fade in).
 */
 static int
-run_player(const char* signature)
+run_player(const char* signature, float leftHertz = 0)
 {
 	BApplication app(signature);
 
@@ -158,6 +160,10 @@ run_player(const char* signature)
 	format.buffer_size = 1024 * 2 * sizeof(float);
 
 	PlayerState state = { 0, 0, 0, 0, 0, 0, 48000 };
+	if (leftHertz > 0) {
+		state.leftHertz = leftHertz;
+		state.target = state.amplitude = kAmplitude;
+	}
 	BSoundPlayer player(&format, "media_test player", play_buffer, NULL,
 		&state);
 	if (player.InitCheck() != B_OK) {
@@ -200,6 +206,19 @@ start_player(Player& player, const char* self, const char* signature)
 {
 	BString command;
 	command << "'" << self << "' player " << signature;
+	player.pipe = popen(command.String(), "w");
+	player.signature = signature;
+	return player.pipe != NULL;
+}
+
+
+//!	A player that plays \a leftHertz from its first buffer on.
+static bool
+start_loud_player(Player& player, const char* self, const char* signature,
+	int leftHertz)
+{
+	BString command;
+	command << "'" << self << "' player " << signature << " " << leftHertz;
 	player.pipe = popen(command.String(), "w");
 	player.signature = signature;
 	return player.pipe != NULL;
@@ -955,11 +974,95 @@ test_streams(const char* self)
 }
 
 
+struct LoudStart {
+	Player*		player;
+	const char*	self;
+	const char*	signature;
+};
+
+
+/*!	An application whose volume was left low starts a stream that is loud
+	from its first buffer: the mixer stores the saved gain
+	(MixerSettings::LoadConnectionSettings()) before that buffer arrives,
+	so the stream must start at it. With the volume ramp of cd976581b8 the
+	first buffer ramped from full volume down to it instead, up to ten
+	times too loud for a few tens of milliseconds.
+*/
+static void
+test_saved_volume_start(const char* self)
+{
+	static const char* kSignatureC = "application/x-vnd.Renga-media-test-c";
+	static const double kSlider = -40;
+	AudioStreamControl control;
+	Player c = { NULL, kSignatureC };
+
+	// The application's volume to -40 on its slider; the mixer saves it.
+	bool started = start_player(c, self, kSignatureC);
+	tone(c, 1450, 0);
+	AudioStream stream;
+	bool found = started && find_stream(control, kSignatureC, stream);
+	status_t status = found ? control.SetGain(stream.id, kSlider)
+		: B_ENTRY_NOT_FOUND;
+	snooze(500000);
+	stop_player(c);
+	snooze(1000000);
+
+	// Recorded while it starts again, at full amplitude from the start.
+	Recording recording;
+	media_node node;
+	if (status == B_OK)
+		status = AudioStreamControl::StartLoopback(NULL, &node);
+	if (status == B_OK) {
+		LoudStart start = { &c, self, kSignatureC };
+		thread_id starter = spawn_thread([](void* data) -> status_t {
+			snooze(300000);
+			LoudStart* start = (LoudStart*)data;
+			start_loud_player(*start->player, start->self, start->signature,
+				1450);
+			return B_OK;
+		}, "loud start", B_NORMAL_PRIORITY, &start);
+		resume_thread(starter);
+		status = record_from(node, 1.8, recording);
+		status_t result;
+		wait_for_thread(starter, &result);
+		BMediaRoster::Roster()->ReleaseNode(node);
+	}
+	stop_player(c);
+
+	float peak = 0;
+	size_t peakAt = 0;
+	for (size_t i = 0; i < recording.left.size(); i++) {
+		if (fabsf(recording.left[i]) > peak) {
+			peak = fabsf(recording.left[i]);
+			peakAt = i;
+		}
+	}
+	ChannelCheck steady = check_channel(recording.left, recording.rate, 1.2,
+		1450);
+	double expected = kAmplitude * mixer_gain(kSlider);
+	report("saved_volume_start", status == B_OK
+			&& near(steady.amplitude, expected, 0.2)
+			&& peak <= 1.5 * expected,
+		"%s; at %.0f on its slider: steady %.4f (want %.4f), peak %.4f at "
+		"%.3f s (want at most %.4f, the stream's start at about 0.3 s)",
+		strerror(status), kSlider, steady.amplitude, expected, peak,
+		recording.rate > 0 ? peakAt / recording.rate : 0.0, 1.5 * expected);
+
+	// Back to full volume for the next run of this signature.
+	if (start_player(c, self, kSignatureC)
+		&& find_stream(control, kSignatureC, stream)) {
+		control.SetGain(stream.id, 0);
+		snooze(300000);
+	}
+	stop_player(c);
+}
+
+
 int
 main(int argc, char** argv)
 {
 	if (argc >= 3 && strcmp(argv[1], "player") == 0)
-		return run_player(argv[2]);
+		return run_player(argv[2], argc >= 4 ? atof(argv[3]) : 0);
 
 	signal(SIGPIPE, SIG_IGN);
 	BApplication app("application/x-vnd.Renga-media-test");
@@ -996,6 +1099,7 @@ main(int argc, char** argv)
 	test_input();
 	if (sSecondDevice.Length() > 0)
 		test_streams(argv[0]);
+	test_saved_volume_start(argv[0]);
 
 	// The media services keep running for the GUI test after this one.
 

@@ -139,9 +139,10 @@ private:
 			void				_UpdateResamplerRates();
 			void				_UpdateInputChannelDestinationMask();
 			void				_UpdateInputChannelDestinations();
+			float				_RampBaseGain(int channel) const;
 			void				_RampInputChannelGain(int channel,
 									int offset, int frames1, int frames2,
-									float gain);
+									float gain, float base);
 
 	struct input_chan_info {
 		float*					buffer_base;
@@ -175,6 +176,7 @@ private:
 			bigtime_t			fLastDataAvailableTime;
 			double				fFractionalFrames;
 			Resampler**			fResampler; // array
+			bool				fResamplerClamps;
 			rtm_pool*			fRtmPool;
 			bool				fUserOverridesChannelDestinations;
 			int32				fDebugMixBufferFrames;
