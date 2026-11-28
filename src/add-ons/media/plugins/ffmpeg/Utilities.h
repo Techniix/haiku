@@ -72,12 +72,21 @@ stream_time_to_microseconds(int64_t time, int num, int den,
 		microseconds to the time base \a num / \a den, \a startTime
 		(AV_NOPTS_VALUE: none) added.
 
-	Rounds to the nearest value, as StreamBase::_ConvertToStreamTimeBase()
-	always did (with a double), not toward zero: a frame's time in
-	microseconds is truncated, and truncating it again on the way back
-	would give the frame before it (1024 at 1/15360 is 66666 us, and 66666
-	us is 1023.99). av_rescale_rnd() keeps 64-bit precision where the
-	double had 53 bits.
+	Returns the last stream time that stream_time_to_microseconds() turns
+	into \a time or earlier, so a time this reader reported converts back
+	to the stream time it came from, whatever the time base:
+	- coarser than 1 us (1/15360): 1024 is 66666 us (66666.67, truncated),
+	  and 66666 us is 1024 again (truncating would give 1023, the frame
+	  before it; rounding to nearest, as the double here did before, also
+	  gave 1024);
+	- finer than 2 us (1/1000000000): 1234567891 ns is 1234567 us, and
+	  1234567 us is 1234567999 ns. Rounding to nearest gave 1234567000 ns,
+	  before the frame, so a seek to the time of a keyframe went back to
+	  the keyframe before it.
+	That is the largest x with x * num * 10^6 / den truncated <= time,
+	ceil((time + 1) * den / (num * 10^6)) - 1, computed by av_rescale_rnd()
+	without overflow. A time between two stream times converts to the
+	earlier one, the frame showing at that time.
 */
 inline int64_t
 microseconds_to_stream_time(int64_t time, int num, int den,
@@ -85,8 +94,8 @@ microseconds_to_stream_time(int64_t time, int num, int den,
 {
 	if (time == AV_NOPTS_VALUE || num <= 0 || den <= 0)
 		return time;
-	int64_t streamTime = av_rescale_rnd(time, den, 1000000LL * num,
-		AV_ROUND_NEAR_INF);
+	int64_t streamTime = av_rescale_rnd(time + 1, den, 1000000LL * num,
+		AV_ROUND_UP) - 1;
 	if (startTime != AV_NOPTS_VALUE)
 		streamTime += startTime;
 	return streamTime;

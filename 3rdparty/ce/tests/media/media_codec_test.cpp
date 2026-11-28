@@ -33,6 +33,7 @@
 #include <Application.h>
 #include <Directory.h>
 #include <Entry.h>
+#include <File.h>
 #include <Message.h>
 #include <OS.h>
 #include <Path.h>
@@ -40,6 +41,7 @@
 
 #include <MediaCodec.h>
 #include <MediaFile.h>
+#include <experimental/MediaIO.h>
 #include <MediaTrack.h>
 
 #include <math.h>
@@ -184,12 +186,14 @@ color_near(uint32 a, uint32 b, int tolerance)
 	it is a frame later, and the last frame ends at the track's Duration().
 	The FFmpeg plug-in used to report the stream's own time base here (an
 	MP4 at 1/15: 0, 1, 2, ...; WebM at 1/1000: 0, 66, 133, ...).
-	Also the track's CountFrames() (<name>_frame_count). For a Matroska
-	file, whose streams have no duration of their own, AVFormatReader falls
-	back to the file's duration: it did not take the stream's start offset
-	off (a stream starting at 2 s was 2 s too long), and the frame count
-	derived from it was a million times too high (microseconds times the
-	frame rate).
+	The duration ends at the last frame's start or at its end (containers
+	do either). Also the track's CountFrames() (<name>_frame_count): never
+	below the real count, as callers stop there (MediaConverter), at most
+	one above. For a Matroska file, whose streams have no duration of their
+	own, AVFormatReader falls back to the file's duration: it did not take
+	the stream's start offset off (a stream starting at 2 s was 2 s too
+	long), and the frame count derived from it was a million times too high
+	(microseconds times the frame rate), and then, rounded, one low.
 */
 static void
 check_video_times(const char* name, const char* path)
@@ -253,7 +257,7 @@ check_video_times(const char* name, const char* path)
 	bigtime_t duration = track != NULL ? track->Duration() : 0;
 	report(BString(name) << "_video_times", status == B_OK
 		&& frames == kFrames && badStart == 0 && badCurrent == 0
-		&& llabs(last + step - duration) <= step,
+		&& duration >= last && duration <= last + step + 1000,
 		"%s: %" B_PRId32 " frames, %" B_PRId32 " start times and %" B_PRId32
 		" CurrentTime()s off by over half a frame (%" B_PRIdBIGTIME
 		" us); last frame at %" B_PRIdBIGTIME " us, duration %" B_PRIdBIGTIME
@@ -261,14 +265,158 @@ check_video_times(const char* name, const char* path)
 		badStart, badCurrent, step, last, duration, times.String());
 	int64 frameCount = track != NULL ? track->CountFrames() : 0;
 	report(BString(name) << "_frame_count", status == B_OK
-		&& llabs(frameCount - kFrames) <= 1,
-		"%s: CountFrames() %" B_PRId64 " (want %" B_PRId32 " +- 1)",
+		&& frameCount >= kFrames && frameCount <= kFrames + 1,
+		"%s: CountFrames() %" B_PRId64 " (want %" B_PRId32 " or one more)",
 		strerror(status), frameCount, kFrames);
 	if (file != NULL) {
 		if (track != NULL)
 			file->ReleaseTrack(track);
 		delete file;
 	}
+}
+
+
+//!	A file as a plain BDataIO: no seeking, no size (a stream, a pipe).
+class PlainFileIO : public BDataIO {
+public:
+	PlainFileIO(const char* path)
+		:
+		fFile(path, B_READ_ONLY)
+	{
+	}
+
+	status_t InitCheck() const { return fFile.InitCheck(); }
+
+	virtual ssize_t Read(void* buffer, size_t size)
+	{
+		return fFile.Read(buffer, size);
+	}
+
+	virtual ssize_t Write(const void*, size_t)
+	{
+		return B_NOT_ALLOWED;
+	}
+
+private:
+	BFile fFile;
+};
+
+
+/*!	A file as a source whose size is not known yet (B_MEDIA_MUTABLE_SIZE),
+	like a download in progress through HTTPMediaIO: seekable, its size
+	the part read so far.
+*/
+class GrowingFileIO : public BMediaIO {
+public:
+	GrowingFileIO(const char* path)
+		:
+		fFile(path, B_READ_ONLY)
+	{
+	}
+
+	status_t InitCheck() const { return fFile.InitCheck(); }
+
+	virtual void GetFlags(int32* flags) const
+	{
+		*flags = B_MEDIA_SEEKABLE | B_MEDIA_MUTABLE_SIZE;
+	}
+
+	virtual ssize_t ReadAt(off_t position, void* buffer, size_t size)
+	{
+		return fFile.ReadAt(position, buffer, size);
+	}
+
+	virtual ssize_t WriteAt(off_t, const void*, size_t)
+	{
+		return B_NOT_ALLOWED;
+	}
+
+	virtual off_t Seek(off_t position, uint32 seekMode)
+	{
+		return fFile.Seek(position, seekMode);
+	}
+
+	virtual off_t Position() const
+	{
+		return fFile.Position();
+	}
+
+	virtual status_t SetSize(off_t)
+	{
+		return B_NOT_ALLOWED;
+	}
+
+	virtual status_t GetSize(off_t* size) const
+	{
+		return fFile.GetSize(size);
+	}
+
+private:
+	BFile fFile;
+};
+
+
+/*!	The video track's CountFrames() when \a path is read from a source of
+	unknown size (B_MEDIA_MUTABLE_SIZE: HTTPMediaIO without a length, RTSP,
+	the adapter for a plain BDataIO): Duration() is 0 there on purpose, but
+	the frame count came from Duration() and was 0 as well, so MediaPlayer
+	showed a streamed Matroska, WebM or FLV video as a still image. Through
+	\a plain, a plain BDataIO (no seeking at all), reported only: the
+	adapter for those (PluginManager's DataIOAdapter) cannot open most of
+	these files, a limit of its own.
+*/
+static void
+check_unseekable_frame_count(const char* name, const char* path, bool plain)
+{
+	BDataIO* io;
+	status_t status;
+	if (plain) {
+		PlainFileIO* file = new PlainFileIO(path);
+		status = file->InitCheck();
+		io = file;
+	} else {
+		GrowingFileIO* file = new GrowingFileIO(path);
+		status = file->InitCheck();
+		io = file;
+	}
+	BMediaFile* file = NULL;
+	BMediaTrack* track = NULL;
+	if (status == B_OK) {
+		file = new BMediaFile(io);
+		status = file->InitCheck();
+	}
+	for (int32 i = 0; status == B_OK && i < file->CountTracks(); i++) {
+		BMediaTrack* candidate = file->TrackAt(i);
+		media_format format;
+		if (candidate != NULL && candidate->EncodedFormat(&format) == B_OK
+			&& format.type == B_MEDIA_ENCODED_VIDEO) {
+			track = candidate;
+			break;
+		}
+		file->ReleaseTrack(candidate);
+	}
+	if (status == B_OK && track == NULL)
+		status = B_ENTRY_NOT_FOUND;
+	int64 frameCount = track != NULL ? track->CountFrames() : 0;
+	bigtime_t duration = track != NULL ? track->Duration() : 0;
+	if (plain) {
+		info("%s: through a plain BDataIO: %s, CountFrames() %" B_PRId64
+			", Duration() %" B_PRIdBIGTIME " us", name, strerror(status),
+			frameCount, duration);
+	} else {
+		report(BString(name) << "_unseekable_frame_count", status == B_OK
+			&& frameCount >= kFrames && frameCount <= kFrames + 1,
+			"%s: from a source of unknown size, CountFrames() %" B_PRId64
+			" (want %" B_PRId32 " or one more), Duration() %" B_PRIdBIGTIME
+			" us (0: size unknown)", strerror(status), frameCount, kFrames,
+			duration);
+	}
+	if (file != NULL) {
+		if (track != NULL)
+			file->ReleaseTrack(track);
+		delete file;
+	}
+	delete io;
 }
 
 
@@ -559,6 +707,36 @@ test_time_conversion()
 		"1024 at 1/15360 after a 2 s start: %" B_PRId64 " (want 66666); "
 		"AV_NOPTS_VALUE %s", nanoseconds, threeHours, truncated, negative,
 		offset, none == AV_NOPTS_VALUE ? "kept" : "changed");
+
+	// Back again (seeks): a reported time converts to the stream time it
+	// came from, or for a time base finer than a microsecond to the last
+	// stream time with that time, never to one before the frame (which
+	// sent a seek to a keyframe's time to the keyframe before it).
+	int64 coarse = stream_time_to_microseconds(1024, 1, 15360,
+		AV_NOPTS_VALUE);
+	int64 coarseBack = microseconds_to_stream_time(coarse, 1, 15360,
+		AV_NOPTS_VALUE);
+	int64 offsetBack = microseconds_to_stream_time(66666, 1, 15360,
+		2 * 15360);
+	const int64 keyFrame = 1234567891;
+	int64 fine = stream_time_to_microseconds(keyFrame, 1, 1000000000,
+		AV_NOPTS_VALUE);
+	int64 fineBack = microseconds_to_stream_time(fine, 1, 1000000000,
+		AV_NOPTS_VALUE);
+	int64 fineAgain = stream_time_to_microseconds(fineBack, 1, 1000000000,
+		AV_NOPTS_VALUE);
+	int64 between = microseconds_to_stream_time(66665, 1, 15360,
+		AV_NOPTS_VALUE);
+	report("stream_time_round_trip", coarse == 66666 && coarseBack == 1024
+		&& offsetBack == 2 * 15360 + 1024 && fine == 1234567
+		&& fineBack >= keyFrame && fineAgain == fine && between == 1023,
+		"1024 at 1/15360: %" B_PRId64 " us, back %" B_PRId64 " (want 66666, "
+		"1024), after a 2 s start %" B_PRId64 " (want %d); %" B_PRId64
+		" ns: %" B_PRId64 " us, back %" B_PRId64 " ns (want at least the "
+		"original), %" B_PRId64 " us again; 66665 us at 1/15360: %" B_PRId64
+		" (want 1023, the frame showing then)", coarse, coarseBack,
+		offsetBack, 2 * 15360 + 1024, keyFrame, fine, fineBack, fineAgain,
+		between);
 }
 
 
@@ -697,6 +875,12 @@ test_case(const Case& test)
 			" in the right colour%s", frames, kFrames, rightColor,
 			wrong.String());
 		check_video_times(test.name, path.String());
+		if (strcmp(test.container, "mp4") != 0) {
+			// MP4 has a duration per stream (and MediaWriter puts the
+			// index at the end, out of reach without seeking)
+			check_unseekable_frame_count(test.name, path.String(), false);
+			check_unseekable_frame_count(test.name, path.String(), true);
+		}
 		if (strcmp(test.name, "webm_vp9_opus") == 0) {
 			// a stream start offset of 2 s
 			const char* offsetPath = "/tmp/media_codec_test.offset.mkv";
@@ -734,6 +918,15 @@ test_case(const Case& test)
 		"%.3f s decoded (want %.1f), 440 Hz %.3f of the left channel, "
 		"660 Hz %.3f of the right (want over 0.9)", seconds, kSeconds,
 		leftPurity, rightPurity);
+	if (strcmp(test.container, "mkv") == 0
+		|| strcmp(test.container, "webm") == 0) {
+		// Matroska streams have no duration: the count comes from the
+		// file's, and MediaTrackAudioSupplier reads no further than it
+		report(BString(test.name) << "_audio_frame_count",
+			audioInfo.frames >= (int64)left.size(),
+			"CountFrames() %" B_PRId64 ", %zu frames decoded (want at most "
+			"the count)", audioInfo.frames, left.size());
+	}
 
 	status = reader.Seek(1000000);
 	int32 frames = 0;
