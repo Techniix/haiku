@@ -1101,17 +1101,21 @@ generate_mounts(proc_buffer& out, bool mountinfo)
 	bool haveRoot = vfs_read_stat(-1, RENGUIN_LINUX_ROOT, true, &rootStat,
 		true) == B_OK;
 
-	int32 id = 1;
+	// Mount IDs (batch 14, review of PR #40): a volume's is its dev_t + 1,
+	// as statx() reports it (fsops.cpp), /proc's is PROC_DEVICE + 1. The
+	// Linux root shares its volume's dev_t, so its line takes 1, which no
+	// volume has: Haiku numbers volumes from 1 (vfs.cpp, sNextMountID), so
+	// theirs start at 2. Files in the root report their volume's ID: in
+	// Haiku they are on that mount.
 	if (haveRoot && _kern_read_fs_info(rootStat.st_dev, info) == B_OK) {
 		escape_field(info->device_name[0] != '\0'
 			? info->device_name : info->fsh_name, escapedSource,
 			B_PATH_NAME_LENGTH);
 		if (mountinfo) {
-			out.Printf("%" B_PRId32 " 0 0:%" B_PRIdDEV " / / rw - %s %s rw\n",
-				id, info->dev, info->fsh_name, escapedSource);
+			out.Printf("1 0 0:%" B_PRIdDEV " / / rw - %s %s rw\n",
+				info->dev, info->fsh_name, escapedSource);
 		} else
 			out.Printf("%s / %s rw 0 0\n", escapedSource, info->fsh_name);
-		id++;
 	}
 
 	int32 cookie = 0;
@@ -1138,17 +1142,17 @@ generate_mounts(proc_buffer& out, bool mountinfo)
 		const char* options
 			= (info->flags & B_FS_IS_READONLY) != 0 ? "ro" : "rw";
 		if (mountinfo) {
-			out.Printf("%" B_PRId32 " 1 0:%" B_PRIdDEV " / %s %s - %s %s %s\n",
-				id++, device, escapedPoint, options, info->fsh_name,
-				escapedSource, options);
+			out.Printf("%" B_PRId64 " 1 0:%" B_PRIdDEV " / %s %s - %s %s %s\n",
+				(int64)device + 1, device, escapedPoint, options,
+				info->fsh_name, escapedSource, options);
 		} else {
 			out.Printf("%s %s %s %s 0 0\n", escapedSource, escapedPoint,
 				info->fsh_name, options);
 		}
 	}
 	if (mountinfo) {
-		out.Printf("%" B_PRId32 " 1 0:%d / /proc rw - proc proc rw\n", id,
-			(int)PROC_DEVICE);
+		out.Printf("%" B_PRId64 " 1 0:%d / /proc rw - proc proc rw\n",
+			(int64)PROC_DEVICE + 1, (int)PROC_DEVICE);
 	} else
 		out.Printf("proc /proc proc rw 0 0\n");
 }

@@ -253,6 +253,58 @@ main(int argc, char** argv)
 	}
 	printf("errors\n");
 
+	// create (review of PR #40): an empty chroot() root is a private tree.
+	// mkdir("/etc") makes the root's own /etc (it gave EEXIST when names
+	// Haiku's tree has could not be made at the top level of any root), and
+	// a file written into it lands there, not in Haiku's /etc.
+	{
+		char empty[256];
+		snprintf(empty, sizeof(empty), "%s/empty", dir);
+		if (mkdir(empty, 0755) != 0)
+			fail("mkdir empty");
+		pid_t child = fork();
+		if (child == 0) {
+			if (chroot(empty) != 0 || chdir("/") != 0)
+				_exit(2);
+			if (mkdir("/etc", 0755) != 0)
+				_exit(3);
+			int fd = open("/etc/renguin-chroot-create",
+				O_CREAT | O_EXCL | O_WRONLY, 0644);
+			if (fd < 0 || write(fd, "inside", 6) != 6)
+				_exit(4);
+			close(fd);
+			_exit(0);
+		}
+		int status = 0;
+		waitpid(child, &status, 0);
+		snprintf(path, sizeof(path), "%s/etc/renguin-chroot-create", empty);
+		char content[16] = "";
+		int fd = open(path, O_RDONLY);
+		if (fd >= 0) {
+			if (read(fd, content, sizeof(content) - 1) < 0)
+				content[0] = '\0';
+			close(fd);
+		}
+		// Haiku's /etc is /boot/system/settings/etc
+		static const char* kOutside[] = { "/etc/renguin-chroot-create",
+			"/boot/system/settings/etc/renguin-chroot-create" };
+		int leaked = 0;
+		for (int i = 0; i < 2; i++) {
+			if (access(kOutside[i], F_OK) == 0) {
+				leaked = 1;
+				unlink(kOutside[i]);
+			}
+		}
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0
+			|| strcmp(content, "inside") != 0 || leaked) {
+			printf("FAIL create: child status %d (3: mkdir /etc, 4: the file),"
+				" file in the root: \"%s\"%s\n", status, content,
+				leaked ? ", and one outside it" : "");
+			return 1;
+		}
+	}
+	printf("create\n");
+
 	int outside = open(dir, O_RDONLY | O_DIRECTORY);
 	if (outside < 0)
 		fail("open outside");

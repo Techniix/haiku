@@ -391,6 +391,8 @@ renguin_sys_openat(int dirfd, uint64 path, uint64 flags, uint64 mode)
 	}
 	if (status != B_OK)
 		return renguin_encode(status);
+	if ((flags & LX_O_CREAT) != 0 && renguin_creates_shadow(dirfd, hostPath))
+		return -LX_EISDIR;		// Haiku's /boot, a directory (path.cpp)
 
 	int fd = _user_open(dirfd, (const char*)(addr_t)hostPath,
 		open_flags_to_haiku(flags),
@@ -822,6 +824,8 @@ renguin_sys_mkdirat(int dirfd, uint64 path, uint64 mode)
 		RENGUIN_PATH_MAY_CREATE, &status, dirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(dirfd, hostPath))
+		return -LX_EEXIST;		// Haiku's /boot (path.cpp)
 	return renguin_encode(_user_create_dir(dirfd,
 		(const char*)(addr_t)hostPath,
 		(int)(mode & 07777 & ~renguin_current_umask())));
@@ -870,6 +874,8 @@ renguin_sys_renameat(int olddirfd, uint64 oldpath, int newdirfd,
 		RENGUIN_PATH_MAY_CREATE, &status, newdirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(newdirfd, hostNew))
+		return -LX_EEXIST;
 	return renguin_encode(_user_rename(olddirfd, (const char*)(addr_t)hostOld,
 		newdirfd, (const char*)(addr_t)hostNew));
 }

@@ -719,6 +719,8 @@ renguin_sys_linkat(int oldDirFD, uint64 oldPath, int newDirFD,
 		RENGUIN_PATH_MAY_CREATE, &status, newDirFD);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(newDirFD, hostNew))
+		return -LX_EEXIST;
 
 	// Haiku's argument order: the new link first, then what it links to.
 	status = _user_create_link(newDirFD, (const char*)(addr_t)hostNew,
@@ -784,6 +786,8 @@ renguin_sys_symlinkat(uint64 target, int dirfd, uint64 path)
 		RENGUIN_PATH_MAY_CREATE, &status, dirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(dirfd, hostPath))
+		return -LX_EEXIST;
 	return renguin_encode(_user_create_symlink(dirfd,
 		(const char*)(addr_t)hostPath, (const char*)(addr_t)target, 0777));
 }
@@ -818,6 +822,8 @@ renguin_sys_mknodat(int dirfd, uint64 path, uint64 mode, uint64 device)
 				RENGUIN_PATH_MAY_CREATE, &status, dirfd);
 			if (status != B_OK)
 				return renguin_encode(status);
+			if (renguin_creates_shadow(dirfd, hostPath))
+				return -LX_EEXIST;
 			return renguin_encode(_user_create_fifo(dirfd,
 				(const char*)(addr_t)hostPath, permissions));
 		}

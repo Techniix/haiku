@@ -139,6 +139,45 @@ int main(void)
 			&& viaRoot.st_ino == direct.st_ino, "fstatat / boot");
 		close(boot);
 		close(root);
+
+		// and from the working directory at "/" (review of PR #40):
+		// "cd / && mkdir -p boot/home/x" made the root's own /boot
+		char cwd[512];
+		CHECK(getcwd(cwd, sizeof(cwd)) != NULL && chdir("/") == 0, "chdir /");
+		errno = 0;
+		made = mkdir("boot", 0755);
+		error = errno;
+		if (made == 0)
+			rmdir("boot");
+		errno = error;
+		CHECK(made != 0 && error == EEXIST, "mkdir boot from /");
+		errno = 0;
+		made = mkdir("etc/../boot", 0755);
+		error = errno;
+		if (made == 0)
+			rmdir("boot");
+		errno = error;
+		CHECK(made != 0 && error == EEXIST, "mkdir etc/../boot from /");
+		CHECK(chdir(cwd) == 0, "chdir back");
+	}
+	// /proc/self/mountinfo has a line with each file's statx mount ID
+	{
+		const char* paths[] = { pathA, "/proc/self/status" };
+		for (int i = 0; i < 2; i++) {
+			struct statx mounted;
+			CHECK(statx(AT_FDCWD, paths[i], 0, STATX_TYPE | 0x1000, &mounted)
+				== 0 && (mounted.stx_mask & 0x1000) != 0, "statx mount id");
+			FILE* info = fopen("/proc/self/mountinfo", "r");
+			CHECK(info != NULL, "open mountinfo");
+			char line[1024];
+			int found = 0;
+			while (fgets(line, sizeof(line), info) != NULL) {
+				if (strtoull(line, NULL, 10) == mounted.stx_mnt_id)
+					found = 1;
+			}
+			fclose(info);
+			CHECK(found, "mountinfo has the statx mount id");
+		}
 	}
 	printf("statx\n");
 

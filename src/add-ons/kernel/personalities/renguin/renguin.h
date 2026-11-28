@@ -163,6 +163,8 @@ struct renguin_team {
 	image_id app_image;			// registered B_APP_IMAGE, or -1
 	addr_t	vdso_base;			// the vDSO's address (vdso.cpp), or 0
 	bool	have_linux_root;	// the root (below) existed at exec time
+	dev_t	root_device;		// batch 14: the root's directory, for
+	ino_t	root_node;			// is_root_dirfd() (path.cpp); set with root
 	char	root[B_PATH_NAME_LENGTH];
 		// batch 14: the host directory chroot() made this team's "/";
 		// "" is RENGUIN_LINUX_ROOT. Inherited on fork(), kept on exec()
@@ -413,6 +415,9 @@ void		renguin_exec_claim_root(team_id team);
 void		renguin_exec_release_root(team_id team, bool dying);
 int32		renguin_exec_root_count();
 int64		renguin_sys_chroot(uint64 path);
+bool		renguin_creates_shadow(int dirfd, uint64 userPath);
+	// batch 14: whether creating userPath (as Haiku resolves it from dirfd)
+	// makes a top-level entry of the Linux root that hides Haiku's own
 status_t	renguin_resolve_in_root_of(const char* root,
 				const char* linuxPath, uint32 flags, char* hostPath,
 				size_t hostPathSize);
