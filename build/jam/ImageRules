@@ -1681,6 +1681,15 @@ actions BuildCDBootPPCImage1 bind MAPS
 
 rule BuildEfiSystemPartition image : efiLoader
 {
+	# Renga: images/CDBootImage and images/AnybootImage both declare the
+	# same esp.image. Each call attached the action again, so every build
+	# of an EFI anyboot image made the partition twice in a row (jam runs
+	# the actions of one target one after the other). Declare it once.
+	if [ on $(image) return $(HAIKU_EFI_SYSTEM_PARTITION_DECLARED) ] {
+		return ;
+	}
+	HAIKU_EFI_SYSTEM_PARTITION_DECLARED on $(image) = 1 ;
+
 	local macVolumeIcon = [ FDirName
 		$(HAIKU_TOP) data artwork VolumeIcon.icns ] ;
 	local fatshell = <build>fat_shell ;
@@ -1731,12 +1740,37 @@ actions BuildEfiSystemPartition1
 	echo "mkdir myfs/KEYS" | ${FATFS} $(<)
 	echo "mkdir myfs/EFI/BOOT" | ${FATFS} $(<)
 
-	echo "cp :${LOADER} myfs/EFI/BOOT/$(EFINAME)" | ${FATFS} $(<)
-	echo "cp :${EFIICON} myfs/.VolumeIcon.icns" | ${FATFS} $(<)
+	# Renga: FAT stores no Haiku attributes, so copy without them. Without
+	# xattr support the build host emulates attributes in a directory keyed
+	# by inode number (src/build/libroot/fs_attr_generic.cpp), and a newly
+	# built loader can inherit a deleted file's attributes when it gets that
+	# file's inode. fat_shell's cp copies attributes before the data and
+	# gives up at the first one FAT refuses, leaving a 0-byte file and still
+	# exiting 0 (batch 14: BEOS:APP_VERSION, a 0-byte BOOTX64.EFI).
+	echo "cp --ignore-attributes :${LOADER} myfs/EFI/BOOT/$(EFINAME)" \
+		| ${FATFS} $(<)
+	echo "cp --ignore-attributes :${EFIICON} myfs/.VolumeIcon.icns" \
+		| ${FATFS} $(<)
 
 	# Copy UEFI signing keys and a README for end users
-	echo "cp :$(EFIKEYS)/README.md myfs/KEYS/README.md" | ${FATFS} $(<)
+	echo "cp --ignore-attributes :$(EFIKEYS)/README.md myfs/KEYS/README.md" \
+		| ${FATFS} $(<)
 	for i in auth cer crt; do
-		echo "cp :$(EFIKEYS)/DB.$i myfs/KEYS/DB.$i" | ${FATFS} $(<)
+		echo "cp --ignore-attributes :$(EFIKEYS)/DB.$i myfs/KEYS/DB.$i" \
+			| ${FATFS} $(<)
 	done
+
+	# Renga: fail loudly if the loader did not arrive whole. fat_shell exits
+	# 0 when a command fails, so read the loader back and compare it.
+	CHECK="$(<).loader-check"
+	$(RM) "${CHECK}"
+	echo "cp --ignore-attributes myfs/EFI/BOOT/$(EFINAME) :${CHECK}" \
+		| ${FATFS} $(<)
+	if ! test -s "${LOADER}" || ! cmp -s "${LOADER}" "${CHECK}"; then
+		echo "BuildEfiSystemPartition: EFI/BOOT/$(EFINAME) in $(<) is not" \
+			"a copy of ${LOADER} (or that loader is empty)" >&2
+		$(RM) "${CHECK}" $(<)
+		exit 1
+	fi
+	$(RM) "${CHECK}"
 }

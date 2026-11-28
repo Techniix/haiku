@@ -5873,6 +5873,12 @@ def main():
 	elif not booted_before:
 		run["image"] = image_identity(image_path(args))
 		write_json_atomically(os.path.join(results_dir, RUN_FILE), run)
+	if ok and not args.compile_only and args.firmware == "uefi":
+		esp = check_esp_loader(image_path(args))
+		report.setdefault("host_checks", []).append(esp)
+		if not esp["pass"]:
+			log("not booting: %s failed: %s" % (esp["name"], esp["detail"]))
+			ok = False
 	if ok and not args.compile_only:
 		disks = None
 		if args.installer_upgrade:
@@ -5973,6 +5979,173 @@ def image_identity(path):
 	except OSError:
 		return None
 	return {"path": path, "size": info.st_size, "mtime": info.st_mtime}
+
+
+# harness.esp_loader: the file OVMF starts from the image's EFI system
+# partition (the removable-media path of the UEFI specification; the harness
+# boots x86_64 only). Batch 14: a build put a 0-byte BOOTX64.EFI in the ESP
+# and OVMF waited out the whole boot timeout with nothing to start.
+ESP_LOADER = ("EFI", "BOOT", "BOOTX64.EFI")
+ESP_MBR_TYPE = 0xef
+# C12A7328-F81F-11D2-BA4B-00A0C93EC93B as GPT stores it (mixed endian)
+ESP_GPT_TYPE = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")
+
+
+def esp_partitions(image):
+	"""The byte offsets of the EFI system partitions in the MBR or GPT
+	partition table of the open \a image."""
+	image.seek(0)
+	mbr = image.read(512)
+	if len(mbr) < 512 or mbr[510:512] != b"\x55\xaa":
+		return []
+	found = []
+	gpt = False
+	for i in range(4):
+		entry = mbr[446 + 16 * i:462 + 16 * i]
+		start = struct.unpack_from("<I", entry, 8)[0]
+		if entry[4] == ESP_MBR_TYPE and start:
+			found.append(start * 512)
+		elif entry[4] == 0xee:
+			gpt = True
+	if gpt:
+		image.seek(512)
+		header = image.read(92)
+		if header[:8] == b"EFI PART":
+			table, count, size = struct.unpack_from("<QII", header, 72)
+			if size >= 128:
+				image.seek(table * 512)
+				entries = image.read(min(count, 256) * size)
+				for i in range(len(entries) // size):
+					entry = entries[i * size:(i + 1) * size]
+					if entry[:16] == ESP_GPT_TYPE:
+						found.append(
+							struct.unpack_from("<Q", entry, 32)[0] * 512)
+	return found
+
+
+def fat_find(image, offset, path):
+	"""Looks up \a path (a sequence of names) in the FAT12/16/32 file system
+	at byte \a offset of the open \a image. Returns the file's size and its
+	first two bytes; raises ValueError saying what is missing."""
+	image.seek(offset)
+	boot = image.read(512)
+	if len(boot) < 512 or boot[510:512] != b"\x55\xaa":
+		raise ValueError("no FAT boot sector")
+	sector, per_cluster, reserved, fats, root_entries, total16 = \
+		struct.unpack_from("<HBHBHH", boot, 11)
+	fat16 = struct.unpack_from("<H", boot, 22)[0]
+	total32, fat32 = struct.unpack_from("<II", boot, 32)
+	root_cluster = struct.unpack_from("<I", boot, 44)[0]
+	if sector not in (512, 1024, 2048, 4096) or not per_cluster or not fats:
+		raise ValueError("not a FAT file system")
+	fat_sectors = fat16 or fat32
+	root_sectors = (root_entries * 32 + sector - 1) // sector
+	data = reserved + fats * fat_sectors + root_sectors
+	clusters = ((total16 or total32) - data) // per_cluster
+	bits = 12 if clusters < 4085 else 16 if clusters < 65525 else 32
+	cluster_bytes = sector * per_cluster
+	image.seek(offset + reserved * sector)
+	fat = image.read(fat_sectors * sector)
+
+	def next_cluster(n):
+		if bits == 12:
+			value = struct.unpack_from("<H", fat, n + n // 2)[0]
+			value = value >> 4 if n & 1 else value & 0xfff
+			return None if value >= 0xff8 else value
+		if bits == 16:
+			value = struct.unpack_from("<H", fat, n * 2)[0]
+			return None if value >= 0xfff8 else value
+		value = struct.unpack_from("<I", fat, n * 4)[0] & 0x0fffffff
+		return None if value >= 0x0ffffff8 else value
+
+	def cluster_offset(n):
+		return offset + data * sector + (n - 2) * cluster_bytes
+
+	def read_chain(n):
+		content = b""
+		for _ in range(clusters):
+			if n is None or n < 2:
+				break
+			image.seek(cluster_offset(n))
+			content += image.read(cluster_bytes)
+			n = next_cluster(n)
+		return content
+
+	if bits == 32:
+		directory = read_chain(root_cluster)
+	else:
+		image.seek(offset + (reserved + fats * fat_sectors) * sector)
+		directory = image.read(root_entries * 32)
+	for depth, name in enumerate(path):
+		walked = "/".join(path[:depth + 1])
+		match = None
+		for i in range(0, len(directory) - 31, 32):
+			entry = directory[i:i + 32]
+			if entry[0] == 0:
+				break
+			# deleted entries, long-name parts and the volume label
+			if entry[0] == 0xe5 or entry[11] & 0x08:
+				continue
+			base = entry[:8].decode("latin-1").rstrip()
+			extension = entry[8:11].decode("latin-1").rstrip()
+			if (base + "." + extension if extension else base).upper() \
+					== name.upper():
+				match = entry
+				break
+		if match is None:
+			raise ValueError("no " + walked)
+		first = struct.unpack_from("<H", match, 20)[0] << 16 \
+			| struct.unpack_from("<H", match, 26)[0]
+		if depth < len(path) - 1:
+			if not match[11] & 0x10:
+				raise ValueError(walked + " is not a directory")
+			directory = read_chain(first)
+			continue
+		size = struct.unpack_from("<I", match, 28)[0]
+		head = b""
+		if size and first >= 2:
+			image.seek(cluster_offset(first))
+			head = image.read(2)
+		return size, head
+	raise ValueError("empty path")
+
+
+def check_esp_loader(path):
+	"""harness.esp_loader: the image to boot with UEFI has an EFI system
+	partition whose EFI/BOOT/BOOTX64.EFI is a non-empty PE image. Checked on
+	the host before QEMU starts, so a broken ESP fails at once instead of
+	OVMF waiting out the boot timeout."""
+	name = os.path.basename(path)
+	loader = "/".join(ESP_LOADER)
+	problems = []
+	try:
+		with open(path, "rb") as image:
+			partitions = esp_partitions(image)
+			for offset in partitions:
+				try:
+					size, head = fat_find(image, offset, ESP_LOADER)
+				except (ValueError, struct.error) as error:
+					problems.append("ESP at byte %d: %s" % (offset, error))
+					continue
+				if size == 0:
+					problems.append("ESP at byte %d: %s is 0 bytes"
+						% (offset, loader))
+				elif head != b"MZ":
+					problems.append("ESP at byte %d: %s (%d bytes) is not "
+						"a PE image" % (offset, loader, size))
+				else:
+					return {"name": "harness.esp_loader", "pass": True,
+						"detail": "%s: %s is %d bytes (ESP at byte %d)"
+							% (name, loader, size, offset)}
+	except OSError as error:
+		return {"name": "harness.esp_loader", "pass": False,
+			"detail": "cannot read %s: %s" % (path, error)}
+	if not partitions:
+		problems.append("no EFI system partition")
+	return {"name": "harness.esp_loader", "pass": False,
+		"detail": "%s: %s; the firmware has nothing to start (see "
+			"BuildEfiSystemPartition in build/jam/ImageRules)"
+			% (name, "; ".join(problems))}
 
 
 # What stays in the results directory when an interrupted boot's files

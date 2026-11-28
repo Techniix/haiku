@@ -440,7 +440,7 @@ Each entry is the single source of status for its component. Fields: Upstream ma
 | Dependencies | `F-01`, `F-13` |
 | Difficulty | Not rated |
 | Risk | Low |
-| Testing status | `renga-raw`: 246/246 at introduction, 286/286 at `23ca3768`; identity checks `image.volume_name`, `image.repositories`, `image.repository_priority` |
+| Testing status | `renga-raw`: 246/246 at introduction, 286/286 at `23ca3768`; identity checks `image.volume_name`, `image.repositories`, `image.repository_priority`. Batch 14 fix: the ESP is declared once and its files copied without the build host's emulated attributes (a stale `BEOS:APP_VERSION` had left a 0-byte `BOOTX64.EFI`); regression check `harness.esp_loader` |
 | Next milestone | All three profiles boot in the harness |
 | Recommended next action | Add a harness run of `renga-anyboot` under UEFI and CD |
 | Links | [RengaBuildProfiles](https://github.com/Techniix/haiku/blob/ce/main/3rdparty/ce/build/RengaBuildProfiles) |
