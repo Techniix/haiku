@@ -135,6 +135,21 @@ summarize_new_volume(const WizardChoice& choice, WizardSummary& summary,
 		? DESTINATION_ERASE_DISK : DESTINATION_FREE_SPACE;
 	if (!valid_volume_name(choice.volumeName.String(), why))
 		return B_BAD_VALUE;
+	summary.plan = RengaDisk::Plan(disk.path.String());
+	summary.plan.AllowRealDisks(true);
+	// only ever applied to this very disk: another one plugged into the
+	// same port has another device ID, and the engine refuses it
+	summary.plan.ExpectDevice(disk.id);
+	status = make_destination_plan(disk, layout,
+		choice.volumeName.String(), summary.plan, why);
+	if (status == B_OK)
+		status = summary.plan.Check(why);
+	if (status != B_OK) {
+		why = capitalized(why) << ".";
+		return status;
+	}
+	// after the disk's own refusals (the running system's disk, too
+	// small), which matter more
 	if (layout == DESTINATION_ERASE_DISK && choice.firmware != FIRMWARE_UEFI) {
 		// The erase layout is GPT with an EFI system partition, which a
 		// BIOS does not start: wiping the disk would leave a computer
@@ -149,19 +164,6 @@ summarize_new_volume(const WizardChoice& choice, WizardSummary& summary,
 				: B_TRANSLATE("How this computer was started could not be "
 					"told."));
 		return B_NOT_SUPPORTED;
-	}
-	summary.plan = RengaDisk::Plan(disk.path.String());
-	summary.plan.AllowRealDisks(true);
-	// only ever applied to this very disk: another one plugged into the
-	// same port has another device ID, and the engine refuses it
-	summary.plan.ExpectDevice(disk.id);
-	status = make_destination_plan(disk, layout,
-		choice.volumeName.String(), summary.plan, why);
-	if (status == B_OK)
-		status = summary.plan.Check(why);
-	if (status != B_OK) {
-		why = capitalized(why) << ".";
-		return status;
 	}
 	summary.changesTable = true;
 	summary.erasesDisk = layout == DESTINATION_ERASE_DISK;
