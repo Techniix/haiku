@@ -40,6 +40,13 @@
 	                                larger disk"; changing it crashed
 	                                libbe), "rengadisk wipe" clears it
 	                                (saved first), then a new table works
+	  disk_engine.whole_disk_fat_not_refused
+	                                a FAT volume on a whole disk (no
+	                                partition table) whose boot code
+	                                bytes would read as an MBR entry
+	                                past the disk's end: a new table is
+	                                not refused (only an Intel map's
+	                                entries are checked)
 	  disk_engine.restore           a saved table written back brings a
 	                                deleted partition back
 	  disk_engine.format            partition 0 formatted as BFS named Data
@@ -49,6 +56,9 @@
 */
 
 
+#include <DiskDevice.h>
+#include <DiskDeviceRoster.h>
+#include <DiskDeviceTypes.h>
 #include <DiskEngine.h>
 #include <FindDirectory.h>
 #include <Path.h>
@@ -468,6 +478,68 @@ main()
 		arguments << "detach '" << larger << "'";
 		tool(arguments.String(), &status);
 		unlink(larger.String());
+	}
+
+	// a whole-disk FAT volume: 0x55aa, and boot code where MBR entries
+	// would be (review of PR #42)
+	{
+		BString fatImage = home.Path();
+		fatImage << "/disk-engine-fat.img";
+		int fatFD = open(fatImage.String(), O_CREAT | O_RDWR | O_TRUNC, 0644);
+		bool made = fatFD >= 0 && ftruncate(fatFD, 64 * 1024 * 1024) == 0;
+		if (fatFD >= 0)
+			close(fatFD);
+		BString arguments;
+		arguments << "attach '" << fatImage << "'";
+		BString fatDisk = tool(arguments.String(), &status);
+		fatDisk.Trim();
+		BDiskDeviceRoster roster;
+		BDiskDevice device;
+		status_t initialized = roster.GetDeviceForPath(fatDisk.String(),
+			&device);
+		if (initialized == B_OK)
+			initialized = device.PrepareModifications();
+		if (initialized == B_OK) {
+			initialized = device.Initialize(kPartitionTypeFAT32, "FATSTICK",
+				NULL);
+			if (initialized == B_OK)
+				initialized = device.CommitModifications();
+			else
+				device.CancelModifications();
+		}
+		// boot code that reads as a FAT32 entry from block 2048 with far
+		// more blocks than the disk has
+		uint8 entry[16] = {};
+		entry[4] = 0x0c;
+		uint32 start = 2048, count = 0x7fffffff;
+		memcpy(entry + 8, &start, 4);
+		memcpy(entry + 12, &count, 4);
+		int raw = open(fatDisk.String(), O_RDWR);
+		uint8 signature[2] = {};
+		bool crafted = raw >= 0
+			&& pwrite(raw, entry, sizeof(entry), 446) == (ssize_t)sizeof(entry)
+			&& pread(raw, signature, 2, 510) == 2
+			&& signature[0] == 0x55 && signature[1] == 0xaa;
+		if (raw >= 0)
+			close(raw);
+		BString fatLines = disk_lines(fatDisk);
+
+		arguments = "";
+		arguments << "plan " << fatDisk << " table:gpt";
+		int planStatus = -1;
+		BString planned = tool(arguments.String(), &planStatus);
+		report("whole_disk_fat_not_refused", made && initialized == B_OK
+				&& crafted && fatLines.FindFirst("(no partition table)") >= 0
+				&& planStatus == 0
+				&& planned.FindFirst("describes a larger disk") < 0,
+			"initialized %s, boot code crafted %d; disk: %s; plan exit %d: %s",
+			strerror(initialized), crafted, one_line(fatLines).String(),
+			planStatus, one_line(planned).String());
+
+		arguments = "";
+		arguments << "detach '" << fatImage << "'";
+		tool(arguments.String(), &status);
+		unlink(fatImage.String());
 	}
 
 	BString detachArgs;

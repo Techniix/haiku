@@ -25,10 +25,13 @@
 	  rengadisk restore <disk> <file>      write a saved table back (disk
 	                                       images only; prints the image's
 	                                       new disk path)
-	  rengadisk wipe <disk>                clear the partition table (saved
-	                                       first), e.g. one for a larger
-	                                       disk that plans refuse; prints
-	                                       the disk's path afterwards
+	  rengadisk wipe <disk>                zero the first and last MiB: the
+	                                       partition table (saved first)
+	                                       and any data there, e.g. a table
+	                                       for a larger disk that plans
+	                                       refuse; a real disk needs
+	                                       --allow-real-disks --confirm
+	                                       <disk>; prints the disk's path
 
 	Only disk images unless --allow-real-disks; never the boot disk.
 	Exit status: 0 done, 1 refused or failed, 2 usage.
@@ -60,11 +63,13 @@ usage()
 			"delete:<index>\n"
 		"                format:<index>:<fs>[:<name>]  name:<index>:<name>\n"
 		"       rengadisk backup|restore <disk> <file>\n"
-		"       rengadisk wipe <disk> [--allow-real-disks] "
+		"       rengadisk wipe <disk> [--allow-real-disks --confirm <disk>] "
 			"[--backup-dir <dir>]\n"
-		"         clears the partition table (saved first), e.g. one that "
-			"describes\n"
-		"         a larger disk; prints the disk's path afterwards\n");
+		"         zeroes the first and last MiB (the partition table, saved "
+			"first,\n"
+		"         and any data there), e.g. a table that describes a larger "
+			"disk;\n"
+		"         prints the disk's path afterwards\n");
 	return 2;
 }
 
@@ -204,6 +209,7 @@ main(int argc, char** argv)
 	}
 	if (strcmp(command, "wipe") == 0 && argc >= 3) {
 		bool allowReal = false;
+		const char* confirmation = NULL;
 		BPath backupDir;
 		find_directory(B_USER_SETTINGS_DIRECTORY, &backupDir, true);
 		backupDir.Append("Renga/disk-backups");
@@ -211,10 +217,19 @@ main(int argc, char** argv)
 		for (int i = 3; i < argc; i++) {
 			if (strcmp(argv[i], "--allow-real-disks") == 0)
 				allowReal = true;
+			else if (strcmp(argv[i], "--confirm") == 0 && i + 1 < argc)
+				confirmation = argv[++i];
 			else if (strcmp(argv[i], "--backup-dir") == 0 && i + 1 < argc)
 				backup = argv[++i];
 			else
 				return usage();
+		}
+		// a real disk: its path a second time, to make sure
+		if (allowReal && (confirmation == NULL
+				|| strcmp(confirmation, argv[2]) != 0)) {
+			fprintf(stderr, "rengadisk: wipe: a real disk needs --confirm "
+				"%s (its path again)\n", argv[2]);
+			return 1;
 		}
 		create_directory(backup.String(), 0700);
 		BString log, newPath;

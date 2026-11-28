@@ -103,10 +103,12 @@ bool TableExceedsDisk(const DiskInfo& disk, BString& why);
 
 /*!	Clears the partition table of the disk at \a devicePath: the first and
 	last MiB (MBR, GPT header and table, GPT backup) are saved into
-	\a backupDir first (RestoreTable() puts them back), then zeroed. The
+	\a backupDir first (RestoreTable() puts them back), then zeroed, with
+	any data there (a volume that starts in the first MiB is damaged). The
 	plan's safety rules apply: never the running system's disk, a
-	read-only one or one with a mounted partition; disk images only unless
-	\a allowRealDisks. An image is attached again so that the system reads
+	read-only one or one with a mounted partition (logical partitions
+	too); disk images only unless \a allowRealDisks (rengadisk also
+	wants the disk's path again, --confirm). An image is attached again so that the system reads
 	the cleared table (\a newDevicePath gets its new path). \a log gets
 	what was done.
 */

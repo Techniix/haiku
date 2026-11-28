@@ -391,6 +391,41 @@ BackupTable(const char* devicePath, const char* backupPath)
 }
 
 
+//!	Whether \a partition or any partition inside it (logical partitions
+//!	of an extended one) is mounted.
+static bool
+mounted_within(BPartition* partition)
+{
+	if (partition == NULL)
+		return false;
+	if (partition->IsMounted())
+		return true;
+	for (int32 i = 0; i < partition->CountChildren(); i++) {
+		if (mounted_within(partition->ChildAt(i)))
+			return true;
+	}
+	return false;
+}
+
+
+//!	mounted_within() for the disk at \a path (\a index -1) or its
+//!	first-level partition \a index.
+static bool
+mounted_on_disk(const char* path, int32 index = -1)
+{
+	BDiskDevice device;
+	if (get_device(path, device) != B_OK)
+		return false;
+	if (index < 0)
+		return mounted_within(&device);
+	for (int32 i = 0; i < device.CountChildren(); i++) {
+		if (device.ChildAt(i)->Index() == index)
+			return mounted_within(device.ChildAt(i));
+	}
+	return false;
+}
+
+
 bool
 TableExceedsDisk(const DiskInfo& disk, BString& why)
 {
@@ -410,7 +445,11 @@ TableExceedsDisk(const DiskInfo& disk, BString& why)
 	uint8 mbr[512];
 	uint8* gpt = (uint8*)malloc(blockSize);
 	bool exceeds = false;
-	if (read_exactly(fd, mbr, sizeof(mbr), 0) == B_OK
+	// MBR entries only when the disk has an Intel partition map: a volume
+	// on the whole disk (FAT, NTFS, exFAT) has 0x55aa too, with boot code
+	// where the entries would be
+	if (disk.partitioning == kPartitionTypeIntel
+		&& read_exactly(fd, mbr, sizeof(mbr), 0) == B_OK
 		&& mbr[510] == 0x55 && mbr[511] == 0xaa) {
 		// the four primary entries (a GPT's protective entry, type 0xee,
 		// covers the whole disk or more by design)
@@ -467,10 +506,8 @@ WipeTable(const char* devicePath, const char* backupDir, bool allowRealDisks,
 		why = "the disk is read-only";
 	else if (!disk.isFile && !allowRealDisks)
 		why = "not a disk image: real disks need --allow-real-disks";
-	for (const PartitionInfo& partition : disk.partitions) {
-		if (why.Length() == 0 && partition.mounted)
-			why = "a partition of the disk is mounted";
-	}
+	if (why.Length() == 0 && mounted_on_disk(disk.path.String()))
+		why = "a partition of the disk is mounted";
 	if (why.Length() > 0) {
 		log << "refused: " << why << "\n";
 		return B_NOT_ALLOWED;
@@ -493,8 +530,12 @@ WipeTable(const char* devicePath, const char* backupDir, bool allowRealDisks,
 	log << "table saved: " << backupPath << "\n";
 
 	int fd = open(disk.path.String(), O_RDWR);
-	if (fd < 0)
-		return errno;
+	if (fd < 0) {
+		status = errno;
+		log << "cannot open " << disk.path << " for writing: "
+			<< strerror(status) << "; nothing was cleared\n";
+		return status;
+	}
 	off_t size = device_size(fd);
 	off_t area = std::min(kTableArea, size / 2);
 	char* zeros = (char*)calloc(1, area);
@@ -506,8 +547,8 @@ WipeTable(const char* devicePath, const char* backupDir, bool allowRealDisks,
 	fsync(fd);
 	close(fd);
 	free(zeros);
-	log << "first and last " << SizeString(area) << " cleared: "
-		<< strerror(status) << "\n";
+	log << "first and last " << SizeString(area) << " cleared, with any "
+		"data there: " << strerror(status) << "\n";
 
 	// the system reads the table again: an image is attached again
 	BDiskDevice device;
@@ -693,17 +734,31 @@ Plan::Check(BString& why) const
 	// (BPartition::Delegate::Uninitialize, 20261128-003328)
 	BString exceeds;
 	if (TableExceedsDisk(disk, exceeds)) {
-		why.SetToFormat("the partition table describes a larger disk (%s); "
-			"clear it first with \"rengadisk wipe %s\" (the table is saved "
-			"before)", exceeds.String(), disk.path.String());
+		if (fOperations[0].kind == kInitializePartitioning) {
+			// the plan replaces the table anyway
+			why.SetToFormat("the partition table describes a larger disk "
+				"(%s); clear it first with \"rengadisk wipe %s\" (the table "
+				"is saved before; the first and last MiB are cleared, with "
+				"any data there)", exceeds.String(), disk.path.String());
+		} else {
+			// the disk's other partitions are to stay: no wiping
+			why.SetToFormat("the partition table describes a larger disk "
+				"(%s): it is inconsistent. Repair it with the tools of the "
+				"system that made it, or erase the disk instead (a new "
+				"table)", exceeds.String());
+		}
 		return B_BAD_DATA;
 	}
 
 	// the partitions as each step leaves them (by index; mounted or not)
+	// mounted here means: the partition or one inside it (the logical
+	// partitions of an extended one)
 	std::vector<bool> mounted;
 	for (const PartitionInfo& partition : disk.partitions) {
-		if (partition.index >= 0)
-			mounted.push_back(partition.mounted);
+		if (partition.index >= 0) {
+			mounted.push_back(partition.mounted
+				|| mounted_on_disk(disk.path.String(), partition.index));
+		}
 	}
 	bool hasTable = disk.partitioning.Length() > 0;
 	bool created = false;
@@ -719,6 +774,11 @@ Plan::Check(BString& why) const
 						why = step << "a partition of the disk is mounted";
 						return B_BUSY;
 					}
+				}
+				// a volume on the whole disk (no table) counts too
+				if (i == 0 && mounted_on_disk(disk.path.String())) {
+					why = step << "a volume on the disk is mounted";
+					return B_BUSY;
 				}
 				if (strcmp(DiskSystemName(operation.system),
 						kPartitionTypeEFI) != 0
