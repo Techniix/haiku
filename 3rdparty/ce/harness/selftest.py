@@ -839,6 +839,74 @@ checks = media_recordings(pace=1.04)
 expect("media phases: tones 4 % off on the second card fail",
 	not checks["media_audio.route_second_card"]["pass"],
 	checks["media_audio.route_second_card"]["detail"])
+
+# Regression (sound_audio.mirror_second, intermittent): the second card's
+# clock-drift correction raises its tones 0.28-0.70 %, and on a fixed 0.2 %
+# grid a 5 kHz tone between two of its frequencies only reached a purity of
+# about 0.58, so with noise some windows fell under 0.5 and split the
+# tone's segment (failed runs: +3252, +6961 and +6911 ppm). Every offset
+# in the search range keeps every window well above the threshold.
+def drifted_tone(hz, seconds, ppm, noise, seed):
+	import random
+	generator = random.Random(seed)
+	step = 2 * math.pi * hz * (1 + ppm / 1e6) / RATE
+	return [int(5800 * math.sin(step * i) + generator.gauss(0, noise))
+		for i in range(int(seconds * RATE))]
+
+
+window = RATE // 10
+sweep = list(range(0, 7501, 100))
+samples = []
+for ppm in sweep:
+	samples += drifted_tone(4970, 0.3, ppm, 600, ppm)
+labels = ce_test.tone_windows(samples, RATE, ce_test.SOUND_FREQUENCIES,
+	window, ce_test.TONE_SPREAD)
+weak = ["%+d ppm: %s %.3f" % (sweep[i // 3], label, purity)
+	for i, (label, purity, _) in enumerate(labels)
+	if label != 4970 or purity < 0.8]
+expect("tone search: 4970 Hz 0 to +7500 ppm stays pure in every window",
+	len(labels) == 3 * len(sweep) and not weak,
+	"%d of %d windows weak; %s" % (len(weak), len(labels),
+		"; ".join(weak[:6])))
+# Review of the above: every candidate's grid holds its own frequency, so an
+# undrifted tone keeps its name (5020 Hz came out as 4970's +1 % and 5070
+# as 5020's, which hid a tone sound_audio.mirror_off_second must not hear).
+for name, candidates in (("sound", ce_test.SOUND_FREQUENCIES),
+		("media", ce_test.MEDIA_FREQUENCIES)):
+	samples = []
+	for hz in candidates:
+		samples += drifted_tone(hz, 0.2, 0, 0, hz)
+	labels = ce_test.tone_windows(samples, RATE, candidates, window,
+		ce_test.TONE_SPREAD)
+	wrong = ["%d Hz: %s" % (candidates[i // 2], label)
+		for i, (label, _, _) in enumerate(labels)
+		if label != candidates[i // 2]]
+	expect("tone search: undrifted %s candidates keep their names" % name,
+		len(labels) == 2 * len(candidates) and not wrong,
+		"; ".join(sorted(set(wrong))))
+for hz in (5020, 5070):
+	labels = ce_test.tone_windows(drifted_tone(hz, 0.5, 0, 600, hz), RATE,
+		ce_test.SOUND_FREQUENCIES, window, ce_test.TONE_SPREAD)
+	expect("tone search: an undrifted %d Hz tone is %d Hz" % (hz, hz),
+		all(label == hz for label, _, _ in labels),
+		str([(label, round(purity, 3)) for label, purity, _ in labels]))
+for ppm in (3200, 3252, 6911, 6961):
+	left = drifted_tone(4920, 2.0, ppm, 600, ppm)
+	right = drifted_tone(4970, 2.0, ppm, 600, ppm + 1)
+	quiet = [0] * (RATE // 2)
+	directory = tempfile.mkdtemp()
+	path = os.path.join(directory, "sdl-out.raw")
+	with open(path, "wb") as raw:
+		raw.write(b"".join(struct.pack("<hh", l, r)
+			for l, r in zip(quiet + left + quiet, quiet + right + quiet)))
+	_, _, segments = ce_test.media_segments(path, ce_test.read_raw_audio,
+		ce_test.SOUND_FREQUENCIES, ce_test.TONE_SPREAD)
+	shutil.rmtree(directory)
+	toned = [(s["key"], s["seconds"]) for s in segments
+		if s["key"] != (None, None)]
+	expect("tone search: L 4920 / R 4970 Hz at %+d ppm is one segment" % ppm,
+		len(toned) == 1 and toned[0][0] == (4920, 4970)
+			and toned[0][1] >= 1.9, str(toned))
 checks = media_recordings(volume=0.5)
 expect("media phases: a wrong application volume fails",
 	not checks["media_audio.app_volume"]["pass"],
