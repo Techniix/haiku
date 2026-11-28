@@ -342,6 +342,7 @@ struct ChannelCheck {
 	double	minPurity;
 	int32	windows;
 	double	maxJump;	// largest step between two samples
+	double	maxJumpAt;	// where, in seconds from the recording's start
 };
 
 
@@ -349,7 +350,7 @@ static ChannelCheck
 check_channel(const std::vector<float>& samples, double rate, double skip,
 	double hertz)
 {
-	ChannelCheck result = { 0, 1.0, 0, 0 };
+	ChannelCheck result = { 0, 1.0, 0, 0, 0 };
 	size_t start = (size_t)(skip * rate);
 	if (samples.size() <= start + 1 || rate <= 0) {
 		result.minPurity = 0;
@@ -359,8 +360,11 @@ check_channel(const std::vector<float>& samples, double rate, double skip,
 	for (size_t i = start; i < samples.size(); i++) {
 		energy += (double)samples[i] * samples[i];
 		if (i > start) {
-			result.maxJump = max_c(result.maxJump,
-				fabs(samples[i] - samples[i - 1]));
+			double step = fabs(samples[i] - samples[i - 1]);
+			if (step > result.maxJump) {
+				result.maxJump = step;
+				result.maxJumpAt = i / rate;
+			}
 		}
 	}
 	result.amplitude = sqrt(energy / (samples.size() - start)) * sqrt(2.0);
@@ -758,7 +762,9 @@ test_streams(const char* self)
 	report("click_free_volume", volume.left.size() > 0
 			&& vLeft.maxJump <= bound,
 		"largest step across the change %.4f, a 1550 Hz sine at %.2f makes "
-		"at most %.4f", vLeft.maxJump, kAmplitude, bound);
+		"at most %.4f (largest at %.3f s of %.3f s; the change at about "
+		"0.6 s)", vLeft.maxJump, kAmplitude, bound, vLeft.maxJumpAt,
+		volume.rate > 0 ? volume.left.size() / volume.rate : 0.0);
 	control.Update();
 	if (control.FindStream(kSignatureA) != NULL) {
 		report("app_volume_shown", fabs(control.FindStream(kSignatureA)->gain
@@ -805,8 +811,8 @@ test_streams(const char* self)
 	bound = max_step(1700, kAmplitude * mixer_gain(-12.0412), muting.rate);
 	report("click_free_mute", muting.left.size() > 0
 			&& muteLeft.maxJump <= bound,
-		"largest step across the mute %.4f, at most %.4f", muteLeft.maxJump,
-		bound);
+		"largest step across the mute %.4f, at most %.4f (largest at %.3f "
+		"s)", muteLeft.maxJump, bound, muteLeft.maxJumpAt);
 
 	// Phase "route": A back to normal on the default output, B on the
 	// second card. What you hear still has both.

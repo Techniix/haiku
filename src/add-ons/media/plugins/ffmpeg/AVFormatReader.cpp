@@ -1418,10 +1418,11 @@ AVFormatReader::Stream::GetStreamInfo(int64* frameCount,
 		// 1.933 s, which rounds to 29), and a count one low loses the last
 		// frame where callers stop at CountFrames() (MediaConverter,
 		// MediaTrackAudioSupplier); one high is harmless there. Audio with
-		// a duration of its own (WAV, ...) keeps the truncated count: that
-		// duration ends at the last sample, and with a count one high
-		// media.click_free_volume found a click in three runs out of three
-		// (the reader of the count on that path is not known yet).
+		// a duration of its own (WAV, MP4, ...) keeps the truncated count,
+		// as upstream: that duration ends at the last sample, so the count
+		// is at most a fraction of a frame low, and readers that loop
+		// until they have CountFrames() frames (BSimpleGameSound, 8-bit) are not
+		// handed one that never comes.
 		bigtime_t length = fStream->duration != AV_NOPTS_VALUE
 			? stream_time_to_microseconds(fStream->duration,
 				fStream->time_base.num, fStream->time_base.den,
