@@ -391,6 +391,182 @@ BackupTable(const char* devicePath, const char* backupPath)
 }
 
 
+//!	Whether \a partition or any partition inside it (logical partitions
+//!	of an extended one) is mounted.
+static bool
+mounted_within(BPartition* partition)
+{
+	if (partition == NULL)
+		return false;
+	if (partition->IsMounted())
+		return true;
+	for (int32 i = 0; i < partition->CountChildren(); i++) {
+		if (mounted_within(partition->ChildAt(i)))
+			return true;
+	}
+	return false;
+}
+
+
+//!	mounted_within() for the disk at \a path (\a index -1) or its
+//!	first-level partition \a index.
+static bool
+mounted_on_disk(const char* path, int32 index = -1)
+{
+	BDiskDevice device;
+	if (get_device(path, device) != B_OK)
+		return false;
+	if (index < 0)
+		return mounted_within(&device);
+	for (int32 i = 0; i < device.CountChildren(); i++) {
+		if (device.ChildAt(i)->Index() == index)
+			return mounted_within(device.ChildAt(i));
+	}
+	return false;
+}
+
+
+bool
+TableExceedsDisk(const DiskInfo& disk, BString& why)
+{
+	for (const PartitionInfo& partition : disk.partitions) {
+		if (partition.offset + partition.size > disk.size) {
+			why.SetToFormat("partition %" B_PRId32 " ends at %s, past the "
+				"disk's %s", partition.index,
+				SizeString(partition.offset + partition.size).String(),
+				SizeString(disk.size).String());
+			return true;
+		}
+	}
+	int fd = open(disk.path.String(), O_RDONLY);
+	if (fd < 0)
+		return false;
+	uint32 blockSize = disk.blockSize > 0 ? disk.blockSize : 512;
+	uint8 mbr[512];
+	uint8* gpt = (uint8*)malloc(blockSize);
+	bool exceeds = false;
+	// MBR entries only when the disk has an Intel partition map: a volume
+	// on the whole disk (FAT, NTFS, exFAT) has 0x55aa too, with boot code
+	// where the entries would be
+	if (disk.partitioning == kPartitionTypeIntel
+		&& read_exactly(fd, mbr, sizeof(mbr), 0) == B_OK
+		&& mbr[510] == 0x55 && mbr[511] == 0xaa) {
+		// the four primary entries (a GPT's protective entry, type 0xee,
+		// covers the whole disk or more by design)
+		for (int i = 0; i < 4 && !exceeds; i++) {
+			const uint8* entry = mbr + 446 + i * 16;
+			uint32 start, count;
+			memcpy(&start, entry + 8, 4);
+			memcpy(&count, entry + 12, 4);
+			if (entry[4] != 0 && entry[4] != 0xee
+				&& ((off_t)start + count) * 512 > disk.size) {
+				why.SetToFormat("MBR entry %d ends at %s, past the disk's %s",
+					i, SizeString(((off_t)start + count) * 512).String(),
+					SizeString(disk.size).String());
+				exceeds = true;
+			}
+		}
+	}
+	if (!exceeds && gpt != NULL
+		&& read_exactly(fd, gpt, blockSize, blockSize) == B_OK
+		&& memcmp(gpt, "EFI PART", 8) == 0) {
+		uint64 alternate, lastUsable;
+		memcpy(&alternate, gpt + 32, 8);
+		memcpy(&lastUsable, gpt + 48, 8);
+		uint64 blocks = disk.size / blockSize;
+		if (alternate >= blocks || lastUsable >= blocks) {
+			why.SetToFormat("its GPT header is for a disk of %s, the disk "
+				"has %s", SizeString((std::max(alternate, lastUsable) + 1)
+					* blockSize).String(), SizeString(disk.size).String());
+			exceeds = true;
+		}
+	}
+	free(gpt);
+	close(fd);
+	return exceeds;
+}
+
+
+status_t
+WipeTable(const char* devicePath, const char* backupDir, bool allowRealDisks,
+	BString& log, BString* newDevicePath)
+{
+	if (newDevicePath != NULL)
+		*newDevicePath = devicePath;
+	DiskInfo disk;
+	status_t status = GetDisk(devicePath, disk);
+	if (status != B_OK) {
+		log << "refused: " << devicePath << ": no such disk\n";
+		return status;
+	}
+	BString why;
+	if (disk.isBootDisk)
+		why = "this is the disk the running system started from";
+	else if (disk.readOnly)
+		why = "the disk is read-only";
+	else if (!disk.isFile && !allowRealDisks)
+		why = "not a disk image: real disks need --allow-real-disks";
+	if (why.Length() == 0 && mounted_on_disk(disk.path.String()))
+		why = "a partition of the disk is mounted";
+	if (why.Length() > 0) {
+		log << "refused: " << why << "\n";
+		return B_NOT_ALLOWED;
+	}
+
+	BString leaf(disk.path);
+	leaf.ReplaceAll('/', '_');
+	char stamp[32];
+	time_t now = time(NULL);
+	strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", localtime(&now));
+	BString backupPath;
+	backupPath.SetToFormat("%s/%s-%s-wipe.table", backupDir, leaf.String(),
+		stamp);
+	status = BackupTable(disk.path.String(), backupPath.String());
+	if (status != B_OK) {
+		log << "refused: the partition table could not be saved ("
+			<< strerror(status) << ")\n";
+		return status;
+	}
+	log << "table saved: " << backupPath << "\n";
+
+	int fd = open(disk.path.String(), O_RDWR);
+	if (fd < 0) {
+		status = errno;
+		log << "cannot open " << disk.path << " for writing: "
+			<< strerror(status) << "; nothing was cleared\n";
+		return status;
+	}
+	off_t size = device_size(fd);
+	off_t area = std::min(kTableArea, size / 2);
+	char* zeros = (char*)calloc(1, area);
+	status = zeros != NULL ? B_OK : B_NO_MEMORY;
+	if (status == B_OK)
+		status = write_exactly(fd, zeros, area, 0);
+	if (status == B_OK)
+		status = write_exactly(fd, zeros, area, size - area);
+	fsync(fd);
+	close(fd);
+	free(zeros);
+	log << "first and last " << SizeString(area) << " cleared, with any "
+		"data there: " << strerror(status) << "\n";
+
+	// the system reads the table again: an image is attached again
+	BDiskDevice device;
+	BPath imageFile;
+	if (status == B_OK && get_device(disk.path.String(), device) == B_OK
+		&& device.IsFile() && device.GetFilePath(&imageFile) == B_OK) {
+		BDiskDeviceRoster roster;
+		roster.UnregisterFileDevice(device.ID());
+		BString path;
+		status = AttachImage(imageFile.Path(), path);
+		if (status == B_OK && newDevicePath != NULL)
+			*newDevicePath = path;
+	} else if (status == B_OK)
+		log << "the cleared table is read at the next restart\n";
+	return status;
+}
+
+
 status_t
 RestoreTable(const char* devicePath, const char* backupPath,
 	BString* newDevicePath)
@@ -458,7 +634,9 @@ RestoreTable(const char* devicePath, const char* backupPath,
 Plan::Plan(const char* devicePath)
 	:
 	fDevicePath(devicePath),
-	fAllowRealDisks(false)
+	fAllowRealDisks(false),
+	fCreatedOffset(-1),
+	fExpectedDevice(-1)
 {
 }
 
@@ -512,6 +690,15 @@ describe(const Operation& operation)
 }
 
 
+BString
+Plan::Describe(int32 index) const
+{
+	if (index < 0 || index >= (int32)fOperations.size())
+		return "";
+	return describe(fOperations[index]);
+}
+
+
 status_t
 Plan::Check(BString& why) const
 {
@@ -525,6 +712,12 @@ Plan::Check(BString& why) const
 		why = "this is the disk the running system started from";
 		return B_NOT_ALLOWED;
 	}
+	if (fExpectedDevice >= 0 && disk.id != fExpectedDevice) {
+		why.SetToFormat("%s is another disk now (device %" B_PRId32 ", the "
+			"plan was made for device %" B_PRId32 "): it was replaced",
+			fDevicePath.String(), disk.id, fExpectedDevice);
+		return B_DEV_ID_ERROR;
+	}
 	if (disk.readOnly) {
 		why = "the disk is read-only";
 		return B_READ_ONLY_DEVICE;
@@ -537,12 +730,35 @@ Plan::Check(BString& why) const
 		why = "nothing to do";
 		return B_BAD_VALUE;
 	}
+	// changing a table that describes a larger disk crashed libbe
+	// (BPartition::Delegate::Uninitialize, 20261128-003328)
+	BString exceeds;
+	if (TableExceedsDisk(disk, exceeds)) {
+		if (fOperations[0].kind == kInitializePartitioning) {
+			// the plan replaces the table anyway
+			why.SetToFormat("the partition table describes a larger disk "
+				"(%s); clear it first with \"rengadisk wipe %s\" (the table "
+				"is saved before; the first and last MiB are cleared, with "
+				"any data there)", exceeds.String(), disk.path.String());
+		} else {
+			// the disk's other partitions are to stay: no wiping
+			why.SetToFormat("the partition table describes a larger disk "
+				"(%s): it is inconsistent. Repair it with the tools of the "
+				"system that made it, or erase the disk instead (a new "
+				"table)", exceeds.String());
+		}
+		return B_BAD_DATA;
+	}
 
 	// the partitions as each step leaves them (by index; mounted or not)
+	// mounted here means: the partition or one inside it (the logical
+	// partitions of an extended one)
 	std::vector<bool> mounted;
 	for (const PartitionInfo& partition : disk.partitions) {
-		if (partition.index >= 0)
-			mounted.push_back(partition.mounted);
+		if (partition.index >= 0) {
+			mounted.push_back(partition.mounted
+				|| mounted_on_disk(disk.path.String(), partition.index));
+		}
 	}
 	bool hasTable = disk.partitioning.Length() > 0;
 	bool created = false;
@@ -558,6 +774,11 @@ Plan::Check(BString& why) const
 						why = step << "a partition of the disk is mounted";
 						return B_BUSY;
 					}
+				}
+				// a volume on the whole disk (no table) counts too
+				if (i == 0 && mounted_on_disk(disk.path.String())) {
+					why = step << "a volume on the disk is mounted";
+					return B_BUSY;
 				}
 				if (strcmp(DiskSystemName(operation.system),
 						kPartitionTypeEFI) != 0
@@ -820,6 +1041,12 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 	backupPath.SetToFormat("%s/%s-%s.table", backupDir, leaf.String(), stamp);
 	DiskInfo disk;
 	GetDisk(fDevicePath.String(), disk);
+	if (fExpectedDevice >= 0 && disk.id != fExpectedDevice) {
+		log << "refused: " << fDevicePath << " is another disk now (device "
+			<< disk.id << ", the plan was made for device " << fExpectedDevice
+			<< "): it was replaced\n";
+		return B_DEV_ID_ERROR;
+	}
 	status = BackupTable(disk.path.String(), backupPath.String());
 	if (status != B_OK) {
 		log << "refused: the partition table could not be saved ("
@@ -838,11 +1065,22 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 			backupPath.String());
 
 	off_t createdOffset = -1;
+	fCreatedOffset = -1;
 	for (size_t i = 0; i < fOperations.size(); i++) {
 		BDiskDevice device;
 		status = get_device(disk.path.String(), device);
 		BString detail;
 		Operation operation = fOperations[i];
+		// the same disk as when the plan was checked: a disk swapped in
+		// the same port while the plan runs gets nothing
+		partition_id expected = fExpectedDevice >= 0 ? fExpectedDevice
+			: disk.id;
+		if (status == B_OK && device.ID() != expected) {
+			detail.SetToFormat("%s is another disk now (device %" B_PRId32
+				", expected %" B_PRId32 ")", disk.path.String(), device.ID(),
+				expected);
+			status = B_DEV_ID_ERROR;
+		}
 		if (status == B_OK && operation.index == kNewPartition) {
 			// the partition the latest create step made, by its offset
 			operation.index = -1;
@@ -865,8 +1103,10 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 				detail << ", ";
 			detail << stepDetail;
 		}
-		if (status == B_OK && operation.kind == kCreatePartition)
+		if (status == B_OK && operation.kind == kCreatePartition) {
 			createdOffset = offset;
+			fCreatedOffset = offset;
+		}
 		BString line;
 		line.SetToFormat("step %d: %s: %s%s%s\n", (int)i + 1,
 			describe(fOperations[i]).String(),

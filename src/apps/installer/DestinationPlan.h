@@ -19,15 +19,18 @@
 	           (the disk keeps its table and its other partitions;
 	           "alongside" without resizing)
 
-	The wizard's window (pages Welcome, Destination, Summary, Progress)
-	and "alongside" with a resize come later. For now only the command
-	line (Installer --plan-disk, InstallerCLI.cpp) calls these functions;
-	the window's Destination page is to use them too.
+	The wizard (WizardWindow.cpp, batch 14) and the command line
+	(Installer --plan-disk, --wizard-summary; InstallerCLI.cpp) both call
+	these functions. "Alongside" with a resize comes later.
 */
 
 
 #include <DiskEngine.h>
+#include <Path.h>
 #include <String.h>
+#include <StringList.h>
+
+#include <vector>
 
 
 enum destination_layout {
@@ -58,6 +61,102 @@ BString unique_volume_name(const char* wanted);
 //!	"erase" or "free"; false for anything else.
 bool destination_layout_for_name(const char* name,
 	destination_layout& layout);
+
+/*!	A stretch of a disk for the wizard's before/after picture
+	(DiskBarView): a partition, a free space, or a partition the plan
+	makes.
+*/
+enum disk_segment_kind {
+	SEGMENT_FREE,		// no partition
+	SEGMENT_KEPT,		// a partition that stays as it is
+	SEGMENT_NEW,		// a partition the plan makes
+	SEGMENT_TARGET		// an existing volume the installation goes onto
+};
+
+struct DiskSegment {
+	off_t				offset;
+	off_t				size;
+	BString				label;		// volume name, or system, or ""
+	disk_segment_kind	kind;
+};
+
+/*!	The disk as it is: its partitions (\a target marked SEGMENT_TARGET,
+	if it is one of them) and the free spaces between them, in order.
+*/
+void disk_segments_now(const RengaDisk::DiskInfo& disk,
+	std::vector<DiskSegment>& segments, partition_id target = -1);
+/*!	The disk as \a layout leaves it, placed the way the engine's Apply()
+	places new partitions (the first free space that holds them, from its
+	first MiB boundary).
+*/
+status_t disk_segments_planned(const RengaDisk::DiskInfo& disk,
+	destination_layout layout, const char* volumeName,
+	std::vector<DiskSegment>& segments);
+
+/*!	The partition whose volume (content) name is \a name; -1 if none, or
+	if more than one has it (\a count gets how many do).
+*/
+partition_id find_volume_named(const char* name, int32* count = NULL);
+
+/*!	Whether \a now is still the disk \a planned describes: the same
+	device, size, partition table and partitions (offset, size, type,
+	name, content and volume name). The wizard checks it when Install is
+	pressed, so that a plan never runs on a disk that changed after its
+	summary was shown (another stick in the same port, DriveSetup started
+	from the Deskbar). \a why gets the first difference.
+*/
+bool same_disk_layout(const RengaDisk::DiskInfo& planned,
+	const RengaDisk::DiskInfo& now, BString& why);
+
+/*!	The partition a plan created on the disk at \a diskPath: the one at
+	\a offset (RengaDisk::Plan::CreatedOffset()), with a file system.
+	-1 if there is none.
+*/
+partition_id created_partition(const char* diskPath, off_t offset);
+
+//!	Whether \a name can name a new BFS volume (1 to 31 bytes, no '/');
+//!	\a why says what is wrong.
+bool valid_volume_name(const char* name, BString& why);
+
+/*!	The volumes on the disk at \a diskPath, on every level (logical
+	partitions inside an extended one too): "<name>, <size>[, <system>]"
+	for the erase confirmation's list of what is lost.
+*/
+void disk_volume_descriptions(const RengaDisk::DiskInfo& disk,
+	BStringList& descriptions);
+
+//!	How the running system was started.
+enum firmware_kind {
+	FIRMWARE_UNKNOWN,
+	FIRMWARE_BIOS,
+	FIRMWARE_UEFI
+};
+
+/*!	The firmware that started the running system: BIOS when the boot loader
+	passed the VESA mode list (the vesa graphics driver publishes
+	/dev/graphics/vesa), UEFI when it passed only a frame buffer (the
+	framebuffer driver publishes /dev/graphics/framebuffer, as on UEFI
+	machines), unknown otherwise.
+*/
+firmware_kind running_firmware();
+const char* firmware_name(firmware_kind firmware);
+
+//!	Whether an EFI system partition of \a disk holds Haiku's or Renga's
+//!	EFI loader (EFI/BOOT, EFI/HAIKU or EFI/RENGA); unmounted ones are
+//!	mounted read-only for the look.
+//!	The answer is kept per device ID (the Destination page asks on every
+//!	change, the name field on every key): forget_efi_loader_cache() when
+//!	the disks are read again.
+bool disk_has_haiku_efi_loader(const RengaDisk::DiskInfo& disk);
+void forget_efi_loader_cache();
+
+//!	Where the Installer keeps the disk engine's table backups and journals
+//!	(~/config/settings/Renga/disk-backups), created if needed.
+status_t disk_backup_directory(BPath& path);
+
+//!	"4.0 GiB disk image, GUID Partition Map: Haiku, Windows": a disk the
+//!	way the wizard names it (its size, kind, table and detected systems).
+BString describe_disk(const RengaDisk::DiskInfo& disk);
 
 //!	The smallest volume the wizard installs onto (an image's size plus
 //!	room for the first updates).

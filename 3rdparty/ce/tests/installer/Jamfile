@@ -42,3 +42,17 @@ if $(CE_HARNESS) {
 	AddFilesToHaikuImage system non-packaged bin ce-tests
 		: installer_destination_test ;
 }
+
+# The Installer's wizard end to end (batch 14, F-23): an erase installation
+# by the wizard's window (--auto) onto the harness's wizard disk
+# (ce-test.py WIZARD_DISK), which the harness then boots with UEFI; this
+# test checks that boot too. renga-* images (a desktop).
+Application installer_wizard_test :
+	installer_wizard_test.cpp
+	: be libdiskengine.a [ TargetLibstdc++ ]
+;
+
+if $(CE_HARNESS) {
+	AddFilesToHaikuImage system non-packaged bin ce-tests-media
+		: installer_wizard_test ;
+}

@@ -25,6 +25,13 @@
 	  rengadisk restore <disk> <file>      write a saved table back (disk
 	                                       images only; prints the image's
 	                                       new disk path)
+	  rengadisk wipe <disk>                zero the first and last MiB: the
+	                                       partition table (saved first)
+	                                       and any data there, e.g. a table
+	                                       for a larger disk that plans
+	                                       refuse; a real disk needs
+	                                       --allow-real-disks --confirm
+	                                       <disk>; prints the disk's path
 
 	Only disk images unless --allow-real-disks; never the boot disk.
 	Exit status: 0 done, 1 refused or failed, 2 usage.
@@ -33,6 +40,7 @@
 
 #include <DiskEngine.h>
 
+#include <Directory.h>
 #include <FindDirectory.h>
 #include <Path.h>
 
@@ -54,7 +62,14 @@ usage()
 		"         steps: table:gpt|mbr  create:<size>[:<name>[:<type>]]  "
 			"delete:<index>\n"
 		"                format:<index>:<fs>[:<name>]  name:<index>:<name>\n"
-		"       rengadisk backup|restore <disk> <file>\n");
+		"       rengadisk backup|restore <disk> <file>\n"
+		"       rengadisk wipe <disk> [--allow-real-disks --confirm <disk>] "
+			"[--backup-dir <dir>]\n"
+		"         zeroes the first and last MiB (the partition table, saved "
+			"first,\n"
+		"         and any data there), e.g. a table that describes a larger "
+			"disk;\n"
+		"         prints the disk's path afterwards\n");
 	return 2;
 }
 
@@ -191,6 +206,42 @@ main(int argc, char** argv)
 		if (status != B_OK)
 			fprintf(stderr, "rengadisk: %s: %s\n", command, strerror(status));
 		return status == B_OK ? 0 : 1;
+	}
+	if (strcmp(command, "wipe") == 0 && argc >= 3) {
+		bool allowReal = false;
+		const char* confirmation = NULL;
+		BPath backupDir;
+		find_directory(B_USER_SETTINGS_DIRECTORY, &backupDir, true);
+		backupDir.Append("Renga/disk-backups");
+		BString backup = backupDir.Path();
+		for (int i = 3; i < argc; i++) {
+			if (strcmp(argv[i], "--allow-real-disks") == 0)
+				allowReal = true;
+			else if (strcmp(argv[i], "--confirm") == 0 && i + 1 < argc)
+				confirmation = argv[++i];
+			else if (strcmp(argv[i], "--backup-dir") == 0 && i + 1 < argc)
+				backup = argv[++i];
+			else
+				return usage();
+		}
+		// a real disk: its path a second time, to make sure
+		if (allowReal && (confirmation == NULL
+				|| strcmp(confirmation, argv[2]) != 0)) {
+			fprintf(stderr, "rengadisk: wipe: a real disk needs --confirm "
+				"%s (its path again)\n", argv[2]);
+			return 1;
+		}
+		create_directory(backup.String(), 0700);
+		BString log, newPath;
+		status_t status = WipeTable(argv[2], backup.String(), allowReal, log,
+			&newPath);
+		fprintf(stderr, "%s", log.String());
+		if (status != B_OK) {
+			fprintf(stderr, "rengadisk: wipe: %s\n", strerror(status));
+			return 1;
+		}
+		printf("%s\n", newPath.String());
+		return 0;
 	}
 	if (strcmp(command, "plan") == 0 && argc >= 4) {
 		Plan plan(argv[2]);

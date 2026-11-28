@@ -9,10 +9,18 @@
 #include <DiskDevice.h>
 #include <DiskDeviceRoster.h>
 #include <DiskDeviceVisitor.h>
+#include <Directory.h>
+#include <FindDirectory.h>
 #include <Partition.h>
 #include <PartitioningInfo.h>
 
+#include <dirent.h>
+#include <map>
+#include <fs_volume.h>
 #include <string.h>
+#include <sys/stat.h>
+
+#include "InstallationInfo.h"
 
 
 const off_t kMinimumInstallSize = 2048LL * 1024 * 1024;
@@ -38,10 +46,12 @@ destination_layout_for_name(const char* name, destination_layout& layout)
 	the disk at \a path, or -1: the space from its first MiB boundary on,
 	since the disk engine starts partitions there (a free space at the
 	start of a GUID partition table begins at block 34, so its full size
-	never fits).
+	never fits). \a _start gets where that partition would start: the
+	first of the largest spaces, which is where the engine puts a
+	partition of that size (the first free space that holds it).
 */
 static off_t
-largest_free_space(const char* path)
+largest_free_space(const char* path, off_t* _start = NULL)
 {
 	BDiskDeviceRoster roster;
 	BDiskDevice device;
@@ -58,15 +68,20 @@ largest_free_space(const char* path)
 	if (status != B_OK)
 		return -1;
 	off_t largest = 0;
+	off_t largestStart = 0;
 	for (int32 i = 0; i < info.CountPartitionableSpaces(); i++) {
 		off_t start, size;
 		if (info.GetPartitionableSpaceAt(i, &start, &size) != B_OK)
 			continue;
 		off_t aligned = (start + kAlignment - 1) / kAlignment * kAlignment;
 		off_t room = start + size - aligned;
-		if (room > largest)
+		if (room > largest) {
 			largest = room;
+			largestStart = aligned;
+		}
 	}
+	if (_start != NULL)
+		*_start = largestStart;
 	return largest;
 }
 
@@ -76,7 +91,8 @@ public:
 	VolumeNameFinder(const char* name)
 		:
 		fName(name),
-		fFound(false)
+		fID(-1),
+		fCount(0)
 	{
 	}
 
@@ -87,25 +103,39 @@ public:
 
 	virtual bool Visit(BPartition* partition, int32 level)
 	{
-		if (partition->ContentName() == fName)
-			fFound = true;
-		return fFound;
+		if (partition->ContentName() == fName) {
+			fID = partition->ID();
+			fCount++;
+		}
+		return false;
 	}
 
-	BString	fName;
-	bool	fFound;
+	BString			fName;
+	partition_id	fID;
+	int32			fCount;
 };
 
 
-bool
-volume_name_exists(const char* name)
+partition_id
+find_volume_named(const char* name, int32* _count)
 {
 	VolumeNameFinder finder(name);
 	BDiskDeviceRoster roster;
 	BDiskDevice device;
 	BPartition* partition;
 	roster.VisitEachPartition(&finder, &device, &partition);
-	return finder.fFound;
+	if (_count != NULL)
+		*_count = finder.fCount;
+	return finder.fCount == 1 ? finder.fID : -1;
+}
+
+
+bool
+volume_name_exists(const char* name)
+{
+	int32 count;
+	find_volume_named(name, &count);
+	return count > 0;
 }
 
 
@@ -204,4 +234,398 @@ make_destination_plan(const RengaDisk::DiskInfo& disk,
 	operation.system = "bfs";
 	plan.Add(operation);
 	return B_OK;
+}
+
+
+// #pragma mark - the wizard's picture of the disk
+
+
+static void
+add_segment(std::vector<DiskSegment>& segments, off_t offset, off_t size,
+	const char* label, disk_segment_kind kind)
+{
+	if (size <= 0)
+		return;
+	DiskSegment segment;
+	segment.offset = offset;
+	segment.size = size;
+	segment.label = label;
+	segment.kind = kind;
+	segments.push_back(segment);
+}
+
+
+static BString
+partition_label(const RengaDisk::PartitionInfo& partition)
+{
+	BString label = partition.contentName;
+	if (label.Length() == 0)
+		label = partition.name;
+	if (partition.system.Length() > 0 && partition.system != label) {
+		if (label.Length() > 0)
+			label << " (" << partition.system << ")";
+		else
+			label = partition.system;
+	}
+	return label;
+}
+
+
+void
+disk_segments_now(const RengaDisk::DiskInfo& disk,
+	std::vector<DiskSegment>& segments, partition_id target)
+{
+	segments.clear();
+	off_t position = 0;
+	for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
+		// gaps smaller than the alignment are table space, not free space
+		if (partition.offset - position >= kAlignment) {
+			add_segment(segments, position, partition.offset - position, "",
+				SEGMENT_FREE);
+		}
+		add_segment(segments, partition.offset, partition.size,
+			partition_label(partition).String(),
+			partition.id == target ? SEGMENT_TARGET : SEGMENT_KEPT);
+		position = partition.offset + partition.size;
+	}
+	if (disk.size - position >= kAlignment)
+		add_segment(segments, position, disk.size - position, "",
+			SEGMENT_FREE);
+}
+
+
+status_t
+disk_segments_planned(const RengaDisk::DiskInfo& disk,
+	destination_layout layout, const char* volumeName,
+	std::vector<DiskSegment>& segments)
+{
+	segments.clear();
+	if (layout == DESTINATION_ERASE_DISK) {
+		// as make_destination_plan() makes it: the EFI system partition
+		// from the first MiB, then the rest (the engine leaves the GPT
+		// backup at the end)
+		add_segment(segments, kAlignment, kEFIPartitionSize, "EFI",
+			SEGMENT_NEW);
+		off_t start = kAlignment + kEFIPartitionSize;
+		add_segment(segments, start, disk.size - start - kAlignment,
+			volumeName, SEGMENT_NEW);
+		return B_OK;
+	}
+
+	off_t start;
+	off_t size = largest_free_space(disk.path.String(), &start);
+	if (size < 0)
+		return B_ERROR;
+	std::vector<DiskSegment> now;
+	disk_segments_now(disk, now);
+	bool placed = false;
+	for (const DiskSegment& segment : now) {
+		if (placed || segment.kind != SEGMENT_FREE
+			|| start < segment.offset
+			|| start >= segment.offset + segment.size) {
+			segments.push_back(segment);
+			continue;
+		}
+		add_segment(segments, segment.offset, start - segment.offset, "",
+			SEGMENT_FREE);
+		add_segment(segments, start, size, volumeName, SEGMENT_NEW);
+		add_segment(segments, start + size,
+			segment.offset + segment.size - start - size, "", SEGMENT_FREE);
+		placed = true;
+	}
+	if (!placed) {
+		// the space is in a gap disk_segments_now() leaves out
+		add_segment(segments, start, size, volumeName, SEGMENT_NEW);
+	}
+	return B_OK;
+}
+
+
+BString
+describe_disk(const RengaDisk::DiskInfo& disk)
+{
+	BString text = RengaDisk::SizeString(disk.size);
+	text << (disk.isFile ? " disk image" : " disk");
+	if (disk.removable)
+		text << " (removable)";
+	text << ", " << (disk.partitioning.Length() > 0
+		? disk.partitioning.String() : "no partition table");
+	BString systems;
+	for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
+		if (partition.system.Length() == 0
+			|| systems.FindFirst(partition.system) >= 0)
+			continue;
+		systems << (systems.Length() > 0 ? ", " : "") << partition.system;
+	}
+	if (systems.Length() > 0)
+		text << ": " << systems;
+	return text;
+}
+
+
+status_t
+disk_backup_directory(BPath& path)
+{
+	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &path, true);
+	if (status == B_OK)
+		status = path.Append("Renga/disk-backups");
+	if (status == B_OK)
+		status = create_directory(path.Path(), 0700);
+	return status;
+}
+
+
+// #pragma mark - checks for the wizard
+
+
+bool
+same_disk_layout(const RengaDisk::DiskInfo& planned,
+	const RengaDisk::DiskInfo& now, BString& why)
+{
+	if (planned.id != now.id || planned.path != now.path) {
+		why = "it is another disk now (it was removed or replaced)";
+		return false;
+	}
+	if (planned.size != now.size) {
+		why.SetToFormat("its size changed (%s, was %s)",
+			RengaDisk::SizeString(now.size).String(),
+			RengaDisk::SizeString(planned.size).String());
+		return false;
+	}
+	if (planned.partitioning != now.partitioning) {
+		why.SetToFormat("its partition table changed (%s, was %s)",
+			now.partitioning.Length() > 0 ? now.partitioning.String()
+				: "none",
+			planned.partitioning.Length() > 0
+				? planned.partitioning.String() : "none");
+		return false;
+	}
+	if (planned.partitions.size() != now.partitions.size()) {
+		why.SetToFormat("it has %d partitions now (was %d)",
+			(int)now.partitions.size(), (int)planned.partitions.size());
+		return false;
+	}
+	for (size_t i = 0; i < now.partitions.size(); i++) {
+		const RengaDisk::PartitionInfo& a = planned.partitions[i];
+		const RengaDisk::PartitionInfo& b = now.partitions[i];
+		if (a.offset != b.offset || a.size != b.size || a.type != b.type
+			|| a.name != b.name || a.content != b.content
+			|| a.contentName != b.contentName) {
+			why.SetToFormat("partition %d changed (now \"%s\" %s at %s)",
+				(int)i, b.contentName.Length() > 0 ? b.contentName.String()
+					: b.name.String(),
+				RengaDisk::SizeString(b.size).String(),
+				RengaDisk::SizeString(b.offset).String());
+			return false;
+		}
+	}
+	return true;
+}
+
+
+partition_id
+created_partition(const char* diskPath, off_t offset)
+{
+	RengaDisk::DiskInfo disk;
+	if (offset < 0 || RengaDisk::GetDisk(diskPath, disk) != B_OK)
+		return -1;
+	for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
+		if (partition.offset == offset && partition.content.Length() > 0)
+			return partition.id;
+	}
+	return -1;
+}
+
+
+bool
+valid_volume_name(const char* name, BString& why)
+{
+	size_t length = strlen(name);
+	if (length == 0) {
+		why = "Name the new volume.";
+		return false;
+	}
+	if (length > 31) {
+		why = "The volume name is too long (31 bytes at most).";
+		return false;
+	}
+	if (strchr(name, '/') != NULL) {
+		why = "A volume name cannot contain \"/\".";
+		return false;
+	}
+	return true;
+}
+
+
+class VolumeDescriber : public BDiskDeviceVisitor {
+public:
+	VolumeDescriber(const RengaDisk::DiskInfo& disk, BStringList& list)
+		:
+		fDisk(disk),
+		fList(list)
+	{
+	}
+
+	virtual bool Visit(BDiskDevice* device)
+	{
+		return false;
+	}
+
+	virtual bool Visit(BPartition* partition, int32 level)
+	{
+		// partitions that hold others (an extended partition) are not
+		// listed themselves; their logical partitions are
+		if (partition->CountChildren() > 0)
+			return false;
+		BString name = partition->ContentName();
+		if (name.Length() == 0)
+			name = partition->Name();
+		BString system;
+		for (const RengaDisk::PartitionInfo& info : fDisk.partitions) {
+			if (info.id == partition->ID())
+				system = info.system;
+		}
+		BString line;
+		line.SetToFormat("\"%s\", %s%s%s", name.String(),
+			RengaDisk::SizeString(partition->Size()).String(),
+			system.Length() > 0 ? ", " : "", system.String());
+		fList.Add(line);
+		return false;
+	}
+
+private:
+	const RengaDisk::DiskInfo&	fDisk;
+	BStringList&				fList;
+};
+
+
+void
+disk_volume_descriptions(const RengaDisk::DiskInfo& disk,
+	BStringList& descriptions)
+{
+	descriptions.MakeEmpty();
+	BDiskDeviceRoster roster;
+	BDiskDevice device;
+	if (roster.GetDeviceForPath(disk.path.String(), &device) != B_OK)
+		return;
+	VolumeDescriber describer(disk, descriptions);
+	device.VisitEachDescendant(&describer);
+	if (descriptions.IsEmpty() && device.ContainsFileSystem()) {
+		BString line;
+		line.SetToFormat("\"%s\", %s", device.ContentName().String(),
+			RengaDisk::SizeString(device.Size()).String());
+		descriptions.Add(line);
+	}
+}
+
+
+firmware_kind
+running_firmware()
+{
+	struct stat st;
+	// opening the folder makes devfs load the graphics drivers
+	if (DIR* dir = opendir("/dev/graphics"))
+		closedir(dir);
+	if (stat("/dev/graphics/vesa", &st) == 0)
+		return FIRMWARE_BIOS;
+	if (stat("/dev/graphics/framebuffer", &st) == 0)
+		return FIRMWARE_UEFI;
+	return FIRMWARE_UNKNOWN;
+}
+
+
+const char*
+firmware_name(firmware_kind firmware)
+{
+	switch (firmware) {
+		case FIRMWARE_BIOS:
+			return "bios";
+		case FIRMWARE_UEFI:
+			return "uefi";
+		default:
+			return "unknown";
+	}
+}
+
+
+static bool
+directory_has_haiku_loader(const BPath& directory)
+{
+	bool found = false;
+	if (DIR* dir = opendir(directory.Path())) {
+		while (dirent* entry = readdir(dir)) {
+			BString name(entry->d_name);
+			if (!name.IEndsWith(".efi"))
+				continue;
+			BPath path(directory.Path(), entry->d_name);
+			if (is_haiku_efi_loader(path.Path())) {
+				found = true;
+				break;
+			}
+		}
+		closedir(dir);
+	}
+	return found;
+}
+
+
+static std::map<partition_id, bool> sEFILoaderCache;
+
+
+void
+forget_efi_loader_cache()
+{
+	sEFILoaderCache.clear();
+}
+
+
+static bool look_for_haiku_efi_loader(const RengaDisk::DiskInfo& disk);
+
+
+bool
+disk_has_haiku_efi_loader(const RengaDisk::DiskInfo& disk)
+{
+	std::map<partition_id, bool>::iterator found
+		= sEFILoaderCache.find(disk.id);
+	if (found != sEFILoaderCache.end())
+		return found->second;
+	bool has = look_for_haiku_efi_loader(disk);
+	sEFILoaderCache[disk.id] = has;
+	return has;
+}
+
+
+static bool
+look_for_haiku_efi_loader(const RengaDisk::DiskInfo& disk)
+{
+	BDiskDeviceRoster roster;
+	for (const RengaDisk::PartitionInfo& info : disk.partitions) {
+		if (info.type != "EFI system data" || info.content.FindFirst("FAT")
+				< 0)
+			continue;
+		BDiskDevice device;
+		BPartition* partition;
+		if (roster.GetPartitionWithID(info.id, &device, &partition) != B_OK)
+			continue;
+		bool mountedHere = false;
+		if (!partition->IsMounted()) {
+			if (partition->Mount(NULL, B_MOUNT_READ_ONLY) < B_OK)
+				continue;
+			mountedHere = true;
+		}
+		BPath root;
+		bool found = false;
+		if (partition->GetMountPoint(&root) == B_OK) {
+			const char* directories[] = { "EFI/BOOT", "EFI/HAIKU",
+				"EFI/RENGA" };
+			for (size_t i = 0; !found && i < 3; i++)
+				found = directory_has_haiku_loader(BPath(root.Path(),
+					directories[i]));
+		}
+		if (mountedHere)
+			partition->Unmount();
+		if (found)
+			return true;
+	}
+	return false;
 }

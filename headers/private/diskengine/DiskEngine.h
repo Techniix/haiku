@@ -92,6 +92,29 @@ status_t BackupTable(const char* devicePath, const char* backupPath);
 status_t RestoreTable(const char* devicePath, const char* backupPath,
 	BString* newDevicePath = NULL);
 
+/*!	Whether the disk's partition table describes a larger disk than it is
+	(a GPT header or table whose end, an MBR entry, or a partition, beyond
+	the disk's end: an image for a larger disk written to a smaller
+	stick). \a why says what. Plans refuse such a disk: changing its table
+	crashed libbe (BPartition::Delegate::Uninitialize); WipeTable() clears
+	it.
+*/
+bool TableExceedsDisk(const DiskInfo& disk, BString& why);
+
+/*!	Clears the partition table of the disk at \a devicePath: the first and
+	last MiB (MBR, GPT header and table, GPT backup) are saved into
+	\a backupDir first (RestoreTable() puts them back), then zeroed, with
+	any data there (a volume that starts in the first MiB is damaged). The
+	plan's safety rules apply: never the running system's disk, a
+	read-only one or one with a mounted partition (logical partitions
+	too); disk images only unless \a allowRealDisks (rengadisk also
+	wants the disk's path again, --confirm). An image is attached again so that the system reads
+	the cleared table (\a newDevicePath gets its new path). \a log gets
+	what was done.
+*/
+status_t WipeTable(const char* devicePath, const char* backupDir,
+	bool allowRealDisks, BString& log, BString* newDevicePath = NULL);
+
 //!	Disk system names: "gpt", "mbr", "bfs", "fat32" -> pretty names.
 const char* DiskSystemName(const char* shortName);
 
@@ -135,6 +158,12 @@ public:
 
 			void				AllowRealDisks(bool allow)
 									{ fAllowRealDisks = allow; }
+	//!	The disk's device ID when the plan was made (DiskInfo::id): Check()
+	//!	and Apply() refuse when the disk at the plan's path has another
+	//!	(another stick in the same port gets a new ID), before the table
+	//!	backup and before every step. -1 (the default): not checked.
+			void				ExpectDevice(partition_id id)
+									{ fExpectedDevice = id; }
 			void				Add(const Operation& operation)
 									{ fOperations.push_back(operation); }
 			int32				CountOperations() const
@@ -145,15 +174,27 @@ public:
 			status_t			Check(BString& why) const;
 	//!	What will change, one line per step, and the warnings.
 			BString				Preview() const;
+	//!	Step \a index in words, as Preview() lists it ("new partition
+	//!	table: GUID Partition Map (every partition on the disk is
+	//!	lost)"); front ends list the steps their own way (the Installer's
+	//!	wizard, F-23).
+			BString				Describe(int32 index) const;
 	//!	Backs the table up into \a backupDir, then applies every step;
 	//!	\a log gets one line per step (also written to the journal).
 			status_t			Apply(const char* backupDir, BString& log,
 									BString* backupPath = NULL);
+	//!	Where Apply()'s latest kCreatePartition step put its partition
+	//!	(the disk's offset), or -1: front ends find the partition they
+	//!	asked for by it, not by its name (the Installer's wizard).
+			off_t				CreatedOffset() const
+									{ return fCreatedOffset; }
 
 private:
 			BString				fDevicePath;
 			bool				fAllowRealDisks;
 			std::vector<Operation> fOperations;
+			off_t				fCreatedOffset;
+			partition_id		fExpectedDevice;
 };
 
 

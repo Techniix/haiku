@@ -26,6 +26,27 @@
 	  disk_engine.refuses_bad_step  a plan naming a partition that does not
 	                                exist is refused before anything is
 	                                written
+	  disk_engine.refuses_other_device
+	                                a plan made for another device ID
+	                                (another stick in the same port,
+	                                RengaDisk::Plan::ExpectDevice) is
+	                                refused by Check() and Apply() before
+	                                the table backup; the disk's own ID
+	                                passes Check() (the engine directly)
+	  disk_engine.refuses_larger_table
+	                                an image whose GPT was made for a
+	                                larger disk (128 MiB, cut to 64 MiB):
+	                                a new table is refused ("describes a
+	                                larger disk"; changing it crashed
+	                                libbe), "rengadisk wipe" clears it
+	                                (saved first), then a new table works
+	  disk_engine.whole_disk_fat_not_refused
+	                                a FAT volume on a whole disk (no
+	                                partition table) whose boot code
+	                                bytes would read as an MBR entry
+	                                past the disk's end: a new table is
+	                                not refused (only an Intel map's
+	                                entries are checked)
 	  disk_engine.restore           a saved table written back brings a
 	                                deleted partition back
 	  disk_engine.format            partition 0 formatted as BFS named Data
@@ -35,6 +56,10 @@
 */
 
 
+#include <DiskDevice.h>
+#include <DiskDeviceRoster.h>
+#include <DiskDeviceTypes.h>
+#include <DiskEngine.h>
 #include <FindDirectory.h>
 #include <Path.h>
 #include <String.h>
@@ -300,6 +325,50 @@ main()
 			&& lines.FindFirst("\"two\"") >= 0,
 		"exit %d: %s", status, one_line(refused).String());
 
+	// a plan for the device the disk was when it was made: refused once
+	// another device is at that path (review of PR #42)
+	{
+		RengaDisk::DiskInfo info;
+		RengaDisk::GetDisk(disk.String(), info);
+		BString otherBackups(backups);
+		otherBackups << "/other-device";
+		mkdir(otherBackups.String(), 0755);
+		RengaDisk::Operation operation;
+		operation.kind = RengaDisk::kSetName;
+		operation.index = 0;
+		operation.size = 0;
+		operation.name = "renamed";
+		RengaDisk::Plan other(disk.String());
+		other.ExpectDevice(info.id + 1000);
+		other.Add(operation);
+		BString why, log;
+		status_t checked = other.Check(why);
+		status_t applied = other.Apply(otherBackups.String(), log);
+		DIR* dir = opendir(otherBackups.String());
+		int written = 0;
+		while (dir != NULL && readdir(dir) != NULL)
+			written++;
+		if (dir != NULL)
+			closedir(dir);
+		RengaDisk::Plan same(disk.String());
+		same.ExpectDevice(info.id);
+		same.Add(operation);
+		BString sameWhy;
+		status_t sameChecked = same.Check(sameWhy);
+		lines = disk_lines(disk);
+		report("refuses_other_device", info.id >= 0
+				&& checked == B_DEV_ID_ERROR && applied == B_DEV_ID_ERROR
+				&& why.FindFirst("replaced") >= 0
+				&& log.FindFirst("replaced") >= 0
+				&& written == 2 /* "." and ".." only */
+				&& sameChecked == B_OK && lines.FindFirst("renamed") < 0,
+			"device %" B_PRId32 ": check \"%s\" (%s), apply \"%s\" (%s), "
+			"%d entries in the backup folder; own ID: %s", info.id,
+			why.String(), strerror(checked), one_line(log).String(),
+			strerror(applied), written, sameWhy.Length() > 0
+				? sameWhy.String() : strerror(sameChecked));
+	}
+
 	BString saved(backups);
 	saved << "/before-delete.table";
 	BString backupArgs;
@@ -336,6 +405,142 @@ main()
 			&& lines.FindFirst("\"Data\"") >= 0,
 		"exit %d: %s; disk: %s", status, one_line(formatted).String(),
 		one_line(lines).String());
+
+	// a table for a larger disk (review of PR #42): refused, then wiped
+	{
+		BString larger = home.Path();
+		larger << "/disk-engine-larger.img";
+		int largerFD = open(larger.String(), O_CREAT | O_RDWR | O_TRUNC,
+			0644);
+		bool made = largerFD >= 0
+			&& ftruncate(largerFD, 128 * 1024 * 1024) == 0;
+		if (largerFD >= 0)
+			close(largerFD);
+		BString arguments;
+		arguments << "attach '" << larger << "'";
+		BString big = tool(arguments.String(), &status);
+		big.Trim();
+		arguments = "";
+		arguments << "plan " << big << " table:gpt create:100M:big --apply "
+			"--backup-dir '" << backups << "'";
+		BString made100 = tool(arguments.String(), &status);
+		made = made && status == 0;
+		arguments = "";
+		arguments << "detach '" << larger << "'";
+		tool(arguments.String(), &status);
+		made = made && status == 0 && truncate(larger.String(),
+			64 * 1024 * 1024) == 0;
+		arguments = "";
+		arguments << "attach '" << larger << "'";
+		BString cut = tool(arguments.String(), &status);
+		cut.Trim();
+		made = made && status == 0 && cut.StartsWith("/dev/disk");
+
+		arguments = "";
+		arguments << "plan " << cut << " table:gpt --apply --backup-dir '"
+			<< backups << "'";
+		int refusedStatus = -1;
+		BString refusedOutput = tool(arguments.String(), &refusedStatus);
+
+		arguments = "";
+		arguments << "wipe " << cut << " --backup-dir '" << backups << "'";
+		int wipeStatus = -1;
+		BString wiped = tool(arguments.String(), &wipeStatus);
+		// its last line is the disk's path (an image is attached again)
+		BString wipedPath = cut;
+		int32 at = wiped.FindLast("/dev/disk");
+		if (at >= 0) {
+			wiped.CopyInto(wipedPath, at, wiped.Length() - at);
+			wipedPath.Trim();
+		}
+
+		arguments = "";
+		arguments << "plan " << wipedPath << " table:gpt --apply "
+			"--backup-dir '" << backups << "'";
+		int afterStatus = -1;
+		BString after = tool(arguments.String(), &afterStatus);
+		BString afterLines = disk_lines(wipedPath);
+
+		report("refuses_larger_table", made && refusedStatus == 1
+				&& refusedOutput.FindFirst("describes a larger disk") >= 0
+				&& refusedOutput.FindFirst("rengadisk wipe") >= 0
+				&& wipeStatus == 0 && wiped.FindFirst("table saved") >= 0
+				&& afterStatus == 0
+				&& afterLines.FindFirst("GUID Partition Map") >= 0,
+			"prepared %d (%s); new table on the cut image: exit %d: %s; "
+			"wipe: exit %d: %s; new table after: exit %d: %s",
+			made, one_line(made100).String(), refusedStatus,
+			one_line(refusedOutput).String(), wipeStatus,
+			one_line(wiped).String(), afterStatus,
+			one_line(after).String());
+
+		arguments = "";
+		arguments << "detach '" << larger << "'";
+		tool(arguments.String(), &status);
+		unlink(larger.String());
+	}
+
+	// a whole-disk FAT volume: 0x55aa, and boot code where MBR entries
+	// would be (review of PR #42)
+	{
+		BString fatImage = home.Path();
+		fatImage << "/disk-engine-fat.img";
+		int fatFD = open(fatImage.String(), O_CREAT | O_RDWR | O_TRUNC, 0644);
+		bool made = fatFD >= 0 && ftruncate(fatFD, 64 * 1024 * 1024) == 0;
+		if (fatFD >= 0)
+			close(fatFD);
+		BString arguments;
+		arguments << "attach '" << fatImage << "'";
+		BString fatDisk = tool(arguments.String(), &status);
+		fatDisk.Trim();
+		BDiskDeviceRoster roster;
+		BDiskDevice device;
+		status_t initialized = roster.GetDeviceForPath(fatDisk.String(),
+			&device);
+		if (initialized == B_OK)
+			initialized = device.PrepareModifications();
+		if (initialized == B_OK) {
+			initialized = device.Initialize(kPartitionTypeFAT32, "FATSTICK",
+				NULL);
+			if (initialized == B_OK)
+				initialized = device.CommitModifications();
+			else
+				device.CancelModifications();
+		}
+		// boot code that reads as a FAT32 entry from block 2048 with far
+		// more blocks than the disk has
+		uint8 entry[16] = {};
+		entry[4] = 0x0c;
+		uint32 start = 2048, count = 0x7fffffff;
+		memcpy(entry + 8, &start, 4);
+		memcpy(entry + 12, &count, 4);
+		int raw = open(fatDisk.String(), O_RDWR);
+		uint8 signature[2] = {};
+		bool crafted = raw >= 0
+			&& pwrite(raw, entry, sizeof(entry), 446) == (ssize_t)sizeof(entry)
+			&& pread(raw, signature, 2, 510) == 2
+			&& signature[0] == 0x55 && signature[1] == 0xaa;
+		if (raw >= 0)
+			close(raw);
+		BString fatLines = disk_lines(fatDisk);
+
+		arguments = "";
+		arguments << "plan " << fatDisk << " table:gpt";
+		int planStatus = -1;
+		BString planned = tool(arguments.String(), &planStatus);
+		report("whole_disk_fat_not_refused", made && initialized == B_OK
+				&& crafted && fatLines.FindFirst("(no partition table)") >= 0
+				&& planStatus == 0
+				&& planned.FindFirst("describes a larger disk") < 0,
+			"initialized %s, boot code crafted %d; disk: %s; plan exit %d: %s",
+			strerror(initialized), crafted, one_line(fatLines).String(),
+			planStatus, one_line(planned).String());
+
+		arguments = "";
+		arguments << "detach '" << fatImage << "'";
+		tool(arguments.String(), &status);
+		unlink(fatImage.String());
+	}
 
 	BString detachArgs;
 	detachArgs << "detach '" << image << "'";

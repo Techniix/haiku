@@ -65,6 +65,11 @@ each. Run it for any change under `src/apps`, `src/preferences`, `src/kits/track
   exact same tree are skipped. Notes-only changes (the roadmap, `docs/partners/`) keep the tree key.
   A configuration a restart killed is resumed from its last finished test program (`ce-test.py --resume`);
   a hung test program is killed after `--suite-timeout` (1200 s) and reported as `harness.watchdog.*`.
+- **Known gap, the Installer wizard (F-23):** the four-way set does not cover the wizard's UEFI erase
+  install and its boot (the `--firmware uefi` leg is the default profile, without the wizard disk; the
+  renga-raw leg is BIOS, where erase is refused and checked as such). Run it separately:
+  `tools/renga/renga-test installer_wizard --profile renga-anyboot --firmware uefi --stall 600`. On this
+  host OVMF can stay silent for over 90 s loading the loader from the IDE disk, hence `--stall 600`.
 
 ## Which tests when (roadmap 1.2; standing rules)
 

@@ -23,7 +23,10 @@ public:
 	virtual	void				Quit();
 
 private:
+			void				_OpenWindow();
+
 			EULAWindow*			fEULAWindow;
+			BWindow*			fWindow;
 };
 
 #endif // INSTALLER_APP_H

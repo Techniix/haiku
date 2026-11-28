@@ -63,5 +63,9 @@ BString package_name_of_file(const char* fileName);
 bool is_package_file(const char* fileName);
 status_t list_package_files(const char* directory, BStringList& files);
 
+// Whether the file at \a path is Haiku's or Renga's EFI boot loader
+// (WorkerThreadModes.cpp).
+bool is_haiku_efi_loader(const char* path);
+
 
 #endif	// INSTALLATION_INFO_H
