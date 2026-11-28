@@ -124,6 +124,8 @@ private:
 			media_format		fInputFormat;
 
 			int64				fFrame;
+			bigtime_t			fNextVideoStartTime;
+									// for a picture without a time
 			bool				fIsAudio;
 
 			// FFmpeg related members
