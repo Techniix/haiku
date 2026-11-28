@@ -29,7 +29,8 @@
 #     acceptance checklist has passed on real hardware.
 #
 # The harness keeps using the minimum-* profiles: they boot in a fraction
-# of the time and the tests do not need a desktop.
+# of the time and the tests do not need a desktop. Harness builds of them
+# (CE_HARNESS) are 512 MiB instead of 300 (see below).
 
 rule DefineRengaBuildProfiles
 {
@@ -38,6 +39,17 @@ rule DefineRengaBuildProfiles
 	DefineBuildProfile renga-vmware : vmware-image : "renga.vmdk" ;
 
 	switch $(HAIKU_BUILD_PROFILE) {
+		case "minimum-*" : {
+			# Harness images (ce-test.py builds with CE_HARNESS=1): the
+			# test programs, the Alpine root and the Debian root (batch 14,
+			# 3rdparty/ce/tests/renguin) left 95 of upstream's default
+			# 300 MiB free, too little for the suites that write. 512 MiB
+			# keeps clear room; renguin_test's boot_free check fails below
+			# 128 MiB free. Regular minimum builds keep upstream's size.
+			if $(CE_HARNESS) {
+				HAIKU_IMAGE_SIZE ?= 512 ;
+			}
+		}
 		case "renga-*" : {
 			HAIKU_RENGA_IMAGE = 1 ;
 

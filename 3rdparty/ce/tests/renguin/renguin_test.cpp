@@ -15,6 +15,8 @@
 	exactly the expected exit status and output:
 
 	  module                   the renguin personality module is installed
+	  boot_free                (batch 14) /boot has at least 128 MiB free
+	                           (the Linux roots take room)
 	  native_after             a native program still runs normally after
 	                           the Linux ones (the hook leaves native teams
 	                           alone)
@@ -87,6 +89,10 @@
 	  dyn.ip                   busybox ip addr/route (netlink) and ifconfig
 	                           (SIOCGIF* ioctls) show the loopback "lo"
 	  dyn.resolv_conf          /etc/resolv.conf in the root is Haiku's own
+	  debian.*                 (batch 14) the Debian root beside the Alpine
+	                           one, through chroot(): glibc 2.41, ldconfig,
+	                           libstdc++, an SDL2 game, GLES on llvmpipe
+	                           (see run_debian_checks())
 
 	Programs listed in kPending are reported as CE-INFO lines with their
 	result, not as checks, until they pass (each with the reason, recorded
@@ -97,6 +103,7 @@
 
 
 #include <FindDirectory.h>
+#include <fs_info.h>
 #include <OS.h>
 #include <Path.h>
 #include <debugger.h>
@@ -206,6 +213,13 @@ is_pending(const std::string& program)
 
 
 static const char* kRoot = "/boot/system/non-packaged/compat/linux";
+// batch 14: the Debian root beside it (root/build-debian-root.sh)
+static const char* kDebianRoot
+	= "/boot/system/non-packaged/compat/linux-roots/debian";
+// only Renga images (HAIKU_RENGA_IMAGE, 3rdparty/ce/Jamfile) have it; their
+// Debian root has the gl layer
+static const char* kRengaImageMarker
+	= "/boot/system/settings/package-repositories/Renga";
 
 
 struct RootCheck {
@@ -318,6 +332,54 @@ static const RootCheck kRootChecks[] = {
 };
 
 
+/*!	Runs one RootCheck in its own native shell: $R is the Linux root, $D
+	the Debian root (batch 14). The command runs in its own shell so that
+	its jobs and quoting stay its own; single quotes in it are passed
+	through a file.
+*/
+static void
+run_root_check(const RootCheck& check, int index)
+{
+	std::string script = std::string("/tmp/renguin-check-")
+		+ std::to_string(index) + ".sh";
+	FILE* file = fopen(script.c_str(), "w");
+	if (file == NULL) {
+		report(check.name, false, "cannot write %s", script.c_str());
+		return;
+	}
+	fprintf(file, "R=%s\nD=%s\n%s\n", kRoot, kDebianRoot, check.command);
+	fclose(file);
+	std::string command = "cd /tmp && { timeout 90 /bin/sh " + script
+		+ " 2>/tmp/renguin-check.err; printf '\\nCE-RC:%d\\n' $?; }";
+
+	bigtime_t started = system_time();
+	std::string output = run(command);
+	bigtime_t took = system_time() - started;
+	unlink(script.c_str());
+	size_t marker = output.rfind("\nCE-RC:");
+	int status = -1;
+	std::string got;
+	if (marker != std::string::npos) {
+		status = atoi(output.c_str() + marker + 7);
+		got = output.substr(0, marker);
+		while (!got.empty() && got.back() == '\n')
+			got.pop_back();
+	}
+	std::string want = check.output;
+	bool pass = status == check.status && got == want;
+	std::string errors;
+	if (!pass) {
+		errors = run("head -c 300 /tmp/renguin-check.err");
+	}
+	report(check.name, pass,
+		"exit %d (want %d), %.0f ms, output [%s]%s%s%s%s%s", status,
+		check.status, took / 1000.0, one_line(got).c_str(),
+		pass ? "" : " (want [", pass ? "" : one_line(want).c_str(),
+		pass ? "" : "])", errors.empty() ? "" : " stderr: ",
+		one_line(errors).c_str());
+}
+
+
 static void
 run_root_checks()
 {
@@ -330,48 +392,8 @@ run_root_checks()
 	if (!present)
 		return;
 
-	for (int i = 0; kRootChecks[i].name != NULL; i++) {
-		const RootCheck& check = kRootChecks[i];
-		// The command runs in its own shell so that its jobs and quoting
-		// stay its own; single quotes in it are passed through a file.
-		std::string script = std::string("/tmp/renguin-check-")
-			+ std::to_string(i) + ".sh";
-		FILE* file = fopen(script.c_str(), "w");
-		if (file == NULL) {
-			report(check.name, false, "cannot write %s", script.c_str());
-			continue;
-		}
-		fprintf(file, "R=%s\n%s\n", kRoot, check.command);
-		fclose(file);
-		std::string command = "cd /tmp && { timeout 90 /bin/sh " + script
-			+ " 2>/tmp/renguin-check.err; printf '\\nCE-RC:%d\\n' $?; }";
-
-		bigtime_t started = system_time();
-		std::string output = run(command);
-		bigtime_t took = system_time() - started;
-		unlink(script.c_str());
-		size_t marker = output.rfind("\nCE-RC:");
-		int status = -1;
-		std::string got;
-		if (marker != std::string::npos) {
-			status = atoi(output.c_str() + marker + 7);
-			got = output.substr(0, marker);
-			while (!got.empty() && got.back() == '\n')
-				got.pop_back();
-		}
-		std::string want = check.output;
-		bool pass = status == check.status && got == want;
-		std::string errors;
-		if (!pass) {
-			errors = run("head -c 300 /tmp/renguin-check.err");
-		}
-		report(check.name, pass,
-			"exit %d (want %d), %.0f ms, output [%s]%s%s%s%s%s", status,
-			check.status, took / 1000.0, one_line(got).c_str(),
-			pass ? "" : " (want [", pass ? "" : one_line(want).c_str(),
-			pass ? "" : "])", errors.empty() ? "" : " stderr: ",
-			one_line(errors).c_str());
-	}
+	for (int i = 0; kRootChecks[i].name != NULL; i++)
+		run_root_check(kRootChecks[i], i);
 
 	// Name servers: the root's /etc/resolv.conf is Haiku's own file.
 	const char* haikuResolv = "/boot/system/settings/network/resolv.conf";
@@ -385,6 +407,124 @@ run_root_checks()
 	} else {
 		printf("CE-INFO renguin: no %s on this machine (no DHCP name "
 			"server); dyn.resolv_conf not checked\n", haikuResolv);
+	}
+}
+
+
+/*!	Batch 14, Steam groundwork (roadmap F-27; docs/design/flatpak-and-
+	steam-under-renguin.md, "Steam", items 2 and 3, 64-bit only): the
+	Debian 13 root beside the Alpine one (root/build-debian-root.sh), its
+	programs started through Renguin's chroot() (Alpine's busybox chroot),
+	outside any Steam client. The test programs are built against the
+	root's own glibc 2.41, libstdc++ and SDL2 (debian/).
+	  debian.present          the root, its loader and test programs
+	  debian.dash             Debian's /bin/sh, the root's own files
+	  debian.glibc_no_cache   glibc-check without /etc/ld.so.cache: the
+	                          loader's multiarch search, rseq (or its clean
+	                          absence), pthreads over clone3 or clone,
+	                          dlopen, NSS passwd and hosts, os-release
+	  debian.ldconfig         Debian's ldconfig writes the cache, and
+	                          ldconfig -p reads it (SDL2 listed)
+	  debian.ld_so_cache_used the loader finds libm and libSDL2 in the cache
+	                          without a path search (LD_DEBUG=libs), and
+	                          does search the paths with an empty cache
+	  debian.cxx              libstdc++: exceptions, std::thread, iostream
+	  debian.sdl_game         a small SDL2 game, headless (SDL's dummy video
+	                          and audio): 120 frames with keyboard events,
+	                          software rendering read back, timer, threads,
+	                          the audio callback thread, SDL_GetBasePath()
+	  debian.gl_llvmpipe      renga-* images (the root's gl layer): EGL
+	                          surfaceless, GLES2 on Mesa's llvmpipe, a
+	                          cleared framebuffer and a shaded triangle
+	                          read back (LLVM's JIT under Renguin)
+	The windowed SDL game is wayland_test's linux_sdl_window.
+*/
+#define DC BB " chroot $D"
+
+static const RootCheck kDebianChecks[] = {
+	{ "debian.dash", DC " /bin/sh -c 'echo $((6 * 7)); read v < "
+		"/etc/debian_version; echo ${v%%.*}'", 0, "42\n13" },
+	{ "debian.glibc_no_cache", "rm -f $D/etc/ld.so.cache\n"
+		DC " /opt/renguin-tests/glibc-check", 0,
+		"glibc_2.41 ok\nrseq ok\nthreads ok\ndlopen ok\ndlopen_sdl2 ok\n"
+		"nss_passwd ok\nnss_hosts ok\nos_release ok\nok" },
+	{ "debian.ldconfig", DC " /sbin/ldconfig || exit 1\n"
+		"[ -s $D/etc/ld.so.cache ] && echo cache\n"
+		DC " /sbin/ldconfig -p > /tmp/rg-ldconfig.txt\n"
+		BB " head -n 1 /tmp/rg-ldconfig.txt | " BB " grep -o "
+		"\"libs found in cache .*\"\n"
+		BB " grep -c \"libSDL2-2.0.so.0 (libc6,x86-64)\" /tmp/rg-ldconfig.txt\n"
+		"rm -f /tmp/rg-ldconfig.txt", 0,
+		"cache\nlibs found in cache `/etc/ld.so.cache'\n1" },
+	// glibc prints "search cache=" before it reads the cache, so that line
+	// alone proves nothing: for libm and libSDL2 (both dlopen()ed) the
+	// cache line must be followed directly by "trying file=", and no
+	// "search path=" may come for them. Then the same with an empty cache
+	// must show the path search (the check's own negative control), and
+	// ldconfig makes the cache again.
+	{ "debian.ld_so_cache_used", "cat > /tmp/rg-cache.awk << 'EOF'\n"
+		"/find library=/ { lib = $0; sub(/.*find library=/, \"\", lib); "
+		"sub(/ .*/, \"\", lib); state = 0; next }\n"
+		"lib != \"libm.so.6\" && lib != \"libSDL2-2.0.so.0\" { next }\n"
+		"/search cache=\\/etc\\/ld.so.cache/ { state = 1; next }\n"
+		"state == 1 && /trying file=/ { hit[lib] = 1 }\n"
+		"{ state = 0 }\n"
+		"/search path=/ { miss[lib] = 1 }\n"
+		"END { if (hit[\"libm.so.6\"] && hit[\"libSDL2-2.0.so.0\"] && "
+		"!miss[\"libm.so.6\"] && !miss[\"libSDL2-2.0.so.0\"]) "
+		"print \"cache-used\"; else print \"cache-not-used\" }\n"
+		"EOF\n"
+		"LD_DEBUG=libs " DC " /opt/renguin-tests/glibc-check "
+		"2> /tmp/rg-lddebug.txt | " BB " tail -n 1\n"
+		BB " awk -f /tmp/rg-cache.awk /tmp/rg-lddebug.txt\n"
+		": > $D/etc/ld.so.cache\n"
+		"LD_DEBUG=libs " DC " /opt/renguin-tests/glibc-check "
+		"2> /tmp/rg-lddebug.txt | " BB " tail -n 1\n"
+		BB " awk -f /tmp/rg-cache.awk /tmp/rg-lddebug.txt\n"
+		DC " /sbin/ldconfig\nrm -f /tmp/rg-lddebug.txt /tmp/rg-cache.awk",
+		0, "ok\ncache-used\nok\ncache-not-used" },
+	{ "debian.cxx", DC " /opt/renguin-tests/cxx-check", 0,
+		"static_init ok\nexceptions ok\nthreads ok\niostream ok\nok" },
+	{ "debian.sdl_game", DC " /opt/renguin-tests/sdl-game headless", 0,
+		"platform ok\nbasepath ok\nvideo ok\nrender ok\nevents ok\ntimer ok\n"
+		"thread ok\naudio ok\nok" },
+	{ NULL, NULL, 0, NULL }
+};
+
+static const RootCheck kDebianGlCheck = { "debian.gl_llvmpipe",
+	"LIBGL_ALWAYS_SOFTWARE=1 " DC " /opt/renguin-tests/gl-check", 0,
+	"egl ok\ncontext ok\nllvmpipe ok\nclear ok\ntriangle ok\nok" };
+
+
+static void
+run_debian_checks()
+{
+	std::string loader = std::string(kDebianRoot)
+		+ "/usr/lib64/ld-linux-x86-64.so.2";
+	std::string tests = std::string(kDebianRoot) + "/opt/renguin-tests";
+	// every x86_64 harness image has the Debian root: missing is a failure
+	bool present = access(loader.c_str(), F_OK) == 0
+		&& access((tests + "/glibc-check").c_str(), X_OK) == 0
+		&& access((std::string(kRoot) + "/bin/busybox").c_str(), X_OK) == 0;
+	report("debian.present", present, "%s: %s", kDebianRoot,
+		present ? "ld-linux, test programs and busybox's chroot present"
+			: "missing");
+	if (!present)
+		return;
+
+	int index = 100;
+	for (int i = 0; kDebianChecks[i].name != NULL; i++)
+		run_root_check(kDebianChecks[i], index++);
+	bool rengaImage = access(kRengaImageMarker, F_OK) == 0;
+	if (access((tests + "/gl-check").c_str(), X_OK) == 0)
+		run_root_check(kDebianGlCheck, index++);
+	else if (rengaImage) {
+		report(kDebianGlCheck.name, false, "a Renga image without the "
+			"Debian root's gl layer (no %s/gl-check)", tests.c_str());
+	} else {
+		printf("CE-INFO renguin: a minimum image: the Debian root has no gl "
+			"layer (renga-* images only); debian.gl_llvmpipe not checked\n");
+		fflush(stdout);
 	}
 }
 
@@ -867,6 +1007,18 @@ main()
 	report("module", access(kModule, F_OK) == 0, "%s: %s", kModule,
 		access(kModule, F_OK) == 0 ? "installed" : strerror(errno));
 
+	// batch 14: the Linux roots take room; the suites that write need it
+	// (harness minimum images are 512 MiB, RengaBuildProfiles)
+	fs_info info;
+	dev_t boot = dev_for_path("/boot");
+	bool known = boot >= 0 && fs_stat_dev(boot, &info) == 0;
+	off_t freeBytes = known ? info.free_blocks * info.block_size : 0;
+	off_t totalBytes = known ? info.total_blocks * info.block_size : 0;
+	report("boot_free", known && freeBytes >= 128LL * 1024 * 1024,
+		"/boot: %lld MiB free of %lld MiB (want at least 128 MiB)",
+		(long long)(freeBytes / (1024 * 1024)),
+		(long long)(totalBytes / (1024 * 1024)));
+
 	std::string setup = std::string("rm -rf ") + kWork + " && cp -r "
 		+ kSource + " " + kWork + " && chmod +x " + kWork + "/* && echo ok";
 	if (run(setup).find("ok") == std::string::npos) {
@@ -952,6 +1104,7 @@ main()
 
 	run_brand_checks();
 	run_root_checks();
+	run_debian_checks();
 	run_chromium_check();
 	run_ladder_checks();
 	run_flatpak_checks();

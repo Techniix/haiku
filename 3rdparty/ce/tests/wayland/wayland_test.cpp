@@ -56,6 +56,13 @@
 	  linux_clipboard     its selection reaches the system clipboard (the
 	                      compositor reads it over a pipe it passes with
 	                      SCM_RIGHTS through Renguin)
+	  linux_sdl_window    (batch 14, renga-* images: the Debian root's gl
+	                      layer) a 64-bit SDL2 game on Debian's glibc,
+	                      through Renguin's chroot(), in a window: SDL's
+	                      Wayland driver, GLES on Mesa's llvmpipe; its
+	                      background covers the window on the screen, it
+	                      exits 0 after at least 100 frames
+	                      (screenshot screen-wayland_linux_sdl_window)
 	  disconnect          the same compositor team keeps running after the
 	                      client and its objects go away
 	  switch_off          "Screen --wayland off" (the Screen preferences'
@@ -1119,6 +1126,109 @@ linux_client_test()
 
 
 
+/*!	Batch 14, Steam groundwork (roadmap F-27): a 64-bit Linux game on the
+	Debian root's glibc and SDL2 (renguin's debian/sdl-game.c), started
+	outside any Steam client through Renguin's chroot(), in a window on the
+	compositor: SDL's Wayland driver, its renderer on EGL and GLES through
+	Mesa's llvmpipe (the Debian root's gl layer: renga-* images). Its
+	background colour must cover the window on the screen while it plays.
+*/
+static const char* kDebianRoot
+	= "/boot/system/non-packaged/compat/linux-roots/debian";
+
+
+static void
+linux_sdl_window_test()
+{
+	std::string game = std::string(kDebianRoot) + "/opt/renguin-tests/sdl-game";
+	std::string gl = std::string(kDebianRoot) + "/opt/renguin-tests/gl-check";
+	if (access(game.c_str(), X_OK) != 0 || access(gl.c_str(), X_OK) != 0) {
+		// only Renga images (their Renga repository) have the gl layer
+		if (access("/boot/system/settings/package-repositories/Renga", F_OK)
+				== 0) {
+			report("linux_sdl_window", false, "a Renga image without the "
+				"Debian root's gl layer (%s or %s missing)", game.c_str(),
+				gl.c_str());
+		} else {
+			printf("CE-INFO wayland: a minimum image: no Debian gl layer "
+				"(renga-* images only); linux_sdl_window not checked\n");
+			fflush(stdout);
+		}
+		return;
+	}
+	// LIBGL_ALWAYS_SOFTWARE: Mesa's Wayland platform goes straight to
+	// swrast on wl_shm (there is no render node); EGL's warnings go to the
+	// report's stderr.
+	std::string command = std::string("LIBGL_ALWAYS_SOFTWARE=1 "
+		"EGL_LOG_LEVEL=warning timeout 90 "
+		"/boot/system/non-packaged/compat/linux/bin/busybox chroot ")
+		+ kDebianRoot + " /opt/renguin-tests/sdl-game window 10 "
+		"2>/tmp/rg-sdl-window.err";
+	FILE* pipe = popen(command.c_str(), "r");
+	if (pipe == NULL) {
+		report("linux_sdl_window", false, "popen: %s", strerror(errno));
+		return;
+	}
+	const int32 kArea = 320 * 200;
+	std::string lines;
+	int32 found = 0;
+	char line[256];
+	while (fgets(line, sizeof(line), pipe) != NULL) {
+		lines += line;
+		if (strncmp(line, "window ok", 9) == 0) {
+			for (int attempt = 0; attempt < 20; attempt++) {
+				snooze(250000);
+				found = count_pixels(0x8f, 0x9d, 0x2a);
+				if (found >= kArea * 9 / 10)
+					break;
+			}
+			printf("CE-HOST screenshot wayland_linux_sdl_window\n");
+			fflush(stdout);
+		}
+	}
+	int status = pclose(pipe);
+	std::string errors;
+	FILE* file = fopen("/tmp/rg-sdl-window.err", "r");
+	if (file != NULL) {
+		char buffer[4096];
+		size_t length;
+		while ((length = fread(buffer, 1, sizeof(buffer), file)) > 0)
+			errors.append(buffer, length);
+		fclose(file);
+	}
+	unlink("/tmp/rg-sdl-window.err");
+	for (char& c : lines) {
+		if (c == '\n')
+			c = '|';
+	}
+	// the game says how many frames it drew in its 10 s (about 300 at
+	// 30 per second in QEMU); fewer than 100 is a stalled game
+	int frames = 0;
+	size_t framesAt = errors.rfind("sdl-game: ");
+	while (framesAt != std::string::npos) {
+		if (sscanf(errors.c_str() + framesAt, "sdl-game: %d frames", &frames)
+				== 1)
+			break;
+		framesAt = framesAt == 0 ? std::string::npos
+			: errors.rfind("sdl-game: ", framesAt - 1);
+	}
+	// the report shows the end of what it said
+	if (errors.size() > 600)
+		errors = "..." + errors.substr(errors.size() - 600);
+	for (char& c : errors) {
+		if (c == '\n')
+			c = '|';
+	}
+	report("linux_sdl_window", lines == "window ok|ok|"
+			&& WIFEXITED(status) && WEXITSTATUS(status) == 0 && frames >= 100
+			&& found >= kArea * 9 / 10,
+		"output [%s] exit %d, %d frames (want 100), %d of %d pixels of its "
+		"colour on the screen, stderr [%s]", lines.c_str(),
+		WIFEXITED(status) ? WEXITSTATUS(status) : -1, frames, (int)found,
+		kArea, errors.c_str());
+}
+
+
 static const char* kChromium
 	= "/boot/system/non-packaged/compat/linux/usr/lib/chromium/chromium";
 
@@ -1476,6 +1586,7 @@ main()
 	toplevel_gone_test(client);
 	clipboard_test(client);
 	linux_client_test();
+	linux_sdl_window_test();
 
 	// The same compositor team keeps running once the client and its
 	// window, surfaces and buffers are gone (launch_daemon would restart a

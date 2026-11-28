@@ -133,6 +133,48 @@ actions BuildRenguinLinuxRoot
 }
 BuildRenguinLinuxRoot $(linuxRoot) : $(rootInputs) <build>wayland_scanner ;
 
+# The Debian root beside the Alpine one (batch 14, Steam groundwork; roadmap
+# F-27 and docs/design/flatpak-and-steam-under-renguin.md):
+# root/build-debian-root.sh, which documents it. Debian 13's glibc 2.41,
+# libstdc++ and SDL2, pinned in root/debian.pins, with the debian/ test
+# programs built against them (17.6 MB to download, 44 MB extracted; the
+# dev layer for building them, 11.4 MB, is not installed). renga-* harness
+# images also get Mesa's EGL, GLES and desktop GL with llvmpipe (47.7 MB
+# more to download, 240 MB extracted in all), which the harness minimum
+# images (512 MiB, 3rdparty/ce/build/RengaBuildProfiles) leave out.
+# Extracted at /boot/system/non-packaged/compat/linux-roots/debian; Linux
+# programs run in it through Renguin's chroot().
+# The archive is named by its layers: the profiles share the output
+# directory, and jam does not notice a changed variable.
+local debianLayers = base ;
+local debianRoot = <renguin-linux>renguin-debian-root.tar.gz ;
+if $(HAIKU_RENGA_IMAGE) {
+	debianLayers = base gl ;
+	debianRoot = <renguin-linux>renguin-debian-gl-root.tar.gz ;
+}
+MakeLocate $(debianRoot) : $(outputDir) ;
+local debianInputs = <renguin-root>build-debian-root.sh
+	<renguin-root>debian.pins <renguin-root>unpack-deb.py
+	<renguin-root>test-unpack-deb.sh ;
+SEARCH on $(debianInputs) = $(rootDir) ;
+local debianDir = [ FDirName $(SUBDIR) debian ] ;
+local debianSources = <renguin-debian>glibc-check.c
+	<renguin-debian>cxx-check.cpp <renguin-debian>sdl-game.c
+	<renguin-debian>gl-check.c ;
+SEARCH on $(debianSources) = $(debianDir) ;
+Depends $(debianRoot) : $(debianInputs) $(debianSources) ;
+RENGUIN_DEBIAN_DIR on $(debianRoot) = $(debianDir) ;
+RENGUIN_DEBIAN_LAYERS on $(debianRoot) = $(debianLayers) ;
+RENGUIN_ROOT_CACHE on $(debianRoot)
+	= [ FDirName $(HAIKU_DOWNLOAD_DIR) renguin-linux-root ] ;
+
+actions BuildRenguinDebianRoot
+{
+	sh $(2[1]) $(1) "$(HOST_CC)" $(2[2]) $(RENGUIN_ROOT_CACHE) \
+		$(RENGUIN_DEBIAN_DIR) $(RENGUIN_DEBIAN_LAYERS)
+}
+BuildRenguinDebianRoot $(debianRoot) : $(debianInputs) ;
+
 actions BuildRenguinChromiumRoot
 {
 	sh $(2[1]) $(1) $(2[2]) $(RENGUIN_ROOT_CACHE) $(RENGUIN_CHROME_PAGES)
@@ -212,6 +254,8 @@ if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test ;
 	ExtractArchiveToHaikuImage system non-packaged compat linux
 		: $(linuxRoot) ;
+	ExtractArchiveToHaikuImage system non-packaged compat linux-roots debian
+		: $(debianRoot) ;
 	if $(chromiumRoot) {
 		ExtractArchiveToHaikuImage system non-packaged compat linux
 			: $(chromiumRoot) ;
