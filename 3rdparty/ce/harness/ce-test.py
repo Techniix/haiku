@@ -4537,16 +4537,36 @@ TONE_SPREAD = 0.01
 TONE_WINDOWS_PER_PIECE = 512
 
 
+# The finest step tone_windows() searches a spread in, as a fraction of its
+# windows' frequency resolution (rate / window): a quarter of a bin leaves a
+# tone at most an eighth of a bin from the nearest frequency tried, which
+# costs it at most 5 % of its purity (sinc^2 of 1/8). A fixed 0.2 % grid was
+# a whole bin apart at 5 kHz in 0.1 s windows, and a tone between two of its
+# frequencies fell to about 0.5.
+TONE_SEARCH_STEP = 0.25
+
+
+def tone_search_offsets(hz, rate, window, spread):
+	"""The relative offsets tone_windows() tries for a candidate: from a
+	fifth of \a spread below it to \a spread above it, both ends included,
+	at most TONE_SEARCH_STEP of a bin apart."""
+	if spread <= 0:
+		return [0.0]
+	low = -spread / 5
+	step = TONE_SEARCH_STEP * rate / window
+	count = max(1, int(math.ceil((spread - low) * hz / step)))
+	return [low + (spread - low) * k / count for k in range(count + 1)]
+
+
 def tone_windows(samples, rate, candidates, window, spread=0.0):
 	"""Per window of one channel: (dominant candidate Hz or None for
 	silence or "other" for anything else, purity, RMS). With \a spread, a
 	candidate also matches up to that fraction above it (and a fifth of
-	it below; the best of a few frequencies). Uses numpy when it is there (the Media Kit
-	phases add a minute or more of tones)."""
-	offsets = [0.0]
-	if spread > 0:
-		steps = 5
-		offsets = [spread * k / steps for k in range(-1, steps + 1)]
+	it below; the best of the frequencies tone_search_offsets() gives).
+	Uses numpy when it is there (the Media Kit phases add a minute or more
+	of tones)."""
+	offsets = [tone_search_offsets(hz, rate, window, spread)
+		for hz in candidates]
 	results = []
 	try:
 		import numpy
@@ -4554,9 +4574,18 @@ def tone_windows(samples, rate, candidates, window, spread=0.0):
 		count = len(data) // window
 		if count == 0:
 			return results
-		n = numpy.arange(window)
-		phasors = [[numpy.exp(-2j * numpy.pi * hz * (1 + offset) * n / rate)
-				for offset in offsets] for hz in candidates]
+		# One matrix of every candidate's every frequency, cosine and sine
+		# apart (real products: no complex copy of the samples), and one
+		# product per piece; the best frequency of each candidate is a
+		# maximum over its columns.
+		hertz = numpy.array([hz * (1 + offset)
+			for hz, perCandidate in zip(candidates, offsets)
+			for offset in perCandidate])
+		angles = 2 * numpy.pi * numpy.outer(numpy.arange(window), hertz) / rate
+		cosines = numpy.cos(angles)
+		sines = numpy.sin(angles)
+		del angles
+		starts = numpy.cumsum([0] + [len(o) for o in offsets[:-1]])
 		# A piece of TONE_WINDOWS_PER_PIECE windows at a time: converting a
 		# whole hour-long channel to float64 at once took 8 bytes a sample
 		# (twice, with the energy), gigabytes for a renga-raw recording.
@@ -4565,15 +4594,8 @@ def tone_windows(samples, rate, candidates, window, spread=0.0):
 			blocks = numpy.asarray(data[first * window:last * window],
 				dtype=numpy.float64).reshape(last - first, window)
 			energy = (blocks * blocks).sum(axis=1)
-			powers = []
-			for perOffset in phasors:
-				best_power = None
-				for phasor in perOffset:
-					power = numpy.abs(blocks @ phasor) ** 2
-					best_power = power if best_power is None \
-						else numpy.maximum(best_power, power)
-				powers.append(best_power)
-			powers = numpy.array(powers)
+			power = (blocks @ cosines) ** 2 + (blocks @ sines) ** 2
+			powers = numpy.maximum.reduceat(power, starts, axis=1).T
 			best = powers.argmax(axis=0)
 			for i in range(last - first):
 				rms = math.sqrt(energy[i] / window)
@@ -4583,7 +4605,7 @@ def tone_windows(samples, rate, candidates, window, spread=0.0):
 				purity = 2 * powers[best[i], i] / (window * energy[i])
 				results.append((candidates[best[i]] if purity >= 0.5
 					else "other", float(purity), rms))
-			del blocks, energy, powers
+			del blocks, energy, power, powers
 		return results
 	except ImportError:
 		pass
@@ -4594,12 +4616,13 @@ def tone_windows(samples, rate, candidates, window, spread=0.0):
 		if rms < 100:
 			results.append((None, 0.0, rms))
 			continue
-		def power(hz):
-			return max(goertzel_power(chunk, rate, hz * (1 + offset))
-				for offset in offsets)
-		best = max(candidates, key=power)
-		purity = 2 * power(best) / (window * energy)
-		results.append((best if purity >= 0.5 else "other", purity, rms))
+		powers = [max(goertzel_power(chunk, rate, hz * (1 + offset))
+			for offset in perCandidate)
+			for hz, perCandidate in zip(candidates, offsets)]
+		best = max(range(len(candidates)), key=lambda i: powers[i])
+		purity = 2 * powers[best] / (window * energy)
+		results.append((candidates[best] if purity >= 0.5 else "other",
+			purity, rms))
 	return results
 
 
