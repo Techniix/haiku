@@ -415,15 +415,18 @@ absent(const ChannelCheck& check)
 
 /*!	Records \a seconds from a new loopback of \a signature (NULL: all) with
 	the exclusion list \a exclude (NULL: none set) and checks the left
-	(A's) and right (B's) channels. \a seconds of audio, not of waiting:
-	the loopback's first buffers can come late on a loaded guest (its
-	connection and start), so it waits up to kRecordSlack longer for them;
-	what was recorded is in ChannelCheck::seconds.
+	(A's) and right (B's) channels. With \a waitForAudio, \a seconds of
+	audio, not of waiting: the loopback's first buffers can come late on a
+	loaded guest (its connection and start), so it waits up to
+	kRecordSlack longer for them. A loopback that is expected to stay
+	silent may get no buffers at all (a route nothing plays on), so its
+	callers pass false and it records for \a seconds of waiting, as
+	before. What was recorded is in ChannelCheck::seconds.
 */
 static status_t
 record(const char* signature, const char* exclude, double seconds,
 	double leftHertz, double rightHertz, ChannelCheck& left,
-	ChannelCheck& right)
+	ChannelCheck& right, bool waitForAudio = true)
 {
 	LoopbackRecorder loopback;
 	status_t status = loopback.Create(signature);
@@ -435,7 +438,8 @@ record(const char* signature, const char* exclude, double seconds,
 		status = loopback.Start();
 	if (status == B_OK) {
 		snooze((bigtime_t)(seconds * 1000000));
-		bigtime_t deadline = system_time() + kRecordSlack;
+		bigtime_t deadline = system_time()
+			+ (waitForAudio ? kRecordSlack : 0);
 		while (system_time() < deadline) {
 			BAutolock locker(loopback.recording.lock);
 			if (loopback.recording.rate > 0
@@ -615,8 +619,8 @@ test_ducking(Player& a, Player& b)
 			&& fabs(right.amplitude - expectedB) < 0.25 * expectedB
 			&& active.FindFirst("active 1") >= 0,
 		"%s; L (A, trigger) %.3f purity >= %.3f, R (B) %.4f (want %.4f, "
-		"-12 dB); %s; %.2f s recorded", strerror(recorded), left.amplitude,
-		left.minPurity, right.amplitude, expectedB,
+		"-12 dB); %s; %.2f s recorded (both channels)", strerror(recorded),
+		left.amplitude, left.minPurity, right.amplitude, expectedB,
 		active.FindFirst("active 1") >= 0 ? "active" : "not active",
 		left.seconds);
 
@@ -626,9 +630,9 @@ test_ducking(Player& a, Player& b)
 	recorded = record(NULL, NULL, 1.0, 5100, 5300, left, right);
 	report("duck_released", recorded == B_OK && absent(left)
 			&& present(right),
-		"%s; L (A) %.4f, R (B) %.3f purity >= %.3f; %.2f s recorded",
-		strerror(recorded), left.amplitude, right.amplitude, right.minPurity,
-		right.seconds);
+		"%s; L (A) %.4f, R (B) %.3f purity >= %.3f; %.2f s recorded (both "
+		"channels)", strerror(recorded), left.amplitude, right.amplitude,
+		right.minPurity, right.seconds);
 
 	// switched off: A no longer ducks
 	set_mixer_text(RENGA_DUCKING_KIND, BString(settings).Replace("on 1",
@@ -645,7 +649,8 @@ test_ducking(Player& a, Player& b)
 	report("duck_switch_off", recorded == B_OK && present(left)
 			&& present(right),
 		"%s; L (A) %.3f purity >= %.3f, R (B) %.3f purity >= %.3f (want "
-		"%.3f +- 10 %%, purity > 0.95); %.2f s recorded; ducking %s",
+		"%.3f +- 10 %%, purity > 0.95); %.2f s recorded (both channels); "
+		"ducking %s",
 		strerror(recorded), left.amplitude, left.minPurity, right.amplitude,
 		right.minPurity, kAmplitude, left.seconds,
 		after.FindFirst("active 1") >= 0 ? "still active" : "not active");
@@ -893,7 +898,10 @@ test_combined(InputDevice& fed)
 	ChannelCheck left, right;
 	status_t recorded = B_ERROR;
 	for (int attempt = 0; attempt < 5; attempt++) {
-		recorded = record(route.String(), NULL, 1.2, 700, 1300, left, right);
+		// (no slack: in QEMU nothing reaches this route yet, see below,
+		// and the attempts wait on their own)
+		recorded = record(route.String(), NULL, 1.2, 700, 1300, left, right,
+			false);
 		if (recorded == B_OK && left.amplitude > 0.5 * kFedAmplitude)
 			break;
 		snooze(1500000);
@@ -912,7 +920,7 @@ test_combined(InputDevice& fed)
 	fflush(stdout);
 	(void)status;
 	ChannelCheck everyLeft, everyRight;
-	record(NULL, NULL, 1.0, 700, 1300, everyLeft, everyRight);
+	record(NULL, NULL, 1.0, 700, 1300, everyLeft, everyRight, false);
 	report("combined_not_heard", everyLeft.amplitude < kSilence,
 		"What you hear: 700 Hz %.4f (the microphone does not play back)",
 		everyLeft.amplitude);
@@ -920,7 +928,7 @@ test_combined(InputDevice& fed)
 	// taken off the list: the stream goes
 	set_mixer_text(RENGA_COMBINED_INPUTS_KIND, "");
 	snooze(3000000);
-	record(route.String(), NULL, 1.0, 700, 1300, left, right);
+	record(route.String(), NULL, 1.0, 700, 1300, left, right, false);
 	report("combined_removed", left.amplitude < kSilence,
 		"after removal: %.4f", left.amplitude);
 }

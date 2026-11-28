@@ -342,6 +342,19 @@ MixerTap::SetDeviceNode(media_node_id node)
 	that counts as a jump: the window started over (one "restart") for
 	nothing but the device's start (media_drift.estimate, batch 14).
 */
+/*!	The sink's pushes stop and start with its connection, its enabled
+	state and its start: before the window's first sample, the warm-up
+	then starts again with the next push (the mixer skips a tap that is
+	not ready, so Push() cannot tell). With fLock held.
+*/
+void
+MixerTap::_RearmDriftWarmUp()
+{
+	if (fDriftCount == 0)
+		fDriftWarmUntil = 0;
+}
+
+
 void
 MixerTap::_UpdateDrift(BTimeSource* mixerClock)
 {
@@ -655,6 +668,7 @@ MixerTap::Start(bigtime_t performanceTime)
 		BAutolock locker(fLock);
 		fRunning = true;
 		_ResetConversion();
+		_RearmDriftWarmUp();
 	}
 	BMediaEventLooper::Start(performanceTime);
 }
@@ -876,6 +890,7 @@ MixerTap::Connect(status_t error, const media_source& source,
 	fConnected = true;
 	fDead = false;
 	fSendErrors = 0;
+	_RearmDriftWarmUp();
 	SetBufferDuration((bigtime_t)(fBufferFrames * 1000000.0 / fRate));
 }
 
@@ -887,6 +902,7 @@ MixerTap::Disconnect(const media_source& what, const media_destination& where)
 	if (what != fOutput.source || where != fOutput.destination)
 		return;
 	fConnected = false;
+	_RearmDriftWarmUp();
 	fOutput.destination = media_destination::null;
 	fOutput.format.u.raw_audio = media_raw_audio_format::wildcard;
 	_Specialize(&fOutput.format);
@@ -913,6 +929,7 @@ MixerTap::EnableOutput(const media_source& what, bool enabled,
 		return;
 	BAutolock locker(fLock);
 	fEnabled = enabled;
+	_RearmDriftWarmUp();
 }
 
 

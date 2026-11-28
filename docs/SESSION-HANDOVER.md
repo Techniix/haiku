@@ -142,7 +142,7 @@ Remaining queue, in order:
 7. Flatpak step 1 (`wip/flatpak-step1`).
 8. Steam 64-bit groundwork.
 9. The two load-dependent media checks (`media_drift.estimate`, `media_mixing.duck_switch_off`).
-   - Done (2026-11-27, `fix/media-load-checks`): `estimate` reproduced under host load ("16 samples, 1 restarts"; the card's start-up burst restarted the drift window); fixed with a 2 s warm-up in MixerTap, and the check now waits for the full window. `duck_switch_off` not reproduced in 22 runs; its report now gives purity, recorded length and ducking state, and `record()` waits for the audio it asked for. Neither is on `KNOWN_FLAKY`. QEMU Tested.
+   - Done (2026-11-27, `fix/media-load-checks`): `estimate` reproduced and fixed under KVM plus host load (not yet run under TCG): "16 samples, 1 restarts", the card's start-up burst restarting the drift window; a 2 s warm-up in MixerTap, and the check now waits for the full window. `duck_switch_off` not reproduced in 22 runs; its report now gives purity, recorded length and ducking state, and `record()` waits for the audio it asked for. Neither is on `KNOWN_FLAKY`. QEMU Tested.
 10. Mesa cross-build on the Linux host, time-boxed to about 2 h (decisions log).
 11. F-23, F-22, Renga Depot, F-66/F-41, F-44.
 12. End of batch: four-way sweep, image `<date>-batch14`, status PR.

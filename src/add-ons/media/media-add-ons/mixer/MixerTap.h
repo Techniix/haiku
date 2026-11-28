@@ -218,6 +218,7 @@ private:
 			void				_UpdateWeb();
 			void				_SendBuffers();
 			void				_UpdateDrift(BTimeSource* mixerClock);
+			void				_RearmDriftWarmUp();
 
 			BMediaAddOn*		fAddOn;
 			kind_t				fKind;

@@ -55,6 +55,11 @@ static const double kWander = 1500;
 	// QEMU's cards against each other, see above
 static const int kWindow = 16;
 	// the sink's samples, one a second (MixerTap::kDriftSamples)
+static const int kFirstWait = 18;
+	// seconds the estimate check waits at least (the window's 16 s and a
+	// little more, as before kSettle)
+static const int kSlowSettle = 30;
+	// a window that took longer than this to fill gets an info line
 static const int kSettle = 60;
 	// seconds the first estimate may take to fill its window. The window
 	// starts 2 s after the sink's first mixed buffer (the card's warm-up,
@@ -270,17 +275,21 @@ main()
 	}
 
 	// the shared host clock: no drift (the estimate fits a line through
-	// the last 16 s, one sample a second). At least 18 s, as before, and
-	// on until the window is full (kSettle).
-	watch(sink, 18, "no skew");
+	// the last 16 s, one sample a second). At least kFirstWait, as
+	// before, and on until the window is full (kSettle).
+	watch(sink, kFirstWait, "no skew");
 	Drift before = {};
 	status = read_drift(sink, &before);
-	int waited = 18;
+	int waited = kFirstWait;
 	while (waited < kSettle && (status != B_OK || before.samples < kWindow)
 		&& before.restarts <= 0) {
 		watch(sink, 3, "no skew, filling");
 		waited += 3;
 		status = read_drift(sink, &before);
+	}
+	if (waited > kSlowSettle && before.samples == kWindow) {
+		info("the window took %d s to fill (more than %d s; %d on an idle "
+			"host)", waited, kSlowSettle, kFirstWait);
 	}
 	info("the second card against the first without skew: %.0f ppm",
 		before.measured);
