@@ -405,7 +405,16 @@ main(int argc, char** argv)
 			}
 			usleep(50000);
 		}
-		after = exec_root_count();
+		// exec_team() renames the team before the personality is
+		// released, and another team may be in an exec of its own: wait
+		// up to 1 s for the count to settle. A native program that held
+		// an entry would keep it for its whole 5 s.
+		for (int j = 0; j < 50; j++) {
+			after = exec_root_count();
+			if (after >= 0 && after <= before)
+				break;
+			usleep(20000);
+		}
 		kill(child, SIGKILL);
 		waitpid(child, &status, 0);
 		if (i == 100) {
@@ -414,8 +423,8 @@ main(int argc, char** argv)
 			return 1;
 		}
 		if (after < 0 || after > before) {
-			printf("FAIL native_live: %ld exec roots before, %ld while the "
-				"native sleep runs\n", before, after);
+			printf("FAIL native_live: %ld exec roots before, still %ld after "
+				"1 s while the native sleep runs\n", before, after);
 			return 1;
 		}
 	}
