@@ -833,6 +833,10 @@ renguin_load(foreign_exec_args* args)
 	data->have_linux_root = vfs_read_stat(-1, data->root[0] != '\0'
 			? data->root : RENGUIN_LINUX_ROOT, true, &rootStat, true) == B_OK
 		&& S_ISDIR(rootStat.st_mode);
+	if (data->have_linux_root) {
+		data->root_device = rootStat.st_dev;
+		data->root_node = rootStat.st_ino;
+	}
 
 	linux_image_info executable;
 	status_t status = load_elf_image(team, args->fd, false, &executable);

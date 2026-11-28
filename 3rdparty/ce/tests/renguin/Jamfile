@@ -200,6 +200,37 @@ if $(RENGUIN_LINUX_CHROMIUM) = 1 {
 	BuildRenguinChromiumRoot $(chromiumRoot) : $(chromiumInputs) ;
 }
 
+# The Flatpak layer (batch 14, Flatpak step 1; root/build-flatpak-root.sh):
+# Alpine's flatpak and ostree (flatpak.pins) and a local OSTree repository
+# with a test application built here on the build host, which the harness
+# installs and runs without a network (renguin_test flatpak.ostree_*). About
+# 12 MB to download once and 30 MB in the image, so every harness image has
+# it. It needs the base root's downloads (alpine.pins) in the same cache.
+local flatpakRoot = <renguin-linux>renguin-flatpak-root.tar.gz ;
+MakeLocate $(flatpakRoot) : $(outputDir) ;
+local flatpakInputs = <renguin-root>build-flatpak-root.sh
+	<renguin-root>flatpak.pins <renguin-root>alpine.pins ;
+SEARCH on $(flatpakInputs) = $(rootDir) ;
+local flatpakAppDir = [ FDirName $(SUBDIR) flatpak ] ;
+local flatpakAppSources = <renguin-flatpak>hello.c <renguin-flatpak>ldconfig
+	<renguin-flatpak>org.renga.Hello.metadata
+	<renguin-flatpak>org.renga.TestPlatform.metadata ;
+SEARCH on $(flatpakAppSources) = $(flatpakAppDir) ;
+# unpack-deb.py --check: every package's links must stay inside the tree
+SEARCH on <renguin-root>unpack-deb.py = $(rootDir) ;
+Depends $(flatpakRoot) : $(flatpakInputs) $(flatpakAppSources) $(linuxRoot)
+	<renguin-root>unpack-deb.py ;
+RENGUIN_FLATPAK_APP_DIR on $(flatpakRoot) = $(flatpakAppDir) ;
+RENGUIN_ROOT_CACHE on $(flatpakRoot)
+	= [ FDirName $(HAIKU_DOWNLOAD_DIR) renguin-linux-root ] ;
+
+actions BuildRenguinFlatpakRoot
+{
+	sh $(2[1]) $(1) $(2[2]) $(2[3]) $(RENGUIN_ROOT_CACHE) \
+		$(RENGUIN_FLATPAK_APP_DIR) "$(HOST_CC)"
+}
+BuildRenguinFlatpakRoot $(flatpakRoot) : $(flatpakInputs) ;
+
 local expected = <renguin-linux-src>expected.txt ;
 SEARCH on $(expected) = $(linuxDir) ;
 
@@ -254,6 +285,8 @@ if $(CE_HARNESS) && $(TARGET_ARCH) = x86_64 {
 	AddFilesToHaikuImage system non-packaged bin ce-tests : renguin_test ;
 	ExtractArchiveToHaikuImage system non-packaged compat linux
 		: $(linuxRoot) ;
+	ExtractArchiveToHaikuImage system non-packaged compat linux
+		: $(flatpakRoot) ;
 	ExtractArchiveToHaikuImage system non-packaged compat linux-roots debian
 		: $(debianRoot) ;
 	if $(chromiumRoot) {

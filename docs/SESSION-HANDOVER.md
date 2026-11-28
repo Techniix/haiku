@@ -139,7 +139,8 @@ Remaining queue, in order:
    - Then the two BGLView checks: no ICD, and lavapipe only.
    - Done (2026-11-27, `batch/14-mesa-optc`): `ce-test.py --profile renga-raw --mesa-upgrade --only mesa_upgrade` passes, QEMU Tested; the solver also takes gcc_syslibs 15.3.0, llvm21_libs and vulkan_loader from HaikuPorts.
 6. `batch/13-chrome-window`, then `batch/13-installer-destination`.
-7. Flatpak step 1: PR #36 (`batch/14-flatpak-step1`), QEMU Tested (`renguin.libc-chroot`, `renguin.flatpak.*`, `renguin_manager.flatpak_switch`). It waits for architect review; the OSTree test app comes next.
+7. Flatpak step 1: PR #36 (`batch/14-flatpak-step1`), QEMU Tested (`renguin.libc-chroot`, `renguin.flatpak.*`, `renguin_manager.flatpak_switch`). Merged as 846680a7eb.
+   - Part 2 (`batch/14-flatpak-ostree`): the guest's own flatpak installs and runs a host-built OSTree test app. This needed shim and Renguin path fixes (statx mount ID, `*at()` from a descriptor of `/`, no top-level `/boot` in the root). QEMU Tested (`renguin.flatpak.ostree_*`, `bwrap_nested`, `libc-fs`). Next: xdg-dbus-proxy under the shim, then Flathub.
 8. Steam 64-bit groundwork.
    - Done (2026-11-27, `batch/14-steam-groundwork`): a Debian 13 root (glibc 2.41, SDL2; Mesa llvmpipe in renga-* images) beside Alpine's, used through `chroot()`; an SDL2 game runs headless and in a Wayland window. QEMU Tested (`renguin.debian.*`, `wayland.linux_sdl_window`; default 151/0, renga-raw 156/0). Harness minimum images are now 512 MiB (253 MiB free; `renguin.boot_free` fails below 128, 94 MiB at the old 300). Next: XWayland, the Steam runtime, i386 (own brief).
 9. The two load-dependent media checks (`media_drift.estimate`, `media_mixing.duck_switch_off`).

@@ -382,7 +382,8 @@ renguin_sys_openat(int dirfd, uint64 path, uint64 flags, uint64 mode)
 	renguin_scratch scratch;
 	renguin_scratch_init(&scratch);
 	status_t status;
-	uint64 hostPath = renguin_user_path(&scratch, path, pathFlags, &status);
+	uint64 hostPath = renguin_user_path(&scratch, path, pathFlags, &status,
+		dirfd);
 	if (status == RENGUIN_STATUS_IN_PROC) {
 		int64 result = proc_path_from_scratch(hostPath, procPath,
 			sizeof(procPath));
@@ -390,6 +391,8 @@ renguin_sys_openat(int dirfd, uint64 path, uint64 flags, uint64 mode)
 	}
 	if (status != B_OK)
 		return renguin_encode(status);
+	if ((flags & LX_O_CREAT) != 0 && renguin_creates_shadow(dirfd, hostPath))
+		return -LX_EISDIR;		// Haiku's /boot, a directory (path.cpp)
 
 	int fd = _user_open(dirfd, (const char*)(addr_t)hostPath,
 		open_flags_to_haiku(flags),
@@ -495,7 +498,7 @@ renguin_stat_at(int dirfd, uint64 path, uint64 flags, struct stat* st)
 
 	status_t status = renguin_get_user_path(path,
 		traverse ? RENGUIN_PATH_FOLLOW_LEAF : 0, buffer.path,
-		B_PATH_NAME_LENGTH);
+		B_PATH_NAME_LENGTH, dirfd);
 	if (status == RENGUIN_STATUS_IN_PROC) {
 		if (!renguin_proc_path(LX_AT_FDCWD, buffer.path, procPath,
 				sizeof(procPath))) {
@@ -569,7 +572,7 @@ renguin_sys_readlinkat(int dirfd, uint64 path, uint64 buffer, uint64 size)
 	}
 
 	status_t status = renguin_get_user_path(path, 0, kernelPath.path,
-		B_PATH_NAME_LENGTH);
+		B_PATH_NAME_LENGTH, dirfd);
 	if (status == RENGUIN_STATUS_IN_PROC) {
 		if (!renguin_proc_path(LX_AT_FDCWD, kernelPath.path, procPath,
 				sizeof(procPath))) {
@@ -644,7 +647,7 @@ renguin_sys_faccessat(int dirfd, uint64 path, uint64 mode, uint64 flags)
 	renguin_scratch_init(&scratch);
 	status_t status;
 	uint64 hostPath = renguin_user_path(&scratch, path,
-		RENGUIN_PATH_FOLLOW_LEAF, &status);
+		RENGUIN_PATH_FOLLOW_LEAF, &status, dirfd);
 	if (status == RENGUIN_STATUS_IN_PROC) {
 		int64 result = proc_path_from_scratch(hostPath, procPath,
 			sizeof(procPath));
@@ -818,9 +821,11 @@ renguin_sys_mkdirat(int dirfd, uint64 path, uint64 mode)
 	renguin_scratch_init(&scratch);
 	status_t status;
 	uint64 hostPath = renguin_user_path(&scratch, path,
-		RENGUIN_PATH_MAY_CREATE, &status);
+		RENGUIN_PATH_MAY_CREATE, &status, dirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(dirfd, hostPath))
+		return -LX_EEXIST;		// Haiku's /boot (path.cpp)
 	return renguin_encode(_user_create_dir(dirfd,
 		(const char*)(addr_t)hostPath,
 		(int)(mode & 07777 & ~renguin_current_umask())));
@@ -838,7 +843,7 @@ renguin_sys_unlinkat(int dirfd, uint64 path, uint64 flags)
 	renguin_scratch scratch;
 	renguin_scratch_init(&scratch);
 	status_t status;
-	uint64 hostPath = renguin_user_path(&scratch, path, 0, &status);
+	uint64 hostPath = renguin_user_path(&scratch, path, 0, &status, dirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
 
@@ -861,13 +866,16 @@ renguin_sys_renameat(int olddirfd, uint64 oldpath, int newdirfd,
 	renguin_scratch scratch;
 	renguin_scratch_init(&scratch);
 	status_t status;
-	uint64 hostOld = renguin_user_path(&scratch, oldpath, 0, &status);
+	uint64 hostOld = renguin_user_path(&scratch, oldpath, 0, &status,
+		olddirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
 	uint64 hostNew = renguin_user_path(&scratch, newpath,
-		RENGUIN_PATH_MAY_CREATE, &status);
+		RENGUIN_PATH_MAY_CREATE, &status, newdirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(newdirfd, hostNew))
+		return -LX_EEXIST;
 	return renguin_encode(_user_rename(olddirfd, (const char*)(addr_t)hostOld,
 		newdirfd, (const char*)(addr_t)hostNew));
 }

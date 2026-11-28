@@ -850,6 +850,8 @@ static const char* kBwrapShim = R"shim(#!/bin/sh
 # /boot/system/ and /boot/home/ on the host); namespace, seccomp and
 # capability options are accepted and ignored.
 LINUX_ROOT=${RENGUIN_BWRAP_LINUX_ROOT-/boot/system/non-packaged/compat/linux}
+# Haiku's /tmp: the Linux root has no /tmp or /var/tmp of its own
+SHARED_TMP=${RENGUIN_BWRAP_SHARED_TMP-/boot/system/cache/tmp}
 root=$(mktemp -d /tmp/renguin-bwrap.XXXXXX) || exit 1
 chdir=/
 clearenv=0
@@ -861,15 +863,71 @@ Flatpak programs run with your rights." >&2
 host() {
 	case "$1" in
 		/boot/*) printf '%s' "$1" ;;
+		/tmp|/tmp/*) printf '%s%s' "$SHARED_TMP" "${1#/tmp}" ;;
+		/var/tmp|/var/tmp/*) printf '%s%s' "$SHARED_TMP" "${1#/var/tmp}" ;;
 		/*) printf '%s%s' "$LINUX_ROOT" "$1" ;;
 		*) printf '%s/%s' "$(pwd)" "$1" ;;
 	esac
 }
 
+# inside <destination>: whether nothing on the way to it in the new root is
+# a link. A bind's link leads out of the private directory (into the
+# Linux root, an installed runtime, the user's files): nothing may be
+# created, removed or written through it, so an option for a place inside
+# another bind is skipped (Renguin has no mount namespace to put it there).
+inside() {
+	case "$1" in /*) ;; *) return 1 ;; esac
+	# no "." or ".." components: they would walk back out of a bind's place
+	case "/$1/" in */./*|*/../*) return 1 ;; esac
+	insidePath=$root
+	insideRest=${1#/}
+	while :; do
+		case "$insideRest" in
+			*/*) insidePath=$insidePath/${insideRest%%/*}
+				insideRest=${insideRest#*/} ;;
+			*) break ;;
+		esac
+		[ -L "$insidePath" ] && return 1
+	done
+	return 0
+}
+
+skipped() {
+	echo "bwrap (Renguin): $1 is inside another bind; skipped" >&2
+}
+
+# host_side <destination>: whether it is under /boot. The new root never
+# has a /boot, so Renguin resolves such paths in Haiku's own tree, where
+# they already are (Flatpak binds the home and its own directories at
+# their own paths); a directory made for them here would hide Haiku's.
+host_side() {
+	case "$1" in /boot|/boot/*) return 0 ;; esac
+	return 1
+}
+
 place() {
 	# $1 host target, $2 destination inside the new root
+	if [ "$2" = / ]; then
+		# a whole tree at the root (Flatpak's install triggers use
+		# --ro-bind / /): a link for each of its entries, except the ones
+		# Renguin answers itself or that are shared with Haiku
+		for entry in "${1%/}"/* "${1%/}"/.[!.]*; do
+			[ -e "$entry" ] || [ -L "$entry" ] || continue
+			name=${entry##*/}
+			case "$name" in ""|.|..|proc|dev|tmp) continue ;; esac
+			rm -rf "${root:?}/$name" 2>/dev/null
+			ln -s "$entry" "${root:?}/$name"
+		done
+		return
+	fi
+	if host_side "$2"; then
+		[ "$1" = "$2" ] || echo "bwrap (Renguin): $2 is Haiku's own" \
+			"path; $1 not bound there" >&2
+		return
+	fi
+	inside "$2" || { skipped "$2"; return; }
 	mkdir -p "$root$(dirname "$2")"
-	rm -rf "$root$2" 2>/dev/null
+	rm -rf "${root:?}$2" 2>/dev/null
 	ln -s "$1" "$root$2"
 }
 
@@ -905,9 +963,15 @@ while [ $# -gt 0 ]; do
 			esac
 			shift 3 ;;
 		--symlink)
-			mkdir -p "$root$(dirname "$3")"
-			rm -rf "$root$3" 2>/dev/null
-			ln -s "$2" "$root$3"
+			if host_side "$3"; then
+				echo "bwrap (Renguin): $3 is Haiku's own path; no link" >&2
+			elif inside "$3" && [ "$3" != / ]; then
+				mkdir -p "$root$(dirname "$3")"
+				rm -rf "${root:?}$3" 2>/dev/null
+				ln -s "$2" "$root$3"
+			else
+				skipped "$3"
+			fi
 			shift 3 ;;
 		--setenv)
 			printf 'export %s=%s\n' "$2" "$(quote "$3")" >> "$envfile"
@@ -918,15 +982,46 @@ while [ $# -gt 0 ]; do
 		--clearenv) clearenv=1; shift ;;
 		--chdir) chdir=$2; shift 2 ;;
 		--dir|--tmpfs|--mqueue)
-			rm -rf "$root$2" 2>/dev/null
-			mkdir -p "$root$2"
+			if [ "$2" = / ] || host_side "$2"; then
+				:
+			elif inside "$2"; then
+				[ -d "$root$2" ] && [ ! -L "$root$2" ] \
+					|| rm -rf "${root:?}$2" 2>/dev/null
+				mkdir -p "$root$2"
+			else
+				skipped "$2"
+			fi
 			shift 2 ;;
 		--proc|--dev) shift 2 ;;
 		--file|--bind-data|--ro-bind-data)
-			mkdir -p "$root$(dirname "$3")"
-			eval "cat <&$2" > "$root$3"
+			if host_side "$3"; then
+				echo "bwrap (Renguin): $3 is Haiku's own path; not written" >&2
+			elif inside "$3" && [ "$3" != / ]; then
+				mkdir -p "$root$(dirname "$3")"
+				rm -rf "${root:?}$3" 2>/dev/null
+				eval "cat <&$2" > "$root$3"
+			else
+				skipped "$3"
+			fi
 			shift 3 ;;
-		--chmod) chmod "$2" "$root$3" 2>/dev/null; shift 3 ;;
+		--chmod)
+			! host_side "$3" && inside "$3" && [ ! -L "$root$3" ] \
+				&& chmod "$2" "$root$3" 2>/dev/null
+			shift 3 ;;
+		--bind-fd|--ro-bind-fd)
+			# Flatpak 1.16 binds the runtime (/usr), the application (/app)
+			# and its data directories by descriptor: Renguin's
+			# /proc/self/fd names a directory descriptor. busybox is
+			# started as a program: ash's in-process readlink, in the
+			# forked subshell of $(...), gets ENOENT under Renguin.
+			source=$(busybox readlink "/proc/self/fd/$2" 2>/dev/null \
+				|| readlink "/proc/self/fd/$2" 2>/dev/null)
+			case "$source" in
+				/*) place "$(host "$source")" "$3" ;;
+				*) echo "bwrap (Renguin): $1 $2: no path for the" \
+					"descriptor; $3 skipped" >&2 ;;
+			esac
+			shift 3 ;;
 		--info-fd|--json-status-fd)
 			eval "printf '{ \"child-pid\": %d }\\n' $$ >&$2"
 			eval "exec $2>&-"
@@ -936,12 +1031,8 @@ while [ $# -gt 0 ]; do
 			shift 2 ;;
 		--seccomp|--add-seccomp-fd|--sync-fd|--userns|--userns2|--pidns|\
 		--exec-label|--file-label|--uid|--gid|--hostname|--lock-file|\
-		--cap-add|--cap-drop|--perms|--size|--remount-ro|--argv0|\
-		--bind-fd|--ro-bind-fd)
-			case "$1" in
-				--bind-fd|--ro-bind-fd) shift 3 ;;
-				*) shift 2 ;;
-			esac ;;
+		--cap-add|--cap-drop|--perms|--size|--remount-ro|--argv0)
+			shift 2 ;;
 		--*) shift ;;
 		*) break ;;
 	esac
@@ -964,6 +1055,7 @@ if [ -n "$RENGUIN_BWRAP_DRY_RUN" ]; then
 	echo "env: $envtext"
 	echo "chdir: $chdir"
 	echo "command: $*"
+	rm -rf "${root:?}" "$envfile" "$root.args"
 	exit 0
 fi
 rm -f "$envfile" "$root.args"

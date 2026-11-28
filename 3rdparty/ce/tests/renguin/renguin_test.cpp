@@ -754,7 +754,16 @@ run_chromium_check()
 	  flatpak.bwrap_runs        the command ran in the new root: its
 	                            environment, working directory and a file
 	                            only the new root has
+	  flatpak.bwrap_nested      a bind inside another bind's place is
+	                            skipped, not made through the first
+	                            bind's link: a file in the directory bound
+	                            first is still there (the first shim, PR 36,
+	                            removed it and left a link in its place)
 	  flatpak.switch_off        off again: the shim is gone
+	While the switch is on, the test application from the Flatpak layer
+	(root/build-flatpak-root.sh: Alpine's flatpak and ostree, and a local
+	OSTree repository built on the build host) is installed with the
+	root's flatpak and run through the shim (run_flatpak_ostree_checks()).
 */
 //! Whether \a path exists and contains \a text (no grep on minimum images).
 static bool
@@ -770,6 +779,131 @@ file_has(const std::string& path, const char* text)
 		content.append(buffer, length);
 	fclose(file);
 	return content.find(text) != std::string::npos;
+}
+
+
+/*!	Batch 14, Flatpak step 1 part 2: a real Flatpak install without a
+	network. The Linux root's flatpak (Alpine's) adds the layer's local
+	repository /opt/renguin-data/flatpak/repo as a remote, installs
+	org.renga.Hello from it (with its runtime org.renga.TestPlatform: a
+	static busybox and an ldconfig), and runs it; "flatpak run" starts it
+	through Renga's bwrap, which binds the runtime at /usr and the
+	application at /app by descriptor. Flatpak's user installation is a
+	directory of its own under ~/.cache, removed before and after. Its
+	repository may fill the disk down to 16 MB free: Flatpak's default for a
+	new repository (500 MB) is more than harness images keep free.
+	  flatpak.ostree_install    install exits 0 and "flatpak list" has the
+	                            application and its runtime
+	  flatpak.ostree_app        the program ran inside Flatpak's layout:
+	                            its Flatpak ID, /app, the runtime's
+	                            /usr/bin/sh, /.flatpak-info, its argument
+	The session bus and the document portal are left out
+	(--no-session-bus, --no-documents-portal): Flatpak would put
+	xdg-dbus-proxy between the program and Renga's bus, which the layer
+	does not have yet (design note, "Step 1, part 2").
+*/
+static const char* kFlatpakRepo = "/opt/renguin-data/flatpak/repo";
+static const char* kFlatpakUserDir = "/boot/home/.cache/renguin-flatpak-test";
+
+
+//! The last \a size bytes of \a text on one line (errors come last).
+static std::string
+last_line(std::string text, size_t size = 300)
+{
+	if (text.size() > size)
+		text = text.substr(text.size() - size);
+	for (size_t i = 0; i < text.size(); i++) {
+		if (text[i] == '\n')
+			text[i] = '|';
+	}
+	return text;
+}
+
+
+static void
+run_flatpak_ostree_checks()
+{
+	std::string repo = std::string(kRoot) + kFlatpakRepo;
+	std::string flatpak = std::string(kRoot) + "/usr/bin/flatpak";
+	if (access((repo + "/summary").c_str(), F_OK) != 0
+		|| access(flatpak.c_str(), X_OK) != 0) {
+		report("flatpak.ostree_install", false, "the Flatpak layer is "
+			"missing: %s %s", access(flatpak.c_str(), X_OK) == 0
+				? "flatpak present," : "no flatpak,",
+			access((repo + "/summary").c_str(), F_OK) == 0
+				? "repository present" : "no repository");
+		return;
+	}
+
+	const std::string userDir = kFlatpakUserDir;
+	run("rm -rf " + userDir);
+	std::string prefix = "cd /tmp && timeout 300 /bin/linux /bin/sh -c '"
+		"export FLATPAK_USER_DIR=" + userDir + "; mkdir -p "
+		"\"$XDG_RUNTIME_DIR\"; ";
+	std::string install = run(prefix
+		+ "flatpak --user remote-add --no-gpg-verify renga-test "
+		+ kFlatpakRepo + " && ostree --repo=" + userDir + "/repo config set "
+		"core.min-free-space-size 16MB && "
+		"flatpak --user install --noninteractive -y "
+		"renga-test org.renga.Hello; echo install-status=$?' 2>&1");
+	std::string list = run(prefix
+		+ "flatpak --user list --columns=application' 2>&1");
+	report("flatpak.ostree_install",
+		install.find("install-status=0") != std::string::npos
+			&& list.find("org.renga.Hello") != std::string::npos
+			&& list.find("org.renga.TestPlatform") != std::string::npos,
+		"install: %s; list: %s", last_line(install, 360).c_str(),
+		one_line(list).c_str());
+
+	std::string output = run(prefix
+		+ "flatpak --user run --no-session-bus --no-a11y-bus "
+		"--no-documents-portal org.renga.Hello renga; "
+		"echo run-status=$?' 2>&1");
+	// Flatpak's per-application directories are made in Haiku's home, not
+	// in a /boot of the Linux root's own (batch 14, path.cpp)
+	bool noRootBoot = access((std::string(kRoot) + "/boot").c_str(), F_OK)
+		!= 0;
+	report("flatpak.ostree_app", noRootBoot
+		&& output.find("FLATPAK_ID=org.renga.Hello") != std::string::npos
+			&& output.find("app=yes runtime=yes info=[Application]")
+				!= std::string::npos
+			&& output.find("arg 1=renga") != std::string::npos
+			&& output.find("run-status=0") != std::string::npos,
+		"%s%s", noRootBoot ? "" : "the Linux root has a /boot; ",
+		last_line(output, 480).c_str());
+	// and the per-application directory "flatpak run" made in the home
+	run("rm -rf " + userDir + " /boot/home/.var/app/org.renga.Hello");
+}
+
+
+//! flatpak.bwrap_nested (see run_flatpak_checks()).
+static void
+run_flatpak_nested_check()
+{
+	// Flatpak binds places inside other binds (extensions under /usr/lib,
+	// its per-app /tmp); the first shim made those through the first
+	// bind's link, in the bound directory itself.
+	const std::string nestedDir = "/boot/home/.cache/renguin-bwrap-nested";
+	run("rm -rf " + nestedDir + "; mkdir -p " + nestedDir + " && echo keep > "
+		+ nestedDir + "/canary");
+	std::string nested = run("cd /tmp && timeout 60 /bin/linux /bin/sh -c '"
+		"RENGUIN_BWRAP_QUIET=1 RENGUIN_BWRAP_DRY_RUN=1 bwrap --ro-bind "
+		+ nestedDir + " /usr --ro-bind /etc /usr/canary --tmpfs /usr/made "
+		"--chmod 0600 /usr --file 0 /usr/written -- /bin/true' 2>&1 "
+		"</dev/null");
+	struct stat canary;
+	bool kept = lstat((nestedDir + "/canary").c_str(), &canary) == 0
+		&& S_ISREG(canary.st_mode)
+		&& file_has(nestedDir + "/canary", "keep");
+	bool untouched = access((nestedDir + "/made").c_str(), F_OK) != 0
+		&& access((nestedDir + "/written").c_str(), F_OK) != 0;
+	report("flatpak.bwrap_nested", kept && untouched
+			&& nested.find("/usr/canary is inside another bind; skipped")
+				!= std::string::npos,
+		"canary %s, %s; %s", kept ? "kept" : "replaced or gone",
+		untouched ? "nothing made through the link" : "made through the link",
+		one_line(nested).c_str());
+	run("chmod 755 " + nestedDir + "; rm -rf " + nestedDir);
 }
 
 
@@ -811,6 +945,9 @@ run_flatpak_checks()
 			&& output.find("/work") != std::string::npos
 			&& output.find("own-root") != std::string::npos,
 		"%s", one_line(output).c_str());
+
+	run_flatpak_nested_check();
+	run_flatpak_ostree_checks();
 
 	file = fopen(path.c_str(), "w");
 	if (file != NULL) {

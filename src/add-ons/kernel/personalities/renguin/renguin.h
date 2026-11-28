@@ -163,6 +163,8 @@ struct renguin_team {
 	image_id app_image;			// registered B_APP_IMAGE, or -1
 	addr_t	vdso_base;			// the vDSO's address (vdso.cpp), or 0
 	bool	have_linux_root;	// the root (below) existed at exec time
+	dev_t	root_device;		// batch 14: the root's directory, for
+	ino_t	root_node;			// is_root_dirfd() (path.cpp); set with root
 	char	root[B_PATH_NAME_LENGTH];
 		// batch 14: the host directory chroot() made this team's "/";
 		// "" is RENGUIN_LINUX_ROOT. Inherited on fork(), kept on exec()
@@ -413,6 +415,9 @@ void		renguin_exec_claim_root(team_id team);
 void		renguin_exec_release_root(team_id team, bool dying);
 int32		renguin_exec_root_count();
 int64		renguin_sys_chroot(uint64 path);
+bool		renguin_creates_shadow(int dirfd, uint64 userPath);
+	// batch 14: whether creating userPath (as Haiku resolves it from dirfd)
+	// makes a top-level entry of the Linux root that hides Haiku's own
 status_t	renguin_resolve_in_root_of(const char* root,
 				const char* linuxPath, uint32 flags, char* hostPath,
 				size_t hostPathSize);
@@ -455,9 +460,10 @@ status_t	renguin_resolve_in_root(const char* linuxPath, uint32 flags,
 	// B_OK if the path exists under the Linux root; hostPath is then the
 	// fully resolved host path. B_ENTRY_NOT_FOUND otherwise.
 status_t	renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
-				size_t pathSize);
+				size_t pathSize, int dirfd = -100 /* LX_AT_FDCWD */);
 	// copies a path from userland and translates absolute paths into the
-	// Linux root where they exist there
+	// Linux root where they exist there; a relative path with a \a dirfd
+	// that is the team's "/" is taken as absolute (batch 14)
 void		renguin_hardlink_settings(bool copy);
 void		renguin_user_settings(bool asUser);
 bool		renguin_user_default();
@@ -467,7 +473,8 @@ uint32		renguin_host_id(uint32 linuxID);
 	// and back, for chown()
 	// fsops.cpp, batch 11: hard links as copies on BFS (switch)
 uint64		renguin_user_path(struct renguin_scratch* scratch, uint64 userPath,
-				uint32 flags, status_t* _status);
+				uint32 flags, status_t* _status,
+				int dirfd = -100 /* LX_AT_FDCWD */);
 	// like renguin_get_user_path(), but returns a user-space copy of the
 	// translated path for Haiku's _user_* calls (or userPath unchanged)
 status_t	renguin_translate_path(char* path, size_t pathSize, uint32 flags);

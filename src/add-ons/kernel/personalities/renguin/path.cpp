@@ -386,15 +386,55 @@ renguin_host_to_linux_device(char* path, size_t size)
 }
 
 
-status_t
-renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
-	size_t pathSize)
+/*!	Batch 14: whether \a dirfd is the team's "/" (the Linux root, or its
+	chroot() root). Relative paths are Haiku's to resolve, but one from a
+	descriptor of "/" means what the same path from "/" means: Flatpak's
+	libglnx walks every path that way (glnx_chaseat(): open("/"), then
+	openat() and mkdirat() one component at a time), and "boot" from the
+	Linux root's own directory missed Haiku's /boot, so that Flatpak made
+	a /boot/home of the root's own for an application's directories.
+*/
+static bool
+is_root_dirfd(int dirfd)
+{
+	if (dirfd < 0 || !linux_root_exists())
+		return false;
+	renguin_team* data = renguin_current_team();
+	struct stat fdStat;
+	return vfs_read_stat(dirfd, NULL, false, &fdStat, false) == B_OK
+		&& S_ISDIR(fdStat.st_mode) && fdStat.st_dev == data->root_device
+		&& fdStat.st_ino == data->root_node;
+}
+
+
+static status_t
+get_user_path(uint64 userPath, uint32 flags, char* path, size_t pathSize,
+	bool rootRelative)
 {
 	ssize_t length = renguin_copy_string_in(path, userPath, pathSize);
 	if (length < 0)
 		return length;
 
+	if (rootRelative && path[0] != '/' && path[0] != '\0') {
+		// "name" from "/" is "/name" (Haiku ignores the descriptor for an
+		// absolute path)
+		size_t used = strlen(path);
+		if (used + 2 > pathSize)
+			return B_NAME_TOO_LONG;
+		memmove(path + 1, path, used + 1);
+		path[0] = '/';
+	}
+
 	return renguin_translate_path(path, pathSize, flags);
+}
+
+
+status_t
+renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
+	size_t pathSize, int dirfd)
+{
+	return get_user_path(userPath, flags, path, pathSize,
+		is_root_dirfd(dirfd));
 }
 
 
@@ -479,7 +519,7 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 
 uint64
 renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
-	status_t* _status)
+	status_t* _status, int dirfd)
 {
 	*_status = B_OK;
 	if (userPath == 0 || !linux_root_exists())
@@ -491,7 +531,8 @@ renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
 		*_status = B_BAD_ADDRESS;
 		return 0;
 	}
-	if (first != '/')
+	bool rootRelative = first != '/' && first != '\0' && is_root_dirfd(dirfd);
+	if (first != '/' && !rootRelative)
 		return userPath;
 
 	char* path = (char*)malloc(B_PATH_NAME_LENGTH);
@@ -501,8 +542,8 @@ renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
 	}
 	MemoryDeleter pathDeleter(path);
 
-	status_t status = renguin_get_user_path(userPath, flags, path,
-		B_PATH_NAME_LENGTH);
+	status_t status = get_user_path(userPath, flags, path,
+		B_PATH_NAME_LENGTH, rootRelative);
 	if (status != B_OK && status != RENGUIN_STATUS_IN_PROC) {
 		*_status = status;
 		return 0;
@@ -511,6 +552,63 @@ renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
 	uint64 copy = renguin_scratch_put(scratch, path, strlen(path) + 1);
 	*_status = copy == 0 ? B_BAD_ADDRESS : status;
 	return copy;
+}
+
+
+/*!	Batch 14 (review of PR #40): whether creating \a userPath, as Haiku
+	will resolve it from \a dirfd, makes a top-level entry of the Linux
+	root that hides one of Haiku's own. Checked on the parent directory's
+	identity (dev/ino of RENGUIN_LINUX_ROOT), so every route is covered: an
+	absolute path translated into the root, a descriptor of "/", the working
+	directory at "/", ".." walks.
+
+	Only "boot" is such a name: Haiku's /boot is reached from the Linux root
+	only because the root has none (absolute paths the root lacks fall
+	through to Haiku's tree, and link targets under /boot/system/ and
+	/boot/home/ are host paths). A root of its own would hide Haiku's volume
+	from every Linux program: Flatpak's top-down directory walk made one
+	(/boot/home/.var/app/...). /tmp and /var/tmp, the other names the root
+	leaves out, are kept shared by "linux" itself (ensure_shared_tmp(),
+	which turns a made directory into a link), and Linux programs may make
+	any other top-level directory of their own, as on Linux. Only the
+	Linux root is checked: a chroot() root is a private tree, where any name
+	may be made.
+*/
+bool
+renguin_creates_shadow(int dirfd, uint64 userPath)
+{
+	if (userPath == 0)
+		return false;
+	char* path = (char*)malloc(B_PATH_NAME_LENGTH);
+	if (path == NULL)
+		return false;
+	MemoryDeleter pathDeleter(path);
+	if (renguin_copy_string_in(path, userPath, B_PATH_NAME_LENGTH) < 0)
+		return false;
+
+	size_t length = strlen(path);
+	while (length > 1 && path[length - 1] == '/')
+		length--;
+	size_t start = length;
+	while (start > 0 && path[start - 1] != '/')
+		start--;
+	if (length - start != 4 || memcmp(path + start, "boot", 4) != 0)
+		return false;
+
+	// the parent: "." for a bare name, else everything before the name
+	if (start == 0)
+		strcpy(path, ".");
+	else
+		path[start] = '\0';
+	struct stat parentStat;
+	struct stat rootStat;
+	if (vfs_read_stat(dirfd, path, true, &parentStat, false) != B_OK
+		|| vfs_read_stat(-1, RENGUIN_LINUX_ROOT, true, &rootStat, true)
+			!= B_OK) {
+		return false;
+	}
+	return parentStat.st_dev == rootStat.st_dev
+		&& parentStat.st_ino == rootStat.st_ino;
 }
 
 
@@ -772,12 +870,20 @@ renguin_sys_chroot(uint64 userPath)
 	// (Lookups in other threads read the root without it. The buffer's
 	// last byte is never written by strlcpy(), so a concurrent reader sees
 	// a terminated string, at worst a mix of the old and new root.)
+	bool ends = strcmp(canonical, RENGUIN_LINUX_ROOT) == 0
+		|| strcmp(canonical, "/") == 0;
+	struct stat rootStat = st;
+	if (ends && vfs_read_stat(-1, RENGUIN_LINUX_ROOT, true, &rootStat, true)
+			!= B_OK) {
+		rootStat = st;
+	}
 	MutexLocker locker(data->lock);
-	if (strcmp(canonical, RENGUIN_LINUX_ROOT) == 0
-		|| strcmp(canonical, "/") == 0) {
+	if (ends)
 		data->root[0] = '\0';
-	} else
+	else
 		strlcpy(data->root, canonical, sizeof(data->root));
+	data->root_device = rootStat.st_dev;
+	data->root_node = rootStat.st_ino;
 	// Path translation is on from now on, also in a program that started
 	// without a Linux root (the root is a directory that exists).
 	data->have_linux_root = true;

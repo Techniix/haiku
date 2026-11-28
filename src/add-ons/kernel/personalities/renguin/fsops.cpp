@@ -57,6 +57,8 @@
 #define LX_STATX_BLOCKS			0x0400
 #define LX_STATX_BASIC_STATS	0x07ff
 #define LX_STATX_BTIME			0x0800
+#define LX_STATX_MNT_ID			0x1000
+#define LX_STATX_MNT_ID_UNIQUE	0x4000
 #define LX_STATX__RESERVED		0x80000000U
 
 // utimensat
@@ -177,7 +179,7 @@ write_stat_at(int fd, uint64 path, bool traverse, bool emptyPathOK,
 		} else {
 			status_t status;
 			uint64 translated = renguin_user_path(&scratch, path,
-				traverse ? RENGUIN_PATH_FOLLOW_LEAF : 0, &status);
+				traverse ? RENGUIN_PATH_FOLLOW_LEAF : 0, &status, fd);
 			if (status != B_OK)
 				return renguin_encode(status);
 			hostPath = (const char*)(addr_t)translated;
@@ -245,6 +247,15 @@ renguin_sys_statx(int dirfd, uint64 path, uint64 flags, uint64 mask,
 	out.stx_rdev_minor = dev_minor((uint32)st.st_rdev);
 	out.stx_dev_major = dev_major((uint32)st.st_dev);
 	out.stx_dev_minor = dev_minor((uint32)st.st_dev);
+	// Batch 14: the mount ID (Flatpak's libglnx asks for STATX_MNT_ID or
+	// STATX_MNT_ID_UNIQUE and fails with ENODATA without one). Every Haiku
+	// volume is one mount, and Haiku does not reuse a volume's dev_t while
+	// it runs, so the volume's dev_t + 1 (never 0) serves for both. It is
+	// not mountinfo's first field (those count the listed volumes).
+	out.stx_mnt_id = (uint64)st.st_dev + 1;
+	out.stx_mask |= LX_STATX_MNT_ID;
+	if ((mask & LX_STATX_MNT_ID_UNIQUE) != 0)
+		out.stx_mask |= LX_STATX_MNT_ID_UNIQUE;
 
 	if (renguin_copy_out(buffer, &out, sizeof(out)) != B_OK)
 		return -LX_EFAULT;
@@ -701,13 +712,15 @@ renguin_sys_linkat(int oldDirFD, uint64 oldPath, int newDirFD,
 	renguin_scratch_init(&scratch);
 	status_t status;
 	uint64 hostOld = renguin_user_path(&scratch, oldPath,
-		follow ? RENGUIN_PATH_FOLLOW_LEAF : 0, &status);
+		follow ? RENGUIN_PATH_FOLLOW_LEAF : 0, &status, oldDirFD);
 	if (status != B_OK)
 		return renguin_encode(status);
 	uint64 hostNew = renguin_user_path(&scratch, newPath,
-		RENGUIN_PATH_MAY_CREATE, &status);
+		RENGUIN_PATH_MAY_CREATE, &status, newDirFD);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(newDirFD, hostNew))
+		return -LX_EEXIST;
 
 	// Haiku's argument order: the new link first, then what it links to.
 	status = _user_create_link(newDirFD, (const char*)(addr_t)hostNew,
@@ -770,9 +783,11 @@ renguin_sys_symlinkat(uint64 target, int dirfd, uint64 path)
 	renguin_scratch_init(&scratch);
 	status_t status;
 	uint64 hostPath = renguin_user_path(&scratch, path,
-		RENGUIN_PATH_MAY_CREATE, &status);
+		RENGUIN_PATH_MAY_CREATE, &status, dirfd);
 	if (status != B_OK)
 		return renguin_encode(status);
+	if (renguin_creates_shadow(dirfd, hostPath))
+		return -LX_EEXIST;
 	return renguin_encode(_user_create_symlink(dirfd,
 		(const char*)(addr_t)hostPath, (const char*)(addr_t)target, 0777));
 }
@@ -804,9 +819,11 @@ renguin_sys_mknodat(int dirfd, uint64 path, uint64 mode, uint64 device)
 			renguin_scratch_init(&scratch);
 			status_t status;
 			uint64 hostPath = renguin_user_path(&scratch, path,
-				RENGUIN_PATH_MAY_CREATE, &status);
+				RENGUIN_PATH_MAY_CREATE, &status, dirfd);
 			if (status != B_OK)
 				return renguin_encode(status);
+			if (renguin_creates_shadow(dirfd, hostPath))
+				return -LX_EEXIST;
 			return renguin_encode(_user_create_fifo(dirfd,
 				(const char*)(addr_t)hostPath, permissions));
 		}

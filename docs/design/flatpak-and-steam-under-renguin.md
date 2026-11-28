@@ -116,6 +116,71 @@ view for the shim, not a sandbox (maintainer, 2026-11-27: step 1 unsandboxed).
   touch the main thread's entry).
   `renguin.flatpak.*` covers the shim. `renguin_manager.flatpak_switch` covers the switch.
 
+### Step 1, part 2 as built (batch 14): a real install without a network
+
+- **Flatpak layer** of the harness root (`root/flatpak.pins`, `root/build-flatpak-root.sh`;
+  every harness image, about 30 MB): Alpine's `flatpak` 1.16 and `ostree` with the libraries
+  they load. Not included: bubblewrap (the shim replaces it), `xdg-dbus-proxy`, `fuse3`, the gpg programs and the
+  trigger tools.
+- **Test repository** `/opt/renguin-data/flatpak/repo`, built on the build host with the pinned
+  flatpak itself, run through Alpine's musl loader (the build host needs no `ostree`):
+  - `runtime/org.renga.TestPlatform/x86_64/1`: static busybox as `/usr/bin/sh`, and an
+    `ldconfig` that writes the empty `ld.so.cache` `flatpak run` asks for;
+  - `app/org.renga.Hello/x86_64/1`: a static program that reports its Flatpak ID, `/app`, `/usr`
+    and `/.flatpak-info`.
+- **Shim changes found on the way:**
+  - Flatpak 1.16 binds `/usr`, `/app` and the app's data directories with `--ro-bind-fd` and
+    `--bind-fd`. The shim names the directory through `/proc/self/fd`.
+  - `/tmp` and `/var/tmp` sources map to Haiku's `/tmp`.
+  - A bind, file or directory placed inside an earlier bind is skipped. The first shim made it
+    through that bind's link, in the bound directory itself.
+  - `--ro-bind / /` (install triggers) becomes a link for each top-level entry.
+  - Destinations under `/boot` are skipped: the private root never has a `/boot`, so Renguin
+    resolves them in Haiku's tree, where Flatpak's same-path binds of the home already are.
+  - `/proc/self/fd` is read with `busybox readlink` as a program. ash's in-process readlink,
+    in the forked subshell of `$(...)`, gets `ENOENT` under Renguin (open, not investigated).
+- **Renguin changes found on the way** (kernel module):
+  - `statx()` reports a mount ID (`STATX_MNT_ID`, and `STATX_MNT_ID_UNIQUE` when asked): the
+    volume's `dev_t` + 1. libglnx fails with `ENODATA` without one. `/proc/self/mountinfo`
+    uses the same IDs. Its Linux-root line takes 1: Haiku numbers volumes from 1, so no
+    volume's ID is 1. Files in the root report their volume's ID, the mount they are on in
+    Haiku.
+  - A relative path from a descriptor of the team's `/` resolves like the absolute path
+    (`openat()`, `mkdirat()`, `fstatat()`, `readlinkat()` and the other `*at()` calls).
+    libglnx's `glnx_chaseat()` walks paths that way. The root's dev/ino is kept in the team
+    data (set at load and at `chroot()`, copied on `fork()`), so the test costs one `fstat`.
+  - No call creates a top-level `boot` in the Linux root (`renguin_creates_shadow()`):
+    - `mkdir`, `symlink`, `mknod`, `link` and `rename` give `EEXIST`, and `open(O_CREAT)`
+      gives `EISDIR`, as for Haiku's `/boot`.
+    - The check is on the parent directory's identity (the Linux root's dev/ino). It covers
+      every route: an absolute path, a descriptor of `/`, the working directory at `/`, and
+      `..` walks.
+    - Why only `boot`: Haiku's `/boot` is reached only because the root has none, and a
+      root of its own would hide Haiku's volume from every Linux program.
+    - `/tmp` and `/var/tmp` are kept shared by `linux` itself (`ensure_shared_tmp()`).
+      Programs may make other top-level directories, as on Linux.
+    - A `chroot()` root is a private tree and is not checked.
+    - Not covered: binding an `AF_UNIX` socket named `/boot`.
+  - Without the last two, Flatpak made a `/boot/home` of the root's own, hiding Haiku's.
+- **Known limits of the shim**, acceptable only because it gives no isolation (step 1 is
+  unsandboxed):
+  - `--bind-fd` and `--ro-bind-fd` are resolved through `/proc/self/fd` to a name and bound
+    by that name. That brings back the name race that binding by descriptor exists to close
+    (CVE-2024-42472).
+  - Masks are dropped: a `--tmpfs` (or `--dir`, `--file`) inside another bind, or under
+    `/boot`, is skipped. What Flatpak meant to hide stays visible.
+- **Tests:**
+  - `renguin.flatpak.ostree_install` and `renguin.flatpak.ostree_app` (`flatpak --user` with
+    its own `FLATPAK_USER_DIR`), and `renguin.flatpak.bwrap_nested`.
+  - In `renguin.libc-fs`: the `statx` mount ID; mountinfo lines with those IDs; `mkdir /boot`
+    absolute, from a descriptor of `/`, and from the working directory at `/` (also through
+    `etc/..`).
+  - In `renguin.libc-chroot`: the `create` part (`mkdir /etc` in an empty chroot).
+- **Still open:** the session bus. `flatpak run` puts `xdg-dbus-proxy` between the program and
+  the bus, so the test runs with `--no-session-bus --no-documents-portal`. The proxy and its
+  sync descriptor under the shim come next, then the Flathub remote (step 4) and the GUI
+  (step 5).
+
 ### Step 2: sandboxed
 
 Needs user and mount namespaces in Renguin (a per-team mount table over Haiku's VFS), or a

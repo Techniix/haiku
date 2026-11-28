@@ -1,0 +1,4 @@
+[Application]
+name=org.renga.Hello
+runtime=org.renga.TestPlatform/x86_64/1
+command=renga-hello
