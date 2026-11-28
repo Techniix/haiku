@@ -468,13 +468,33 @@ test_low_memory()
 	reserve), the kernel stacks those, and the area failed.
 
 	It takes at most what cached pages and the commit limit leave room for
-	with 64 MiB to spare, so it never pushes the system into paging; it
-	gives up after 20 s, and frees everything before it returns.
+	with 64 MiB to spare, so it never pushes the system into paging; a
+	watchdog thread ends it with a failure after 20 s (pressure_watchdog()),
+	and it frees everything before it reports.
 */
 static status_t
 pressure_waiter(void* data)
 {
 	acquire_sem(*(sem_id*)data);
+	return B_OK;
+}
+
+
+/*!	Ends the test with a failure when lomem_under_pressure has not finished
+	in time: a create_area() stuck in "waiting for pages" would otherwise
+	hang the suite. The team exits, which gives the memory back.
+*/
+static status_t
+pressure_watchdog(void* data)
+{
+	if (acquire_sem_etc(*(sem_id*)data, 1, B_RELATIVE_TIMEOUT, 20000000)
+			== B_TIMED_OUT) {
+		report("lomem_under_pressure", false, "not done after 20 s (an "
+			"allocation waiting for pages?); the test team exits");
+		printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
+		fflush(stdout);
+		_exit(1);
+	}
 	return B_OK;
 }
 
@@ -518,17 +538,17 @@ test_low_memory_under_pressure()
 		return;
 	}
 
+	sem_id done = create_sem(0, "ce pressure done");
+	thread_id watchdog = spawn_thread(pressure_watchdog, "ce pressure watchdog",
+		B_URGENT_DISPLAY_PRIORITY, &done);
+	resume_thread(watchdog);
+
 	const int32 maxAreas = (int32)(goal / chunk) + 1;
 	area_id* areas = new area_id[maxAreas];
 	int32 count = 0;
 	uint64 held = 0;
 	status_t error = B_OK;
-	const bigtime_t deadline = system_time() + 20000000;
 	while (held < goal && count < maxAreas) {
-		if (system_time() > deadline) {
-			error = B_TIMED_OUT;
-			break;
-		}
 		void* address = NULL;
 		area_id area = create_area("ce pressure", &address, B_ANY_ADDRESS,
 			chunk, B_FULL_LOCK, B_READ_AREA | B_WRITE_AREA);
@@ -569,6 +589,11 @@ test_low_memory_under_pressure()
 	for (int32 i = 0; i < count; i++)
 		delete_area(areas[i]);
 	delete[] areas;
+
+	release_sem(done);
+	status_t watchdogResult;
+	wait_for_thread(watchdog, &watchdogResult);
+	delete_sem(done);
 
 	report("lomem_under_pressure", error == B_OK && held >= goal
 			&& started == kThreads && low >= 0,
