@@ -60,7 +60,8 @@
 	                      layer) a 64-bit SDL2 game on Debian's glibc,
 	                      through Renguin's chroot(), in a window: SDL's
 	                      Wayland driver, GLES on Mesa's llvmpipe; its
-	                      background covers the window on the screen
+	                      background covers the window on the screen, it
+	                      exits 0 after at least 100 frames
 	                      (screenshot screen-wayland_linux_sdl_window)
 	  disconnect          the same compositor team keeps running after the
 	                      client and its objects go away
@@ -1142,9 +1143,17 @@ linux_sdl_window_test()
 	std::string game = std::string(kDebianRoot) + "/opt/renguin-tests/sdl-game";
 	std::string gl = std::string(kDebianRoot) + "/opt/renguin-tests/gl-check";
 	if (access(game.c_str(), X_OK) != 0 || access(gl.c_str(), X_OK) != 0) {
-		printf("CE-INFO wayland: no Debian root with its gl layer on this "
-			"image (renga-* images); linux_sdl_window not checked\n");
-		fflush(stdout);
+		// only Renga images (their Renga repository) have the gl layer
+		if (access("/boot/system/settings/package-repositories/Renga", F_OK)
+				== 0) {
+			report("linux_sdl_window", false, "a Renga image without the "
+				"Debian root's gl layer (%s or %s missing)", game.c_str(),
+				gl.c_str());
+		} else {
+			printf("CE-INFO wayland: a minimum image: no Debian gl layer "
+				"(renga-* images only); linux_sdl_window not checked\n");
+			fflush(stdout);
+		}
 		return;
 	}
 	// LIBGL_ALWAYS_SOFTWARE: Mesa's Wayland platform goes straight to
@@ -1181,9 +1190,10 @@ linux_sdl_window_test()
 	std::string errors;
 	FILE* file = fopen("/tmp/rg-sdl-window.err", "r");
 	if (file != NULL) {
-		char buffer[600];
-		size_t length = fread(buffer, 1, sizeof(buffer) - 1, file);
-		errors.assign(buffer, length);
+		char buffer[4096];
+		size_t length;
+		while ((length = fread(buffer, 1, sizeof(buffer), file)) > 0)
+			errors.append(buffer, length);
 		fclose(file);
 	}
 	unlink("/tmp/rg-sdl-window.err");
@@ -1191,15 +1201,31 @@ linux_sdl_window_test()
 		if (c == '\n')
 			c = '|';
 	}
+	// the game says how many frames it drew in its 10 s (about 300 at
+	// 30 per second in QEMU); fewer than 100 is a stalled game
+	int frames = 0;
+	size_t framesAt = errors.rfind("sdl-game: ");
+	while (framesAt != std::string::npos) {
+		if (sscanf(errors.c_str() + framesAt, "sdl-game: %d frames", &frames)
+				== 1)
+			break;
+		framesAt = framesAt == 0 ? std::string::npos
+			: errors.rfind("sdl-game: ", framesAt - 1);
+	}
+	// the report shows the end of what it said
+	if (errors.size() > 600)
+		errors = "..." + errors.substr(errors.size() - 600);
 	for (char& c : errors) {
 		if (c == '\n')
 			c = '|';
 	}
 	report("linux_sdl_window", lines == "window ok|ok|"
+			&& WIFEXITED(status) && WEXITSTATUS(status) == 0 && frames >= 100
 			&& found >= kArea * 9 / 10,
-		"output [%s] exit %d, %d of %d pixels of its colour on the screen, "
-		"stderr [%s]", lines.c_str(), WEXITSTATUS(status), (int)found, kArea,
-		errors.c_str());
+		"output [%s] exit %d, %d frames (want 100), %d of %d pixels of its "
+		"colour on the screen, stderr [%s]", lines.c_str(),
+		WIFEXITED(status) ? WEXITSTATUS(status) : -1, frames, (int)found,
+		kArea, errors.c_str());
 }
 
 

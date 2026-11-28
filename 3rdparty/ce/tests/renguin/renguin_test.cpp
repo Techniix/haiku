@@ -15,6 +15,8 @@
 	exactly the expected exit status and output:
 
 	  module                   the renguin personality module is installed
+	  boot_free                (batch 14) /boot has at least 128 MiB free
+	                           (the Linux roots take room)
 	  native_after             a native program still runs normally after
 	                           the Linux ones (the hook leaves native teams
 	                           alone)
@@ -101,6 +103,7 @@
 
 
 #include <FindDirectory.h>
+#include <fs_info.h>
 #include <OS.h>
 #include <Path.h>
 #include <debugger.h>
@@ -213,6 +216,10 @@ static const char* kRoot = "/boot/system/non-packaged/compat/linux";
 // batch 14: the Debian root beside it (root/build-debian-root.sh)
 static const char* kDebianRoot
 	= "/boot/system/non-packaged/compat/linux-roots/debian";
+// only Renga images (HAIKU_RENGA_IMAGE, 3rdparty/ce/Jamfile) have it; their
+// Debian root has the gl layer
+static const char* kRengaImageMarker
+	= "/boot/system/settings/package-repositories/Renga";
 
 
 struct RootCheck {
@@ -418,8 +425,9 @@ run_root_checks()
 	                          dlopen, NSS passwd and hosts, os-release
 	  debian.ldconfig         Debian's ldconfig writes the cache, and
 	                          ldconfig -p reads it (SDL2 listed)
-	  debian.ld_so_cache_used the loader now looks libraries up in the cache
-	                          (LD_DEBUG=libs), and glibc-check still passes
+	  debian.ld_so_cache_used the loader finds libm and libSDL2 in the cache
+	                          without a path search (LD_DEBUG=libs), and
+	                          does search the paths with an empty cache
 	  debian.cxx              libstdc++: exceptions, std::thread, iostream
 	  debian.sdl_game         a small SDL2 game, headless (SDL's dummy video
 	                          and audio): 120 frames with keyboard events,
@@ -448,11 +456,33 @@ static const RootCheck kDebianChecks[] = {
 		BB " grep -c \"libSDL2-2.0.so.0 (libc6,x86-64)\" /tmp/rg-ldconfig.txt\n"
 		"rm -f /tmp/rg-ldconfig.txt", 0,
 		"cache\nlibs found in cache `/etc/ld.so.cache'\n1" },
-	{ "debian.ld_so_cache_used", "LD_DEBUG=libs " DC
-		" /opt/renguin-tests/glibc-check 2> /tmp/rg-lddebug.txt | "
-		BB " tail -n 1\n" BB " grep -q \"search cache=/etc/ld.so.cache\" "
-		"/tmp/rg-lddebug.txt && echo cache-used\nrm -f /tmp/rg-lddebug.txt",
-		0, "ok\ncache-used" },
+	// glibc prints "search cache=" before it reads the cache, so that line
+	// alone proves nothing: for libm and libSDL2 (both dlopen()ed) the
+	// cache line must be followed directly by "trying file=", and no
+	// "search path=" may come for them. Then the same with an empty cache
+	// must show the path search (the check's own negative control), and
+	// ldconfig makes the cache again.
+	{ "debian.ld_so_cache_used", "cat > /tmp/rg-cache.awk << 'EOF'\n"
+		"/find library=/ { lib = $0; sub(/.*find library=/, \"\", lib); "
+		"sub(/ .*/, \"\", lib); state = 0; next }\n"
+		"lib != \"libm.so.6\" && lib != \"libSDL2-2.0.so.0\" { next }\n"
+		"/search cache=\\/etc\\/ld.so.cache/ { state = 1; next }\n"
+		"state == 1 && /trying file=/ { hit[lib] = 1 }\n"
+		"{ state = 0 }\n"
+		"/search path=/ { miss[lib] = 1 }\n"
+		"END { if (hit[\"libm.so.6\"] && hit[\"libSDL2-2.0.so.0\"] && "
+		"!miss[\"libm.so.6\"] && !miss[\"libSDL2-2.0.so.0\"]) "
+		"print \"cache-used\"; else print \"cache-not-used\" }\n"
+		"EOF\n"
+		"LD_DEBUG=libs " DC " /opt/renguin-tests/glibc-check "
+		"2> /tmp/rg-lddebug.txt | " BB " tail -n 1\n"
+		BB " awk -f /tmp/rg-cache.awk /tmp/rg-lddebug.txt\n"
+		": > $D/etc/ld.so.cache\n"
+		"LD_DEBUG=libs " DC " /opt/renguin-tests/glibc-check "
+		"2> /tmp/rg-lddebug.txt | " BB " tail -n 1\n"
+		BB " awk -f /tmp/rg-cache.awk /tmp/rg-lddebug.txt\n"
+		DC " /sbin/ldconfig\nrm -f /tmp/rg-lddebug.txt /tmp/rg-cache.awk",
+		0, "ok\ncache-used\nok\ncache-not-used" },
 	{ "debian.cxx", DC " /opt/renguin-tests/cxx-check", 0,
 		"static_init ok\nexceptions ok\nthreads ok\niostream ok\nok" },
 	{ "debian.sdl_game", DC " /opt/renguin-tests/sdl-game headless", 0,
@@ -472,12 +502,7 @@ run_debian_checks()
 	std::string loader = std::string(kDebianRoot)
 		+ "/usr/lib64/ld-linux-x86-64.so.2";
 	std::string tests = std::string(kDebianRoot) + "/opt/renguin-tests";
-	if (access(kDebianRoot, F_OK) != 0) {
-		printf("CE-INFO renguin: no Debian root on this image; debian.* not "
-			"checked\n");
-		fflush(stdout);
-		return;
-	}
+	// every x86_64 harness image has the Debian root: missing is a failure
 	bool present = access(loader.c_str(), F_OK) == 0
 		&& access((tests + "/glibc-check").c_str(), X_OK) == 0
 		&& access((std::string(kRoot) + "/bin/busybox").c_str(), X_OK) == 0;
@@ -490,11 +515,15 @@ run_debian_checks()
 	int index = 100;
 	for (int i = 0; kDebianChecks[i].name != NULL; i++)
 		run_root_check(kDebianChecks[i], index++);
+	bool rengaImage = access(kRengaImageMarker, F_OK) == 0;
 	if (access((tests + "/gl-check").c_str(), X_OK) == 0)
 		run_root_check(kDebianGlCheck, index++);
-	else {
-		printf("CE-INFO renguin: the Debian root has no gl layer (renga-* "
-			"images only); debian.gl_llvmpipe not checked\n");
+	else if (rengaImage) {
+		report(kDebianGlCheck.name, false, "a Renga image without the "
+			"Debian root's gl layer (no %s/gl-check)", tests.c_str());
+	} else {
+		printf("CE-INFO renguin: a minimum image: the Debian root has no gl "
+			"layer (renga-* images only); debian.gl_llvmpipe not checked\n");
 		fflush(stdout);
 	}
 }
@@ -977,6 +1006,18 @@ main()
 
 	report("module", access(kModule, F_OK) == 0, "%s: %s", kModule,
 		access(kModule, F_OK) == 0 ? "installed" : strerror(errno));
+
+	// batch 14: the Linux roots take room; the suites that write need it
+	// (harness minimum images are 512 MiB, RengaBuildProfiles)
+	fs_info info;
+	dev_t boot = dev_for_path("/boot");
+	bool known = boot >= 0 && fs_stat_dev(boot, &info) == 0;
+	off_t freeBytes = known ? info.free_blocks * info.block_size : 0;
+	off_t totalBytes = known ? info.total_blocks * info.block_size : 0;
+	report("boot_free", known && freeBytes >= 128LL * 1024 * 1024,
+		"/boot: %lld MiB free of %lld MiB (want at least 128 MiB)",
+		(long long)(freeBytes / (1024 * 1024)),
+		(long long)(totalBytes / (1024 * 1024)));
 
 	std::string setup = std::string("rm -rf ") + kWork + " && cp -r "
 		+ kSource + " " + kWork + " && chmod +x " + kWork + "/* && echo ok";

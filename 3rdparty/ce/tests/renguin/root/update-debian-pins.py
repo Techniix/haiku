@@ -25,6 +25,11 @@ The script downloads the suite's Packages index for amd64 (about 10 MB),
 resolves the layers and rewrites the pin lines, keeping the header. It then
 sets "snapshot" to the current time (UTC), so the files stay fetchable from
 snapshot.debian.org after a point release replaces them.
+
+Limits: only the suite's main archive is resolved (point releases), not
+trixie-security; and the pins are trust on first use: the index comes over
+HTTPS from the mirror, its Release signature is not checked, and the
+SHA-256 sums it gives are what build-debian-root.sh checks from then on.
 """
 
 import datetime
@@ -37,6 +42,50 @@ import urllib.request
 
 LAYERS = ("base", "gl", "dev")
 MIRROR = os.environ.get("RENGUIN_DEBIAN_MIRROR", "https://deb.debian.org/debian")
+
+
+def _order(character):
+	if character == "~":
+		return -1
+	if character.isalpha():
+		return ord(character)
+	return ord(character) + 256
+
+
+def _compare_part(a, b):
+	"""dpkg's comparison of an upstream version or revision."""
+	while a or b:
+		textA = re.match(r"[^0-9]*", a).group()
+		textB = re.match(r"[^0-9]*", b).group()
+		a, b = a[len(textA):], b[len(textB):]
+		for i in range(max(len(textA), len(textB))):
+			x = _order(textA[i]) if i < len(textA) else 0
+			y = _order(textB[i]) if i < len(textB) else 0
+			if x != y:
+				return -1 if x < y else 1
+		numberA = re.match(r"[0-9]*", a).group()
+		numberB = re.match(r"[0-9]*", b).group()
+		a, b = a[len(numberA):], b[len(numberB):]
+		x, y = int(numberA or 0), int(numberB or 0)
+		if x != y:
+			return -1 if x < y else 1
+	return 0
+
+
+def compare_versions(a, b):
+	"""-1, 0 or 1 as Debian orders versions [epoch:]upstream[-revision]."""
+	def split(version):
+		epoch, _, rest = version.rpartition(":") if ":" in version \
+			else ("0", "", version)
+		upstream, _, revision = rest.rpartition("-") if "-" in rest \
+			else (rest, "", "0")
+		return int(epoch or 0), upstream, revision
+	epochA, upstreamA, revisionA = split(a)
+	epochB, upstreamB, revisionB = split(b)
+	if epochA != epochB:
+		return -1 if epochA < epochB else 1
+	return _compare_part(upstreamA, upstreamB) \
+		or _compare_part(revisionA, revisionB)
 
 
 def parse_index(text):
@@ -54,7 +103,11 @@ def parse_index(text):
 		name = fields.get("Package")
 		if name is None:
 			continue
-		# several versions of one package (rare): keep the newest listed
+		# several versions of one package in the index (linux-libc-dev in
+		# trixie): keep the newest, by Debian's version ordering
+		if name in packages and compare_versions(fields.get("Version", "0"),
+				packages[name].get("Version", "0")) <= 0:
+			continue
 		packages[name] = fields
 		for entry in fields.get("Provides", "").split(","):
 			entry = entry.strip().split(" ")[0]

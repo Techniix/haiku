@@ -1320,14 +1320,19 @@ Host check: `mesa_upgrade.setup`.
   Since batch 14 (Steam groundwork) harness images also carry a Debian 13
   root beside it, in `/boot/system/non-packaged/compat/linux-roots/debian`
   (`tests/renguin/root/build-debian-root.sh`, packages pinned in
-  `debian.pins`, `update-debian-pins.py` resolves them; about 15 MB to
-  download once): glibc 2.41, libstdc++, dash and SDL2, and in renga-*
-  images Mesa's EGL/GLES with llvmpipe too. The `debian/` programs are
+  `debian.pins`, `update-debian-pins.py` resolves them, `unpack-deb.py`
+  keeps every path inside the root): glibc 2.41, libstdc++, dash and SDL2
+  (17.6 MB to download once, 44 MB in the image), and in renga-* images
+  Mesa's EGL, GLES and desktop GL with llvmpipe too (47.7 MB more, 240 MB
+  in all); the dev layer that builds the test programs is another 11.4 MB
+  to download. Harness minimum images are 512 MiB for it
+  (`3rdparty/ce/build/RengaBuildProfiles`), and `boot_free` fails below
+  128 MiB free on /boot. The `debian/` programs are
   built against the root's own libraries and run in it through Renguin's
   `chroot()`: `debian.present`, `debian.dash`, `debian.glibc_no_cache`,
   `debian.ldconfig`, `debian.ld_so_cache_used`, `debian.cxx`,
   `debian.sdl_game` (an SDL2 game, headless) and, in renga-* images,
-  `debian.gl_llvmpipe`.
+  `debian.gl_llvmpipe` (a failure there when the gl layer is missing).
 - **wayland** (`wayland_test`, x86_64): Renga's Wayland compositor
   (roadmap F-43 phase C) seen by a native Wayland client on Renga's
   libwayland over `$XDG_RUNTIME_DIR/wayland-0`: the compositor runs,

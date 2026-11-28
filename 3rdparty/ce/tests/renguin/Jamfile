@@ -137,10 +137,13 @@ BuildRenguinLinuxRoot $(linuxRoot) : $(rootInputs) <build>wayland_scanner ;
 # F-27 and docs/design/flatpak-and-steam-under-renguin.md):
 # root/build-debian-root.sh, which documents it. Debian 13's glibc 2.41,
 # libstdc++ and SDL2, pinned in root/debian.pins, with the debian/ test
-# programs built against them; renga-* harness images also get Mesa's EGL
-# and GLES with llvmpipe (about 170 MB more extracted; the minimum images
-# do not have the room). Extracted at /boot/system/non-packaged/compat/
-# linux-roots/debian; Linux programs run in it through Renguin's chroot().
+# programs built against them (17.6 MB to download, 44 MB extracted; the
+# dev layer for building them, 11.4 MB, is not installed). renga-* harness
+# images also get Mesa's EGL, GLES and desktop GL with llvmpipe (47.7 MB
+# more to download, 240 MB extracted in all), which the harness minimum
+# images (512 MiB, 3rdparty/ce/build/RengaBuildProfiles) leave out.
+# Extracted at /boot/system/non-packaged/compat/linux-roots/debian; Linux
+# programs run in it through Renguin's chroot().
 # The archive is named by its layers: the profiles share the output
 # directory, and jam does not notice a changed variable.
 local debianLayers = base ;
@@ -151,7 +154,7 @@ if $(HAIKU_RENGA_IMAGE) {
 }
 MakeLocate $(debianRoot) : $(outputDir) ;
 local debianInputs = <renguin-root>build-debian-root.sh
-	<renguin-root>debian.pins ;
+	<renguin-root>debian.pins <renguin-root>unpack-deb.py ;
 SEARCH on $(debianInputs) = $(rootDir) ;
 local debianDir = [ FDirName $(SUBDIR) debian ] ;
 local debianSources = <renguin-debian>glibc-check.c

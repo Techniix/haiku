@@ -8,13 +8,18 @@
 #
 # A glibc-based x86_64 root: Debian 13 "trixie" packages pinned by pool path
 # and SHA-256 in debian.pins (update-debian-pins.py resolves them), unpacked
-# without dpkg (no maintainer scripts run). <layers> is "base" (glibc,
-# libstdc++, dash and SDL2 with the libraries it links; about 15 MB to
-# download, 50 MB unpacked) or "base gl" (also Mesa's EGL and GLES with
-# llvmpipe and LLVM, and desktop GL through libglvnd; about 40 MB more to
-# download, 200 MB unpacked: only
-# the renga-* harness images have the room). Nothing of it is kept in the
-# git tree; the files exist only in harness images, which are never
+# without dpkg (no maintainer scripts run) by unpack-deb.py, which keeps
+# every path inside the root. <layers> is "base" (glibc, libstdc++, dash and
+# SDL2 with the libraries it links; 17.6 MB to download, 44 MB unpacked) or
+# "base gl" (also Mesa's EGL, GLES and desktop GL through libglvnd with
+# llvmpipe and LLVM; 47.7 MB more to download, 240 MB unpacked in all: the
+# renga-* harness images only). The "dev" layer (11.4 MB to download) is
+# only used to build the test programs. Downloads are kept in the cache
+# directory. Measured on the 300 MiB minimum image: 129 MiB free without
+# the base layer, 95 MiB with it, which is why harness minimum images are
+# 512 MiB (3rdparty/ce/build/RengaBuildProfiles) and renguin_test checks
+# the free space (renguin.boot_free). Nothing of it is kept in the git
+# tree; the files exist only in harness images, which are never
 # distributed.
 #
 # The image extracts the archive at /boot/system/non-packaged/compat/
@@ -29,7 +34,8 @@
 #    and /etc/shadow (root and the Renga user 1000), /etc/nsswitch.conf,
 #    /etc/hosts, /etc/hostname; no /etc/ld.so.cache (renguin_test runs the
 #    root's ldconfig and checks the loader with and without it);
-#  - as in build-root.sh: absolute links become relative ones, /tmp and
+#  - as in build-root.sh: absolute links become relative ones (as each
+#    package is unpacked, so no later member can follow one out), /tmp and
 #    /var/tmp are left out (Linux programs share Haiku's /tmp: the Wayland
 #    socket), /etc/resolv.conf links to Haiku's network settings;
 #  - no documentation, man pages or translations;
@@ -38,6 +44,7 @@
 #    libraries (a sysroot of the root plus the "dev" layer's headers and
 #    link files, which are not installed). gl-check only with "gl".
 set -e
+umask 022
 
 output=$1
 hostCC=$2
@@ -46,6 +53,7 @@ cache=$4/debian
 sources=$5
 shift 5
 layers="$*"
+unpackDeb=$(dirname "$0")/unpack-deb.py
 
 mirror=${RENGUIN_DEBIAN_MIRROR:-https://deb.debian.org/debian}
 snapshot=$(sed -n 's/^snapshot //p' "$pins")
@@ -83,18 +91,11 @@ fetch()
 	fetched=$file
 }
 
-# unpack <.deb> <directory>: the data member, through the merged-/usr links.
+# unpack <.deb> <directory>: the data member, through the merged-/usr
+# links, every path kept inside <directory> (unpack-deb.py).
 unpack()
 {
-	member=$(ar t "$1" | grep '^data\.tar')
-	case "$member" in
-		*.xz)	decompress="xz -dc" ;;
-		*.zst)	decompress="zstd -dc" ;;
-		*.gz)	decompress="gzip -dc" ;;
-		*)		decompress=cat ;;
-	esac
-	ar p "$1" "$member" | $decompress \
-		| tar -C "$2" -x --keep-directory-symlink --no-same-owner -f -
+	python3 -I "$unpackDeb" "$1" "$2"
 }
 
 # merged_usr <directory>
@@ -108,7 +109,7 @@ merged_usr()
 
 merged_usr "$root"
 for layer in $layers dev; do
-	grep "^$layer " "$pins" | while read -r kind path sum; do
+	grep "^$layer " "$pins" | while read -r _ path sum; do
 		fetch "$path" "$sum"
 		echo "$fetched"
 	done > "$work/$layer.files"
@@ -153,24 +154,6 @@ rm -rf "$root/usr/share/doc" "$root/usr/share/man" "$root/usr/share/info" \
 rm -f "$root/etc/resolv.conf"
 ln -s /boot/system/settings/network/resolv.conf "$root/etc/resolv.conf"
 
-# Relative links instead of absolute ones (see build-root.sh); the
-# resolv.conf link to Haiku's file stays.
-python3 -I -c '
-import os, sys
-root = sys.argv[1]
-for directory, dirs, files in os.walk(root):
-    for name in dirs + files:
-        path = os.path.join(directory, name)
-        if not os.path.islink(path):
-            continue
-        target = os.readlink(path)
-        if not target.startswith("/") or target.startswith("/boot/"):
-            continue
-        linkDir = "/" + os.path.relpath(directory, root)
-        os.unlink(path)
-        os.symlink(os.path.relpath(target, os.path.normpath(linkDir)), path)
-' "$root"
-
 # The sysroot for the test programs: the root, plus the dev layer.
 cp -a "$root" "$sysroot"
 while read -r file; do
@@ -183,31 +166,57 @@ gccVersion=$(ls "$sysroot/usr/include/c++" | sort -n | tail -1)
 # The host compiler with the root's headers and libraries only: its own
 # headers (stddef.h and friends) and crtbegin/crtend, the root's glibc,
 # libgcc_s and libstdc++ (GCC $gccVersion's headers), Debian's loader path.
-cc="$hostCC --sysroot=$sysroot -O2 -Wall -Wno-unused-result \
-	-L$sysroot/usr/lib/gcc/x86_64-linux-gnu/$gccVersion \
-	-L$sysroot/usr/lib/x86_64-linux-gnu -Wl,--build-id=none \
-	-Wl,-rpath-link,$sysroot/usr/lib/x86_64-linux-gnu"
-$cc -pthread -o "$tests/glibc-check" "$sources/glibc-check.c" -ldl
-$cc -x c++ -std=gnu++17 -nostdinc++ \
+# ($hostCC may carry options of its own, so it is not quoted.)
+cc()
+{
+	$hostCC --sysroot="$sysroot" -O2 -Wall -Wno-unused-result \
+		-L"$sysroot/usr/lib/gcc/x86_64-linux-gnu/$gccVersion" \
+		-L"$sysroot/usr/lib/x86_64-linux-gnu" -Wl,--build-id=none \
+		-Wl,-rpath-link,"$sysroot/usr/lib/x86_64-linux-gnu" "$@"
+}
+cc -pthread -o "$tests/glibc-check" "$sources/glibc-check.c" -ldl
+cc -x c++ -std=gnu++17 -nostdinc++ \
 	-isystem "$sysroot/usr/include/c++/$gccVersion" \
 	-isystem "$sysroot/usr/include/x86_64-linux-gnu/c++/$gccVersion" \
 	-pthread -o "$tests/cxx-check" "$sources/cxx-check.cpp" -x none \
 	-lstdc++ -lm
-$cc -o "$tests/sdl-game" "$sources/sdl-game.c" -lSDL2
+cc -o "$tests/sdl-game" "$sources/sdl-game.c" -lSDL2
 case " $layers " in
 	*" gl "*)
-		$cc -o "$tests/gl-check" "$sources/gl-check.c" -lEGL -lGLESv2 ;;
+		cc -o "$tests/gl-check" "$sources/gl-check.c" -lEGL -lGLESv2 ;;
 esac
 
-# Nothing may need a newer glibc or libstdc++ than the root's.
-for program in "$tests"/*; do
-	if readelf -V "$program" | grep -Eq 'GLIBC_2\.(4[2-9]|[5-9][0-9])|GLIBCXX_3\.4\.(3[4-9])'; then
-		echo "build-debian-root.sh: $program needs symbols newer than" \
-			"the root's glibc or libstdc++" >&2
-		exit 1
-	fi
-done
+# Nothing may need a newer glibc or libstdc++ than the root's: each
+# GLIBC_/GLIBCXX_/CXXABI_ version a program needs, compared as numbers with
+# the newest the root's libc, libm and libstdc++ define.
+python3 -I -c '
+import re, subprocess, sys
+root, programs = sys.argv[1], sys.argv[2:]
+def versions(path, section):
+    text = subprocess.run(["readelf", "-V", "--wide", path],
+        stdout=subprocess.PIPE, text=True, check=True).stdout
+    part = text.split(section, 1)[1] if section in text else ""
+    part = re.split(r"\n(?=Version (needs|definition|symbols) section)", part)[0]
+    found = re.findall(r"\b(GLIBC|GLIBCXX|CXXABI)_([0-9.]+)\b", part)
+    return [(name, tuple(int(n) for n in number.split("."))) for name, number in found]
+newest = {}
+for lib in ("libc.so.6", "libm.so.6", "libstdc++.so.6"):
+    for name, number in versions(root + "/usr/lib/x86_64-linux-gnu/" + lib,
+            "Version definition section"):
+        newest[name] = max(newest.get(name, ()), number)
+bad = []
+for program in programs:
+    for name, number in versions(program, "Version needs section"):
+        if name not in newest or number > newest[name]:
+            bad.append("%s needs %s_%s" % (program, name,
+                ".".join(map(str, number))))
+if bad:
+    sys.exit("build-debian-root.sh: newer than the root has: " + "; ".join(bad))
+' "$root" "$tests"/*
 
-# Owned by root, as on Linux; the archive keeps modes and links.
-tar -C "$root" --owner=0 --group=0 --numeric-owner -czf "$output.tmp" .
+# Owned by root, as on Linux; the archive keeps modes (set from the
+# packages by unpack-deb.py, from umask 022 for the files above, none group
+# or world writable) and links, in a fixed order and with fixed times.
+tar -C "$root" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+	--mode=go-w -czf "$output.tmp" .
 mv "$output.tmp" "$output"
