@@ -31,9 +31,34 @@ struct avpacket_user_data {
     int flags;
     int64_t duration;
     int64_t pos;
+    // Renga: what the times above are counted in, so that the decoder can
+    // convert them to microseconds the way AVFormatReader converts
+    // media_header::start_time (see StreamBase::_ConvertFromStreamTimeBase()
+    // and stream_time_to_microseconds() below).
+    int time_base_num;
+    int time_base_den;
+    int64_t stream_start_time;	// AV_NOPTS_VALUE when the stream has none
 };
 
 #define AVPACKET_USER_DATA_TYPE 'ffav'
+
+
+/*! \brief Converts a time of a packet from AVFormatReader (pts, dts) from
+		its stream's time base to microseconds, relative to the stream's
+		start time, exactly as AVFormatReader computes the packet's
+		media_header::start_time. AV_NOPTS_VALUE stays AV_NOPTS_VALUE.
+*/
+inline int64_t
+stream_time_to_microseconds(int64_t time, const avpacket_user_data& data)
+{
+	if (time == AV_NOPTS_VALUE || data.time_base_num <= 0
+		|| data.time_base_den <= 0) {
+		return time;
+	}
+	if (data.stream_start_time != AV_NOPTS_VALUE)
+		time -= data.stream_start_time;
+	return 1000000LL * time * data.time_base_num / data.time_base_den;
+}
 
 
 /*! \brief Converts FFmpeg notation of video aspect ratio into the Media Kits

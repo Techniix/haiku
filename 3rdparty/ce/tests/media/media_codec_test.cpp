@@ -12,6 +12,13 @@
 	the tracks, their codecs and sizes, the frame count, the colours in
 	order, the audio length and its tones (Goertzel), and seeking.
 
+	Every video case also checks the frames' times (media_header's
+	start_time and BMediaTrack::CurrentTime() after each ReadFrames(): one
+	frame duration apart, in microseconds, the last one ending at the
+	track's duration), and a Matroska file whose video starts 2 s into the
+	stream (libavformat remuxes the WebM clip with the offset) checks that
+	the stream's start offset is taken off as it is for audio.
+
 	Also, when the harness provides them, samples the host's FFmpeg made
 	with encoders the plug-in only decodes (AV1, HEVC, H.264) in
 	/boot/system/non-packaged/data/ce-harness/media (same picture, 30
@@ -28,6 +35,8 @@
 #include <String.h>
 
 #include <MediaCodec.h>
+#include <MediaFile.h>
+#include <MediaTrack.h>
 
 #include <math.h>
 #include <stdarg.h>
@@ -38,6 +47,10 @@
 #include <unistd.h>
 
 #include <vector>
+
+extern "C" {
+#include <libavformat/avformat.h>
+}
 
 
 #define SUITE "media_codec"
@@ -154,6 +167,148 @@ color_near(uint32 a, uint32 b, int tolerance)
 			return false;
 	}
 	return true;
+}
+
+
+/*!	The times of the video frames of \a path through BMediaTrack: frame i
+	starts at i / kFrameRate s (+ half a frame), CurrentTime() after reading
+	it is a frame later, and the last frame ends at the track's Duration().
+	The FFmpeg plug-in used to report the stream's own time base here (an
+	MP4 at 1/15: 0, 1, 2, ...; WebM at 1/1000: 0, 66, 133, ...).
+	Without \a checkDuration the duration is only reported: for a Matroska
+	file whose stream starts late, the reader falls back to the file's
+	duration, which counts from 0 rather than from the stream's start (a
+	known limit of AVFormatReader, not of the frame times).
+*/
+static void
+check_video_times(const char* name, const char* path,
+	bool checkDuration = true)
+{
+	entry_ref ref;
+	status_t status = get_ref_for_path(path, &ref);
+	BMediaFile* file = NULL;
+	BMediaTrack* track = NULL;
+	if (status == B_OK) {
+		file = new BMediaFile(&ref);
+		status = file->InitCheck();
+	}
+	for (int32 i = 0; status == B_OK && i < file->CountTracks(); i++) {
+		BMediaTrack* candidate = file->TrackAt(i);
+		media_format format;
+		if (candidate != NULL && candidate->EncodedFormat(&format) == B_OK
+			&& format.type == B_MEDIA_ENCODED_VIDEO) {
+			track = candidate;
+			break;
+		}
+		file->ReleaseTrack(candidate);
+	}
+	media_format format;
+	if (status == B_OK && track == NULL)
+		status = B_ENTRY_NOT_FOUND;
+	if (status == B_OK) {
+		format.Clear();
+		format.type = B_MEDIA_RAW_VIDEO;
+		format.u.raw_video = media_raw_video_format::wildcard;
+		format.u.raw_video.display.format = B_RGB32;
+		status = track->DecodedFormat(&format);
+	}
+	const bigtime_t step = bigtime_t(1000000 / kFrameRate);
+	int32 frames = 0, badStart = 0, badCurrent = 0;
+	bigtime_t last = -1;
+	BString times;
+	if (status == B_OK) {
+		size_t size = (size_t)format.u.raw_video.display.bytes_per_row
+			* format.u.raw_video.display.line_count;
+		std::vector<uint8> buffer(size > 0 ? size : 1);
+		while (frames < kFrames * 2) {
+			int64 count = 0;
+			media_header header;
+			if (track->ReadFrames(buffer.data(), &count, &header) != B_OK
+				|| count <= 0) {
+				break;
+			}
+			bigtime_t want = frames * step;
+			if (llabs(header.start_time - want) > step / 2)
+				badStart++;
+			if (llabs(track->CurrentTime() - (want + step)) > step / 2)
+				badCurrent++;
+			if (frames < 4 || frames == kFrames - 1) {
+				times << " " << frames << ":" << header.start_time << "/"
+					<< track->CurrentTime();
+			}
+			last = header.start_time;
+			frames++;
+		}
+	}
+	bigtime_t duration = track != NULL ? track->Duration() : 0;
+	report(BString(name) << "_video_times", status == B_OK
+		&& frames == kFrames && badStart == 0 && badCurrent == 0
+		&& (!checkDuration || llabs(last + step - duration) <= step),
+		"%s: %" B_PRId32 " frames, %" B_PRId32 " start times and %" B_PRId32
+		" CurrentTime()s off by over half a frame (%" B_PRIdBIGTIME
+		" us); last frame at %" B_PRIdBIGTIME " us, duration %" B_PRIdBIGTIME
+		" us%s; frame:start_time/CurrentTime()%s", strerror(status), frames,
+		badStart, badCurrent, step, last, duration,
+		checkDuration ? "" : " (not checked)", times.String());
+	if (file != NULL) {
+		if (track != NULL)
+			file->ReleaseTrack(track);
+		delete file;
+	}
+}
+
+
+/*!	Copies \a from to the Matroska file \a to with every packet \a offset
+	microseconds later: the stream then has a start time of its own.
+*/
+static status_t
+remux_with_offset(const char* from, const char* to, int64 offset)
+{
+	AVFormatContext* input = NULL;
+	if (avformat_open_input(&input, from, NULL, NULL) < 0)
+		return B_ERROR;
+	status_t status = B_ERROR;
+	AVFormatContext* output = NULL;
+	if (avformat_find_stream_info(input, NULL) >= 0
+		&& avformat_alloc_output_context2(&output, NULL, "matroska", to)
+			>= 0) {
+		bool ok = true;
+		for (unsigned i = 0; i < input->nb_streams && ok; i++) {
+			AVStream* stream = avformat_new_stream(output, NULL);
+			ok = stream != NULL && avcodec_parameters_copy(stream->codecpar,
+				input->streams[i]->codecpar) >= 0;
+			if (ok) {
+				stream->codecpar->codec_tag = 0;
+				stream->time_base = input->streams[i]->time_base;
+			}
+		}
+		ok = ok && avio_open(&output->pb, to, AVIO_FLAG_WRITE) >= 0
+			&& avformat_write_header(output, NULL) >= 0;
+		AVPacket* packet = av_packet_alloc();
+		while (ok && packet != NULL && av_read_frame(input, packet) >= 0) {
+			AVRational timeBase
+				= input->streams[packet->stream_index]->time_base;
+			int64 shift = av_rescale_q(offset, AVRational{ 1, 1000000 },
+				timeBase);
+			if (packet->pts != AV_NOPTS_VALUE)
+				packet->pts += shift;
+			if (packet->dts != AV_NOPTS_VALUE)
+				packet->dts += shift;
+			av_packet_rescale_ts(packet, timeBase,
+				output->streams[packet->stream_index]->time_base);
+			packet->pos = -1;
+			ok = av_interleaved_write_frame(output, packet) >= 0;
+			av_packet_unref(packet);
+		}
+		av_packet_free(&packet);
+		if (ok && av_write_trailer(output) >= 0)
+			status = B_OK;
+		if (output->pb != NULL)
+			avio_closep(&output->pb);
+		avformat_free_context(output);
+	}
+	avformat_close_input(&input);
+	return status;
 }
 
 
@@ -291,6 +446,21 @@ test_case(const Case& test)
 			"%" B_PRId32 " frames decoded (want %" B_PRId32 "), %" B_PRId32
 			" in the right colour%s", frames, kFrames, rightColor,
 			wrong.String());
+		check_video_times(test.name, path.String());
+		if (strcmp(test.name, "webm_vp9_opus") == 0) {
+			// a stream start offset of 2 s
+			const char* offsetPath = "/tmp/media_codec_test.offset.mkv";
+			unlink(offsetPath);
+			status_t remuxed = remux_with_offset(path.String(), offsetPath,
+				2000000);
+			if (remuxed == B_OK)
+				check_video_times("mkv_vp9_start_offset", offsetPath, false);
+			else {
+				report("mkv_vp9_start_offset_video_times", false,
+					"remuxing with libavformat failed");
+			}
+			unlink(offsetPath);
+		}
 	}
 
 	std::vector<float> left, right;

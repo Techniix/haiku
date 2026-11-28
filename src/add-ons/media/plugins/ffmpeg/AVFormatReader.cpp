@@ -783,6 +783,9 @@ StreamBase::GetNextChunk(const void** chunkBuffer,
 		data->flags = fPacket.flags;
 		data->duration = fPacket.duration;
 		data->pos = fPacket.pos;
+		data->time_base_num = fStream->time_base.num;
+		data->time_base_den = fStream->time_base.den;
+		data->stream_start_time = fStream->start_time;
 
 		mediaHeader->type = fFormat.type;
 		mediaHeader->buffer = 0;
