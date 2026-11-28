@@ -597,6 +597,125 @@ expect("spare disk: refused when the file is not sparse",
 	and not os.path.exists(sparePath), str(problem))
 shutil.rmtree(spareDirectory)
 
+# The wizard disk (installer_wizard_test, batch 14, F-23): renga-* images
+# booted from a disk, a selection with the test (or a full run), none of
+# the modes that boot other disks; then booted with UEFI only when the
+# wizard installed onto it (its marker gone), and always removed.
+def wizard_args(**changes):
+	values = dict(only="", profile="renga-raw", media="disk",
+		two_installs=False, other_systems=False, installer_upgrade=False,
+		restore_points=False, loader_writes=False, mesa_upgrade=False)
+	values.update(changes)
+	return types.SimpleNamespace(**values)
+
+
+for name, args, wanted in [
+		("a full renga-raw run", wizard_args(), True),
+		("--only installer_wizard", wizard_args(only="installer_wizard"),
+			True),
+		("--only parsed, with the test", wizard_args(
+			only=["installer_wizard_test"], resume_selection=[]), True),
+		("--only installer_ui", wizard_args(only="installer_ui"), False),
+		("the default profile", wizard_args(profile="default"), False),
+		("--media cdrom", wizard_args(media="cdrom"), False),
+		("--installer-upgrade", wizard_args(installer_upgrade=True), False),
+		("--other-systems", wizard_args(other_systems=True), False),
+		("--mesa-upgrade", wizard_args(mesa_upgrade=True), False)]:
+	expect("wizard disk %s for %s" % ("attached" if wanted else "left out",
+			name), ce_test.wizard_disk_wanted(args) == wanted)
+
+wizardDirectory = tempfile.mkdtemp()
+wizardPath = os.path.join(wizardDirectory, "wizard.img")
+
+
+def make_wizard_disk(state):
+	"""The wizard disk as the guest may leave it: "blank" (its marker),
+	"partial" (written, no completion marker), "complete"."""
+	problem = ce_test.make_spare_disk(wizardPath, disk=ce_test.WIZARD_DISK)
+	if problem is None and state != "blank":
+		with open(wizardPath, "r+b") as disk:
+			disk.write(b"\0" * 512)
+			if state == "complete":
+				disk.seek(ce_test.WIZARD_COMPLETE_OFFSET)
+				disk.write(ce_test.WIZARD_COMPLETE_MARKER)
+	return problem
+
+
+problem = make_wizard_disk("blank")
+with open(wizardPath, "rb") if problem is None else open(os.devnull, "rb") \
+		as wizardFile:
+	start = wizardFile.read(len(ce_test.WIZARD_DISK[2]))
+expect("wizard disk: a sparse 4 GiB file with its marker", problem is None
+	and os.path.getsize(wizardPath) == ce_test.WIZARD_DISK[1]
+	and start == ce_test.WIZARD_DISK[2], str(problem))
+os.remove(wizardPath)
+
+booted = []
+savedBoot = ce_test.boot
+ce_test.boot = lambda args, *a, **k: booted.append(dict(k,
+	firmware=args.firmware, attachment=getattr(args, "boot_attachment",
+		None), stall=args.stall)) or True
+results = {}
+try:
+	for firmware, state in [("uefi", "blank"), ("uefi", "partial"),
+			("uefi", "complete"), ("bios", "blank"), ("bios", "partial")]:
+		make_wizard_disk(state)
+		runArgs = wizard_args(firmware=firmware, boot_attachment="usb",
+			stall=90)
+		before = len(booted)
+		runReport = {}
+		ce_test.run_wizard_boot(runArgs, wizardDirectory, runReport,
+			wizardPath)
+		ce_test.check_wizard_boot(runReport)
+		results[(firmware, state)] = (len(booted) - before, runReport,
+			runArgs, os.path.exists(wizardPath))
+finally:
+	ce_test.boot = savedBoot
+
+for (firmware, state), (boots, runReport, runArgs, left) in results.items():
+	checks = runReport.get("host_checks", [])
+	if firmware == "uefi" and state == "complete":
+		expect("wizard disk complete (UEFI): booted once as it is, tagged "
+			"wizard, with a longer stall time and no boot attachment, both "
+			"put back, disk removed",
+			boots == 1 and booted[-1].get("image") == wizardPath
+			and booted[-1].get("tag") == "wizard"
+			and booted[-1].get("firmware") == "uefi"
+			and booted[-1].get("attachment") is None
+			and booted[-1].get("stall") >= ce_test.WIZARD_BOOT_STALL
+			and runArgs.boot_attachment == "usb" and runArgs.stall == 90
+			and not left, booted[-1:])
+		runReport["boots"] = {"wizard": {"status": "exited",
+			"runner_finished": True}}
+		runReport["host_checks"] = []
+		ce_test.check_wizard_boot(runReport)
+		expect("installer_wizard.boot_installed passes when the boot "
+			"finished", [c["pass"] for c in runReport["host_checks"]]
+			== [True], runReport)
+	elif firmware == "uefi":
+		# known bad: a blank or half-written disk is never booted
+		expect("wizard disk %s (UEFI): not booted, removed, check fails"
+			% state, boots == 0 and not left and len(checks) == 1
+			and checks[0]["name"] == "installer_wizard.boot_installed"
+			and not checks[0]["pass"] and state in checks[0]["detail"],
+			checks)
+	else:
+		expect("wizard disk %s (BIOS): not booted, removed, "
+			"bios_disk_untouched %s" % (state, "passes" if state == "blank"
+				else "fails"),
+			boots == 0 and not left and len(checks) == 1
+			and checks[0]["name"] == "installer_wizard.bios_disk_untouched"
+			and checks[0]["pass"] == (state == "blank"), checks)
+
+noReport = {}
+ce_test.check_wizard_boot(noReport)
+expect("installer_wizard checks are no checks without the disk",
+	not noReport.get("host_checks"), noReport)
+# the spare disk is wanted for installer_wizard_test too
+expect("spare disk attached for --only installer_wizard",
+	ce_test.spare_disk_wanted(spare_args(only="installer_wizard")))
+shutil.rmtree(wizardDirectory)
+
 # The capture feed: the file must hold the requested tone everywhere (SDL
 # rereads it from the start on every PCM_PREPARE), seamlessly from one second
 # to the next and across rewrites, and a new tone must replace the old one

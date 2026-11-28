@@ -243,7 +243,8 @@ WorkerThread::WorkerThread(const BMessenger& owner)
 	fUnattended(false),
 	fRenameVolume(-1),
 	fLeanInstall(false),
-	fHadInstallerLink(false)
+	fHadInstallerLink(false),
+	fNewEFIPartition(-1)
 {
 	Run();
 }
@@ -841,6 +842,13 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 	if (mode == INSTALL_MODE_UPGRADE || mode == INSTALL_MODE_REPLACE
 		|| mode == INSTALL_MODE_ERASE) {
 		_UpdateEFILoaders(targetDisk);
+	}
+	if (fNewEFIPartition >= 0) {
+		err = _InstallNewEFILoader();
+		if (err != B_OK) {
+			_SaveLog(targetDirectory);
+			return _InstallationError(err);
+		}
 	}
 
 	err = _LaunchFinishScript(targetDirectory);

@@ -85,6 +85,7 @@ private:
 			BMenuItem*			fLaunchBootManagerItem;
 			BMenuItem*			fMakeBootableItem;
 			BMenu*				fEFILoaderMenu;
+			BMenuItem*			fWizardItem;	// Renga
 
 			bool				fEncouragedToSetupPartitions;
 

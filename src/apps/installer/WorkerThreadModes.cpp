@@ -521,8 +521,9 @@ WorkerThread::_WriteActivatedPackages(const BPath& target)
 /*!	Whether the file at \a path is Haiku's or Renga's EFI boot loader: a PE
 	file that says "Haiku revision" and "boot loader!" (the loader's welcome
 	line, "Welcome to the Haiku boot loader!" or "... Renga ...").
+	(InstallationInfo.h; the wizard's summary uses it too.)
 */
-static bool
+bool
 is_haiku_efi_loader(const char* path)
 {
 	BFile file(path, B_READ_ONLY);
@@ -658,4 +659,83 @@ WorkerThread::_UpdateEFILoaders(partition_id disk)
 	_Log("%" B_PRId32 " EFI loader(s) updated on %" B_PRIuSIZE " EFI system "
 		"partition(s)", updated, collector.ids.size());
 	return B_OK;
+}
+
+
+static const char*
+efi_fallback_loader_name()
+{
+#if defined(__x86_64__)
+	return "BOOTX64.EFI";
+#elif defined(__i386__)
+	return "BOOTIA32.EFI";
+#elif defined(__aarch64__) || defined(__arm64__)
+	return "BOOTAA64.EFI";
+#elif defined(__arm__) || defined(__ARM__)
+	return "BOOTARM.EFI";
+#elif defined(__riscv) && __riscv_xlen == 64
+	return "BOOTRISCV64.EFI";
+#else
+	return NULL;
+#endif
+}
+
+
+/*!	Renga (F-23, the wizard): Renga's EFI loader into the EFI system
+	partition the wizard made (SetNewEFIPartition()), as EFI/BOOT's
+	fallback loader. A loader that is there already is not replaced: the
+	partition is new, so one would mean it is not the partition the
+	wizard made, and another system's fallback loader is never
+	overwritten (roadmap F-23).
+*/
+status_t
+WorkerThread::_InstallNewEFILoader()
+{
+	BPath loader;
+	const char* name = efi_fallback_loader_name();
+	if (name == NULL || find_directory(B_SYSTEM_DIRECTORY, &loader) != B_OK
+		|| loader.Append("haiku_loader.efi") != B_OK
+		|| !BEntry(loader.Path()).Exists()) {
+		_Log("no EFI loader on the source for the new EFI system partition");
+		return B_ENTRY_NOT_FOUND;
+	}
+
+	BDiskDevice device;
+	BPartition* partition;
+	status_t status = fDDRoster.GetPartitionWithID(fNewEFIPartition, &device,
+		&partition);
+	if (status != B_OK) {
+		_Log("the new EFI system partition is gone: %s", strerror(status));
+		return status;
+	}
+	bool mountedHere = false;
+	if (!partition->IsMounted()) {
+		dev_t volume = partition->Mount();
+		if (volume < B_OK) {
+			_Log("the new EFI system partition cannot be mounted: %s",
+				strerror(volume));
+			return volume;
+		}
+		mountedHere = true;
+	}
+	BPath directory;
+	status = partition->GetMountPoint(&directory);
+	if (status == B_OK)
+		status = directory.Append("EFI/BOOT");
+	if (status == B_OK)
+		status = create_directory(directory.Path(), 0755);
+	BPath target(directory.Path(), name);
+	if (status == B_OK && BEntry(target.Path()).Exists()) {
+		_Log("EFI loader %s: already there, left alone", target.Path());
+	} else if (status == B_OK) {
+		CopyEngine copier(NULL, NULL);
+		status = copier.Copy(loader.Path(), target.Path(), -1, false);
+		_Log("EFI loader %s: %s", target.Path(),
+			status == B_OK ? "installed" : strerror(status));
+	} else
+		_Log("EFI/BOOT on the new EFI system partition: %s",
+			strerror(status));
+	if (mountedHere)
+		partition->Unmount();
+	return status;
 }
