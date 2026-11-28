@@ -655,7 +655,12 @@ check_spare_disk_cases(const BString& firmware)
 		arguments = "";
 		arguments << "--choice alongside --disk " << along
 			<< " --name RengaAlong";
-		output = run_wizard(arguments, NULL);
+		// on BIOS (no erase install) this run takes the wizard's
+		// screenshots
+		const char* shots[] = { "summary=installer_wizard_erase_summary",
+			"progress=installer_wizard_progress",
+			"finish=installer_wizard_finish", NULL };
+		output = run_wizard(arguments, firmware == "uefi" ? NULL : shots);
 		RengaDisk::GetDisk(along.String(), info);
 		keep = volume_named(info, "KeepAlong");
 		const RengaDisk::PartitionInfo* created = volume_named(info,
