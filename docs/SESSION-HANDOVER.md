@@ -86,6 +86,59 @@ Batch 11 (2026-11-21) is finished. Commits: Renga Depot decision (`f3b1ae0c`), b
 
 Open, queued by the coordinator in batch 11 and not done: the large-font UI audit of every Renga window with a harness mode (Control Panel sidebar width, resizable window, minimum size; only the Windows page menus done); Linux Chromium zygote and separate GPU process (flags work around it); the initial-size mismatch of Linux Chromium's window (needs a hardware retest with the scale fix); several inputs at once (no buffers reach the mixer); AppImage through the roster; Open with copy flaky; ptrace, sysfs/udev, V4L2, Debian/Arch roots, Renguin badge on window tab/list; Chrome 10 of 10; system bus socket in the Linux root.
 
+## Batch 14/15: continue from here
+
+**Local session, 2026-11-28.** Batch 14 is done. QEMU Tested unless marked.
+
+- **Image:** `2026.11.28-batch14` on renga-builds, Renga `cc8f520b`.
+- **Sweep:** default 1459, `--smp 2` 1459, `--firmware uefi` 1456 and renga-raw 2101 checks, all pass. The installer wizard under UEFI ran separately with `--stall 600`: 30/30.
+- **Merged this batch:** #36-#47:
+  - #36 Flatpak step 1: Renguin `chroot()`, bwrap shim, Manager switch
+  - #37 media load checks: mixer sink drift warm-up; media_drift and media_mixing wait for their data
+  - #38 Renguin: Debian glibc root and a 64-bit SDL2 game (Steam groundwork)
+  - #39 build VM: native HaikuPorter builds in a Renga VM (`renga-buildvm`)
+  - #40 Flatpak step 1, part 2: a host-built OSTree test app installed and run by the guest's flatpak
+  - #41 `renga-buildvm` follow-ups: trust-host cleanup, bfs_shell first, default VM dir
+  - #42 installer: the wizard shell (F-23, first piece)
+  - #43 FFmpeg plug-in: video `start_time` in microseconds for every container
+  - #44 FFmpeg plug-in and ChunkCache: PR #43 review follow-ups
+  - #45 harness: tone offsets searched at a quarter bin, not a fixed 0.2 % grid
+  - #46 ESP: declared once, copied without host attributes, loader checked (`harness.esp_loader`)
+  - #47 kernel: low page reserve keeps memory below 16 MiB under memory pressure (F-61)
+- **RengaPorts:** haikuwebkit 1.10.0-102 is published.
+- **Rule:** a package built in the build VM requires `haiku>=` the build VM image's haiku version (-102 requires `hrev60381_519`). Publish such a package only once a released image satisfies that.
+
+Batch 15 is next. Decided:
+- gcc_syslibs 15, LLVM 21 and the Vulkan loader from current HaikuPorts
+- a RengaPorts repository rule
+- libglvnd_devel for BuildFeatures `mesa`
+- the image ships libglvnd 1.7.0-100 and Mesa 26.3.0-101
+- a full sweep before that image
+- also: the invalid opcode of the EFI boot loader on a virtio disk under UEFI (protected boot code)
+
+Hardware tests asked of the maintainer (relay `status.md`, 2026-11-28):
+- WebPositive video and seeking, and quitting during playback
+- the installer wizard on a spare disk under UEFI
+- per-app volume clicks
+- freezes under heavy disk copying
+
+Open follow-ups:
+- OVMF on this host can stay silent for over 90 s, so UEFI wizard runs need `--stall 600`.
+- The sweep does not cover the UEFI wizard install.
+- libbe `Delegate::Uninitialize` crash.
+- Spare-disk space leak.
+- DataIOAdapter: the plain-`BDataIO` limit.
+- haikuwebkit: tear down media players on quit; the probe-read deadline.
+- Renguin: `O_EXCL` on `/boot` should give `EEXIST`; AF_UNIX `bind` is not guarded.
+- `image.repository_priority` flake.
+- Two trust-host concurrency edges in `renga-buildvm`.
+- Wi-Fi MT7922 (needs hardware).
+- The 8BitDo syslog (waiting on the maintainer).
+- The build output keeps stale host-emulated attributes (`generated.x86_64/attributes/<inode>`, `HAIKU_HOST_USE_XATTR=0`), so other files copied with attributes can inherit wrong ones; PR #46 fixed only the ESP.
+- Tone detector: candidates more than 5 kHz apart overlap within 1 %; cap each candidate's upper bound.
+- `vm_semantics.lomem_under_pressure`: the watchdog comment wrongly says `_exit` frees the memory (a thread in "waiting for pages" cannot be killed).
+- The MixerInput comment says "ten times"; the measured figure is 27x.
+
 ## Batch 14: continue from here
 
 **Cloud session, 2026-11-27 (stopped so that the maintainer's local PC session can take over).** QEMU Tested unless marked.
