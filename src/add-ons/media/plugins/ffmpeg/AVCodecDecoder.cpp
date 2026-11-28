@@ -85,6 +85,7 @@ AVCodecDecoder::AVCodecDecoder()
 	fHeader(),
 	fInputFormat(),
 	fFrame(0),
+	fNextVideoStartTime(0),
 	fIsAudio(false),
 	fCodec(NULL),
 	fCodecContext(NULL),
@@ -298,6 +299,7 @@ AVCodecDecoder::SeekedTo(int64 frame, bigtime_t time)
 	fDecodedDataSizeInBytes = 0;
 
 	fFrame = frame;
+	fNextVideoStartTime = time;
 
 	return ret;
 }
@@ -1295,11 +1297,8 @@ AVCodecDecoder::_DecodeNextVideoFrame()
 				return loadingChunkStatus;
 			}
 
-			char timestamp[AV_TS_MAX_STRING_SIZE];
-			av_ts_make_time_string(timestamp,
-				fTempPacket->dts, &fCodecContext->time_base);
-			TRACE("[v] Feed %d more bytes (dts %s)\n", fTempPacket->size,
-				timestamp);
+			TRACE("[v] Feed %d more bytes (dts %" B_PRId64 " us)\n",
+				fTempPacket->size, (int64)fTempPacket->dts);
 
 			send_error = avcodec_send_packet(fCodecContext, fTempPacket);
 			if (send_error < 0 && send_error != AVERROR(EAGAIN)) {
@@ -1452,6 +1451,26 @@ AVCodecDecoder::_LoadNextChunkIfNeededAndAssignStartTime()
 		// 14.1 s. The reader's start_time is the same time in microseconds.
 		if (fIsAudio)
 			fTempPacket->dts = chunkMediaHeader.start_time;
+		else {
+			// Renga: the same for video. A decoded picture's
+			// best_effort_timestamp is derived from the packets' pts and
+			// dts, and _UpdateMediaHeaderForVideoFrame() reports it as
+			// media_header::start_time, which is in microseconds. Left in
+			// the stream's time base, an MP4 at 1/24 gave start times 0, 1,
+			// 2, ... and a WebM (1/1000) 0, 33, 67, ...; BMediaTrack's
+			// CurrentTime() inherited them. pts keeps its own value (B
+			// frames are reordered by it); both are converted like the
+			// reader converts start_time, stream start offset included.
+			// (Since upstream Haiku commit 45bd581b70 passed the packets'
+			// pts and dts through; upstream is likely affected too.)
+			fTempPacket->pts = stream_time_to_microseconds(data->pts, *data);
+			fTempPacket->dts = stream_time_to_microseconds(data->dts, *data);
+			if (data->duration > 0 && data->time_base_num > 0
+				&& data->time_base_den > 0) {
+				fTempPacket->duration = 1000000LL * data->duration
+					* data->time_base_num / data->time_base_den;
+			}
+		}
 	}
 
 #ifdef LOG_STREAM_TO_FILE
@@ -1607,7 +1626,20 @@ AVCodecDecoder::_UpdateMediaHeaderForVideoFrame()
 	fHeader.type = B_MEDIA_RAW_VIDEO;
 	fHeader.file_pos = 0;
 	fHeader.orig_size = 0;
-	fHeader.start_time = fRawDecodedPicture->best_effort_timestamp;
+	// In microseconds (see _LoadNextChunkIfNeededAndAssignStartTime()).
+	// A picture without any time (none of its packets had a pts or dts)
+	// follows the previous one by a frame, or starts where the last seek
+	// went to.
+	if (fRawDecodedPicture->best_effort_timestamp != AV_NOPTS_VALUE)
+		fHeader.start_time = fRawDecodedPicture->best_effort_timestamp;
+	else
+		fHeader.start_time = fNextVideoStartTime;
+	bigtime_t frameDuration = fRawDecodedPicture->duration;
+	if (frameDuration <= 0) {
+		float fieldRate = fInputFormat.u.encoded_video.output.field_rate;
+		frameDuration = fieldRate > 0 ? bigtime_t(1000000 / fieldRate) : 0;
+	}
+	fNextVideoStartTime = fHeader.start_time + frameDuration;
 	fHeader.size_used = av_image_get_buffer_size(
 		colorspace_to_pixfmt(fOutputColorSpace), fRawDecodedPicture->width,
 		fRawDecodedPicture->height, 1);
@@ -1627,12 +1659,8 @@ AVCodecDecoder::_UpdateMediaHeaderForVideoFrame()
 		fHeader.u.raw_video.pixel_width_aspect,
 		fHeader.u.raw_video.pixel_height_aspect);
 
-	char timestamp[AV_TS_MAX_STRING_SIZE];
-	av_ts_make_time_string(timestamp,
-		fRawDecodedPicture->best_effort_timestamp, &fCodecContext->time_base);
-
-	TRACE("[v] start_time=%s field_sequence=%" B_PRIu32 "\n",
-		timestamp, fHeader.u.raw_video.field_sequence);
+	TRACE("[v] start_time=%.6f s field_sequence=%" B_PRIu32 "\n",
+		fHeader.start_time / 1000000.0, fHeader.u.raw_video.field_sequence);
 }
 
 

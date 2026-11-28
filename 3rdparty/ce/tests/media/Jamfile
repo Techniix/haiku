@@ -54,9 +54,14 @@ Application screen_capture_test :
 ;
 
 # The encode/decode API (F-31 phase 4) and the FFmpeg plug-in's encoders.
+# Its start offset check remuxes a clip with libavformat, hence FFmpeg.
+UseBuildFeatureHeaders ffmpeg ;
+Includes [ FGristFiles media_codec_test.cpp ]
+	: [ BuildFeatureAttribute ffmpeg : headers ] ;
 Application media_codec_test :
 	media_codec_test.cpp
-	: be media [ TargetLibstdc++ ]
+	: be media [ BuildFeatureAttribute ffmpeg : libraries ]
+		[ TargetLibstdc++ ]
 ;
 
 # Streaming through the FFmpeg plug-in's protocols (F-31 phase 4): HLS over

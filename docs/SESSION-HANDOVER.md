@@ -134,6 +134,7 @@ Remaining queue, in order:
    - Video frames are presented by PTS against the audio clock.
    - `media_html5_test` gets a slow progressive H.264+AAC clip.
    - 101 is published: audio is fine on hardware, video choppy and too fast.
+   - Found on the way: the FFmpeg plug-in gave video `start_time` in the stream's time base. Fixed in `fix/ffmpeg-video-start-time` (PR, test `media_codec.*_video_times`), QEMU Tested.
 5. Mesa (option C), verified in QEMU on the batch 14 image:
    - Run the one transaction: `pkgman install` of libglvnd, mesa, mesa_devel, mesa_eglvnd and mesa_lavapipe from RengaPorts, with mesa_swpipe removed in the same transaction.
    - Then the two BGLView checks: no ICD, and lavapipe only.
