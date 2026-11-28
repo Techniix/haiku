@@ -455,9 +455,10 @@ status_t	renguin_resolve_in_root(const char* linuxPath, uint32 flags,
 	// B_OK if the path exists under the Linux root; hostPath is then the
 	// fully resolved host path. B_ENTRY_NOT_FOUND otherwise.
 status_t	renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
-				size_t pathSize);
+				size_t pathSize, int dirfd = -100 /* LX_AT_FDCWD */);
 	// copies a path from userland and translates absolute paths into the
-	// Linux root where they exist there
+	// Linux root where they exist there; a relative path with a \a dirfd
+	// that is the team's "/" is taken as absolute (batch 14)
 void		renguin_hardlink_settings(bool copy);
 void		renguin_user_settings(bool asUser);
 bool		renguin_user_default();
@@ -467,7 +468,8 @@ uint32		renguin_host_id(uint32 linuxID);
 	// and back, for chown()
 	// fsops.cpp, batch 11: hard links as copies on BFS (switch)
 uint64		renguin_user_path(struct renguin_scratch* scratch, uint64 userPath,
-				uint32 flags, status_t* _status);
+				uint32 flags, status_t* _status,
+				int dirfd = -100 /* LX_AT_FDCWD */);
 	// like renguin_get_user_path(), but returns a user-space copy of the
 	// translated path for Haiku's _user_* calls (or userPath unchanged)
 status_t	renguin_translate_path(char* path, size_t pathSize, uint32 flags);

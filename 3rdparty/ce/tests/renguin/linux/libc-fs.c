@@ -88,6 +88,58 @@ int main(void)
 		&& (sx.stx_mode & S_IFMT) == S_IFREG
 		&& makedev(sx.stx_dev_major, sx.stx_dev_minor) == st.st_dev
 		&& sx.stx_mtime.tv_sec == st.st_mtim.tv_sec, "statx fields");
+	// batch 14: the mount ID, as Flatpak asks for it (libglnx's
+	// glnx_statx with STATX_TYPE | STATX_INO | STATX_MNT_ID |
+	// STATX_MNT_ID_UNIQUE, which fails with ENODATA without one of the
+	// two); the same for two files on one volume
+	{
+		const unsigned int mntId = 0x1000, mntIdUnique = 0x4000;
+		struct statx file, parent;
+		CHECK(statx(AT_FDCWD, pathA, 0, STATX_TYPE | STATX_INO | mntId
+				| mntIdUnique, &file) == 0
+			&& statx(AT_FDCWD, dir, 0, STATX_TYPE | STATX_INO | mntId
+				| mntIdUnique, &parent) == 0,
+			"statx mount id");
+		CHECK((file.stx_mask & (mntId | mntIdUnique)) != 0
+			&& (parent.stx_mask & (mntId | mntIdUnique)) != 0
+			&& file.stx_mnt_id != 0
+			&& file.stx_mnt_id == parent.stx_mnt_id, "statx mount id fields");
+	}
+	// batch 14: mkdir of a top-level directory the Linux root does not
+	// have but Haiku's tree does (/boot) fails with EEXIST, as on Linux,
+	// and makes nothing inside the root (it made the root's own /boot,
+	// hiding Haiku's, for a top-down "mkdir -p /boot/home/...")
+	{
+		errno = 0;
+		int made = mkdir("/boot", 0755);
+		int error = errno;
+		if (made == 0)
+			rmdir("/boot");
+		errno = error;
+		CHECK(made != 0 && error == EEXIST, "mkdir /boot");
+
+		// the same from a descriptor of "/", as Flatpak's libglnx walks
+		// paths (glnx_chaseat(): openat() and mkdirat() one component at
+		// a time): "boot" from "/" is /boot
+		int root = open("/", O_RDONLY | O_DIRECTORY);
+		CHECK(root >= 0, "open /");
+		errno = 0;
+		made = mkdirat(root, "boot", 0755);
+		error = errno;
+		if (made == 0)
+			unlinkat(root, "boot", AT_REMOVEDIR);
+		errno = error;
+		CHECK(made != 0 && error == EEXIST, "mkdirat / boot");
+		struct stat viaRoot, direct;
+		int boot = openat(root, "boot", O_RDONLY | O_DIRECTORY);
+		CHECK(boot >= 0 && fstat(boot, &viaRoot) == 0
+			&& stat("/boot", &direct) == 0 && viaRoot.st_ino == direct.st_ino
+			&& viaRoot.st_dev == direct.st_dev, "openat / boot");
+		CHECK(fstatat(root, "boot", &viaRoot, 0) == 0
+			&& viaRoot.st_ino == direct.st_ino, "fstatat / boot");
+		close(boot);
+		close(root);
+	}
 	printf("statx\n");
 
 	// statfs

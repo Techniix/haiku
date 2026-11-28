@@ -183,6 +183,24 @@ resolve_walk(const char* linuxPath, uint32 flags, char* hostPath,
 		if (status != B_OK) {
 			if (status == B_ENTRY_NOT_FOUND && isLast
 				&& (flags & RENGUIN_PATH_MAY_CREATE) != 0) {
+				// Batch 14: a top-level name the root does not have but
+				// Haiku's tree does (/boot, /tmp) is Haiku's, as any other
+				// path missing from the root is: not found here, so that
+				// the caller falls through to it. Creating it in the root
+				// would hide Haiku's for every Linux program afterwards; a
+				// top-down "mkdir -p /boot/home/x" (busybox, Flatpak's
+				// per-application directories) made the Linux root's own
+				// /boot/home that way.
+				if (inRoot && resolvedLength == 0) {
+					link[0] = '/';
+					memcpy(link + 1, component, componentLength);
+					link[componentLength + 1] = '\0';
+					struct stat haikuStat;
+					if (vfs_read_stat(-1, link, false, &haikuStat, true)
+							== B_OK) {
+						return B_ENTRY_NOT_FOUND;
+					}
+				}
 				status = append_component(resolved, &resolvedLength,
 					kBufferSize, component, componentLength);
 				if (status != B_OK)
@@ -386,13 +404,49 @@ renguin_host_to_linux_device(char* path, size_t size)
 }
 
 
+/*!	Batch 14: whether \a dirfd is the team's "/" (the Linux root, or its
+	chroot() root). Relative paths are Haiku's to resolve, but one from a
+	descriptor of "/" means what the same path from "/" means: Flatpak's
+	libglnx walks every path that way (glnx_chaseat(): open("/"), then
+	openat() and mkdirat() one component at a time), and "boot" from the
+	Linux root's own directory missed Haiku's /boot, so that Flatpak made
+	a /boot/home of the root's own for an application's directories.
+*/
+static bool
+is_root_dirfd(int dirfd)
+{
+	if (dirfd < 0 || !linux_root_exists())
+		return false;
+	struct stat fdStat;
+	if (vfs_read_stat(dirfd, NULL, false, &fdStat, false) != B_OK
+		|| !S_ISDIR(fdStat.st_mode)) {
+		return false;
+	}
+	struct stat rootStat;
+	return vfs_read_stat(-1, renguin_root_prefix(), true, &rootStat, true)
+			== B_OK
+		&& fdStat.st_dev == rootStat.st_dev
+		&& fdStat.st_ino == rootStat.st_ino;
+}
+
+
 status_t
 renguin_get_user_path(uint64 userPath, uint32 flags, char* path,
-	size_t pathSize)
+	size_t pathSize, int dirfd)
 {
 	ssize_t length = renguin_copy_string_in(path, userPath, pathSize);
 	if (length < 0)
 		return length;
+
+	if (path[0] != '/' && path[0] != '\0' && is_root_dirfd(dirfd)) {
+		// "name" from "/" is "/name" (Haiku ignores the descriptor for an
+		// absolute path)
+		size_t used = strlen(path);
+		if (used + 2 > pathSize)
+			return B_NAME_TOO_LONG;
+		memmove(path + 1, path, used + 1);
+		path[0] = '/';
+	}
 
 	return renguin_translate_path(path, pathSize, flags);
 }
@@ -479,7 +533,7 @@ renguin_translate_path(char* path, size_t pathSize, uint32 flags)
 
 uint64
 renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
-	status_t* _status)
+	status_t* _status, int dirfd)
 {
 	*_status = B_OK;
 	if (userPath == 0 || !linux_root_exists())
@@ -491,7 +545,7 @@ renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
 		*_status = B_BAD_ADDRESS;
 		return 0;
 	}
-	if (first != '/')
+	if (first != '/' && (first == '\0' || !is_root_dirfd(dirfd)))
 		return userPath;
 
 	char* path = (char*)malloc(B_PATH_NAME_LENGTH);
@@ -502,7 +556,7 @@ renguin_user_path(renguin_scratch* scratch, uint64 userPath, uint32 flags,
 	MemoryDeleter pathDeleter(path);
 
 	status_t status = renguin_get_user_path(userPath, flags, path,
-		B_PATH_NAME_LENGTH);
+		B_PATH_NAME_LENGTH, dirfd);
 	if (status != B_OK && status != RENGUIN_STATUS_IN_PROC) {
 		*_status = status;
 		return 0;
