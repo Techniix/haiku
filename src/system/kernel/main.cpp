@@ -61,6 +61,7 @@
 #include <user_mutex.h>
 #include <vfs.h>
 #include <vm/vm.h>
+#include <vm/vm_page.h>
 #include <boot/kernel_args.h>
 
 #include "vm/VMAnonymousCache.h"
@@ -379,6 +380,10 @@ main2(void* /*unused*/)
 	// Note: don't confuse the kernel_args structure (which is never freed)
 	// with the kernel args ranges it contains (and which are freed here).
 	vm_free_kernel_args(&sKernelArgs);
+
+	// Renga (roadmap F-61): the boot loader's memory below 16 MiB is free
+	// now, count it into the low page reserve
+	vm_page_update_low_page_reserve();
 
 	// start the init process
 	{
