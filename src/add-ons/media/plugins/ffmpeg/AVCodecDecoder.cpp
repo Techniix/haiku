@@ -497,6 +497,12 @@ AVCodecDecoder::_NegotiateVideoOutputFormat(media_format* inOutFormat)
 		// to _DecodeNextVideoFrame() will update the essential video format
 		// properties accordingly regardless of the settings here.
 
+	// Renga: the packets' times are in microseconds (see
+	// _LoadNextChunkIfNeededAndAssignStartTime()); tell libavcodec, as the
+	// software video accelerator does. Decoders that derive times or
+	// durations themselves then count in the same unit.
+	fCodecContext->pkt_timebase = (AVRational){ 1, 1000000 };
+
 	if (avcodec_open2(fCodecContext, fCodec, NULL) < 0) {
 		TRACE("avcodec_open() failed to init codec!\n");
 		return B_ERROR;
@@ -1467,8 +1473,8 @@ AVCodecDecoder::_LoadNextChunkIfNeededAndAssignStartTime()
 			fTempPacket->dts = stream_time_to_microseconds(data->dts, *data);
 			if (data->duration > 0 && data->time_base_num > 0
 				&& data->time_base_den > 0) {
-				fTempPacket->duration = 1000000LL * data->duration
-					* data->time_base_num / data->time_base_den;
+				fTempPacket->duration
+					= stream_duration_to_microseconds(data->duration, *data);
 			}
 		}
 	}
@@ -1636,8 +1642,14 @@ AVCodecDecoder::_UpdateMediaHeaderForVideoFrame()
 		fHeader.start_time = fNextVideoStartTime;
 	bigtime_t frameDuration = fRawDecodedPicture->duration;
 	if (frameDuration <= 0) {
+		// Without a frame duration from the packets, one frame at the
+		// stream's field rate. Without that either (some raw or elementary
+		// streams), 25 fps, the most common rate and the one FFmpeg itself
+		// assumes for such streams: with a duration of 0, every following
+		// picture without a time would get the same start_time, and
+		// BMediaTrack::CurrentTime() would stop.
 		float fieldRate = fInputFormat.u.encoded_video.output.field_rate;
-		frameDuration = fieldRate > 0 ? bigtime_t(1000000 / fieldRate) : 0;
+		frameDuration = bigtime_t(1000000 / (fieldRate > 0 ? fieldRate : 25));
 	}
 	fNextVideoStartTime = fHeader.start_time + frameDuration;
 	fHeader.size_used = av_image_get_buffer_size(

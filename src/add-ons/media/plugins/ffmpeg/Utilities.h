@@ -43,6 +43,56 @@ struct avpacket_user_data {
 #define AVPACKET_USER_DATA_TYPE 'ffav'
 
 
+/*! \brief Converts \a time from the time base \a num / \a den to
+		microseconds, with \a startTime (a stream's start time in the same
+		time base, AV_NOPTS_VALUE for none) taken off first.
+
+	Renga: the one conversion that StreamBase::_ConvertFromStreamTimeBase()
+	(media_header::start_time, seek results, durations) and the decoder
+	(stream_time_to_microseconds() below, a video frame's start_time) both
+	use, so that they agree to the microsecond. It truncates toward zero,
+	as the former "1000000LL * time * num / den" did, but av_rescale_rnd()
+	does not overflow: with a time base of 1 ns (Matroska and NUT files can
+	have one) the plain product did after 2^63 / 10^15 s, about 2.6 hours.
+	AV_NOPTS_VALUE, and an invalid time base, are returned unchanged.
+*/
+inline int64_t
+stream_time_to_microseconds(int64_t time, int num, int den,
+	int64_t startTime)
+{
+	if (time == AV_NOPTS_VALUE || num <= 0 || den <= 0)
+		return time;
+	if (startTime != AV_NOPTS_VALUE)
+		time -= startTime;
+	return av_rescale_rnd(time, 1000000LL * num, den, AV_ROUND_ZERO);
+}
+
+
+/*! \brief The reverse of stream_time_to_microseconds(): \a time in
+		microseconds to the time base \a num / \a den, \a startTime
+		(AV_NOPTS_VALUE: none) added.
+
+	Rounds to the nearest value, as StreamBase::_ConvertToStreamTimeBase()
+	always did (with a double), not toward zero: a frame's time in
+	microseconds is truncated, and truncating it again on the way back
+	would give the frame before it (1024 at 1/15360 is 66666 us, and 66666
+	us is 1023.99). av_rescale_rnd() keeps 64-bit precision where the
+	double had 53 bits.
+*/
+inline int64_t
+microseconds_to_stream_time(int64_t time, int num, int den,
+	int64_t startTime)
+{
+	if (time == AV_NOPTS_VALUE || num <= 0 || den <= 0)
+		return time;
+	int64_t streamTime = av_rescale_rnd(time, den, 1000000LL * num,
+		AV_ROUND_NEAR_INF);
+	if (startTime != AV_NOPTS_VALUE)
+		streamTime += startTime;
+	return streamTime;
+}
+
+
 /*! \brief Converts a time of a packet from AVFormatReader (pts, dts) from
 		its stream's time base to microseconds, relative to the stream's
 		start time, exactly as AVFormatReader computes the packet's
@@ -51,13 +101,20 @@ struct avpacket_user_data {
 inline int64_t
 stream_time_to_microseconds(int64_t time, const avpacket_user_data& data)
 {
-	if (time == AV_NOPTS_VALUE || data.time_base_num <= 0
-		|| data.time_base_den <= 0) {
-		return time;
-	}
-	if (data.stream_start_time != AV_NOPTS_VALUE)
-		time -= data.stream_start_time;
-	return 1000000LL * time * data.time_base_num / data.time_base_den;
+	return stream_time_to_microseconds(time, data.time_base_num,
+		data.time_base_den, data.stream_start_time);
+}
+
+
+/*! \brief A packet's duration from AVFormatReader in microseconds (no
+		start offset), truncated like stream_time_to_microseconds().
+*/
+inline int64_t
+stream_duration_to_microseconds(int64_t duration,
+	const avpacket_user_data& data)
+{
+	return stream_time_to_microseconds(duration, data.time_base_num,
+		data.time_base_den, AV_NOPTS_VALUE);
 }
 
 

@@ -17,7 +17,11 @@
 	frame duration apart, in microseconds, the last one ending at the
 	track's duration), and a Matroska file whose video starts 2 s into the
 	stream (libavformat remuxes the WebM clip with the offset) checks that
-	the stream's start offset is taken off as it is for audio.
+	the stream's start offset is taken off as it is for audio, in the
+	track's Duration() and CountFrames() too. Two clips with B frames
+	(libavcodec's MPEG-4 encoder, MP4 and Matroska) check the times with
+	pts out of order, and the plug-in's time conversion is checked for a
+	1 ns time base.
 
 	Also, when the harness provides them, samples the host's FFmpeg made
 	with encoders the plug-in only decodes (AV1, HEVC, H.264) in
@@ -49,8 +53,13 @@
 #include <vector>
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/mathematics.h>
 }
+
+#include "Utilities.h"
+	// the FFmpeg plug-in's time conversion (test_time_conversion())
 
 
 #define SUITE "media_codec"
@@ -175,14 +184,15 @@ color_near(uint32 a, uint32 b, int tolerance)
 	it is a frame later, and the last frame ends at the track's Duration().
 	The FFmpeg plug-in used to report the stream's own time base here (an
 	MP4 at 1/15: 0, 1, 2, ...; WebM at 1/1000: 0, 66, 133, ...).
-	Without \a checkDuration the duration is only reported: for a Matroska
-	file whose stream starts late, the reader falls back to the file's
-	duration, which counts from 0 rather than from the stream's start (a
-	known limit of AVFormatReader, not of the frame times).
+	Also the track's CountFrames() (<name>_frame_count). For a Matroska
+	file, whose streams have no duration of their own, AVFormatReader falls
+	back to the file's duration: it did not take the stream's start offset
+	off (a stream starting at 2 s was 2 s too long), and the frame count
+	derived from it was a million times too high (microseconds times the
+	frame rate).
 */
 static void
-check_video_times(const char* name, const char* path,
-	bool checkDuration = true)
+check_video_times(const char* name, const char* path)
 {
 	entry_ref ref;
 	status_t status = get_ref_for_path(path, &ref);
@@ -243,13 +253,17 @@ check_video_times(const char* name, const char* path,
 	bigtime_t duration = track != NULL ? track->Duration() : 0;
 	report(BString(name) << "_video_times", status == B_OK
 		&& frames == kFrames && badStart == 0 && badCurrent == 0
-		&& (!checkDuration || llabs(last + step - duration) <= step),
+		&& llabs(last + step - duration) <= step,
 		"%s: %" B_PRId32 " frames, %" B_PRId32 " start times and %" B_PRId32
 		" CurrentTime()s off by over half a frame (%" B_PRIdBIGTIME
 		" us); last frame at %" B_PRIdBIGTIME " us, duration %" B_PRIdBIGTIME
-		" us%s; frame:start_time/CurrentTime()%s", strerror(status), frames,
-		badStart, badCurrent, step, last, duration,
-		checkDuration ? "" : " (not checked)", times.String());
+		" us; frame:start_time/CurrentTime()%s", strerror(status), frames,
+		badStart, badCurrent, step, last, duration, times.String());
+	int64 frameCount = track != NULL ? track->CountFrames() : 0;
+	report(BString(name) << "_frame_count", status == B_OK
+		&& llabs(frameCount - kFrames) <= 1,
+		"%s: CountFrames() %" B_PRId64 " (want %" B_PRId32 " +- 1)",
+		strerror(status), frameCount, kFrames);
 	if (file != NULL) {
 		if (track != NULL)
 			file->ReleaseTrack(track);
@@ -309,6 +323,242 @@ remux_with_offset(const char* from, const char* to, int64 offset)
 	}
 	avformat_close_input(&input);
 	return status;
+}
+
+
+/*!	Encodes the test picture (kFrames frames at kFrameRate) with
+	libavcodec's MPEG-4 encoder and up to two B frames between reference
+	frames into \a path, a \a container ("mp4", "matroska") file: the
+	packets' pts are then out of order, and in MP4 the first dts is
+	negative. The plug-in's encoder is not used, as it adds B frames only
+	for MPEG-2, and its defaults stay as they are.
+*/
+static status_t
+encode_with_b_frames(const char* path, const char* container)
+{
+	const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
+	AVFormatContext* output = NULL;
+	if (codec == NULL || avformat_alloc_output_context2(&output, NULL,
+			container, path) < 0) {
+		return B_ERROR;
+	}
+	AVCodecContext* context = avcodec_alloc_context3(codec);
+	AVStream* stream = avformat_new_stream(output, NULL);
+	AVFrame* frame = av_frame_alloc();
+	AVPacket* packet = av_packet_alloc();
+	bool ok = context != NULL && stream != NULL && frame != NULL
+		&& packet != NULL;
+	if (ok) {
+		context->width = kWidth;
+		context->height = kHeight;
+		context->time_base = AVRational{ 1, (int)kFrameRate };
+		context->framerate = AVRational{ (int)kFrameRate, 1 };
+		context->pix_fmt = AV_PIX_FMT_YUV420P;
+		context->gop_size = 12;
+		context->max_b_frames = 2;
+		context->bit_rate = 400000;
+		if ((output->oformat->flags & AVFMT_GLOBALHEADER) != 0)
+			context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+		ok = avcodec_open2(context, codec, NULL) >= 0
+			&& avcodec_parameters_from_context(stream->codecpar, context)
+				>= 0;
+	}
+	bool started = false;
+	if (ok) {
+		stream->time_base = context->time_base;
+		frame->format = context->pix_fmt;
+		frame->width = kWidth;
+		frame->height = kHeight;
+		ok = av_frame_get_buffer(frame, 0) >= 0
+			&& avio_open(&output->pb, path, AVIO_FLAG_WRITE) >= 0
+			&& avformat_write_header(output, NULL) >= 0;
+		started = ok;
+	}
+	for (int32 i = 0; ok && i <= kFrames; i++) {
+		if (i < kFrames) {
+			// frame_color() in BT.601 YUV, the whole picture
+			ok = av_frame_make_writable(frame) >= 0;
+			uint32 color = frame_color(i);
+			int r = (color >> 16) & 0xff, g = (color >> 8) & 0xff,
+				b = color & 0xff;
+			int y = (66 * r + 129 * g + 25 * b + 128) / 256 + 16;
+			int u = (-38 * r - 74 * g + 112 * b + 128) / 256 + 128;
+			int v = (112 * r - 94 * g - 18 * b + 128) / 256 + 128;
+			for (int32 row = 0; ok && row < kHeight; row++) {
+				memset(frame->data[0] + row * frame->linesize[0], y, kWidth);
+				if (row < kHeight / 2) {
+					memset(frame->data[1] + row * frame->linesize[1], u,
+						kWidth / 2);
+					memset(frame->data[2] + row * frame->linesize[2], v,
+						kWidth / 2);
+				}
+			}
+			frame->pts = i;
+		}
+		// the last round flushes the encoder
+		ok = ok && avcodec_send_frame(context, i < kFrames ? frame : NULL)
+			>= 0;
+		while (ok) {
+			int result = avcodec_receive_packet(context, packet);
+			if (result == AVERROR(EAGAIN) || result == AVERROR_EOF)
+				break;
+			if (result < 0) {
+				ok = false;
+				break;
+			}
+			av_packet_rescale_ts(packet, context->time_base,
+				stream->time_base);
+			packet->stream_index = stream->index;
+			ok = av_interleaved_write_frame(output, packet) >= 0;
+		}
+	}
+	status_t status = started && ok && av_write_trailer(output) >= 0
+		? B_OK : B_ERROR;
+	if (output->pb != NULL)
+		avio_closep(&output->pb);
+	avformat_free_context(output);
+	avcodec_free_context(&context);
+	av_frame_free(&frame);
+	av_packet_free(&packet);
+	return status;
+}
+
+
+/*!	Counts the video packets of \a path, as libavformat reads them, whose
+	pts is lower than an earlier packet's (\a _reordered), whose pts and
+	dts differ (\a _ptsNotDts) and whose dts is negative (\a _negativeDts),
+	and the pictures libavcodec decodes from them, drained at the end
+	(\a _decoded: what the plug-in should deliver).
+*/
+static status_t
+count_reordered_packets(const char* path, int32* _packets,
+	int32* _reordered, int32* _ptsNotDts, int32* _negativeDts,
+	int32* _decoded)
+{
+	*_packets = *_reordered = *_ptsNotDts = *_negativeDts = *_decoded = 0;
+	AVFormatContext* input = NULL;
+	if (avformat_open_input(&input, path, NULL, NULL) < 0)
+		return B_ERROR;
+	status_t status = B_ERROR;
+	int index = -1;
+	if (avformat_find_stream_info(input, NULL) >= 0) {
+		index = av_find_best_stream(input, AVMEDIA_TYPE_VIDEO, -1, -1, NULL,
+			0);
+	}
+	AVPacket* packet = av_packet_alloc();
+	AVFrame* frame = av_frame_alloc();
+	AVCodecContext* decoder = NULL;
+	if (index >= 0) {
+		const AVCodec* codec = avcodec_find_decoder(
+			input->streams[index]->codecpar->codec_id);
+		decoder = codec != NULL ? avcodec_alloc_context3(codec) : NULL;
+		if (decoder != NULL && (avcodec_parameters_to_context(decoder,
+					input->streams[index]->codecpar) < 0
+				|| avcodec_open2(decoder, codec, NULL) < 0)) {
+			avcodec_free_context(&decoder);
+		}
+	}
+	if (index >= 0 && packet != NULL && frame != NULL) {
+		status = B_OK;
+		int64 highest = AV_NOPTS_VALUE;
+		while (av_read_frame(input, packet) >= 0) {
+			if (packet->stream_index == index) {
+				(*_packets)++;
+				if (decoder != NULL && avcodec_send_packet(decoder, packet)
+						>= 0) {
+					while (avcodec_receive_frame(decoder, frame) >= 0)
+						(*_decoded)++;
+				}
+				if (packet->pts != AV_NOPTS_VALUE) {
+					if (highest != AV_NOPTS_VALUE && packet->pts < highest)
+						(*_reordered)++;
+					else
+						highest = packet->pts;
+				}
+				if (packet->pts != AV_NOPTS_VALUE
+					&& packet->dts != AV_NOPTS_VALUE
+					&& packet->pts != packet->dts) {
+					(*_ptsNotDts)++;
+				}
+				if (packet->dts != AV_NOPTS_VALUE && packet->dts < 0)
+					(*_negativeDts)++;
+			}
+			av_packet_unref(packet);
+		}
+		if (decoder != NULL && avcodec_send_packet(decoder, NULL) >= 0) {
+			while (avcodec_receive_frame(decoder, frame) >= 0)
+				(*_decoded)++;
+		}
+	}
+	avcodec_free_context(&decoder);
+	av_frame_free(&frame);
+	av_packet_free(&packet);
+	avformat_close_input(&input);
+	return status;
+}
+
+
+/*!	B frames (pts out of order; in MP4 pts != dts and a negative first
+	dts): the frame times through BMediaTrack in presentation order. The
+	other cases' encoders write no B frames, so their pts follow dts.
+	\a needDts: the container stores dts (MP4; Matroska stores only pts).
+*/
+static void
+test_b_frames(const char* name, const char* container,
+	const char* extension, bool needDts)
+{
+	BString path("/tmp/media_codec_test.bframes.");
+	path << extension;
+	unlink(path.String());
+	status_t status = encode_with_b_frames(path.String(), container);
+	int32 packets = 0, reordered = 0, ptsNotDts = 0, negativeDts = 0,
+		decoded = 0;
+	if (status == B_OK) {
+		status = count_reordered_packets(path.String(), &packets, &reordered,
+			&ptsNotDts, &negativeDts, &decoded);
+	}
+	report(BString(name) << "_reordered", status == B_OK
+		&& packets == kFrames && decoded == kFrames && reordered > 0
+		&& (!needDts || ptsNotDts > 0),
+		"%s: %" B_PRId32 " packets, %" B_PRId32 " with a pts below an "
+		"earlier one, %" B_PRId32 " with pts != dts, %" B_PRId32 " with a "
+		"negative dts; libavcodec decodes %" B_PRId32 " pictures",
+		strerror(status), packets, reordered, ptsNotDts, negativeDts,
+		decoded);
+	if (status == B_OK)
+		check_video_times(name, path.String());
+	unlink(path.String());
+}
+
+
+/*!	The plug-in's time conversion (Utilities.h), shared by AVFormatReader
+	and AVCodecDecoder: truncating toward zero, the stream start offset
+	taken off, and no overflow for a 1 ns time base (3 hours are 1.08e13
+	ns; "1000000LL * time * num / den" overflowed after about 2.6 hours).
+*/
+static void
+test_time_conversion()
+{
+	avpacket_user_data data = {};
+	data.time_base_num = 1;
+	data.time_base_den = 1000000000;
+	data.stream_start_time = 0;
+	const int64 threeHours = 3LL * 3600 * 1000000;
+	int64 nanoseconds = stream_time_to_microseconds(threeHours * 1000, data);
+	int64 truncated = stream_time_to_microseconds(1999, data);
+	int64 negative = stream_time_to_microseconds(-1999, data);
+	data.time_base_den = 15360;
+	data.stream_start_time = 2 * 15360;
+	int64 offset = stream_time_to_microseconds(2 * 15360 + 1024, data);
+	int64 none = stream_time_to_microseconds(AV_NOPTS_VALUE, data);
+	report("stream_time_long_time_base", nanoseconds == threeHours
+		&& truncated == 1 && negative == -1 && offset == 66666
+		&& none == AV_NOPTS_VALUE,
+		"3 h at 1/1000000000: %" B_PRId64 " us (want %" B_PRId64 "), "
+		"1999 ns: %" B_PRId64 ", -1999 ns: %" B_PRId64 " (want 1, -1); "
+		"1024 at 1/15360 after a 2 s start: %" B_PRId64 " (want 66666); "
+		"AV_NOPTS_VALUE %s", nanoseconds, threeHours, truncated, negative,
+		offset, none == AV_NOPTS_VALUE ? "kept" : "changed");
 }
 
 
@@ -454,7 +704,7 @@ test_case(const Case& test)
 			status_t remuxed = remux_with_offset(path.String(), offsetPath,
 				2000000);
 			if (remuxed == B_OK)
-				check_video_times("mkv_vp9_start_offset", offsetPath, false);
+				check_video_times("mkv_vp9_start_offset", offsetPath);
 			else {
 				report("mkv_vp9_start_offset_video_times", false,
 					"remuxing with libavformat failed");
@@ -603,6 +853,10 @@ main()
 		test_case(kCases[i]);
 	}
 	sKnownFailure = false;
+
+	test_b_frames("mp4_mpeg4_bframes", "mp4", "mp4", true);
+	test_b_frames("mkv_mpeg4_bframes", "matroska", "mkv", false);
+	test_time_conversion();
 
 	test_samples();
 

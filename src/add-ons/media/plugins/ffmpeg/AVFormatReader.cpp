@@ -491,8 +491,30 @@ StreamBase::Duration() const
 		if (fStream->start_time != AV_NOPTS_VALUE)
 			time += fStream->start_time;
 		return _ConvertFromStreamTimeBase(time);
-	} else if ((int64)fContext->duration != AV_NOPTS_VALUE)
-		return (bigtime_t)fContext->duration;
+	} else if ((int64)fContext->duration != AV_NOPTS_VALUE) {
+		// Renga: the file's duration (AV_TIME_BASE is microseconds) counts
+		// from the file's time 0, but every time this stream reports has
+		// its start offset taken off (_ConvertFromStreamTimeBase()), so
+		// the offset is taken off here too: a Matroska file, whose streams
+		// have no duration of their own, with video starting at 2 s
+		// reported a duration 2 s too long. The duration reaches this
+		// fallback only when it came from the file's header (libavformat
+		// gives every stream a duration when it computes the file's from
+		// the streams' times), and a header duration, the Matroska and WebM
+		// segment's one or FLV's "duration", counts from 0, not from
+		// fContext->start_time, so that is not added: with the stream
+		// starting at 2 s and an audio stream at 0, the file starts at 0,
+		// and the video is still 2 s shorter than the file.
+		bigtime_t duration = (bigtime_t)fContext->duration;
+		if (fStream->start_time != AV_NOPTS_VALUE) {
+			bigtime_t offset = stream_time_to_microseconds(
+				fStream->start_time, fStream->time_base.num,
+				fStream->time_base.den, AV_NOPTS_VALUE);
+			if (offset > 0 && offset < duration)
+				duration -= offset;
+		}
+		return duration;
+	}
 
 	return 0;
 }
@@ -964,22 +986,22 @@ StreamBase::_NextPacket(bool reuse)
 int64_t
 StreamBase::_ConvertToStreamTimeBase(bigtime_t time) const
 {
-	int64 timeStamp = int64_t((double)time * fStream->time_base.den
-		/ (1000000.0 * fStream->time_base.num) + 0.5);
-	if (fStream->start_time != AV_NOPTS_VALUE)
-		timeStamp += fStream->start_time;
-	return timeStamp;
+	// Renga: av_rescale_rnd() (rounding to nearest, as the double before
+	// did) through the helper the decoder shares, see Utilities.h.
+	return microseconds_to_stream_time(time, fStream->time_base.num,
+		fStream->time_base.den, fStream->start_time);
 }
 
 
 bigtime_t
 StreamBase::_ConvertFromStreamTimeBase(int64_t time) const
 {
-	if (fStream->start_time != AV_NOPTS_VALUE)
-		time -= fStream->start_time;
-
-	return bigtime_t(1000000LL * time
-		* fStream->time_base.num / fStream->time_base.den);
+	// Renga: "1000000LL * time * num / den" overflowed for a 1 ns time base
+	// after about 2.6 hours. The helper truncates the same way without
+	// overflowing, and the decoder converts a video frame's pts with it
+	// too, so frame times and the chunks' start times stay identical.
+	return stream_time_to_microseconds(time, fStream->time_base.num,
+		fStream->time_base.den, fStream->start_time);
 }
 
 
@@ -1367,7 +1389,13 @@ AVFormatReader::Stream::GetStreamInfo(int64* frameCount,
 			*frameCount = (int64)(fStream->duration * frameRate
 				* fStream->time_base.num / fStream->time_base.den);
 		} else if (fContext->duration != AV_NOPTS_VALUE) {
-			*frameCount = (int64)(fContext->duration * frameRate);
+			// Renga: fContext->duration is in microseconds (and counts from
+			// the file's time 0); Duration() has the stream's start offset
+			// taken off. The product was a million times the frame count.
+			// Rounded: 1.933 s at 15 fps is 28.995 frames, and truncating
+			// gave 28 where the file has 30 (its header duration ends at
+			// the last frame's start).
+			*frameCount = (int64)(*duration * frameRate / 1000000.0 + 0.5);
 		}
 		TRACE("  frameCount calculated: %" B_PRIu64 ", from context: %" B_PRIu64 "\n",
 			*frameCount, fStream->nb_frames);
