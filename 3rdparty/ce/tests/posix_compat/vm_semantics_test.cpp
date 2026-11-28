@@ -20,7 +20,8 @@
 	 - munmap() of sub-ranges (V8's OS::Release()).
 
 	And Renga kernel behaviours: memory below 16 MiB stays available
-	after the boot (lomem_area, see test_low_memory()); and (batch 12)
+	after the boot (lomem_area, see test_low_memory()) and under memory
+	pressure (lomem_under_pressure); and (batch 12)
 	fork() of a team with a locked area, whose copies are then given up
 	in either order (test_fork_locked_area()).
 
@@ -443,6 +444,169 @@ test_low_memory()
 }
 
 
+/*!	Memory below 16 MiB stays available under memory pressure too (roadmap
+	F-61, second part). Keeping the low pages at the end of the free queues
+	held only while the system had free memory to spare: the page daemon
+	keeps about 3 MiB free, so a long burst of allocations (the Installer
+	copying 737 MB on a 1 GiB machine, installer_destination in the
+	renga-raw sweep of batch 14) drained the free queue into its low end and
+	long-lived memory ended up below 16 MiB; the later lomem_area check and
+	LinuxKPI's 2 MiB bounce pool failed. The kernel now keeps the free low
+	pages out of ordinary allocations (a reserve like Linux's ZONE_DMA
+	lowmem_reserve).
+
+	The test first finds the largest B_LOMEM area the kernel can make now
+	(8 MiB down to 256 KiB; how much of the low 16 MiB is free and
+	contiguous depends on the firmware and the boot). It then takes all
+	free memory and 16 MiB more as ordinary locked memory (4 MiB
+	B_FULL_LOCK areas; what goes beyond the free pages comes from cached
+	ones), starts 256 threads that wait (their kernel stacks are kernel
+	memory of system priority, as the Installer's block cache and slabs
+	were), and, while holding all that, makes a B_LOMEM area of that size
+	again: ordinary memory use must not take it away. On the old kernel the
+	locked memory took the free low pages but for the last 512 (the user
+	reserve), the kernel stacks those, and the area failed.
+
+	It takes at most what cached pages and the commit limit leave room for
+	with 64 MiB to spare, so it never pushes the system into paging; a
+	watchdog thread ends it with a failure after 20 s (pressure_watchdog()),
+	and it frees everything before it reports.
+*/
+static status_t
+pressure_waiter(void* data)
+{
+	acquire_sem(*(sem_id*)data);
+	return B_OK;
+}
+
+
+/*!	Ends the test with a failure when lomem_under_pressure has not finished
+	in time: a create_area() stuck in "waiting for pages" would otherwise
+	hang the suite. The team exits, which gives the memory back.
+*/
+static status_t
+pressure_watchdog(void* data)
+{
+	if (acquire_sem_etc(*(sem_id*)data, 1, B_RELATIVE_TIMEOUT, 20000000)
+			== B_TIMED_OUT) {
+		report("lomem_under_pressure", false, "not done after 20 s (an "
+			"allocation waiting for pages?); the test team exits");
+		printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);
+		fflush(stdout);
+		_exit(1);
+	}
+	return B_OK;
+}
+
+
+static void
+test_low_memory_under_pressure()
+{
+	const size_t chunk = 4 * kMiB;
+
+	size_t lowSize = 0;
+	for (size_t size = 8 * kMiB; size >= 256 * 1024; size /= 2) {
+		void* address = NULL;
+		area_id area = create_area("ce lomem probe", &address, B_ANY_ADDRESS,
+			size, B_LOMEM, B_READ_AREA | B_WRITE_AREA);
+		if (area >= 0) {
+			delete_area(area);
+			lowSize = size;
+			break;
+		}
+	}
+	if (lowSize == 0) {
+		report("lomem_under_pressure", false, "no B_LOMEM area of 256 KiB "
+			"or more before the pressure");
+		return;
+	}
+
+	system_info info;
+	get_system_info(&info);
+	uint64 freePages = info.max_pages - info.used_pages - info.cached_pages;
+	uint64 freeBytes = freePages * kPage;
+	uint64 goal = freeBytes + 16 * kMiB;
+	uint64 reclaimable = (freePages + info.cached_pages) * kPage;
+	uint64 room = reclaimable < info.free_memory
+		? reclaimable : (uint64)info.free_memory;
+	if (room < 64 * kMiB || goal > room - 64 * kMiB) {
+		report("lomem_under_pressure", false, "cannot apply the pressure: "
+			"%" B_PRIu64 " MiB free, %" B_PRIu64 " MiB free or cached, "
+			"%" B_PRIu64 " MiB uncommitted; want %" B_PRIu64 " MiB and 64 MiB "
+			"to spare", freeBytes / kMiB, reclaimable / kMiB,
+			(uint64)info.free_memory / kMiB, goal / kMiB);
+		return;
+	}
+
+	sem_id done = create_sem(0, "ce pressure done");
+	thread_id watchdog = spawn_thread(pressure_watchdog, "ce pressure watchdog",
+		B_URGENT_DISPLAY_PRIORITY, &done);
+	resume_thread(watchdog);
+
+	const int32 maxAreas = (int32)(goal / chunk) + 1;
+	area_id* areas = new area_id[maxAreas];
+	int32 count = 0;
+	uint64 held = 0;
+	status_t error = B_OK;
+	while (held < goal && count < maxAreas) {
+		void* address = NULL;
+		area_id area = create_area("ce pressure", &address, B_ANY_ADDRESS,
+			chunk, B_FULL_LOCK, B_READ_AREA | B_WRITE_AREA);
+		if (area < 0) {
+			error = area;
+			break;
+		}
+		areas[count++] = area;
+		held += chunk;
+	}
+
+	const int32 kThreads = 256;
+	thread_id threads[kThreads];
+	sem_id wait = create_sem(0, "ce pressure");
+	int32 started = 0;
+	for (; error == B_OK && started < kThreads; started++) {
+		threads[started] = spawn_thread(pressure_waiter, "ce pressure",
+			B_NORMAL_PRIORITY, &wait);
+		if (threads[started] < 0)
+			break;
+		resume_thread(threads[started]);
+	}
+
+	void* lowAddress = NULL;
+	area_id low = create_area("ce lomem pressure", &lowAddress, B_ANY_ADDRESS,
+		lowSize, B_LOMEM, B_READ_AREA | B_WRITE_AREA);
+	if (low >= 0)
+		memset(lowAddress, 0x5a, lowSize);
+
+	// give the memory back before anything else runs
+	if (low >= 0)
+		delete_area(low);
+	delete_sem(wait);
+	for (int32 i = 0; i < started; i++) {
+		status_t result;
+		wait_for_thread(threads[i], &result);
+	}
+	for (int32 i = 0; i < count; i++)
+		delete_area(areas[i]);
+	delete[] areas;
+
+	release_sem(done);
+	status_t watchdogResult;
+	wait_for_thread(watchdog, &watchdogResult);
+	delete_sem(done);
+
+	report("lomem_under_pressure", error == B_OK && held >= goal
+			&& started == kThreads && low >= 0,
+		"held %" B_PRIu64 " MiB of locked memory (%" B_PRIu64 " MiB were "
+		"free, goal %" B_PRIu64 " MiB%s%s), %" B_PRId32 " waiting threads; "
+		"meanwhile create_area(B_LOMEM, %zu KiB, the largest before): %s",
+		held / kMiB, freeBytes / kMiB, goal / kMiB,
+		error != B_OK ? ", stopped: " : "",
+		error != B_OK ? strerror(error) : "", started, lowSize / 1024,
+		strerror(low >= 0 ? B_OK : low));
+}
+
+
 /*!	Batch 12: fork() copies a B_FULL_LOCK area (memory that never goes to
 	swap, such as Renguin's one-page vDSO in every Linux program). The
 	child's copy got a swappable cache above the locked one; when the
@@ -509,6 +673,7 @@ main()
 	test_dontneed();
 	test_free();
 	test_low_memory();
+	test_low_memory_under_pressure();
 	test_fork_locked_area();
 
 	printf("CE-SUITE " SUITE " DONE failures=%d\n", sFailures);

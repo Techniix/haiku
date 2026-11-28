@@ -4749,7 +4749,18 @@ vm_try_reserve_internal(int64& pool, uint32 resource,
 	ASSERT(priority >= 0 && priority < (int)B_COUNT_OF(kMemoryReserveForPriority));
 	TRACE(("try to reserve %" B_PRIuSIZE " bytes, %" B_PRIdOFF " left\n", amount, pool));
 
-	const size_t reserve = kMemoryReserveForPriority[priority];
+	// Renga (roadmap F-61): user and system priority commitments also leave
+	// the low page reserve alone, as their page reservations do
+	// (vm_page.cpp, page_reserve_for_priority()). This keeps upstream's
+	// invariant that the memory reserve of a priority is its page reserve
+	// in bytes: VM_MEMORY_RESERVE_* == VM_PAGE_RESERVE_* * B_PAGE_SIZE, and
+	// both grow by vm_page_low_page_reserve() pages. Without it, memory
+	// could be committed that only the reserve could back, and with no swap
+	// a team faulting it in would wait for pages forever instead of
+	// getting B_NO_MEMORY at commit time.
+	const size_t reserve = kMemoryReserveForPriority[priority]
+		+ (priority != VM_PRIORITY_VIP
+			? (size_t)vm_page_low_page_reserve() * B_PAGE_SIZE : 0);
 	const int64 amountPlusReserve = amount + reserve;
 
 	// Try with a read-lock and atomics first, but only if there's more than double

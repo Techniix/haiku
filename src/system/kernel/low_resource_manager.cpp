@@ -156,7 +156,11 @@ compute_state(void)
 	sLowResources = B_ALL_KERNEL_RESOURCES;
 
 	// free pages state
+	// Renga (roadmap F-61): without the low page reserve, which user and
+	// system allocations cannot use, so the states fire as before
+	int32 lowReserve = vm_page_low_page_reserve();
 	uint32 freePages = vm_page_num_free_pages();
+	freePages = freePages > (uint32)lowReserve ? freePages - lowReserve : 0;
 
 	int32 oldState = sLowPagesState;
 	if (freePages < kCriticalPagesLimit) {
@@ -176,7 +180,8 @@ compute_state(void)
 	}
 
 	// free memory state
-	off_t freeMemory = vm_available_not_needed_memory();
+	off_t freeMemory = vm_available_not_needed_memory()
+		- (off_t)lowReserve * B_PAGE_SIZE;
 
 	oldState = sLowMemoryState;
 	if (freeMemory < sCriticalMemoryLimit) {

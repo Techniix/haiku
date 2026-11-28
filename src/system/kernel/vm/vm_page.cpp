@@ -73,6 +73,20 @@ static const size_t kPageReserveForPriority[] = {
 	0							// VIP
 };
 
+// Renga: the pages below 16 MiB, the only memory devices with 24-bit DMA
+// (ISA-era sound cards, B_LOMEM areas, LinuxKPI drivers with a 24-bit DMA
+// mask) can reach. See insert_free_page() and page_reserve_for_priority().
+static const page_num_t kLowPageLimit = 16 * 1024 * 1024 / B_PAGE_SIZE;
+
+// Renga (roadmap F-61): how many free pages ordinary (user and system
+// priority) reservations leave untouched on top of their priority's
+// reserve, so that the pages below 16 MiB, kept at the end of the free and
+// clear queues, are never handed out for ordinary allocations. Set to the
+// number of free pages below 16 MiB at the end of vm_page_init() and again
+// when the boot has given back the boot loader's memory
+// (vm_page_update_low_page_reserve()), capped at 1/16 of the memory.
+static int32 sLowPageReserve = 0;
+
 // Minimum number of free pages the page daemon will try to achieve.
 static uint32 sFreePagesTarget;
 static uint32 sFreeOrCachedPagesTarget;
@@ -1518,9 +1532,6 @@ page_queue_for(vm_page* page, uint8 state)
 	order of the queues is not part of any interface, and the cost is one
 	comparison per freed page.
 */
-static const page_num_t kLowPageLimit = 16 * 1024 * 1024 / B_PAGE_SIZE;
-
-
 static inline void
 insert_free_page(VMPageQueue& queue, vm_page* page)
 {
@@ -1528,6 +1539,37 @@ insert_free_page(VMPageQueue& queue, vm_page* page)
 		queue.AppendUnlocked(page);
 	else
 		queue.PrependUnlocked(page);
+}
+
+
+/*!	Renga (roadmap F-61, second part): the free pages a reservation of
+	\a priority must leave untouched. The queue order of insert_free_page()
+	alone keeps the low pages free only while there is no memory pressure:
+	the page daemon keeps just sFreePagesTarget pages free (3 MiB on 1 GiB),
+	so under a long burst of allocations (the Installer copying 737 MB on a
+	1 GiB machine, installer_destination) the free queue drains into its low
+	end and long-lived memory ends up below 16 MiB; B_LOMEM areas and 24-bit
+	DMA buffers then fail for the rest of the session (vm_semantics.lomem_area
+	in the renga-raw sweep, batch 14).
+
+	User and system priority reservations therefore also leave
+	sLowPageReserve pages untouched. As the low pages are at the end of the
+	queues and pages are allocated from the front, at least
+	sUnreservedFreePages - (free low pages) >= the reserved pages are above
+	16 MiB, so an ordinary allocation always finds one there; when the
+	reserve is reached the reservation steals cached pages or waits for the
+	page daemon, whose target includes the reserve, as it does at its own
+	reserve. VIP reservations (the kernel's last resort) and page runs that
+	only low memory can satisfy (\a lowRestricted) may use the low pages.
+	This is what Linux's lowmem_reserve does for ZONE_DMA.
+*/
+static inline int32
+page_reserve_for_priority(int priority, bool lowRestricted = false)
+{
+	int32 reserve = kPageReserveForPriority[priority];
+	if (priority != VM_PRIORITY_VIP && !lowRestricted)
+		reserve += sLowPageReserve;
+	return reserve;
 }
 
 static void
@@ -1736,7 +1778,7 @@ page_scrubber(void *unused)
 		// necessary, because we don't have information on how many of the
 		// reserved pages have already been allocated.
 		int32 reserved = reserve_some_pages(SCRUB_SIZE,
-			kPageReserveForPriority[VM_PRIORITY_USER]);
+			page_reserve_for_priority(VM_PRIORITY_USER));
 		if (reserved == 0)
 			continue;
 
@@ -2364,10 +2406,12 @@ page_daemon(void* /*unused*/)
 /*!	Returns how many pages could *not* be reserved.
 */
 static uint32
-reserve_pages(uint32 missing, int priority, bool dontWait)
+reserve_pages(uint32 missing, int priority, bool dontWait,
+	bool lowRestricted = false)
 {
 	const uint32 requested = missing;
-	const int32 dontTouch = kPageReserveForPriority[priority];
+	const int32 dontTouch = page_reserve_for_priority(priority,
+		lowRestricted);
 
 	while (true) {
 		missing -= reserve_some_pages(missing, dontTouch);
@@ -2446,6 +2490,57 @@ reserve_pages(uint32 missing, int priority, bool dontWait)
 		ASSERT(waiter.requested == waiter.reserved);
 		return 0;
 	}
+}
+
+
+/*!	Renga: the size of the low page reserve (page_reserve_for_priority()):
+	the free and clear pages below 16 MiB, at most 1/16 of the memory, so
+	that small machines keep most of their memory for ordinary use. 0 when
+	no page below 16 MiB is free, which leaves everything as it was.
+*/
+static int32
+count_low_page_reserve()
+{
+	int32 lowFreePages = 0;
+	for (page_num_t i = 0; i < sNumPages
+			&& sPhysicalPageOffset + i < kLowPageLimit; i++) {
+		uint8 state = sPages[i].State();
+		if (state == PAGE_STATE_FREE || state == PAGE_STATE_CLEAR)
+			lowFreePages++;
+	}
+	return std::min(lowFreePages,
+		(int32)((sNumPages - sNonExistingPages) / 16));
+}
+
+
+/*!	Renga: counts the low page reserve again once the boot has given back
+	the boot loader's memory (main2(), after vm_free_kernel_args()). On BIOS
+	boots much of the memory below 16 MiB is the boot loader's until then;
+	vm_page_init() sees only part of it as free. The page daemon's target
+	follows the reserve.
+*/
+int32
+vm_page_low_page_reserve()
+{
+	return sLowPageReserve;
+}
+
+
+void
+vm_page_update_low_page_reserve()
+{
+	WriteLocker locker(sFreePageQueuesLock);
+	int32 reserve = count_low_page_reserve();
+	if (reserve > sLowPageReserve) {
+		// the targets contain the reserve once (see vm_page_init())
+		sFreePagesTarget += reserve - sLowPageReserve;
+		sFreeOrCachedPagesTarget += reserve - sLowPageReserve;
+		sLowPageReserve = reserve;
+	}
+	locker.Unlock();
+
+	dprintf("vm_page: %" B_PRId32 " pages below 16 MiB kept for low memory "
+		"allocations\n", sLowPageReserve);
 }
 
 
@@ -2550,25 +2645,33 @@ vm_page_init(kernel_args *args)
 	// prevent future allocations from the kernel args ranges
 	args->num_physical_allocated_ranges = 0;
 
+	// Renga: the free pages below 16 MiB become the low page reserve
+	// (see page_reserve_for_priority())
+	sLowPageReserve = count_low_page_reserve();
+
 	// report initially available memory
 	vm_unreserve_memory(vm_page_num_free_pages() * B_PAGE_SIZE);
 
 	// The target of actually free pages. This must be at least the system
 	// reserve, but should be a few more pages, so we don't have to extract
 	// a cached page with each allocation.
-	sFreePagesTarget = VM_PAGE_RESERVE_USER
+	// Renga: plus the low page reserve, which user allocations must not
+	// touch either (page_reserve_for_priority()). Each target below contains
+	// it exactly once, as vm_page_update_low_page_reserve() assumes.
+	const uint32 baseFreePagesTarget = VM_PAGE_RESERVE_USER
 		+ std::max((page_num_t)32, (sNumPages - sNonExistingPages) / 1024);
+	sFreePagesTarget = baseFreePagesTarget + sLowPageReserve;
 
 	// The target of free + cached and inactive pages. On low-memory machines
 	// keep things tight. free + cached is the pool of immediately allocatable
 	// pages. We want a few inactive pages, so when we're actually paging, we
 	// have a reasonably large set of pages to work with.
 	if (sUnreservedFreePages < (16 * 1024)) {
-		sFreeOrCachedPagesTarget = sFreePagesTarget + 128;
-		sInactivePagesTarget = sFreePagesTarget / 3;
+		sFreeOrCachedPagesTarget = baseFreePagesTarget + 128 + sLowPageReserve;
+		sInactivePagesTarget = baseFreePagesTarget / 3;
 	} else {
-		sFreeOrCachedPagesTarget = 2 * sFreePagesTarget;
-		sInactivePagesTarget = sFreePagesTarget / 2;
+		sFreeOrCachedPagesTarget = 2 * baseFreePagesTarget + sLowPageReserve;
+		sInactivePagesTarget = baseFreePagesTarget / 2;
 	}
 
 	TRACE(("vm_page_init: exit\n"));
@@ -2785,7 +2888,7 @@ vm_page_allocate_page(vm_page_reservation* reservation, uint32 flags)
 
 			page = queue->RemoveHead();
 			if (page == NULL)
-				otherQueue->RemoveHead();
+				page = otherQueue->RemoveHead();
 
 			if (page == NULL) {
 				panic("Had reserved page, but there is none!");
@@ -2794,6 +2897,31 @@ vm_page_allocate_page(vm_page_reservation* reservation, uint32 flags)
 
 			// downgrade to read lock
 			locker.Lock();
+		}
+	}
+
+	if (page->physical_page_number < kLowPageLimit) {
+		// Renga: the head of this queue is a low page; the other queue may
+		// still have a page above 16 MiB (both keep the low pages at their
+		// end), take that one and put the low page back at the end.
+		// Another thread may take pages from either queue between the two
+		// removals, so the result can be a low page although a high one was
+		// free a moment before; that only costs one low page, and the pages
+		// go back in the queue order of insert_free_page(), so the next
+		// allocation sees the high pages first again.
+		vm_page* otherPage = otherQueue->RemoveHeadUnlocked();
+		if (otherPage != NULL) {
+			VMPageQueue* pageQueue = page->State() == PAGE_STATE_CLEAR
+				? &sClearPageQueue : &sFreePageQueue;
+			if (otherPage->physical_page_number >= kLowPageLimit) {
+				pageQueue->AppendUnlocked(page);
+				page = otherPage;
+			} else {
+				VMPageQueue* otherPageQueue
+					= otherPage->State() == PAGE_STATE_CLEAR
+						? &sClearPageQueue : &sFreePageQueue;
+				otherPageQueue->PrependUnlocked(otherPage);
+			}
 		}
 	}
 
@@ -3080,8 +3208,15 @@ vm_page_allocate_page_run(uint32 flags, page_num_t length,
 		boundaryMask = -boundary;
 	}
 
+	// Renga: a run that only the memory below 16 MiB can satisfy may use
+	// the low page reserve (page_reserve_for_priority())
+	const bool lowRestricted = end + sPhysicalPageOffset <= kLowPageLimit;
 	vm_page_reservation reservation;
-	vm_page_reserve_pages(&reservation, length, priority);
+	reservation.count = length;
+	if (length > 0) {
+		TA(ReservePages(length));
+		reserve_pages(length, priority, false, lowRestricted);
+	}
 
 	WriteLocker freeClearQueueLocker(sFreePageQueuesLock);
 
@@ -3091,6 +3226,18 @@ vm_page_allocate_page_run(uint32 flags, page_num_t length,
 	// the first iteration in this case.
 	int32 freePages = sUnreservedFreePages;
 	bool useCached = (freePages > 0) && ((page_num_t)freePages > (length * 2));
+
+	// Renga (roadmap F-61): a run that may lie anywhere (B_CONTIGUOUS,
+	// 32-bit DMA, LinuxKPI coherent buffers) is searched above 16 MiB first
+	// and only then from the requested start, so that it does not use up
+	// the memory below 16 MiB that only low-restricted runs can use.
+	page_num_t searchStart = requestedStart;
+	const page_num_t lowEnd = kLowPageLimit > sPhysicalPageOffset
+		? kLowPageLimit - sPhysicalPageOffset : 0;
+	if (!lowRestricted && requestedStart < lowEnd && lowEnd + length <= end)
+		searchStart = lowEnd;
+	const bool initialUseCached = useCached;
+	start = searchStart;
 
 	for (;;) {
 		if (alignmentMask != 0 || boundaryMask != 0) {
@@ -3114,7 +3261,14 @@ vm_page_allocate_page_run(uint32 flags, page_num_t length,
 				// The first iteration with free pages only was unsuccessful.
 				// Try again also considering cached pages.
 				useCached = true;
-				start = requestedStart;
+				start = searchStart;
+				continue;
+			}
+			if (searchStart != requestedStart) {
+				// Renga: nothing above 16 MiB, now the whole range
+				searchStart = requestedStart;
+				useCached = initialUseCached;
+				start = searchStart;
 				continue;
 			}
 
