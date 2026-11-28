@@ -4548,14 +4548,18 @@ TONE_SEARCH_STEP = 0.25
 
 def tone_search_offsets(hz, rate, window, spread):
 	"""The relative offsets tone_windows() tries for a candidate: from a
-	fifth of \a spread below it to \a spread above it, both ends included,
-	at most TONE_SEARCH_STEP of a bin apart."""
+	fifth of \a spread below it to \a spread above it, at most
+	TONE_SEARCH_STEP of a bin apart. Built from 0 outwards, so the
+	candidate itself and both ends are always tried: the candidates are
+	about 1 % apart, and without 0 an undrifted tone could score higher
+	at its lower neighbour's +1 % end than on its own grid."""
 	if spread <= 0:
 		return [0.0]
-	low = -spread / 5
 	step = TONE_SEARCH_STEP * rate / window
-	count = max(1, int(math.ceil((spread - low) * hz / step)))
-	return [low + (spread - low) * k / count for k in range(count + 1)]
+	def side(end):
+		count = max(1, int(math.ceil(abs(end) * hz / step)))
+		return [end * k / count for k in range(1, count + 1)]
+	return sorted(side(-spread / 5) + [0.0] + side(spread))
 
 
 def tone_windows(samples, rate, candidates, window, spread=0.0):

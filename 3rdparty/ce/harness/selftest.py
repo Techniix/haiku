@@ -868,6 +868,28 @@ expect("tone search: 4970 Hz 0 to +7500 ppm stays pure in every window",
 	len(labels) == 3 * len(sweep) and not weak,
 	"%d of %d windows weak; %s" % (len(weak), len(labels),
 		"; ".join(weak[:6])))
+# Review of the above: every candidate's grid holds its own frequency, so an
+# undrifted tone keeps its name (5020 Hz came out as 4970's +1 % and 5070
+# as 5020's, which hid a tone sound_audio.mirror_off_second must not hear).
+for name, candidates in (("sound", ce_test.SOUND_FREQUENCIES),
+		("media", ce_test.MEDIA_FREQUENCIES)):
+	samples = []
+	for hz in candidates:
+		samples += drifted_tone(hz, 0.2, 0, 0, hz)
+	labels = ce_test.tone_windows(samples, RATE, candidates, window,
+		ce_test.TONE_SPREAD)
+	wrong = ["%d Hz: %s" % (candidates[i // 2], label)
+		for i, (label, _, _) in enumerate(labels)
+		if label != candidates[i // 2]]
+	expect("tone search: undrifted %s candidates keep their names" % name,
+		len(labels) == 2 * len(candidates) and not wrong,
+		"; ".join(sorted(set(wrong))))
+for hz in (5020, 5070):
+	labels = ce_test.tone_windows(drifted_tone(hz, 0.5, 0, 600, hz), RATE,
+		ce_test.SOUND_FREQUENCIES, window, ce_test.TONE_SPREAD)
+	expect("tone search: an undrifted %d Hz tone is %d Hz" % (hz, hz),
+		all(label == hz for label, _, _ in labels),
+		str([(label, round(purity, 3)) for label, purity, _ in labels]))
 for ppm in (3200, 3252, 6911, 6961):
 	left = drifted_tone(4920, 2.0, ppm, 600, ppm)
 	right = drifted_tone(4970, 2.0, ppm, 600, ppm + 1)
