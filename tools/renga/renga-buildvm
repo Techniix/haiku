@@ -29,8 +29,9 @@
 #   stop              shut the guest down (QEMU quit after 60 s)
 #   status            is it running; disk sizes
 #
-# Environment: RENGA_BUILDVM_DIR (default: "buildvm" in the directory that
-# holds the tree, $(dirname <tree>)/buildvm), MEMORY (12G), CPUS (8),
+# Environment: RENGA_BUILDVM_DIR (default: $(dirname <main worktree>)/
+# buildvm/vm, the same from every worktree of the tree; on the maintainer's
+# host /home/Techniix/renga/buildvm/vm), MEMORY (12G), CPUS (8),
 # SSH_PORT (2222), DATA_SIZE (120G). The VM's files: system.image (raw BFS,
 # boot disk), data.qcow2 (the "Ports" volume, mounted at /Ports; ~/ports
 # links to /Ports/ports), ssh/id_ed25519 (client key),
@@ -51,7 +52,10 @@ caller_dir=$PWD	# host paths of put, get and screendump are relative to it
 # shellcheck source=tools/renga/lib.sh
 . "$(dirname "$0")/lib.sh"
 
-dir=${RENGA_BUILDVM_DIR:-$(dirname "$renga_root")/buildvm}
+# the main worktree (the first one git lists), else this tree
+main_tree=$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')
+[ -n "$main_tree" ] || main_tree=$renga_root
+dir=${RENGA_BUILDVM_DIR:-$(dirname "$main_tree")/buildvm/vm}
 MEMORY=${MEMORY:-12G}
 CPUS=${CPUS:-8}
 SSH_PORT=${SSH_PORT:-2222}
@@ -99,13 +103,15 @@ host_keys() {
 	ssh_strict=yes
 }
 
-# run_ssh <ssh|scp> <port option> [args]: the program with the VM's options
+# run_ssh <ssh|scp> <port option> [args]: the program with the VM's options;
+# key authentication only (BatchMode): never a password prompt, so a wrong
+# port or user fails at once instead of waiting on a terminal
 run_ssh() {
 	prog=$1 port_option=$2
 	shift 2
 	"$prog" -i "$key" "$port_option" "$SSH_PORT" \
 		-o "UserKnownHostsFile=$ssh_known" -o "StrictHostKeyChecking=$ssh_strict" \
-		-o LogLevel=ERROR -o ConnectTimeout=5 \
+		-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=5 \
 		-o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$@"
 }
 
@@ -143,16 +149,17 @@ monitor() {
 	EOF
 }
 
-# bfs_shell from this tree's build output, else from the main worktree's
-bfs_shell() {
-	main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
-	shell=
+# find_bfs_shell: sets bfs_shell_path to bfs_shell from this tree's build
+# output, else from the main worktree's; fails if neither is built. prepare
+# calls it before it copies the image, so a missing bfs_shell never leaves
+# an unedited system.image behind.
+find_bfs_shell() {
+	bfs_shell_path=
 	for f in "$RENGA_OUTPUT"/objects/*/*/release/tools/bfs_shell/bfs_shell \
-		"$main"/generated.x86_64/objects/*/*/release/tools/bfs_shell/bfs_shell; do
-		[ -x "$f" ] && { shell=$f; break; }
+		"$main_tree"/generated.x86_64/objects/*/*/release/tools/bfs_shell/bfs_shell; do
+		[ -x "$f" ] && { bfs_shell_path=$f; return 0; }
 	done
-	[ -n "$shell" ] || renga_die "bfs_shell not built (jam -q '<build>bfs_shell')"
-	"$shell" "$@"
+	renga_die "bfs_shell not built (jam -q '<build>bfs_shell')"
 }
 
 cmd=${1:-}
@@ -168,6 +175,7 @@ prepare)
 	[ -f "$1" ] || renga_die "no image $1"
 	running && renga_die "the VM is running; stop it first"
 	[ -e "$dir/system.image" ] && renga_die "$dir/system.image exists; remove it to start over (data.qcow2, the Ports volume, is kept)"
+	find_bfs_shell
 	mkdir -p "$dir/ssh"
 	[ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C renga-buildvm -f "$key"
 	work=$(mktemp -d)
@@ -196,7 +204,7 @@ prepare)
 		no_safemode
 	}
 	EOF
-	bfs_shell "$dir/system.image" > "$work/log" 2>&1 <<-EOF || true
+	"$bfs_shell_path" "$dir/system.image" > "$work/log" 2>&1 <<-EOF || true
 	rm /myfs/system/settings/launch/ce-harness
 	cp -f :$work/job /myfs/system/settings/launch/renga-buildvm
 	mkdir /myfs/home/config/settings/ssh
@@ -217,7 +225,7 @@ prepare)
 	# check the result in a second session: every file is listed
 	# ("<mode> <uid> <gid> <size> <date> <time> <name>"), the private keys
 	# with mode 600, and the harness job is gone
-	bfs_shell "$dir/system.image" > "$work/check" 2>&1 <<-EOF || true
+	"$bfs_shell_path" "$dir/system.image" > "$work/check" 2>&1 <<-EOF || true
 	ls /myfs/system/settings/launch
 	ls /myfs/home/config/settings/ssh
 	ls /myfs/system/settings/ssh
@@ -371,9 +379,17 @@ trust-host)
 		esac
 		echo "$type $value renga-buildvm-host" > "$dir/ssh/ssh_host_${name}_key.pub"
 	done
+	# every ssh/ssh_host_*_key.pub is new (refused above if one existed):
+	# when the keys cannot be used, they go again with the known_hosts made
+	# from them, so that a scan of the wrong server (another SSH_PORT) is
+	# not kept and trust-host can simply be run again
+	untrust() {
+		rm -f "$dir"/ssh/ssh_host_*_key.pub "$known_hosts"
+		renga_die "$1; removed the recorded host keys again. Check that SSH_PORT ($SSH_PORT) is this VM's port (start prints it; the guest's sshd must be up), then run trust-host again"
+	}
 	host_keys
-	[ "$ssh_strict" = yes ] || renga_die "no usable host keys recorded"
-	guest_n true || renga_die "SSH with the recorded host keys failed"
+	[ "$ssh_strict" = yes ] || untrust "no usable host keys recorded"
+	guest_n true || untrust "SSH with the recorded host keys failed (another server on 127.0.0.1:$SSH_PORT, or the guest's sshd did not answer)"
 	renga_note "recorded the guest's host keys in $dir/ssh; SSH now checks them ($known_hosts)"
 	;;
 

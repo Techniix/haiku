@@ -89,9 +89,10 @@ The system disk is a copy of a `renga-raw` image: its 1.4 GB BFS volume had abou
 sparse 120 GB qcow2 data disk (`DATA_SIZE`) holds the BFS volume "Ports" at `/Ports`: the ports trees
 (`~/ports` links to `/Ports/ports`), HaikuPorter's work directories, `TMPDIR` and a 16 GB swap file (6 GB
 allocated after the haikuwebkit build). Networking is QEMU's user mode; only SSH is forwarded
-(`127.0.0.1:2222`). Every drive is a file in the VM directory, `RENGA_BUILDVM_DIR` (default: `buildvm` in
-the directory that holds the tree, that is `$(dirname <tree>)/buildvm`; the maintainer's host sets
-`/home/Techniix/renga/buildvm/vm`).
+(`127.0.0.1:2222`). Every drive is a file in the VM directory, `RENGA_BUILDVM_DIR`. Its default is
+`buildvm/vm` next to the main worktree, `$(dirname <main worktree>)/buildvm/vm`, which is the same from every
+linked worktree; on the maintainer's host that is `/home/Techniix/renga/buildvm/vm`, so no setting is needed
+there. `buildvm/` itself holds the other build-VM files (packages, test trees).
 
 ```sh
 # once (any recent renga-raw build; a harness image is fine)
@@ -119,7 +120,8 @@ package's post-install script does not finish on a first boot without a user ses
 never start), and adds a boot job that mounts "Ports" and writes `BUILDVM-READY`, the network setup and
 the volumes to `serial.log`. It then lists the image's files with `bfs_shell` and fails (removing the
 half-made `system.image`) unless the boot job, `authorized_keys` and the host keys (private keys mode 600)
-are there and the harness job is gone. `prepare` refuses while `system.image` exists; it creates
+are there and the harness job is gone. It looks up `bfs_shell` before copying anything, so a missing one
+leaves no `system.image`. `prepare` refuses while `system.image` exists; it creates
 `data.qcow2` only when there is none, so preparing again after removing `system.image` keeps the "Ports"
 volume and everything on it. To start the data disk over as well, remove `data.qcow2` by hand.
 
@@ -128,7 +130,9 @@ every command writes `ssh/known_hosts` from them as `[localhost]:<SSH_PORT>` and
 and connects with `StrictHostKeyChecking=yes`. A VM directory prepared before this has no host keys on
 the host: the tool then still works, without the check and with a warning on each command, until
 `renga-buildvm trust-host` (once, while the VM runs) records the guest's keys with `ssh-keyscan` on
-127.0.0.1 (trust on first use over loopback). `setup` initialises the data disk only when it is not
+127.0.0.1 (trust on first use over loopback). It then connects with them; if that fails (for example a
+wrong `SSH_PORT` reached another server), it removes the keys it wrote and says so: fix `SSH_PORT` and run
+it again. `setup` initialises the data disk only when it is not
 the boot device and its first 4 MiB compare equal to zeros (`cmp`); any error counts as "not empty". The root user is `baron`, home `/boot/home`. An SSH session has no
 `LIBRARY_PATH`: set the whole list when overriding it (see the test below). Check `pkgman`'s plan before
 applying it: the image also lists upstream Haiku's repository, and a plan that replaces the `haiku`
@@ -162,7 +166,8 @@ hey WebPositive quit
 LIBRARY_PATH=/boot/home/<name>test/lib:%A/lib:/boot/home/config/non-packaged/lib:/boot/home/config/lib:/boot/system/non-packaged/lib:/boot/system/lib \
   /boot/system/apps/WebPositive http://127.0.0.1:8000/index.html &
 ```
-Serve pages with `python3 -m http.server` in the guest.
+Serve pages in the guest with `python3 -m http.server -b 127.0.0.1 8000` (run in the pages' directory): the
+`-b 127.0.0.1` is needed in the guest.
 `renga-buildvm screendump shot.png` takes a screenshot (QEMU monitor); the guest's sound is recorded to
 `audio.wav` in the VM directory (virtio-sound, written only while a stream plays). The screen saver
 blanks the display after a long build: run `/boot/system/non-packaged/bin/ce_screensaver_off` (harness
