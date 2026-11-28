@@ -391,6 +391,141 @@ BackupTable(const char* devicePath, const char* backupPath)
 }
 
 
+bool
+TableExceedsDisk(const DiskInfo& disk, BString& why)
+{
+	for (const PartitionInfo& partition : disk.partitions) {
+		if (partition.offset + partition.size > disk.size) {
+			why.SetToFormat("partition %" B_PRId32 " ends at %s, past the "
+				"disk's %s", partition.index,
+				SizeString(partition.offset + partition.size).String(),
+				SizeString(disk.size).String());
+			return true;
+		}
+	}
+	int fd = open(disk.path.String(), O_RDONLY);
+	if (fd < 0)
+		return false;
+	uint32 blockSize = disk.blockSize > 0 ? disk.blockSize : 512;
+	uint8 mbr[512];
+	uint8* gpt = (uint8*)malloc(blockSize);
+	bool exceeds = false;
+	if (read_exactly(fd, mbr, sizeof(mbr), 0) == B_OK
+		&& mbr[510] == 0x55 && mbr[511] == 0xaa) {
+		// the four primary entries (a GPT's protective entry, type 0xee,
+		// covers the whole disk or more by design)
+		for (int i = 0; i < 4 && !exceeds; i++) {
+			const uint8* entry = mbr + 446 + i * 16;
+			uint32 start, count;
+			memcpy(&start, entry + 8, 4);
+			memcpy(&count, entry + 12, 4);
+			if (entry[4] != 0 && entry[4] != 0xee
+				&& ((off_t)start + count) * 512 > disk.size) {
+				why.SetToFormat("MBR entry %d ends at %s, past the disk's %s",
+					i, SizeString(((off_t)start + count) * 512).String(),
+					SizeString(disk.size).String());
+				exceeds = true;
+			}
+		}
+	}
+	if (!exceeds && gpt != NULL
+		&& read_exactly(fd, gpt, blockSize, blockSize) == B_OK
+		&& memcmp(gpt, "EFI PART", 8) == 0) {
+		uint64 alternate, lastUsable;
+		memcpy(&alternate, gpt + 32, 8);
+		memcpy(&lastUsable, gpt + 48, 8);
+		uint64 blocks = disk.size / blockSize;
+		if (alternate >= blocks || lastUsable >= blocks) {
+			why.SetToFormat("its GPT header is for a disk of %s, the disk "
+				"has %s", SizeString((std::max(alternate, lastUsable) + 1)
+					* blockSize).String(), SizeString(disk.size).String());
+			exceeds = true;
+		}
+	}
+	free(gpt);
+	close(fd);
+	return exceeds;
+}
+
+
+status_t
+WipeTable(const char* devicePath, const char* backupDir, bool allowRealDisks,
+	BString& log, BString* newDevicePath)
+{
+	if (newDevicePath != NULL)
+		*newDevicePath = devicePath;
+	DiskInfo disk;
+	status_t status = GetDisk(devicePath, disk);
+	if (status != B_OK) {
+		log << "refused: " << devicePath << ": no such disk\n";
+		return status;
+	}
+	BString why;
+	if (disk.isBootDisk)
+		why = "this is the disk the running system started from";
+	else if (disk.readOnly)
+		why = "the disk is read-only";
+	else if (!disk.isFile && !allowRealDisks)
+		why = "not a disk image: real disks need --allow-real-disks";
+	for (const PartitionInfo& partition : disk.partitions) {
+		if (why.Length() == 0 && partition.mounted)
+			why = "a partition of the disk is mounted";
+	}
+	if (why.Length() > 0) {
+		log << "refused: " << why << "\n";
+		return B_NOT_ALLOWED;
+	}
+
+	BString leaf(disk.path);
+	leaf.ReplaceAll('/', '_');
+	char stamp[32];
+	time_t now = time(NULL);
+	strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", localtime(&now));
+	BString backupPath;
+	backupPath.SetToFormat("%s/%s-%s-wipe.table", backupDir, leaf.String(),
+		stamp);
+	status = BackupTable(disk.path.String(), backupPath.String());
+	if (status != B_OK) {
+		log << "refused: the partition table could not be saved ("
+			<< strerror(status) << ")\n";
+		return status;
+	}
+	log << "table saved: " << backupPath << "\n";
+
+	int fd = open(disk.path.String(), O_RDWR);
+	if (fd < 0)
+		return errno;
+	off_t size = device_size(fd);
+	off_t area = std::min(kTableArea, size / 2);
+	char* zeros = (char*)calloc(1, area);
+	status = zeros != NULL ? B_OK : B_NO_MEMORY;
+	if (status == B_OK)
+		status = write_exactly(fd, zeros, area, 0);
+	if (status == B_OK)
+		status = write_exactly(fd, zeros, area, size - area);
+	fsync(fd);
+	close(fd);
+	free(zeros);
+	log << "first and last " << SizeString(area) << " cleared: "
+		<< strerror(status) << "\n";
+
+	// the system reads the table again: an image is attached again
+	BDiskDevice device;
+	BPath imageFile;
+	if (status == B_OK && get_device(disk.path.String(), device) == B_OK
+		&& device.IsFile() && device.GetFilePath(&imageFile) == B_OK) {
+		BDiskDeviceRoster roster;
+		roster.UnregisterFileDevice(device.ID());
+		BString path;
+		status = AttachImage(imageFile.Path(), path);
+		if (status == B_OK && newDevicePath != NULL)
+			*newDevicePath = path;
+	} else if (status == B_OK)
+		log << "the cleared table is read at the next restart\n";
+	return status;
+}
+
+
 status_t
 RestoreTable(const char* devicePath, const char* backupPath,
 	BString* newDevicePath)
@@ -553,6 +688,15 @@ Plan::Check(BString& why) const
 	if (fOperations.empty()) {
 		why = "nothing to do";
 		return B_BAD_VALUE;
+	}
+	// changing a table that describes a larger disk crashed libbe
+	// (BPartition::Delegate::Uninitialize, 20261128-003328)
+	BString exceeds;
+	if (TableExceedsDisk(disk, exceeds)) {
+		why.SetToFormat("the partition table describes a larger disk (%s); "
+			"clear it first with \"rengadisk wipe %s\" (the table is saved "
+			"before)", exceeds.String(), disk.path.String());
+		return B_BAD_DATA;
 	}
 
 	// the partitions as each step leaves them (by index; mounted or not)

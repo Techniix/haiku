@@ -33,6 +33,13 @@
 	                                refused by Check() and Apply() before
 	                                the table backup; the disk's own ID
 	                                passes Check() (the engine directly)
+	  disk_engine.refuses_larger_table
+	                                an image whose GPT was made for a
+	                                larger disk (128 MiB, cut to 64 MiB):
+	                                a new table is refused ("describes a
+	                                larger disk"; changing it crashed
+	                                libbe), "rengadisk wipe" clears it
+	                                (saved first), then a new table works
 	  disk_engine.restore           a saved table written back brings a
 	                                deleted partition back
 	  disk_engine.format            partition 0 formatted as BFS named Data
@@ -388,6 +395,80 @@ main()
 			&& lines.FindFirst("\"Data\"") >= 0,
 		"exit %d: %s; disk: %s", status, one_line(formatted).String(),
 		one_line(lines).String());
+
+	// a table for a larger disk (review of PR #42): refused, then wiped
+	{
+		BString larger = home.Path();
+		larger << "/disk-engine-larger.img";
+		int largerFD = open(larger.String(), O_CREAT | O_RDWR | O_TRUNC,
+			0644);
+		bool made = largerFD >= 0
+			&& ftruncate(largerFD, 128 * 1024 * 1024) == 0;
+		if (largerFD >= 0)
+			close(largerFD);
+		BString arguments;
+		arguments << "attach '" << larger << "'";
+		BString big = tool(arguments.String(), &status);
+		big.Trim();
+		arguments = "";
+		arguments << "plan " << big << " table:gpt create:100M:big --apply "
+			"--backup-dir '" << backups << "'";
+		BString made100 = tool(arguments.String(), &status);
+		made = made && status == 0;
+		arguments = "";
+		arguments << "detach '" << larger << "'";
+		tool(arguments.String(), &status);
+		made = made && status == 0 && truncate(larger.String(),
+			64 * 1024 * 1024) == 0;
+		arguments = "";
+		arguments << "attach '" << larger << "'";
+		BString cut = tool(arguments.String(), &status);
+		cut.Trim();
+		made = made && status == 0 && cut.StartsWith("/dev/disk");
+
+		arguments = "";
+		arguments << "plan " << cut << " table:gpt --apply --backup-dir '"
+			<< backups << "'";
+		int refusedStatus = -1;
+		BString refusedOutput = tool(arguments.String(), &refusedStatus);
+
+		arguments = "";
+		arguments << "wipe " << cut << " --backup-dir '" << backups << "'";
+		int wipeStatus = -1;
+		BString wiped = tool(arguments.String(), &wipeStatus);
+		// its last line is the disk's path (an image is attached again)
+		BString wipedPath = cut;
+		int32 at = wiped.FindLast("/dev/disk");
+		if (at >= 0) {
+			wiped.CopyInto(wipedPath, at, wiped.Length() - at);
+			wipedPath.Trim();
+		}
+
+		arguments = "";
+		arguments << "plan " << wipedPath << " table:gpt --apply "
+			"--backup-dir '" << backups << "'";
+		int afterStatus = -1;
+		BString after = tool(arguments.String(), &afterStatus);
+		BString afterLines = disk_lines(wipedPath);
+
+		report("refuses_larger_table", made && refusedStatus == 1
+				&& refusedOutput.FindFirst("describes a larger disk") >= 0
+				&& refusedOutput.FindFirst("rengadisk wipe") >= 0
+				&& wipeStatus == 0 && wiped.FindFirst("table saved") >= 0
+				&& afterStatus == 0
+				&& afterLines.FindFirst("GUID Partition Map") >= 0,
+			"prepared %d (%s); new table on the cut image: exit %d: %s; "
+			"wipe: exit %d: %s; new table after: exit %d: %s",
+			made, one_line(made100).String(), refusedStatus,
+			one_line(refusedOutput).String(), wipeStatus,
+			one_line(wiped).String(), afterStatus,
+			one_line(after).String());
+
+		arguments = "";
+		arguments << "detach '" << larger << "'";
+		tool(arguments.String(), &status);
+		unlink(larger.String());
+	}
 
 	BString detachArgs;
 	detachArgs << "detach '" << image << "'";

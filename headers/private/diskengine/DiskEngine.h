@@ -92,6 +92,27 @@ status_t BackupTable(const char* devicePath, const char* backupPath);
 status_t RestoreTable(const char* devicePath, const char* backupPath,
 	BString* newDevicePath = NULL);
 
+/*!	Whether the disk's partition table describes a larger disk than it is
+	(a GPT header or table whose end, an MBR entry, or a partition, beyond
+	the disk's end: an image for a larger disk written to a smaller
+	stick). \a why says what. Plans refuse such a disk: changing its table
+	crashed libbe (BPartition::Delegate::Uninitialize); WipeTable() clears
+	it.
+*/
+bool TableExceedsDisk(const DiskInfo& disk, BString& why);
+
+/*!	Clears the partition table of the disk at \a devicePath: the first and
+	last MiB (MBR, GPT header and table, GPT backup) are saved into
+	\a backupDir first (RestoreTable() puts them back), then zeroed. The
+	plan's safety rules apply: never the running system's disk, a
+	read-only one or one with a mounted partition; disk images only unless
+	\a allowRealDisks. An image is attached again so that the system reads
+	the cleared table (\a newDevicePath gets its new path). \a log gets
+	what was done.
+*/
+status_t WipeTable(const char* devicePath, const char* backupDir,
+	bool allowRealDisks, BString& log, BString* newDevicePath = NULL);
+
 //!	Disk system names: "gpt", "mbr", "bfs", "fat32" -> pretty names.
 const char* DiskSystemName(const char* shortName);
 

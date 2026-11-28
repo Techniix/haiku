@@ -1142,7 +1142,7 @@ Required capabilities (maintainer, 2026-11-09), with design notes:
 | Status | Engine first part **QEMU Tested**; GUI part 1 (DriveSetup pending changes, batch 13, #16) **QEMU Tested**; rest **Designed** |
 | Completed | Engine first part: `libdiskengine.a` (`headers/private/diskengine/DiskEngine.h`) and `rengadisk`: list disks with detected systems and warnings, attach images, planned steps (table, create, delete, format, name) with a preview, safety rules (never the boot disk, read-only or mounted, images only unless allowed), table backup, journal, restore (images). Design (audit section 7): grow DriveSetup; pending-changes queue with one Apply; safety rules (queue, fsck before shrink, no resize while mounted, table backup before Apply, disk-image tests only) |
 | Remaining | The partition manager GUI on the engine (DriveSetup revamp, pending-changes queue with one Apply, switches); restore on real disks (no userland rescan: after a restart); resize; userland `ValidateResizeChild`/`ResizeChild` (4); GPT attributes and backup repair (4); ext4/exFAT format (5); pending queue + resize UI (5); BFS resize unmounted (6); GPT move (6); SMART (6) |
-| Known bugs/limitations | Not applicable |
+| Known bugs/limitations | Not applicable libbe crashes (`BPartition::Delegate::Uninitialize`) when a table that describes a larger disk is changed (20261128-003328); the engine refuses such disks (`TableExceedsDisk`) and `rengadisk wipe` clears them. |
 | Dependencies | `F-01` (disk-image tests) |
 | Difficulty | 4-6 by item |
 | Risk | High (data loss) |
