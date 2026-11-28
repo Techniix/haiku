@@ -1,0 +1,55 @@
+# Alpine Linux packages for the Flatpak layer of the harness's Linux root
+# (build-flatpak-root.sh; batch 14, Flatpak step 1): flatpak and ostree with
+# the shared libraries they load, as "apk add flatpak" brings them, except
+# the helper programs Flatpak only starts (bubblewrap, which Renga's bwrap
+# replaces; xdg-dbus-proxy; fuse3; the gpg, gpg-agent and gpgsm programs gpgme
+# runs; desktop-file-utils, gtk-update-icon-cache and shared-mime-info for
+# the install triggers). busybox-static is not installed into the root: it
+# is the test runtime's shell (build-flatpak-root.sh). The packages
+# alpine.pins already has (libffi, acl-libs, libattr, ...) are not repeated.
+# Same format as alpine.pins; update-pins.py brings the versions up to date.
+branch v3.24
+community appstream-1.1.2-r0.apk 9cfd806eef4abd147bfdcb1089e3009f274ac5e01e9de7a70530e3a8c66c9523
+main brotli-libs-1.2.1-r0.apk 62a7e37e43bbfc1f8525a00ad2125fd5897135dc93b849733884cb78ffd8e26c
+main c-ares-1.34.9-r0.apk 3539a3e11c1ef1516117d8179a546ac882086e94e0d78ad51d687b3fa2b3b5f2
+community dconf-0.49.0-r1.apk 5f51b8af4ac032445708b4c70127c79ed0f7ecf533cb8db4f202347d45004228
+community flatpak-1.16.6_git20261120-r0.apk a877eefe48a82a616439f60f55d115e90018668bba65eb06716309c8c1861080
+main fontconfig-2.17.1-r1.apk 7634cf2fb1066ec97c8f41ec90ec9f036540e056276b7bf9a10dc4ec9e44d238
+main freetype-2.14.3-r0.apk 09d76fde675a9ca3cfeb83d72fb09cb2e9ccf79b2937daa05a1af9a37a6b7815
+main fuse3-libs-3.18.3-r0.apk 5455c41da8abb45ece2c7bf74cb9a9f5758d9ba17118cb85a2bc5ebef159bcfa
+community gdk-pixbuf-2.44.7-r1.apk 71c422b35822af144fbc14baf7308fa6bd59c490b19842de93aef4ed46c88422
+main glib-2.88.4-r0.apk bde649b4bdef101b8f08e269eb2de0ce03172a3d191cadcfca7aea55e31bc1a2
+community gpgme-2.3.1-r0.apk 1371f20a06716c95f4a4d831e0f7e027595dee6a1be7334effe02a080aeef8e9
+community json-glib-1.10.8-r0.apk c213f9fd6b9717f2baec2ddf930ffb70227894e5db633ca73bb9b61e91a45808
+main lcms2-2.19-r0.apk b4cb038af3c2f02bedd8456ae876c97ac0a9f29789add77871bfd6ce084ff136
+main libarchive-3.8.11-r0.apk 275ca3b65a540656c91f776a7e0f3ceee5240982218d16b6acba7d040f765599
+main libassuan-3.0.2-r0.apk 785f314ba8d612ce2f03273ff5455a50383e7b6f2c6bf4b12a28d20ed5662a4a
+main libblkid-2.42.3-r1.apk 2512c2bff496ac2b8561a3c814d21d35ce10cda579b3d410f9f96da93a5aaac1
+main libbz2-1.0.8-r6.apk 2737e2b23ed08d4911ee62cd0163b5f4bf0379cacf4dc35b23a00209584c98fd
+main libcap2-2.78-r0.apk 42886a7b4bcde26347c712925c8dc7db202b6029ef9b8c7ee81577ab7bdd8fad
+main libcurl-8.23.0-r0.apk 1f70ca404818805a6465b615bbfe84ef861488a963d7e630108ebd7fbaa51665
+main libeconf-0.8.3-r0.apk 2a791c7957961f830cf31b04f35f814a63afcf633badc9052425ff1cf2f64380
+community libelogind-255.24-r0.apk 5f9d90571f5f097cb1067b73e0ae3b58778b974c67b574b257ecbad09f8c32ef
+main libexpat-2.11.0-r0.apk 3779d8b0dfac33f82fd4ca0749318066e6beabe77cd788aa2d9f502e74a87b07
+community libfyaml-0.9.5-r1.apk ea8f2a2dd2267ee64d146b48fef23c347140d5be3f7edf77f46499bd2d696bea
+main libgcc-15.2.0-r5.apk 393dcd32629f06d7d85409c272d142d0c082772d10b87ef55ee82f47de3be637
+community libglycin-2.1.5-r0.apk 3541d1a5d4d2599d145904f4febf26e56942403b6d80834461e196636b35b280
+main libgpg-error-1.61-r0.apk 580b80e679adda234e5d36e7633023c25cf20ce9fcf3ee8f9dd85ba578d886b6
+main libidn2-2.3.8-r0.apk 7d038ac558dde464964b033ce5126dd2eaf84cc414dc15e77c5424a321d0ebee
+main libintl-1.0-r0.apk cb03919cba5624b5e8759d04f3b31913b02585355988b914bc31de4746ff5ef6
+main libmount-2.42.3-r1.apk e2ae003260f2c1ec13666c6e108d5e8e3d64974b0667166a02432bd3be263a7a
+main libpng-1.6.59-r0.apk d16aeb0597f2bc43e0583ac9ff779388ec160c3e22568b640122e94ba55be6d7
+main libpsl-0.21.5-r3.apk ec665a344b6e887f00f0a47015cc732c3a281b69e84641dc8662ea234fde6cdb
+main libseccomp-2.6.1-r0.apk b22ccfe8cb072e4c8d3bc17222eeda132e270ce6258c27622acb193bf27b48e1
+main libunistring-1.4.2-r0.apk 3aa6030e603e34d96192742f327c0509f409c6769ce2e7b1463685dede38d714
+main libxau-1.0.12-r0.apk 3506cdba7ed916a6f814a010fbb127dbfdae4147107f64a15f5fa2651c5d8510
+main libxml2-2.13.9-r5.apk b7d56295eab909875e724992b53ccc242fa792b40d682f303595f958a97b0224
+community libxmlb-0.3.27-r0.apk 568d6dc7a424febadbfac38eab35a922fb73e9c99bec5ca42bcd656c960f27df
+main lz4-libs-1.10.0-r1.apk 3ad4912ab8ecf5f6236fdb751f88243006b3a8f152684e455b781e16284dd298
+main nghttp2-libs-1.70.0-r0.apk f0c4014eb2f10308dcdfd84cd49c121673c7b78cb8182b6e7a1388d8ae112a3b
+community ostree-2025.7-r1.apk 99ad2cc3b45fe13d21db12da882d544d97d58267b17c4affa16369158e76d53f
+main pcre2-10.49-r0.apk 2919897914820f42a17a8d7d37df310d2dfad1c82ebe5f539cc5c765f916752a
+community polkit-elogind-libs-127-r2.apk 8194ea9f3beb3931361db7c6a91e75a3dc2c87f438b41d57b8ad40b171c326c9
+main xz-libs-5.8.4-r0.apk ab362dd515ead04c31a6c302163248da7aa4813e283c971e6dd3f789b453a1d9
+main zstd-libs-1.6.0-r1.apk 69243fd7b0633f20fee47ccf566ecfe2802a7a9d18700f10abc54aa8060774ab
+main busybox-static-1.37.0-r31.apk b0d6cfc585d7fdd12df359cc5d38d5e45894e9e9e78c4059eb41577d022ec734

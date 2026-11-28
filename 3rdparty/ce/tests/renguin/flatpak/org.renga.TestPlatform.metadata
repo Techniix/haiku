@@ -1,0 +1,4 @@
+[Runtime]
+name=org.renga.TestPlatform
+runtime=org.renga.TestPlatform/x86_64/1
+sdk=org.renga.TestPlatform/x86_64/1
