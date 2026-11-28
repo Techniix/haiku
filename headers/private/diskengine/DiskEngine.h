@@ -154,11 +154,17 @@ public:
 	//!	\a log gets one line per step (also written to the journal).
 			status_t			Apply(const char* backupDir, BString& log,
 									BString* backupPath = NULL);
+	//!	Where Apply()'s latest kCreatePartition step put its partition
+	//!	(the disk's offset), or -1: front ends find the partition they
+	//!	asked for by it, not by its name (the Installer's wizard).
+			off_t				CreatedOffset() const
+									{ return fCreatedOffset; }
 
 private:
 			BString				fDevicePath;
 			bool				fAllowRealDisks;
 			std::vector<Operation> fOperations;
+			off_t				fCreatedOffset;
 };
 
 

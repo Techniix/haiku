@@ -131,6 +131,9 @@ private:
 			bool				_MakeChoice(WizardChoice& choice);
 			void				_FillSummary();
 			bool				_ConfirmDiskErase();
+			bool				_SummaryStillValid();
+			void				_RefuseWhileApplying();
+			void				_KeepBackupOnTarget();
 			void				_StartInstallation();
 			void				_PlanApplied(BMessage* message);
 			void				_StartCopy(partition_id target,
@@ -172,6 +175,7 @@ private:
 			DiskBarView*		fAfterBar;
 			BStringView*		fAfterLabel;
 			BCheckBox*			fLeanCheckBox;
+			BTextView*			fSummaryNote;
 
 			// Progress and Finish
 			BTextView*			fProgressText;
@@ -186,6 +190,10 @@ private:
 			bool				fInstalling;
 			bool				fInstalled;
 			bool				fDriveSetupRunning;
+			bool				fApplying;		// the disk plan runs
+			BString				fBackupPath;	// its table backup
+			partition_id		fTarget;
+			firmware_kind		fFirmware;
 			BMessageRunner*		fAutoRunner;
 };
 

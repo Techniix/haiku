@@ -46,6 +46,7 @@ struct WizardChoice {
 			install_mode		mode;			// existing, manual: for a
 												// volume that is not empty
 			bool				lean;
+			firmware_kind		firmware;		// running_firmware()
 };
 
 
@@ -60,6 +61,9 @@ struct WizardSummary {
 												// goes onto
 			BStringList			changes;		// the Summary page's list
 			BStringList			warnings;		// detected-system warnings
+			BString				startNote;		// how the new system is
+												// started, if not by
+												// itself (Finish page)
 			std::vector<DiskSegment> before;
 			std::vector<DiskSegment> after;
 };

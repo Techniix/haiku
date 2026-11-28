@@ -28,7 +28,8 @@ WizardChoice::WizardChoice()
 	destination(WIZARD_ERASE_DISK),
 	target(-1),
 	mode(INSTALL_MODE_ASK),
-	lean(false)
+	lean(false),
+	firmware(FIRMWARE_UNKNOWN)
 {
 }
 
@@ -132,6 +133,23 @@ summarize_new_volume(const WizardChoice& choice, WizardSummary& summary,
 	const RengaDisk::DiskInfo& disk = summary.disk;
 	destination_layout layout = choice.destination == WIZARD_ERASE_DISK
 		? DESTINATION_ERASE_DISK : DESTINATION_FREE_SPACE;
+	if (!valid_volume_name(choice.volumeName.String(), why))
+		return B_BAD_VALUE;
+	if (layout == DESTINATION_ERASE_DISK && choice.firmware != FIRMWARE_UEFI) {
+		// The erase layout is GPT with an EFI system partition, which a
+		// BIOS does not start: wiping the disk would leave a computer
+		// that cannot start anything (review of PR #42).
+		why.SetToFormat(B_TRANSLATE("%s Erasing a disk makes a GUID "
+			"partition table with an EFI system partition, which a BIOS "
+			"cannot start. Choose \"Set up partitions by hand\" instead "
+			"(DriveSetup: an Intel partition map with an active Be File "
+			"System partition), then that volume."),
+			choice.firmware == FIRMWARE_BIOS
+				? B_TRANSLATE("This computer was started by a BIOS.")
+				: B_TRANSLATE("How this computer was started could not be "
+					"told."));
+		return B_NOT_SUPPORTED;
+	}
 	summary.plan = RengaDisk::Plan(disk.path.String());
 	summary.plan.AllowRealDisks(true);
 	status = make_destination_plan(disk, layout,
@@ -155,13 +173,12 @@ summarize_new_volume(const WizardChoice& choice, WizardSummary& summary,
 			"everything on it is lost"), disk.path.String(),
 			describe_disk(disk).String());
 		summary.changes.Add(line);
-		for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
-			BString name = partition.contentName.Length() > 0
-				? partition.contentName : partition.name;
-			line.SetToFormat(B_TRANSLATE("  Lost: \"%s\", %s%s%s"),
-				name.String(), RengaDisk::SizeString(partition.size).String(),
-				partition.system.Length() > 0 ? ", " : "",
-				partition.system.String());
+		// every volume, logical partitions in an extended one too
+		BStringList lost;
+		disk_volume_descriptions(disk, lost);
+		for (int32 i = 0; i < lost.CountStrings(); i++) {
+			line.SetToFormat(B_TRANSLATE("  Lost: %s"),
+				lost.StringAt(i).String());
 			summary.changes.Add(line);
 		}
 	} else {
@@ -185,12 +202,29 @@ summarize_new_volume(const WizardChoice& choice, WizardSummary& summary,
 			"\"%s\""), choice.volumeName.String());
 	} else {
 		line.SetToFormat(B_TRANSLATE("Write the boot sector of \"%s\"; the "
-			"disk's EFI system partitions are not changed (Tools > Install "
-			"EFI loader in the classic window)"), choice.volumeName.String());
+			"disk's EFI system partitions are not changed"),
+			choice.volumeName.String());
+		if (choice.firmware == FIRMWARE_UEFI) {
+			if (!disk_has_haiku_efi_loader(disk)) {
+				summary.startNote.SetToFormat(B_TRANSLATE("The new system "
+					"will not start until %s's EFI loader is installed: no "
+					"EFI system partition on this disk has it. Install it "
+					"with Tools > Install EFI loader in the classic "
+					"window."), DISTRO_NAME);
+			}
+		} else {
+			summary.startNote = B_TRANSLATE("This computer was started by a "
+				"BIOS: start the new system from the boot menu, which Boot "
+				"Manager sets up (Tools > Set up boot menu in the classic "
+				"window).");
+		}
 	}
 	summary.changes.Add(line);
-	summary.changes.Add(B_TRANSLATE("The partition table is saved first "
-		"(~/config/settings/Renga/disk-backups, rengadisk restore); "
+	if (summary.startNote.Length() > 0)
+		summary.changes.Add(summary.startNote);
+	summary.changes.Add(B_TRANSLATE("The partition table is saved first, on "
+		"the installation medium (~/config/settings/Renga/disk-backups, "
+		"rengadisk restore), and copied onto the new volume afterwards; "
 		"overwritten partition contents cannot be restored"));
 	add_warnings(disk, summary);
 	return B_OK;

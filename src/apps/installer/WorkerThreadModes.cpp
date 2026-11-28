@@ -521,8 +521,9 @@ WorkerThread::_WriteActivatedPackages(const BPath& target)
 /*!	Whether the file at \a path is Haiku's or Renga's EFI boot loader: a PE
 	file that says "Haiku revision" and "boot loader!" (the loader's welcome
 	line, "Welcome to the Haiku boot loader!" or "... Renga ...").
+	(InstallationInfo.h; the wizard's summary uses it too.)
 */
-static bool
+bool
 is_haiku_efi_loader(const char* path)
 {
 	BFile file(path, B_READ_ONLY);

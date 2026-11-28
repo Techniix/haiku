@@ -28,6 +28,7 @@
 #include <DiskEngine.h>
 #include <Path.h>
 #include <String.h>
+#include <StringList.h>
 
 #include <vector>
 
@@ -96,6 +97,54 @@ status_t disk_segments_planned(const RengaDisk::DiskInfo& disk,
 	if more than one has it (\a count gets how many do).
 */
 partition_id find_volume_named(const char* name, int32* count = NULL);
+
+/*!	Whether \a now is still the disk \a planned describes: the same
+	device, size, partition table and partitions (offset, size, type,
+	name, content and volume name). The wizard checks it when Install is
+	pressed, so that a plan never runs on a disk that changed after its
+	summary was shown (another stick in the same port, DriveSetup started
+	from the Deskbar). \a why gets the first difference.
+*/
+bool same_disk_layout(const RengaDisk::DiskInfo& planned,
+	const RengaDisk::DiskInfo& now, BString& why);
+
+/*!	The partition a plan created on the disk at \a diskPath: the one at
+	\a offset (RengaDisk::Plan::CreatedOffset()), with a file system.
+	-1 if there is none.
+*/
+partition_id created_partition(const char* diskPath, off_t offset);
+
+//!	Whether \a name can name a new BFS volume (1 to 31 bytes, no '/');
+//!	\a why says what is wrong.
+bool valid_volume_name(const char* name, BString& why);
+
+/*!	The volumes on the disk at \a diskPath, on every level (logical
+	partitions inside an extended one too): "<name>, <size>[, <system>]"
+	for the erase confirmation's list of what is lost.
+*/
+void disk_volume_descriptions(const RengaDisk::DiskInfo& disk,
+	BStringList& descriptions);
+
+//!	How the running system was started.
+enum firmware_kind {
+	FIRMWARE_UNKNOWN,
+	FIRMWARE_BIOS,
+	FIRMWARE_UEFI
+};
+
+/*!	The firmware that started the running system: BIOS when the boot loader
+	passed the VESA mode list (the vesa graphics driver publishes
+	/dev/graphics/vesa), UEFI when it passed only a frame buffer (the
+	framebuffer driver publishes /dev/graphics/framebuffer, as on UEFI
+	machines), unknown otherwise.
+*/
+firmware_kind running_firmware();
+const char* firmware_name(firmware_kind firmware);
+
+//!	Whether an EFI system partition of \a disk holds Haiku's or Renga's
+//!	EFI loader (EFI/BOOT, EFI/HAIKU or EFI/RENGA); unmounted ones are
+//!	mounted read-only for the look.
+bool disk_has_haiku_efi_loader(const RengaDisk::DiskInfo& disk);
 
 //!	Where the Installer keeps the disk engine's table backups and journals
 //!	(~/config/settings/Renga/disk-backups), created if needed.

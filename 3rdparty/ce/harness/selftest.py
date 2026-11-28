@@ -626,62 +626,94 @@ for name, args, wanted in [
 
 wizardDirectory = tempfile.mkdtemp()
 wizardPath = os.path.join(wizardDirectory, "wizard.img")
-problem = ce_test.make_spare_disk(wizardPath, disk=ce_test.WIZARD_DISK)
+
+
+def make_wizard_disk(state):
+	"""The wizard disk as the guest may leave it: "blank" (its marker),
+	"partial" (written, no completion marker), "complete"."""
+	problem = ce_test.make_spare_disk(wizardPath, disk=ce_test.WIZARD_DISK)
+	if problem is None and state != "blank":
+		with open(wizardPath, "r+b") as disk:
+			disk.write(b"\0" * 512)
+			if state == "complete":
+				disk.seek(ce_test.WIZARD_COMPLETE_OFFSET)
+				disk.write(ce_test.WIZARD_COMPLETE_MARKER)
+	return problem
+
+
+problem = make_wizard_disk("blank")
 with open(wizardPath, "rb") if problem is None else open(os.devnull, "rb") \
 		as wizardFile:
 	start = wizardFile.read(len(ce_test.WIZARD_DISK[2]))
 expect("wizard disk: a sparse 4 GiB file with its marker", problem is None
 	and os.path.getsize(wizardPath) == ce_test.WIZARD_DISK[1]
 	and start == ce_test.WIZARD_DISK[2], str(problem))
-# not installed (marker still there): no boot, the disk removed, and the
-# check fails saying so
-wizardReport = {}
+os.remove(wizardPath)
+
 booted = []
 savedBoot = ce_test.boot
 ce_test.boot = lambda args, *a, **k: booted.append(dict(k,
-	firmware=args.firmware, disk_bus=args.disk_bus, stall=args.stall)) \
-	or True
+	firmware=args.firmware, attachment=getattr(args, "boot_attachment",
+		None), stall=args.stall)) or True
+results = {}
 try:
-	ce_test.run_wizard_boot(wizard_args(firmware="bios", disk_bus="ide",
-		stall=90), wizardDirectory,
-		wizardReport, wizardPath)
-	bootedBefore = len(booted)
-	removedBefore = not os.path.exists(wizardPath)
-	# installed: booted with UEFI firmware, as it is, tagged "wizard"
-	with open(wizardPath, "wb") as wizardFile:
-		wizardFile.write(b"\0" * 512)
-	installedReport = {}
-	installedArgs = wizard_args(firmware="bios", disk_bus="ide", stall=90)
-	ce_test.run_wizard_boot(installedArgs, wizardDirectory, installedReport,
-		wizardPath)
+	for firmware, state in [("uefi", "blank"), ("uefi", "partial"),
+			("uefi", "complete"), ("bios", "blank"), ("bios", "partial")]:
+		make_wizard_disk(state)
+		runArgs = wizard_args(firmware=firmware, boot_attachment="usb",
+			stall=90)
+		before = len(booted)
+		runReport = {}
+		ce_test.run_wizard_boot(runArgs, wizardDirectory, runReport,
+			wizardPath)
+		ce_test.check_wizard_boot(runReport)
+		results[(firmware, state)] = (len(booted) - before, runReport,
+			runArgs, os.path.exists(wizardPath))
 finally:
 	ce_test.boot = savedBoot
-ce_test.check_wizard_boot(wizardReport)
-checks = [c for c in wizardReport.get("host_checks", [])
-	if c["name"] == "installer_wizard.boot_installed"]
-expect("wizard disk not installed: not booted, removed, check fails",
-	bootedBefore == 0 and removedBefore and len(checks) == 1 and not checks[0]["pass"]
-	and "marker" in checks[0]["detail"], checks)
-expect("wizard disk installed: booted once as it is, tagged wizard, with "
-	"UEFI and a longer stall time, all put back, disk removed",
-	len(booted) == 1 and booted[0].get("image") == wizardPath
-	and booted[0].get("tag") == "wizard"
-	and booted[0].get("firmware") == "uefi"
-	and booted[0].get("disk_bus") == "ide"
-	and booted[0].get("stall") >= ce_test.WIZARD_BOOT_STALL
-	and installedArgs.firmware == "bios" and installedArgs.disk_bus == "ide"
-	and installedArgs.stall == 90
-	and not os.path.exists(wizardPath), booted)
-installedReport["boots"] = {"wizard": {"status": "exited",
-	"runner_finished": True}}
-ce_test.check_wizard_boot(installedReport)
-expect("installer_wizard.boot_installed passes when the boot finished",
-	[c["pass"] for c in installedReport.get("host_checks", [])] == [True],
-	installedReport)
+
+for (firmware, state), (boots, runReport, runArgs, left) in results.items():
+	checks = runReport.get("host_checks", [])
+	if firmware == "uefi" and state == "complete":
+		expect("wizard disk complete (UEFI): booted once as it is, tagged "
+			"wizard, with a longer stall time and no boot attachment, both "
+			"put back, disk removed",
+			boots == 1 and booted[-1].get("image") == wizardPath
+			and booted[-1].get("tag") == "wizard"
+			and booted[-1].get("firmware") == "uefi"
+			and booted[-1].get("attachment") is None
+			and booted[-1].get("stall") >= ce_test.WIZARD_BOOT_STALL
+			and runArgs.boot_attachment == "usb" and runArgs.stall == 90
+			and not left, booted[-1:])
+		runReport["boots"] = {"wizard": {"status": "exited",
+			"runner_finished": True}}
+		runReport["host_checks"] = []
+		ce_test.check_wizard_boot(runReport)
+		expect("installer_wizard.boot_installed passes when the boot "
+			"finished", [c["pass"] for c in runReport["host_checks"]]
+			== [True], runReport)
+	elif firmware == "uefi":
+		# known bad: a blank or half-written disk is never booted
+		expect("wizard disk %s (UEFI): not booted, removed, check fails"
+			% state, boots == 0 and not left and len(checks) == 1
+			and checks[0]["name"] == "installer_wizard.boot_installed"
+			and not checks[0]["pass"] and state in checks[0]["detail"],
+			checks)
+	else:
+		expect("wizard disk %s (BIOS): not booted, removed, "
+			"bios_disk_untouched %s" % (state, "passes" if state == "blank"
+				else "fails"),
+			boots == 0 and not left and len(checks) == 1
+			and checks[0]["name"] == "installer_wizard.bios_disk_untouched"
+			and checks[0]["pass"] == (state == "blank"), checks)
+
 noReport = {}
 ce_test.check_wizard_boot(noReport)
-expect("installer_wizard.boot_installed is no check without the disk",
+expect("installer_wizard checks are no checks without the disk",
 	not noReport.get("host_checks"), noReport)
+# the spare disk is wanted for installer_wizard_test too
+expect("spare disk attached for --only installer_wizard",
+	ce_test.spare_disk_wanted(spare_args(only="installer_wizard")))
 shutil.rmtree(wizardDirectory)
 
 # The capture feed: the file must hold the requested tone everywhere (SDL

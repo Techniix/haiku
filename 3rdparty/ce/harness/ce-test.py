@@ -322,6 +322,9 @@ SCRATCH_ALLOCATED_RANGE = (4 * 1024 * 1024, 6 * 1024 * 1024)
 SPARE_DISK = ("spare", 16 * 1024 * 1024 * 1024,
 	b"CE-SPARE-DISK installer_destination\n")
 SPARE_DISK_TEST = "installer_destination_test"
+# installer_wizard_test puts its "alongside" and stale-plan disk images
+# there too (batch 14, review of PR #42)
+SPARE_DISK_TESTS = (SPARE_DISK_TEST, "installer_wizard_test")
 # What the new file may have allocated: the marker's block (a file system
 # that does not make sparse files would allocate all 16 GiB)
 SPARE_DISK_MAX_ALLOCATED = 1024 * 1024
@@ -346,8 +349,8 @@ def spare_disk_wanted(args, plain_image=False, tag="", persist=False):
 		selection = [w.strip() for w in selection.split(",") if w.strip()]
 	if not selection:
 		return True
-	return any(name in (SPARE_DISK_TEST, SPARE_DISK_TEST[:-len("_test")])
-		for name in selection)
+	return any(name in (test, test[:-len("_test")])
+		for name in selection for test in SPARE_DISK_TESTS)
 
 
 # The disk installer_wizard_test's wizard erases and installs onto (batch
@@ -393,34 +396,56 @@ def wizard_drives(path):
 		"-device", "virtio-blk-pci,drive=%s" % WIZARD_DISK[0]]
 
 
+# installer_wizard_test writes this last, at WIZARD_COMPLETE_OFFSET (before
+# the first partition): a disk without it (the wizard stopped half way, the
+# guest crashed) is never booted
+WIZARD_COMPLETE_MARKER = b"CE-WIZARD-COMPLETE\n"
+WIZARD_COMPLETE_OFFSET = 512 * 1024
+
+
+def wizard_disk_state(disk):
+	""""blank" (its marker), "complete" (the completion marker) or
+	"partial" (written, without the completion marker)."""
+	with open(disk, "rb") as f:
+		start = f.read(len(WIZARD_DISK[2]))
+		f.seek(WIZARD_COMPLETE_OFFSET)
+		complete = f.read(len(WIZARD_COMPLETE_MARKER))
+	if start == WIZARD_DISK[2]:
+		return "blank"
+	return "complete" if complete == WIZARD_COMPLETE_MARKER else "partial"
+
+
 def run_wizard_boot(args, results_dir, report, disk):
-	"""After the test image's boot: boot the wizard disk if the wizard
-	installed onto it (its marker is gone), with UEFI firmware, and append
-	that boot's serial log to serial.log, so that installer_wizard_test's
-	checks there count like the others. Removes the disk."""
+	"""After the test image's boot: with UEFI firmware, boot the wizard disk
+	if the wizard installed onto it completely (installer_wizard_test's
+	completion marker), and append that boot's serial log to serial.log,
+	so that the test's checks there count like the others. With BIOS
+	firmware the wizard refuses to erase, so the disk must still be blank.
+	Removes the disk."""
 	try:
-		with open(disk, "rb") as f:
-			start = f.read(len(WIZARD_DISK[2]))
-		if start == WIZARD_DISK[2]:
-			report["wizard_setup"] = "not installed: the marker is still " \
-				"there"
+		state = wizard_disk_state(disk)
+		report["wizard_firmware"] = args.firmware
+		if args.firmware != "uefi":
+			report["wizard_setup"] = "BIOS: disk %s" % state
+			return
+		if state != "complete":
+			report["wizard_setup"] = "not installed: the disk is %s" % state
 			return
 		report["wizard_setup"] = "installed"
-		# UEFI, the disk as the run attaches its image (IDE by default).
-		# OVMF took up to 241 s to load the loader from the IDE disk,
-		# silent all the while, which the stall rule took for a hang:
-		# WIZARD_BOOT_STALL. (From a virtio disk the
-		# loader stopped with an invalid opcode at its first boot-state
-		# write, 20261127-225541: a boot loader finding, not this test's.)
-		saved = (args.firmware, getattr(args, "boot_attachment", None),
-			args.stall)
-		args.firmware, args.boot_attachment = "uefi", None
+		# The disk as the run attaches its image (IDE by default). OVMF
+		# took up to 241 s to load the loader from the IDE disk, silent all
+		# the while, which the stall rule took for a hang:
+		# WIZARD_BOOT_STALL. (From a virtio disk the loader stopped with
+		# an invalid opcode at its first boot-state write, 20261127-225541:
+		# a boot loader finding, not this test's.)
+		saved = (getattr(args, "boot_attachment", None), args.stall)
+		args.boot_attachment = None
 		args.stall = max(args.stall, WIZARD_BOOT_STALL)
 		try:
 			if not boot(args, results_dir, report, image=disk, tag="wizard"):
 				log("booting the wizard's installation failed")
 		finally:
-			args.firmware, args.boot_attachment, args.stall = saved
+			args.boot_attachment, args.stall = saved
 		for name in ("serial.log", "serial.timed.log"):
 			try:
 				with open(os.path.join(results_dir, "wizard", name),
@@ -439,13 +464,20 @@ def run_wizard_boot(args, results_dir, report, disk):
 
 
 def check_wizard_boot(report):
-	"""installer_wizard.boot_installed: the wizard's installation started
-	and its test runner finished (only when the wizard disk was used)."""
+	"""UEFI: installer_wizard.boot_installed, the wizard's installation
+	started and its test runner finished. BIOS: installer_wizard.
+	bios_disk_untouched, the refused erase left the disk blank. Only when
+	the wizard disk was used."""
 	setup = report.get("wizard_setup")
 	if setup is None:
 		return
+	checks = report.setdefault("host_checks", [])
+	if report.get("wizard_firmware", "uefi") != "uefi":
+		checks.append({"name": "installer_wizard.bios_disk_untouched",
+			"pass": setup == "BIOS: disk blank", "detail": setup})
+		return
 	boot = report.get("boots", {}).get("wizard", {})
-	report.setdefault("host_checks", []).append({
+	checks.append({
 		"name": "installer_wizard.boot_installed",
 		"pass": setup == "installed" and boot.get("status") == "exited"
 			and boot.get("runner_finished", False),
@@ -5867,8 +5899,14 @@ def main():
 		elif skip_boot:
 			report["boot"] = boot_info(results_dir)
 		else:
-			boot(args, results_dir, report, extra_drives=extra,
-				progress=progress)
+			try:
+				boot(args, results_dir, report, extra_drives=extra,
+					progress=progress)
+			except BaseException:
+				# never leave the 4 GiB wizard disk behind
+				if wizard is not None and os.path.exists(wizard):
+					os.remove(wizard)
+				raise
 		if disks:
 			run_installer_boots(args, results_dir, report, disks)
 		if wizard is not None:

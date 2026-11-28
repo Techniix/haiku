@@ -458,7 +458,8 @@ RestoreTable(const char* devicePath, const char* backupPath,
 Plan::Plan(const char* devicePath)
 	:
 	fDevicePath(devicePath),
-	fAllowRealDisks(false)
+	fAllowRealDisks(false),
+	fCreatedOffset(-1)
 {
 }
 
@@ -847,6 +848,7 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 			backupPath.String());
 
 	off_t createdOffset = -1;
+	fCreatedOffset = -1;
 	for (size_t i = 0; i < fOperations.size(); i++) {
 		BDiskDevice device;
 		status = get_device(disk.path.String(), device);
@@ -874,8 +876,10 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 				detail << ", ";
 			detail << stepDetail;
 		}
-		if (status == B_OK && operation.kind == kCreatePartition)
+		if (status == B_OK && operation.kind == kCreatePartition) {
 			createdOffset = offset;
+			fCreatedOffset = offset;
+		}
 		BString line;
 		line.SetToFormat("step %d: %s: %s%s%s\n", (int)i + 1,
 			describe(fOperations[i]).String(),

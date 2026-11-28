@@ -271,6 +271,7 @@ static int
 wizard_options(int argc, char** argv, bool summaryOnly)
 {
 	WizardOptions& options = gWizardOptions;
+	BString firmware;
 	options.wizard = !summaryOnly && strcmp(argv[1], "--wizard") == 0;
 	options.classic = strcmp(argv[1], "--classic") == 0;
 	if (options.classic)
@@ -302,6 +303,8 @@ wizard_options(int argc, char** argv, bool summaryOnly)
 			options.name = value;
 		else if (strcmp(option, "--confirm-erase") == 0 && !summaryOnly)
 			options.confirmErase = value;
+		else if (strcmp(option, "--firmware") == 0 && summaryOnly)
+			firmware = value;
 		else
 			return usage();
 	}
@@ -333,6 +336,15 @@ wizard_options(int argc, char** argv, bool summaryOnly)
 	choice.mode = options.mode.Length() > 0
 		? install_mode_for_name(options.mode.String()) : INSTALL_MODE_ASK;
 	choice.lean = options.lean;
+	// --firmware bios|uefi: the summary for the other firmware (tests);
+	// by default the running one's
+	choice.firmware = running_firmware();
+	if (firmware == "bios")
+		choice.firmware = FIRMWARE_BIOS;
+	else if (firmware == "uefi")
+		choice.firmware = FIRMWARE_UEFI;
+	else if (firmware.Length() > 0)
+		return usage();
 	WizardSummary summary;
 	BString why;
 	if (make_wizard_summary(choice, summary, why) != B_OK) {
@@ -368,7 +380,8 @@ usage()
 		"       Installer --wizard-summary --choice erase|alongside|existing\n"
 		"           [--disk <raw device>] [--name <new volume name>]\n"
 		"           [--target <volume name>] [--mode upgrade|replace|erase]\n"
-		"           [--lean]\n"
+		"           [--lean] [--firmware bios|uefi]\n"
+		"       Installer --firmware   (bios, uefi or unknown)\n"
 		"       Installer --wizard [--page welcome|destination|summary|\n"
 		"           progress|finish] [--choice ...] [--disk ...] [--target ...]\n"
 		"           [--mode ...] [--name ...] [--lean]\n"
@@ -406,6 +419,11 @@ installer_command_line(int argc, char** argv)
 
 	if (strcmp(argv[1], "--wizard") == 0 || strcmp(argv[1], "--classic") == 0)
 		return wizard_options(argc, argv, false);
+	if (strcmp(argv[1], "--firmware") == 0 && argc == 2) {
+		// how the running system was started, as the wizard tells it
+		printf("%s\n", firmware_name(running_firmware()));
+		return 0;
+	}
 	if (strcmp(argv[1], "--which-window") == 0 && argc == 2) {
 		// the window the setting chooses (Options > Use the classic
 		// Installer window, Tools > Use the installation wizard)

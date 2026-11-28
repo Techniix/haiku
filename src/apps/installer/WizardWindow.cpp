@@ -309,6 +309,9 @@ WizardWindow::WizardWindow()
 	fInstalling(false),
 	fInstalled(false),
 	fDriveSetupRunning(false),
+	fApplying(false),
+	fTarget(-1),
+	fFirmware(running_firmware()),
 	fAutoRunner(NULL)
 {
 	if (!be_roster->IsRunning(kTrackerSignature))
@@ -549,6 +552,7 @@ WizardWindow::_MakeSummaryPage()
 	BStringView* beforeLabel = new BStringView("before_label",
 		B_TRANSLATE("Now:"));
 	fAfterLabel = new BStringView("after_label", B_TRANSLATE("After:"));
+	fSummaryNote = make_note("summary_note", "", 1);
 	fLeanCheckBox = new BCheckBox("lean", B_TRANSLATE("Lean install: leave "
 		"out the development files (headers, compiler)"),
 		new BMessage(kMsgLean));
@@ -563,6 +567,7 @@ WizardWindow::_MakeSummaryPage()
 			.Add(fAfterLabel, 0, 1)
 			.Add(fAfterBar, 1, 1)
 		.End()
+		.Add(fSummaryNote)
 		.Add(fLeanCheckBox);
 	return page;
 }
@@ -633,7 +638,8 @@ WizardWindow::_ShowPage(int32 page)
 	fNextButton->SetLabel(page == kSummaryPage ? B_TRANSLATE("Install")
 		: B_TRANSLATE("Next"));
 	fNextButton->SetEnabled(page != kProgressPage
-		&& (page != kDestinationPage || fChoiceValid));
+		&& (page != kDestinationPage || fChoiceValid)
+		&& (page != kSummaryPage || !fDriveSetupRunning));
 	fCancelButton->SetLabel(page == kProgressPage ? B_TRANSLATE("Stop")
 		: B_TRANSLATE("Quit"));
 	fCancelButton->SetEnabled(page != kFinishPage);
@@ -679,7 +685,7 @@ WizardWindow::_ApplyOptions()
 		const char* path;
 		if (item->Message() != NULL
 			&& item->Message()->FindString("path", &path) == B_OK
-			&& options.disk == path)
+			&& options.disk == path && item->IsEnabled())
 			item->SetMarked(true);
 	}
 	for (int32 i = 0; options.target.Length() > 0
@@ -796,6 +802,7 @@ WizardWindow::_MakeChoice(WizardChoice& choice)
 			INSTALL_MODE_ASK);
 	}
 	choice.lean = fLeanCheckBox->Value() == B_CONTROL_ON;
+	choice.firmware = fFirmware;
 	return true;
 }
 
@@ -881,14 +888,9 @@ WizardWindow::_ConfirmDiskErase()
 				"must name the disk)");
 		return confirmed;
 	}
-	BString lost;
-	for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
-		BString name = partition.contentName.Length() > 0
-			? partition.contentName : partition.name;
-		if (name.Length() == 0)
-			name = RengaDisk::SizeString(partition.size);
-		lost << (lost.Length() > 0 ? ", " : "") << "\"" << name << "\"";
-	}
+	BStringList volumes;
+	disk_volume_descriptions(disk, volumes);
+	BString lost = volumes.Join("; ");
 	BString text;
 	text.SetToFormat(B_TRANSLATE("Erase the whole disk %s?\n\n%s\n\n"
 		"Everything on it is lost%s%s. This cannot be undone."),
@@ -899,6 +901,44 @@ WizardWindow::_ConfirmDiskErase()
 		B_WIDTH_AS_USUAL, B_STOP_ALERT);
 	alert->SetShortcut(0, B_ESCAPE);
 	return alert->Go() == 1;
+}
+
+
+/*!	Whether the disk is still what the summary showed (review of PR #42:
+	another stick in the same port, or DriveSetup started from the
+	Deskbar, must not get the old plan). If not, the summary is made again
+	from the disk as it is, the page says why, and Install has to be
+	pressed again; an automated run stops there.
+*/
+bool
+WizardWindow::_SummaryStillValid()
+{
+	RengaDisk::DiskInfo now;
+	BString why;
+	if (RengaDisk::GetDisk(fSummary.disk.path.String(), now) != B_OK)
+		why = B_TRANSLATE("the disk is gone");
+	else if (same_disk_layout(fSummary.disk, now, why))
+		return true;
+
+	BString text;
+	text.SetToFormat(B_TRANSLATE("The disk changed after this summary was "
+		"made: %s. Nothing was written. The summary below is new: check it, "
+		"then press Install again."), why.String());
+	_Report("the disk changed after the summary: %s", why.String());
+	_FillSummary();
+	if (!fChoiceValid) {
+		text << "\n" << B_TRANSLATE("The choice no longer works: go back to "
+			"the previous page.");
+		fNextButton->SetEnabled(false);
+	}
+	set_note(fSummaryNote, text, 1);
+	if (gWizardOptions.autoRun) {
+		BString failure;
+		failure.SetToFormat("the disk changed after the summary (%s)",
+			why.String());
+		_Finished(false, failure);
+	}
+	return false;
 }
 
 
@@ -921,6 +961,10 @@ WizardWindow::_StartInstallation()
 		"partition table, then partitioning and formatting" B_UTF8_ELLIPSIS),
 		3);
 	_Report("applying the disk plan for %s", fSummary.disk.path.String());
+	// until kMsgApplied comes, neither Stop nor Quit: the disk would be
+	// left half written (review of PR #42)
+	fApplying = true;
+	fCancelButton->SetEnabled(false);
 
 	struct Job {
 		RengaDisk::Plan	plan;
@@ -933,10 +977,13 @@ WizardWindow::_StartInstallation()
 		BString log;
 		BPath backups;
 		status_t status = disk_backup_directory(backups);
+		BString backup;
 		if (status == B_OK)
-			status = job->plan.Apply(backups.Path(), log);
+			status = job->plan.Apply(backups.Path(), log, &backup);
 		message.AddInt32("status", status);
 		message.AddString("log", log);
+		message.AddString("backup", backup);
+		message.AddInt64("offset", job->plan.CreatedOffset());
 		job->target.SendMessage(&message);
 		delete job;
 		return B_OK;
@@ -951,20 +998,52 @@ WizardWindow::_StartInstallation()
 void
 WizardWindow::_PlanApplied(BMessage* message)
 {
+	fApplying = false;
+	fCancelButton->SetEnabled(true);
 	status_t status = message->GetInt32("status", B_ERROR);
 	BString log = message->GetString("log", "");
+	fBackupPath = message->GetString("backup", "");
 	_Report("disk plan: %s", status == B_OK ? "applied" : strerror(status));
 	if (log.Length() > 0)
 		_Report("%s", log.String());
 	if (status != B_OK) {
+		// the step that failed, and how to put the old table back
+		BString step;
+		int32 start = 0;
+		while (start < log.Length()) {
+			int32 end = log.FindFirst('\n', start);
+			if (end < 0)
+				end = log.Length();
+			BString line;
+			log.CopyInto(line, start, end - start);
+			if (line.StartsWith("step ") || line.StartsWith("refused"))
+				step = line;
+			start = end + 1;
+		}
 		BString text;
 		text.SetToFormat(B_TRANSLATE("the disk could not be prepared (%s)"),
 			strerror(status));
+		if (step.Length() > 0)
+			text << ".\n\n" << B_TRANSLATE("Failed:") << " " << step;
+		if (fBackupPath.Length() > 0) {
+			BString journal(fBackupPath);
+			journal.RemoveLast(".table");
+			journal << ".journal";
+			BString restore;
+			restore.SetToFormat(B_TRANSLATE("The old partition table is saved "
+				"in %s (journal: %s). To put it back, run:\nrengadisk restore "
+				"%s %s"), fBackupPath.String(), journal.String(),
+				fSummary.disk.path.String(), fBackupPath.String());
+			text << "\n\n" << restore;
+		}
 		_Finished(false, text);
 		return;
 	}
 
-	partition_id target = find_volume_named(fChoice.volumeName);
+	// the partition the plan made, on that disk at that offset (another
+	// volume of the same name elsewhere is never taken)
+	partition_id target = created_partition(fSummary.disk.path.String(),
+		message->GetInt64("offset", -1));
 	partition_id efi = -1;
 	if (fSummary.erasesDisk) {
 		RengaDisk::DiskInfo disk;
@@ -1010,6 +1089,7 @@ WizardWindow::_StartCopy(partition_id target, partition_id newEFIPartition)
 	fWorkerThread->SetUnattended(gWizardOptions.autoRun);
 	set_note(fProgressText, B_TRANSLATE("Copying the system" B_UTF8_ELLIPSIS),
 		3);
+	fTarget = target;
 	_Report("installing onto partition %" B_PRId32, target);
 	fWorkerThread->StartInstall(source, target);
 }
@@ -1030,15 +1110,14 @@ WizardWindow::_Finished(bool success, const char* text)
 			DISTRO_NAME);
 		if (fChoice.destination == WIZARD_ALONGSIDE) {
 			message << "\n\n" << B_TRANSLATE("The other systems on the disk "
-				"are still there. Choose the new volume in the boot menu "
-				"(hold Space while the computer starts) or install the EFI "
-				"loader from the classic window's Tools menu.");
+				"are still there.");
 		}
+		if (fSummary.startNote.Length() > 0)
+			message << "\n\n" << fSummary.startNote;
 	} else {
 		message.SetToFormat(B_TRANSLATE("The installation was not completed: "
-			"%s.\n\nIf the copy had started, its log is on the destination "
-			"(system/var/log/installer.log). A disk's old partition table can "
-			"be put back with \"rengadisk restore\"."), text);
+			"%s\n\nIf the copy had started, its log is on the destination "
+			"(system/var/log/installer.log)."), text);
 	}
 	set_note(fFinishText, message, 5);
 	if (wasInstalling || !success)
@@ -1091,22 +1170,38 @@ WizardWindow::_Next()
 			break;
 		case kDestinationPage:
 			_UpdateDestination();
-			if (!fChoiceValid)
+			if (!fChoiceValid) {
+				// an automated run cannot choose otherwise: it stops, saying
+				// why (the Destination page's note)
+				if (gWizardOptions.autoRun)
+					_Finished(false, fDestinationNote->Text());
 				break;
+			}
 			_FillSummary();
+			set_note(fSummaryNote, "", 1);
 			if (fChoiceValid)
 				_ShowPage(kSummaryPage);
 			break;
 		case kSummaryPage:
+		{
+			if (fDriveSetupRunning)
+				break;
 			fChoice.lean = fLeanCheckBox->Value() == B_CONTROL_ON;
+			// the plan is only good for the disk its summary showed
+			if (!_SummaryStillValid())
+				break;
 			if (fSummary.erasesDisk && !_ConfirmDiskErase()) {
 				if (gWizardOptions.autoRun)
 					_Finished(false, B_TRANSLATE("erasing the disk was not "
 						"confirmed"));
 				break;
 			}
+			// the confirmation can stay open for any time: once more
+			if (!_SummaryStillValid())
+				break;
 			_StartInstallation();
 			break;
+		}
 		case kFinishPage:
 			PostMessage(B_QUIT_REQUESTED);
 			break;
@@ -1146,7 +1241,9 @@ WizardWindow::MessageReceived(BMessage* message)
 			_Back();
 			break;
 		case kMsgCancel:
-			if (fPage == kProgressPage)
+			if (fApplying)
+				_RefuseWhileApplying();
+			else if (fPage == kProgressPage)
 				_Stop(true);
 			else
 				PostMessage(B_QUIT_REQUESTED);
@@ -1215,6 +1312,7 @@ WizardWindow::MessageReceived(BMessage* message)
 			break;
 		}
 		case MSG_INSTALL_FINISHED:
+			_KeepBackupOnTarget();
 			_Finished(true, NULL);
 			break;
 		case MSG_RESET:
@@ -1239,6 +1337,14 @@ WizardWindow::MessageReceived(BMessage* message)
 				_ScanVolumes();
 			}
 			_UpdateDestination();
+			if (fPage == kSummaryPage) {
+				// no Install while DriveSetup can change the disk; the
+				// summary is checked again when Install is pressed
+				fNextButton->SetEnabled(!fDriveSetupRunning && fChoiceValid);
+				set_note(fSummaryNote, fDriveSetupRunning
+					? B_TRANSLATE("DriveSetup is running: Install waits until "
+						"it is closed.") : "", 1);
+			}
 			break;
 		}
 
@@ -1251,6 +1357,10 @@ WizardWindow::MessageReceived(BMessage* message)
 bool
 WizardWindow::QuitRequested()
 {
+	if (fApplying) {
+		_RefuseWhileApplying();
+		return false;
+	}
 	if (fInstalling && !gWizardOptions.autoRun) {
 		BAlert* alert = new BAlert(B_TRANSLATE_SYSTEM_NAME("Installer"),
 			B_TRANSLATE("The installation is not complete yet!\n"
@@ -1276,4 +1386,69 @@ WizardWindow::QuitRequested()
 	quit.AddBool("install_complete", fInstalled && !gWizardOptions.autoRun);
 	be_app->PostMessage(&quit);
 	return true;
+}
+
+
+void
+WizardWindow::_RefuseWhileApplying()
+{
+	_Report("not stopped: the disk is being prepared");
+	if (gWizardOptions.autoRun)
+		return;
+	BAlert* alert = new BAlert(B_TRANSLATE_SYSTEM_NAME("Installer"),
+		B_TRANSLATE("The disk is being partitioned and formatted. Stopping "
+			"now would leave it half written: wait until this step is done "
+			"(it takes a few seconds), then you can stop."),
+		B_TRANSLATE("OK"));
+	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+	alert->Go(NULL);
+}
+
+
+/*!	After a successful installation on a disk the wizard changed: the table
+	backup and its journal also go onto the new volume
+	(home/config/settings/Renga/disk-backups), since the installation
+	medium may be gone when they are needed.
+*/
+void
+WizardWindow::_KeepBackupOnTarget()
+{
+	if (fBackupPath.Length() == 0 || fTarget < 0)
+		return;
+	BDiskDeviceRoster roster;
+	BDiskDevice device;
+	BPartition* partition;
+	BPath root;
+	if (roster.GetPartitionWithID(fTarget, &device, &partition) != B_OK
+		|| (!partition->IsMounted() && partition->Mount() < B_OK)
+		|| partition->GetMountPoint(&root) != B_OK) {
+		_Report("the table backup was not copied: the new volume is not "
+			"mounted");
+		return;
+	}
+	BPath directory(root.Path(), "home/config/settings/Renga/disk-backups");
+	create_directory(directory.Path(), 0700);
+	BString journal(fBackupPath);
+	journal.RemoveLast(".table");
+	journal << ".journal";
+	const char* files[] = { fBackupPath.String(), journal.String() };
+	for (int i = 0; i < 2; i++) {
+		BFile source(files[i], B_READ_ONLY);
+		BPath leaf(files[i]);
+		BPath target(directory.Path(), leaf.Leaf());
+		BFile copy(target.Path(), B_WRITE_ONLY | B_CREATE_FILE
+			| B_ERASE_FILE);
+		status_t status = source.InitCheck();
+		if (status == B_OK)
+			status = copy.InitCheck();
+		char buffer[64 * 1024];
+		ssize_t bytes;
+		while (status == B_OK
+			&& (bytes = source.Read(buffer, sizeof(buffer))) > 0) {
+			if (copy.Write(buffer, bytes) != bytes)
+				status = B_IO_ERROR;
+		}
+		_Report("table backup copied to %s: %s", target.Path(),
+			strerror(status));
+	}
 }

@@ -14,7 +14,12 @@
 #include <Partition.h>
 #include <PartitioningInfo.h>
 
+#include <dirent.h>
+#include <fs_volume.h>
 #include <string.h>
+#include <sys/stat.h>
+
+#include "InstallationInfo.h"
 
 
 const off_t kMinimumInstallSize = 2048LL * 1024 * 1024;
@@ -366,4 +371,234 @@ disk_backup_directory(BPath& path)
 	if (status == B_OK)
 		status = create_directory(path.Path(), 0700);
 	return status;
+}
+
+
+// #pragma mark - checks for the wizard
+
+
+bool
+same_disk_layout(const RengaDisk::DiskInfo& planned,
+	const RengaDisk::DiskInfo& now, BString& why)
+{
+	if (planned.id != now.id || planned.path != now.path) {
+		why = "it is another disk now (it was removed or replaced)";
+		return false;
+	}
+	if (planned.size != now.size) {
+		why.SetToFormat("its size changed (%s, was %s)",
+			RengaDisk::SizeString(now.size).String(),
+			RengaDisk::SizeString(planned.size).String());
+		return false;
+	}
+	if (planned.partitioning != now.partitioning) {
+		why.SetToFormat("its partition table changed (%s, was %s)",
+			now.partitioning.Length() > 0 ? now.partitioning.String()
+				: "none",
+			planned.partitioning.Length() > 0
+				? planned.partitioning.String() : "none");
+		return false;
+	}
+	if (planned.partitions.size() != now.partitions.size()) {
+		why.SetToFormat("it has %d partitions now (was %d)",
+			(int)now.partitions.size(), (int)planned.partitions.size());
+		return false;
+	}
+	for (size_t i = 0; i < now.partitions.size(); i++) {
+		const RengaDisk::PartitionInfo& a = planned.partitions[i];
+		const RengaDisk::PartitionInfo& b = now.partitions[i];
+		if (a.offset != b.offset || a.size != b.size || a.type != b.type
+			|| a.name != b.name || a.content != b.content
+			|| a.contentName != b.contentName) {
+			why.SetToFormat("partition %d changed (now \"%s\" %s at %s)",
+				(int)i, b.contentName.Length() > 0 ? b.contentName.String()
+					: b.name.String(),
+				RengaDisk::SizeString(b.size).String(),
+				RengaDisk::SizeString(b.offset).String());
+			return false;
+		}
+	}
+	return true;
+}
+
+
+partition_id
+created_partition(const char* diskPath, off_t offset)
+{
+	RengaDisk::DiskInfo disk;
+	if (offset < 0 || RengaDisk::GetDisk(diskPath, disk) != B_OK)
+		return -1;
+	for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
+		if (partition.offset == offset && partition.content.Length() > 0)
+			return partition.id;
+	}
+	return -1;
+}
+
+
+bool
+valid_volume_name(const char* name, BString& why)
+{
+	size_t length = strlen(name);
+	if (length == 0) {
+		why = "Name the new volume.";
+		return false;
+	}
+	if (length > 31) {
+		why = "The volume name is too long (31 bytes at most).";
+		return false;
+	}
+	if (strchr(name, '/') != NULL) {
+		why = "A volume name cannot contain \"/\".";
+		return false;
+	}
+	return true;
+}
+
+
+class VolumeDescriber : public BDiskDeviceVisitor {
+public:
+	VolumeDescriber(const RengaDisk::DiskInfo& disk, BStringList& list)
+		:
+		fDisk(disk),
+		fList(list)
+	{
+	}
+
+	virtual bool Visit(BDiskDevice* device)
+	{
+		return false;
+	}
+
+	virtual bool Visit(BPartition* partition, int32 level)
+	{
+		// partitions that hold others (an extended partition) are not
+		// listed themselves; their logical partitions are
+		if (partition->CountChildren() > 0)
+			return false;
+		BString name = partition->ContentName();
+		if (name.Length() == 0)
+			name = partition->Name();
+		BString system;
+		for (const RengaDisk::PartitionInfo& info : fDisk.partitions) {
+			if (info.id == partition->ID())
+				system = info.system;
+		}
+		BString line;
+		line.SetToFormat("\"%s\", %s%s%s", name.String(),
+			RengaDisk::SizeString(partition->Size()).String(),
+			system.Length() > 0 ? ", " : "", system.String());
+		fList.Add(line);
+		return false;
+	}
+
+private:
+	const RengaDisk::DiskInfo&	fDisk;
+	BStringList&				fList;
+};
+
+
+void
+disk_volume_descriptions(const RengaDisk::DiskInfo& disk,
+	BStringList& descriptions)
+{
+	descriptions.MakeEmpty();
+	BDiskDeviceRoster roster;
+	BDiskDevice device;
+	if (roster.GetDeviceForPath(disk.path.String(), &device) != B_OK)
+		return;
+	VolumeDescriber describer(disk, descriptions);
+	device.VisitEachDescendant(&describer);
+	if (descriptions.IsEmpty() && device.ContainsFileSystem()) {
+		BString line;
+		line.SetToFormat("\"%s\", %s", device.ContentName().String(),
+			RengaDisk::SizeString(device.Size()).String());
+		descriptions.Add(line);
+	}
+}
+
+
+firmware_kind
+running_firmware()
+{
+	struct stat st;
+	// opening the folder makes devfs load the graphics drivers
+	if (DIR* dir = opendir("/dev/graphics"))
+		closedir(dir);
+	if (stat("/dev/graphics/vesa", &st) == 0)
+		return FIRMWARE_BIOS;
+	if (stat("/dev/graphics/framebuffer", &st) == 0)
+		return FIRMWARE_UEFI;
+	return FIRMWARE_UNKNOWN;
+}
+
+
+const char*
+firmware_name(firmware_kind firmware)
+{
+	switch (firmware) {
+		case FIRMWARE_BIOS:
+			return "bios";
+		case FIRMWARE_UEFI:
+			return "uefi";
+		default:
+			return "unknown";
+	}
+}
+
+
+static bool
+directory_has_haiku_loader(const BPath& directory)
+{
+	bool found = false;
+	if (DIR* dir = opendir(directory.Path())) {
+		while (dirent* entry = readdir(dir)) {
+			BString name(entry->d_name);
+			if (!name.IEndsWith(".efi"))
+				continue;
+			BPath path(directory.Path(), entry->d_name);
+			if (is_haiku_efi_loader(path.Path())) {
+				found = true;
+				break;
+			}
+		}
+		closedir(dir);
+	}
+	return found;
+}
+
+
+bool
+disk_has_haiku_efi_loader(const RengaDisk::DiskInfo& disk)
+{
+	BDiskDeviceRoster roster;
+	for (const RengaDisk::PartitionInfo& info : disk.partitions) {
+		if (info.type != "EFI system data" || info.content.FindFirst("FAT")
+				< 0)
+			continue;
+		BDiskDevice device;
+		BPartition* partition;
+		if (roster.GetPartitionWithID(info.id, &device, &partition) != B_OK)
+			continue;
+		bool mountedHere = false;
+		if (!partition->IsMounted()) {
+			if (partition->Mount(NULL, B_MOUNT_READ_ONLY) < B_OK)
+				continue;
+			mountedHere = true;
+		}
+		BPath root;
+		bool found = false;
+		if (partition->GetMountPoint(&root) == B_OK) {
+			const char* directories[] = { "EFI/BOOT", "EFI/HAIKU",
+				"EFI/RENGA" };
+			for (size_t i = 0; !found && i < 3; i++)
+				found = directory_has_haiku_loader(BPath(root.Path(),
+					directories[i]));
+		}
+		if (mountedHere)
+			partition->Unmount();
+		if (found)
+			return true;
+	}
+	return false;
 }
