@@ -2519,12 +2519,20 @@ count_low_page_reserve()
 	vm_page_init() sees only part of it as free. The page daemon's target
 	follows the reserve.
 */
+int32
+vm_page_low_page_reserve()
+{
+	return sLowPageReserve;
+}
+
+
 void
 vm_page_update_low_page_reserve()
 {
 	WriteLocker locker(sFreePageQueuesLock);
 	int32 reserve = count_low_page_reserve();
 	if (reserve > sLowPageReserve) {
+		// the targets contain the reserve once (see vm_page_init())
 		sFreePagesTarget += reserve - sLowPageReserve;
 		sFreeOrCachedPagesTarget += reserve - sLowPageReserve;
 		sLowPageReserve = reserve;
@@ -2648,20 +2656,22 @@ vm_page_init(kernel_args *args)
 	// reserve, but should be a few more pages, so we don't have to extract
 	// a cached page with each allocation.
 	// Renga: plus the low page reserve, which user allocations must not
-	// touch either (page_reserve_for_priority()).
-	sFreePagesTarget = VM_PAGE_RESERVE_USER + sLowPageReserve
+	// touch either (page_reserve_for_priority()). Each target below contains
+	// it exactly once, as vm_page_update_low_page_reserve() assumes.
+	const uint32 baseFreePagesTarget = VM_PAGE_RESERVE_USER
 		+ std::max((page_num_t)32, (sNumPages - sNonExistingPages) / 1024);
+	sFreePagesTarget = baseFreePagesTarget + sLowPageReserve;
 
 	// The target of free + cached and inactive pages. On low-memory machines
 	// keep things tight. free + cached is the pool of immediately allocatable
 	// pages. We want a few inactive pages, so when we're actually paging, we
 	// have a reasonably large set of pages to work with.
 	if (sUnreservedFreePages < (16 * 1024)) {
-		sFreeOrCachedPagesTarget = sFreePagesTarget + 128;
-		sInactivePagesTarget = (sFreePagesTarget - sLowPageReserve) / 3;
+		sFreeOrCachedPagesTarget = baseFreePagesTarget + 128 + sLowPageReserve;
+		sInactivePagesTarget = baseFreePagesTarget / 3;
 	} else {
-		sFreeOrCachedPagesTarget = 2 * sFreePagesTarget;
-		sInactivePagesTarget = (sFreePagesTarget - sLowPageReserve) / 2;
+		sFreeOrCachedPagesTarget = 2 * baseFreePagesTarget + sLowPageReserve;
+		sInactivePagesTarget = baseFreePagesTarget / 2;
 	}
 
 	TRACE(("vm_page_init: exit\n"));
@@ -2894,6 +2904,11 @@ vm_page_allocate_page(vm_page_reservation* reservation, uint32 flags)
 		// Renga: the head of this queue is a low page; the other queue may
 		// still have a page above 16 MiB (both keep the low pages at their
 		// end), take that one and put the low page back at the end.
+		// Another thread may take pages from either queue between the two
+		// removals, so the result can be a low page although a high one was
+		// free a moment before; that only costs one low page, and the pages
+		// go back in the queue order of insert_free_page(), so the next
+		// allocation sees the high pages first again.
 		vm_page* otherPage = otherQueue->RemoveHeadUnlocked();
 		if (otherPage != NULL) {
 			VMPageQueue* pageQueue = page->State() == PAGE_STATE_CLEAR
@@ -3212,6 +3227,18 @@ vm_page_allocate_page_run(uint32 flags, page_num_t length,
 	int32 freePages = sUnreservedFreePages;
 	bool useCached = (freePages > 0) && ((page_num_t)freePages > (length * 2));
 
+	// Renga (roadmap F-61): a run that may lie anywhere (B_CONTIGUOUS,
+	// 32-bit DMA, LinuxKPI coherent buffers) is searched above 16 MiB first
+	// and only then from the requested start, so that it does not use up
+	// the memory below 16 MiB that only low-restricted runs can use.
+	page_num_t searchStart = requestedStart;
+	const page_num_t lowEnd = kLowPageLimit > sPhysicalPageOffset
+		? kLowPageLimit - sPhysicalPageOffset : 0;
+	if (!lowRestricted && requestedStart < lowEnd && lowEnd + length <= end)
+		searchStart = lowEnd;
+	const bool initialUseCached = useCached;
+	start = searchStart;
+
 	for (;;) {
 		if (alignmentMask != 0 || boundaryMask != 0) {
 			page_num_t offsetStart = start + sPhysicalPageOffset;
@@ -3234,7 +3261,14 @@ vm_page_allocate_page_run(uint32 flags, page_num_t length,
 				// The first iteration with free pages only was unsuccessful.
 				// Try again also considering cached pages.
 				useCached = true;
-				start = requestedStart;
+				start = searchStart;
+				continue;
+			}
+			if (searchStart != requestedStart) {
+				// Renga: nothing above 16 MiB, now the whole range
+				searchStart = requestedStart;
+				useCached = initialUseCached;
+				start = searchStart;
 				continue;
 			}
 

@@ -40,7 +40,9 @@ status_t vm_page_init(struct kernel_args *args);
 status_t vm_page_init_post_area(struct kernel_args *args);
 status_t vm_page_init_post_thread(struct kernel_args *args);
 void vm_page_update_low_page_reserve(void);
-	// Renga (roadmap F-61)
+int32 vm_page_low_page_reserve(void);
+	// Renga (roadmap F-61): the free pages below 16 MiB that user and system
+	// priority allocations leave alone
 
 status_t vm_mark_page_inuse(page_num_t page);
 status_t vm_mark_page_range_inuse(page_num_t startPage, page_num_t length);

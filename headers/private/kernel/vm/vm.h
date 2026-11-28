@@ -42,7 +42,10 @@ struct VMPageWiringInfo;
 #define VM_PAGE_RESERVE_USER	512
 #define VM_PAGE_RESERVE_SYSTEM	128
 
-// memory reserves
+// memory reserves: each the page reserve of its priority in bytes. Renga
+// (roadmap F-61) adds vm_page_low_page_reserve() pages to both kinds for
+// user and system priority (vm_page.cpp page_reserve_for_priority(),
+// vm.cpp vm_try_reserve_internal()), so the two stay equal.
 #define VM_MEMORY_RESERVE_USER		(VM_PAGE_RESERVE_USER * B_PAGE_SIZE)
 #define VM_MEMORY_RESERVE_SYSTEM	(VM_PAGE_RESERVE_SYSTEM * B_PAGE_SIZE)
 
