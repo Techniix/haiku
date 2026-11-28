@@ -33,8 +33,9 @@
 #    take.
 #
 # As in build-chromium-root.sh: absolute symbolic links become relative
-# ones, /tmp and /var/tmp are left out, and documentation, man pages and
-# translations other than English are dropped.
+# ones (here after each package, checked with unpack-deb.py --check), /tmp
+# and /var/tmp are left out, and documentation, man pages and translations
+# other than English are dropped.
 set -e
 
 output=$1
@@ -45,7 +46,7 @@ appSources=$5
 hostCC=$6
 
 mirror=${RENGUIN_ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}
-branch=$(sed -n 's/^branch //p' "$pins")
+unpackDeb=$(dirname "$0")/unpack-deb.py
 mkdir -p "$cache"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/renguin-flatpak.XXXXXX")
@@ -80,12 +81,42 @@ fetch()
 	fi
 }
 
-# unpack <archive> <directory>: an Alpine package or the minirootfs
+# relative_links <directory>: absolute symbolic links become relative ones
+relative_links()
+{
+	python3 -I -c '
+import os, sys
+root = sys.argv[1]
+for directory, dirs, files in os.walk(root):
+    for name in dirs + files:
+        path = os.path.join(directory, name)
+        if not os.path.islink(path):
+            continue
+        target = os.readlink(path)
+        if not target.startswith("/"):
+            continue
+        linkDir = "/" + os.path.relpath(directory, root)
+        os.unlink(path)
+        os.symlink(os.path.relpath(target, os.path.normpath(linkDir)), path)
+' "$1"
+}
+
+# unpack <archive> <directory>: an Alpine package or the minirootfs. After
+# each one, its absolute links are made relative and every link must stay
+# inside <directory> by the build host's rules (unpack-deb.py --check), so
+# that a package's link to a directory cannot send a later package's files
+# elsewhere on the build host.
 unpack()
 {
 	tar -C "$2" -xzf "$1" --warning=no-unknown-keyword 2>/dev/null \
 		|| tar -C "$2" -xzf "$1"
 	rm -f "$2"/.PKGINFO "$2"/.SIGN.* "$2"/.pre-* "$2"/.post-* "$2"/.trigger
+	relative_links "$2"
+	python3 -I "$unpackDeb" --check "$2" || {
+		echo "build-flatpak-root.sh: $(basename "$1") leaves" \
+			"$2 through a link" >&2
+		exit 1
+	}
 }
 
 # The build host's copy: the base root's files, then the Flatpak packages.
@@ -180,21 +211,7 @@ if [ -d "$root/usr/share/locale" ]; then
 		-exec rm -rf {} +
 fi
 
-python3 -I -c '
-import os, sys
-root = sys.argv[1]
-for directory, dirs, files in os.walk(root):
-    for name in dirs + files:
-        path = os.path.join(directory, name)
-        if not os.path.islink(path):
-            continue
-        target = os.readlink(path)
-        if not target.startswith("/"):
-            continue
-        linkDir = "/" + os.path.relpath(directory, root)
-        os.unlink(path)
-        os.symlink(os.path.relpath(target, os.path.normpath(linkDir)), path)
-' "$root"
+relative_links "$root"
 
 rm -rf "$root/tmp" "$root/var/tmp"
 

@@ -216,7 +216,10 @@ local flatpakAppSources = <renguin-flatpak>hello.c <renguin-flatpak>ldconfig
 	<renguin-flatpak>org.renga.Hello.metadata
 	<renguin-flatpak>org.renga.TestPlatform.metadata ;
 SEARCH on $(flatpakAppSources) = $(flatpakAppDir) ;
-Depends $(flatpakRoot) : $(flatpakInputs) $(flatpakAppSources) $(linuxRoot) ;
+# unpack-deb.py --check: every package's links must stay inside the tree
+SEARCH on <renguin-root>unpack-deb.py = $(rootDir) ;
+Depends $(flatpakRoot) : $(flatpakInputs) $(flatpakAppSources) $(linuxRoot)
+	<renguin-root>unpack-deb.py ;
 RENGUIN_FLATPAK_APP_DIR on $(flatpakRoot) = $(flatpakAppDir) ;
 RENGUIN_ROOT_CACHE on $(flatpakRoot)
 	= [ FDirName $(HAIKU_DOWNLOAD_DIR) renguin-linux-root ] ;

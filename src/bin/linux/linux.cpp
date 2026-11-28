@@ -877,6 +877,8 @@ host() {
 # another bind is skipped (Renguin has no mount namespace to put it there).
 inside() {
 	case "$1" in /*) ;; *) return 1 ;; esac
+	# no "." or ".." components: they would walk back out of a bind's place
+	case "/$1/" in */./*|*/../*) return 1 ;; esac
 	insidePath=$root
 	insideRest=${1#/}
 	while :; do
@@ -911,9 +913,10 @@ place() {
 		# Renguin answers itself or that are shared with Haiku
 		for entry in "${1%/}"/* "${1%/}"/.[!.]*; do
 			[ -e "$entry" ] || [ -L "$entry" ] || continue
-			case "${entry##*/}" in proc|dev|tmp) continue ;; esac
-			rm -rf "$root/${entry##*/}" 2>/dev/null
-			ln -s "$entry" "$root/${entry##*/}"
+			name=${entry##*/}
+			case "$name" in ""|.|..|proc|dev|tmp) continue ;; esac
+			rm -rf "${root:?}/$name" 2>/dev/null
+			ln -s "$entry" "${root:?}/$name"
 		done
 		return
 	fi
@@ -924,7 +927,7 @@ place() {
 	fi
 	inside "$2" || { skipped "$2"; return; }
 	mkdir -p "$root$(dirname "$2")"
-	rm -rf "$root$2" 2>/dev/null
+	rm -rf "${root:?}$2" 2>/dev/null
 	ln -s "$1" "$root$2"
 }
 
@@ -964,7 +967,7 @@ while [ $# -gt 0 ]; do
 				echo "bwrap (Renguin): $3 is Haiku's own path; no link" >&2
 			elif inside "$3" && [ "$3" != / ]; then
 				mkdir -p "$root$(dirname "$3")"
-				rm -rf "$root$3" 2>/dev/null
+				rm -rf "${root:?}$3" 2>/dev/null
 				ln -s "$2" "$root$3"
 			else
 				skipped "$3"
@@ -983,7 +986,7 @@ while [ $# -gt 0 ]; do
 				:
 			elif inside "$2"; then
 				[ -d "$root$2" ] && [ ! -L "$root$2" ] \
-					|| rm -rf "$root$2" 2>/dev/null
+					|| rm -rf "${root:?}$2" 2>/dev/null
 				mkdir -p "$root$2"
 			else
 				skipped "$2"
@@ -995,7 +998,7 @@ while [ $# -gt 0 ]; do
 				echo "bwrap (Renguin): $3 is Haiku's own path; not written" >&2
 			elif inside "$3" && [ "$3" != / ]; then
 				mkdir -p "$root$(dirname "$3")"
-				rm -rf "$root$3" 2>/dev/null
+				rm -rf "${root:?}$3" 2>/dev/null
 				eval "cat <&$2" > "$root$3"
 			else
 				skipped "$3"
@@ -1052,7 +1055,7 @@ if [ -n "$RENGUIN_BWRAP_DRY_RUN" ]; then
 	echo "env: $envtext"
 	echo "chdir: $chdir"
 	echo "command: $*"
-	rm -rf "$root" "$envfile" "$root.args"
+	rm -rf "${root:?}" "$envfile" "$root.args"
 	exit 0
 fi
 rm -f "$envfile" "$root.args"
