@@ -218,6 +218,7 @@ private:
 			void				_UpdateWeb();
 			void				_SendBuffers();
 			void				_UpdateDrift(BTimeSource* mixerClock);
+			void				_RearmDriftWarmUp();
 
 			BMediaAddOn*		fAddOn;
 			kind_t				fKind;
@@ -269,6 +270,8 @@ private:
 			int32				fDriftCount;
 			int32				fDriftNext;
 			int32				fDriftRestarts;	// for the test hook
+			bigtime_t			fDriftWarmUntil;
+				// no first sample before this real time (0: not set yet)
 			int32				fDriftRejected;
 			double				fDrift;			// device / mixer - 1
 			double				fMeasuredDrift;
