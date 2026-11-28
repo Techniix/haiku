@@ -2785,7 +2785,7 @@ vm_page_allocate_page(vm_page_reservation* reservation, uint32 flags)
 
 			page = queue->RemoveHead();
 			if (page == NULL)
-				otherQueue->RemoveHead();
+				page = otherQueue->RemoveHead();
 
 			if (page == NULL) {
 				panic("Had reserved page, but there is none!");
