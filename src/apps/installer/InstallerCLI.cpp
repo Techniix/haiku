@@ -44,6 +44,8 @@
 #include <Path.h>
 
 #include "DestinationPlan.h"
+#include "WizardPlan.h"
+#include "WizardWindow.h"
 
 #include "InstallationInfo.h"
 #include "InstallerDefs.h"
@@ -121,36 +123,6 @@ private:
 };
 
 
-class PartitionFinder : public BDiskDeviceVisitor {
-public:
-	PartitionFinder(const char* name)
-		:
-		fName(name),
-		fID(-1),
-		fCount(0)
-	{
-	}
-
-	virtual bool Visit(BDiskDevice* device)
-	{
-		return Visit(device, 0);
-	}
-
-	virtual bool Visit(BPartition* partition, int32 level)
-	{
-		if (partition->ContentName() == fName) {
-			fID = partition->ID();
-			fCount++;
-		}
-		return false;
-	}
-
-	BString			fName;
-	partition_id	fID;
-	int32			fCount;
-};
-
-
 class TargetLister : public BDiskDeviceVisitor {
 public:
 	virtual bool Visit(BDiskDevice* device)
@@ -193,14 +165,13 @@ find_partition(BDiskDeviceRoster& roster, const char* spec)
 		fprintf(stderr, "Installer: nothing is mounted at %s\n", spec);
 		return -1;
 	}
-	PartitionFinder finder(spec);
-	roster.VisitEachPartition(&finder, &device, &partition);
-	if (finder.fCount != 1) {
+	int32 count;
+	partition_id id = find_volume_named(spec, &count);
+	if (id < 0) {
 		fprintf(stderr, "Installer: %" B_PRId32 " volumes are named \"%s\"\n",
-			finder.fCount, spec);
-		return -1;
+			count, spec);
 	}
-	return finder.fID;
+	return id;
 }
 
 
@@ -271,12 +242,7 @@ plan_disk(int argc, char** argv)
 		return 1;
 	}
 	BPath backups;
-	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &backups,
-		true);
-	if (status == B_OK)
-		status = backups.Append("Renga/disk-backups");
-	if (status == B_OK)
-		status = create_directory(backups.Path(), 0700);
+	status_t status = disk_backup_directory(backups);
 	if (status != B_OK) {
 		fprintf(stderr, "Installer: no backup folder: %s\n",
 			strerror(status));
@@ -295,6 +261,99 @@ plan_disk(int argc, char** argv)
 }
 
 
+/*!	Renga (batch 14, F-23): the wizard's options (WizardWindow.h). With
+	\a summaryOnly ("--wizard-summary") the Summary page's list is printed
+	instead, one "summary: " line per change, from the same code as the
+	page (WizardPlan.cpp); nothing is written. Returns -1 when the window
+	is to be shown, else the exit status.
+*/
+static int
+wizard_options(int argc, char** argv, bool summaryOnly)
+{
+	WizardOptions& options = gWizardOptions;
+	options.wizard = !summaryOnly && strcmp(argv[1], "--wizard") == 0;
+	options.classic = strcmp(argv[1], "--classic") == 0;
+	if (options.classic)
+		return argc == 2 ? -1 : usage();
+	for (int i = 2; i < argc; i++) {
+		const char* option = argv[i];
+		if (strcmp(option, "--auto") == 0 && !summaryOnly) {
+			options.autoRun = true;
+			continue;
+		}
+		if (strcmp(option, "--lean") == 0) {
+			options.lean = true;
+			continue;
+		}
+		if (i + 1 >= argc)
+			return usage();
+		const char* value = argv[++i];
+		if (strcmp(option, "--page") == 0 && !summaryOnly)
+			options.page = value;
+		else if (strcmp(option, "--choice") == 0)
+			options.choice = value;
+		else if (strcmp(option, "--disk") == 0)
+			options.disk = value;
+		else if (strcmp(option, "--target") == 0)
+			options.target = value;
+		else if (strcmp(option, "--mode") == 0)
+			options.mode = value;
+		else if (strcmp(option, "--name") == 0)
+			options.name = value;
+		else if (strcmp(option, "--confirm-erase") == 0 && !summaryOnly)
+			options.confirmErase = value;
+		else
+			return usage();
+	}
+	wizard_destination destination = WIZARD_ERASE_DISK;
+	if (options.choice.Length() > 0
+		&& !wizard_destination_for_name(options.choice.String(),
+			destination)) {
+		return usage();
+	}
+	if (options.mode.Length() > 0
+		&& install_mode_for_name(options.mode.String()) == INSTALL_MODE_ASK)
+		return usage();
+	if (!summaryOnly)
+		return -1;
+
+	if (options.choice.Length() == 0)
+		return usage();
+	WizardChoice choice;
+	choice.destination = destination;
+	choice.diskPath = options.disk;
+	choice.volumeName = options.name.Length() > 0 ? options.name
+		: unique_volume_name("Renga");
+	if (options.target.Length() > 0) {
+		BDiskDeviceRoster roster;
+		choice.target = find_partition(roster, options.target.String());
+		if (choice.target < 0)
+			return 1;
+	}
+	choice.mode = options.mode.Length() > 0
+		? install_mode_for_name(options.mode.String()) : INSTALL_MODE_ASK;
+	choice.lean = options.lean;
+	WizardSummary summary;
+	BString why;
+	if (make_wizard_summary(choice, summary, why) != B_OK) {
+		fprintf(stderr, "Installer: %s\n", why.String());
+		return 1;
+	}
+	for (int32 i = 0; i < summary.changes.CountStrings(); i++)
+		printf("summary: %s\n", summary.changes.StringAt(i).String());
+	for (int32 i = 0; i < summary.warnings.CountStrings(); i++)
+		printf("summary: %s\n", summary.warnings.StringAt(i).String());
+	for (const DiskSegment& segment : summary.after) {
+		printf("after: %s %" B_PRIdOFF " MiB at %" B_PRIdOFF " MiB \"%s\"\n",
+			segment.kind == SEGMENT_NEW ? "new" : segment.kind == SEGMENT_FREE
+				? "free" : segment.kind == SEGMENT_TARGET ? "target" : "kept",
+			segment.size / (1024 * 1024), segment.offset / (1024 * 1024),
+			segment.label.String());
+	}
+	return 0;
+}
+
+
 static int
 usage()
 {
@@ -306,6 +365,16 @@ usage()
 		"           [--lean yes|no]\n"
 		"       Installer --plan-disk <raw device> --layout erase|free\n"
 		"           [--name <volume name>] [--apply]\n"
+		"       Installer --wizard-summary --choice erase|alongside|existing\n"
+		"           [--disk <raw device>] [--name <new volume name>]\n"
+		"           [--target <volume name>] [--mode upgrade|replace|erase]\n"
+		"           [--lean]\n"
+		"       Installer --wizard [--page welcome|destination|summary|\n"
+		"           progress|finish] [--choice ...] [--disk ...] [--target ...]\n"
+		"           [--mode ...] [--name ...] [--lean]\n"
+		"           [--auto [--confirm-erase <raw device|volume name>]]\n"
+		"       Installer --classic   (the classic window)\n"
+		"       Installer --which-window   (the setting: wizard or classic)\n"
 		"       Installer [--target <volume name> [--begin]]   (the window)\n");
 	return 2;
 }
@@ -334,6 +403,17 @@ installer_command_line(int argc, char** argv)
 
 	if (strcmp(argv[1], "--plan-disk") == 0)
 		return plan_disk(argc, argv);
+
+	if (strcmp(argv[1], "--wizard") == 0 || strcmp(argv[1], "--classic") == 0)
+		return wizard_options(argc, argv, false);
+	if (strcmp(argv[1], "--which-window") == 0 && argc == 2) {
+		// the window the setting chooses (Options > Use the classic
+		// Installer window, Tools > Use the installation wizard)
+		printf("%s\n", installer_uses_classic_window() ? "classic" : "wizard");
+		return 0;
+	}
+	if (strcmp(argv[1], "--wizard-summary") == 0)
+		return wizard_options(argc, argv, true);
 
 	if (strcmp(argv[1], "--unattended") != 0) {
 		if (strcmp(argv[1], "--target") == 0 && (argc == 3

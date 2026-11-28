@@ -9,6 +9,8 @@
 #include <DiskDevice.h>
 #include <DiskDeviceRoster.h>
 #include <DiskDeviceVisitor.h>
+#include <Directory.h>
+#include <FindDirectory.h>
 #include <Partition.h>
 #include <PartitioningInfo.h>
 
@@ -38,10 +40,12 @@ destination_layout_for_name(const char* name, destination_layout& layout)
 	the disk at \a path, or -1: the space from its first MiB boundary on,
 	since the disk engine starts partitions there (a free space at the
 	start of a GUID partition table begins at block 34, so its full size
-	never fits).
+	never fits). \a _start gets where that partition would start: the
+	first of the largest spaces, which is where the engine puts a
+	partition of that size (the first free space that holds it).
 */
 static off_t
-largest_free_space(const char* path)
+largest_free_space(const char* path, off_t* _start = NULL)
 {
 	BDiskDeviceRoster roster;
 	BDiskDevice device;
@@ -58,15 +62,20 @@ largest_free_space(const char* path)
 	if (status != B_OK)
 		return -1;
 	off_t largest = 0;
+	off_t largestStart = 0;
 	for (int32 i = 0; i < info.CountPartitionableSpaces(); i++) {
 		off_t start, size;
 		if (info.GetPartitionableSpaceAt(i, &start, &size) != B_OK)
 			continue;
 		off_t aligned = (start + kAlignment - 1) / kAlignment * kAlignment;
 		off_t room = start + size - aligned;
-		if (room > largest)
+		if (room > largest) {
 			largest = room;
+			largestStart = aligned;
+		}
 	}
+	if (_start != NULL)
+		*_start = largestStart;
 	return largest;
 }
 
@@ -76,7 +85,8 @@ public:
 	VolumeNameFinder(const char* name)
 		:
 		fName(name),
-		fFound(false)
+		fID(-1),
+		fCount(0)
 	{
 	}
 
@@ -87,25 +97,39 @@ public:
 
 	virtual bool Visit(BPartition* partition, int32 level)
 	{
-		if (partition->ContentName() == fName)
-			fFound = true;
-		return fFound;
+		if (partition->ContentName() == fName) {
+			fID = partition->ID();
+			fCount++;
+		}
+		return false;
 	}
 
-	BString	fName;
-	bool	fFound;
+	BString			fName;
+	partition_id	fID;
+	int32			fCount;
 };
 
 
-bool
-volume_name_exists(const char* name)
+partition_id
+find_volume_named(const char* name, int32* _count)
 {
 	VolumeNameFinder finder(name);
 	BDiskDeviceRoster roster;
 	BDiskDevice device;
 	BPartition* partition;
 	roster.VisitEachPartition(&finder, &device, &partition);
-	return finder.fFound;
+	if (_count != NULL)
+		*_count = finder.fCount;
+	return finder.fCount == 1 ? finder.fID : -1;
+}
+
+
+bool
+volume_name_exists(const char* name)
+{
+	int32 count;
+	find_volume_named(name, &count);
+	return count > 0;
 }
 
 
@@ -204,4 +228,142 @@ make_destination_plan(const RengaDisk::DiskInfo& disk,
 	operation.system = "bfs";
 	plan.Add(operation);
 	return B_OK;
+}
+
+
+// #pragma mark - the wizard's picture of the disk
+
+
+static void
+add_segment(std::vector<DiskSegment>& segments, off_t offset, off_t size,
+	const char* label, disk_segment_kind kind)
+{
+	if (size <= 0)
+		return;
+	DiskSegment segment;
+	segment.offset = offset;
+	segment.size = size;
+	segment.label = label;
+	segment.kind = kind;
+	segments.push_back(segment);
+}
+
+
+static BString
+partition_label(const RengaDisk::PartitionInfo& partition)
+{
+	BString label = partition.contentName;
+	if (label.Length() == 0)
+		label = partition.name;
+	if (partition.system.Length() > 0 && partition.system != label) {
+		if (label.Length() > 0)
+			label << " (" << partition.system << ")";
+		else
+			label = partition.system;
+	}
+	return label;
+}
+
+
+void
+disk_segments_now(const RengaDisk::DiskInfo& disk,
+	std::vector<DiskSegment>& segments, partition_id target)
+{
+	segments.clear();
+	off_t position = 0;
+	for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
+		// gaps smaller than the alignment are table space, not free space
+		if (partition.offset - position >= kAlignment) {
+			add_segment(segments, position, partition.offset - position, "",
+				SEGMENT_FREE);
+		}
+		add_segment(segments, partition.offset, partition.size,
+			partition_label(partition).String(),
+			partition.id == target ? SEGMENT_TARGET : SEGMENT_KEPT);
+		position = partition.offset + partition.size;
+	}
+	if (disk.size - position >= kAlignment)
+		add_segment(segments, position, disk.size - position, "",
+			SEGMENT_FREE);
+}
+
+
+status_t
+disk_segments_planned(const RengaDisk::DiskInfo& disk,
+	destination_layout layout, const char* volumeName,
+	std::vector<DiskSegment>& segments)
+{
+	segments.clear();
+	if (layout == DESTINATION_ERASE_DISK) {
+		// as make_destination_plan() makes it: the EFI system partition
+		// from the first MiB, then the rest (the engine leaves the GPT
+		// backup at the end)
+		add_segment(segments, kAlignment, kEFIPartitionSize, "EFI",
+			SEGMENT_NEW);
+		off_t start = kAlignment + kEFIPartitionSize;
+		add_segment(segments, start, disk.size - start - kAlignment,
+			volumeName, SEGMENT_NEW);
+		return B_OK;
+	}
+
+	off_t start;
+	off_t size = largest_free_space(disk.path.String(), &start);
+	if (size < 0)
+		return B_ERROR;
+	std::vector<DiskSegment> now;
+	disk_segments_now(disk, now);
+	bool placed = false;
+	for (const DiskSegment& segment : now) {
+		if (placed || segment.kind != SEGMENT_FREE
+			|| start < segment.offset
+			|| start >= segment.offset + segment.size) {
+			segments.push_back(segment);
+			continue;
+		}
+		add_segment(segments, segment.offset, start - segment.offset, "",
+			SEGMENT_FREE);
+		add_segment(segments, start, size, volumeName, SEGMENT_NEW);
+		add_segment(segments, start + size,
+			segment.offset + segment.size - start - size, "", SEGMENT_FREE);
+		placed = true;
+	}
+	if (!placed) {
+		// the space is in a gap disk_segments_now() leaves out
+		add_segment(segments, start, size, volumeName, SEGMENT_NEW);
+	}
+	return B_OK;
+}
+
+
+BString
+describe_disk(const RengaDisk::DiskInfo& disk)
+{
+	BString text = RengaDisk::SizeString(disk.size);
+	text << (disk.isFile ? " disk image" : " disk");
+	if (disk.removable)
+		text << " (removable)";
+	text << ", " << (disk.partitioning.Length() > 0
+		? disk.partitioning.String() : "no partition table");
+	BString systems;
+	for (const RengaDisk::PartitionInfo& partition : disk.partitions) {
+		if (partition.system.Length() == 0
+			|| systems.FindFirst(partition.system) >= 0)
+			continue;
+		systems << (systems.Length() > 0 ? ", " : "") << partition.system;
+	}
+	if (systems.Length() > 0)
+		text << ": " << systems;
+	return text;
+}
+
+
+status_t
+disk_backup_directory(BPath& path)
+{
+	status_t status = find_directory(B_USER_SETTINGS_DIRECTORY, &path, true);
+	if (status == B_OK)
+		status = path.Append("Renga/disk-backups");
+	if (status == B_OK)
+		status = create_directory(path.Path(), 0700);
+	return status;
 }

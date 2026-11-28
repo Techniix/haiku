@@ -60,6 +60,14 @@ public:
 			// compiler and binutils) out of the installed system
 			void				SetLeanInstall(bool lean)
 									{ fLeanInstall = lean; }
+			// Renga (F-23, the wizard): an EFI system partition the wizard
+			// has just made on the destination's disk. After the copy,
+			// Renga's EFI loader goes into it as the fallback loader
+			// (EFI/BOOT/BOOTX64.EFI), so that the firmware starts the new
+			// installation. It is new and empty: no other system's loader
+			// is replaced (one that is there already is left alone).
+			void				SetNewEFIPartition(partition_id id)
+									{ fNewEFIPartition = id; }
 
 private:
 			status_t			_WriteBootSector(BPath& path);
@@ -83,6 +91,7 @@ private:
 			status_t			_WriteActivatedPackages(
 									const BPath& target);
 			status_t			_UpdateEFILoaders(partition_id disk);
+			status_t			_InstallNewEFILoader();
 			void				_Log(const char* format, ...);
 			void				_RenameVolume(const BPath& target);
 			void				_SaveLog(const BPath& target);
@@ -114,6 +123,7 @@ private:
 			int32				fRenameVolume;
 			bool				fLeanInstall;
 			bool				fHadInstallerLink;
+			partition_id		fNewEFIPartition;
 			BString				fLogText;
 };
 

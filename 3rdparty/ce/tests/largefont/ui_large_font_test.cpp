@@ -25,7 +25,9 @@
 
 	Programs: Control Panel (every page), Welcome (every page), Renguin
 	Manager, Audio (every page), Gamepads, LinuxKPI Manager, Boot menu, Renga
-	Doctor, the session bus prompt, Deskbar preferences and Tracker
+	Doctor, the session bus prompt, the Installer's wizard (every page; the
+	Summary page for upgrading "CETarget" when installer_ui_test's disk is
+	attached, otherwise it says so), Deskbar preferences and Tracker
 	preferences (Deskbar and Tracker are restarted with the audit loaded,
 	then restarted normally).
 */
@@ -497,6 +499,49 @@ main()
 		audit_program("session_bus_prompt",
 			"/boot/system/servers/session_bus_prompt",
 			"application/x-vnd.Renga-SessionBusPrompt", arguments);
+	}
+
+	// the Installer's wizard: every page, each through "--page" (the
+	// Installer is not asked through messengers, see installer_ui_test)
+	{
+		bool target = run("/boot/system/apps/Installer --list-targets")
+			.FindFirst("CETarget\t") >= 0;
+		const char* wizardPages[] = { "welcome", "destination", "summary",
+			"progress", "finish" };
+		for (size_t i = 0; i < sizeof(wizardPages) / sizeof(wizardPages[0]);
+				i++) {
+			BString check;
+			check << "installer_wizard_" << wizardPages[i];
+			if (strcmp(wizardPages[i], "summary") == 0 && !target) {
+				printf("CE-INFO large_font: %s not audited: no CETarget "
+					"disk (run with installer_ui_test)\n", check.String());
+				continue;
+			}
+			std::vector<const char*> arguments;
+			arguments.push_back("--wizard");
+			arguments.push_back("--page");
+			arguments.push_back(wizardPages[i]);
+			if (target) {
+				arguments.push_back("--choice");
+				arguments.push_back("existing");
+				arguments.push_back("--target");
+				arguments.push_back("CETarget");
+				arguments.push_back("--mode");
+				arguments.push_back("upgrade");
+			}
+			// no messenger to the Installer (looking it up hung the
+			// guest, as in installer_ui_test): a fixed wait, then kill
+			BString directory;
+			directory << "/tmp/ce-large-font-" << check;
+			pid_t pid = start_audited(directory.String(),
+				"/boot/system/apps/Installer", arguments);
+			snooze(6000000);
+			audit(directory.String(), check.String());
+			if (pid > 0) {
+				kill(pid, SIGKILL);
+				waitpid(pid, NULL, 0);
+			}
+		}
 	}
 
 	audit_service_preferences("deskbar_preferences", "x-vnd.Be-TSKB",

@@ -16,12 +16,32 @@
 	  the installation, upgrade is chosen; F-59: the volume is named
 	  "Haiku" for this, so "Rename the volume to \"Renga\"" is offered,
 	  checked);
-	- the Installer is then killed: the volume is unchanged.
+	- the Installer is then killed;
+	then the wizard (batch 14, F-23, the default window):
+	- "Installer --which-window" says "wizard" without a setting and
+	  "classic" with classic_window yes in ~/config/settings/Renga/
+	  installer (the setting is put back afterwards);
+	- "Installer --wizard-summary" (the Summary page's list, as text):
+	  upgrading CETarget names its installation and leaves the partition
+	  table alone; erasing CETarget's 64 MiB disk is refused as too small;
+	  erasing the disk the system runs from is refused as such;
+	- "Installer --wizard --page <page> --choice existing --target
+	  CETarget --mode upgrade" shows the Welcome, Destination and Summary
+	  pages (screenshots installer_wizard_welcome, _destination,
+	  _summary); the Summary page prints the same list as
+	  --wizard-summary;
+	- in the end the volume is unchanged.
 	The disk is a snapshot; nothing it gets is kept.
 */
 
 
 #include <Application.h>
+#include <DiskDevice.h>
+#include <DiskDeviceRoster.h>
+#include <FindDirectory.h>
+#include <Partition.h>
+#include <Path.h>
+#include <VolumeRoster.h>
 #include <Messenger.h>
 #include <OS.h>
 #include <Roster.h>
@@ -29,6 +49,8 @@
 #include <Volume.h>
 #include <fs_info.h>
 
+#include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -91,6 +113,240 @@ screenshot(const char* name)
 	printf("CE-HOST screenshot %s\n", name);
 	fflush(stdout);
 	snooze(1500000);
+}
+
+
+//!	\a text on one line, at most 300 characters.
+static BString
+one_line(BString text)
+{
+	text.ReplaceAll("\n", " | ");
+	if (text.Length() > 300) {
+		text.Truncate(297);
+		text << "...";
+	}
+	return text;
+}
+
+
+/*!	Starts the Installer with \a arguments and its output in a pipe;
+	collects the output until a line contains \a wanted (or \a seconds
+	pass), takes \a shot then, and kills it. Returns what it printed.
+*/
+static BString
+run_window(const char* const* arguments, const char* wanted,
+	const char* shot, int seconds, bool* _seen)
+{
+	int fds[2];
+	BString output;
+	*_seen = false;
+	if (pipe(fds) != 0)
+		return output;
+	pid_t pid = fork();
+	if (pid == 0) {
+		dup2(fds[1], 1);
+		dup2(fds[1], 2);
+		close(fds[0]);
+		close(fds[1]);
+		const char* argv[16];
+		int count = 0;
+		argv[count++] = kInstaller;
+		for (int i = 0; arguments[i] != NULL && count < 15; i++)
+			argv[count++] = arguments[i];
+		argv[count] = NULL;
+		execv(kInstaller, (char* const*)argv);
+		_exit(127);
+	}
+	close(fds[1]);
+	bigtime_t end = system_time() + seconds * 1000000LL;
+	while (pid > 0 && system_time() < end
+		&& output.FindFirst(wanted) < 0) {
+		struct pollfd entry = { fds[0], POLLIN, 0 };
+		if (poll(&entry, 1, 500) <= 0)
+			continue;
+		char buffer[1024];
+		ssize_t bytes = read(fds[0], buffer, sizeof(buffer));
+		if (bytes <= 0)
+			break;
+		output.Append(buffer, bytes);
+	}
+	*_seen = output.FindFirst(wanted) >= 0;
+	if (*_seen) {
+		// the page is laid out and drawn
+		snooze(1500000);
+		screenshot(shot);
+	}
+	if (pid > 0) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+	}
+	// what it printed meanwhile
+	int flags = fcntl(fds[0], F_GETFL);
+	fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+	char buffer[1024];
+	ssize_t bytes;
+	while ((bytes = read(fds[0], buffer, sizeof(buffer))) > 0)
+		output.Append(buffer, bytes);
+	close(fds[0]);
+	return output;
+}
+
+
+//!	The "summary: " lines of \a output, in order, without the prefix.
+static BString
+summary_lines(const BString& output)
+{
+	BString lines;
+	int32 start = 0;
+	while (start < output.Length()) {
+		int32 end = output.FindFirst('\n', start);
+		if (end < 0)
+			end = output.Length();
+		BString line;
+		output.CopyInto(line, start, end - start);
+		start = end + 1;
+		int32 at = line.FindFirst("summary: ");
+		if (at >= 0)
+			lines << line.String() + at + 9 << "\n";
+	}
+	return lines;
+}
+
+
+static BString
+read_text(const char* path, bool* _exists = NULL)
+{
+	BString text;
+	FILE* file = fopen(path, "r");
+	if (_exists != NULL)
+		*_exists = file != NULL;
+	if (file == NULL)
+		return text;
+	char buffer[1024];
+	size_t bytes;
+	while ((bytes = fread(buffer, 1, sizeof(buffer), file)) > 0)
+		text.Append(buffer, bytes);
+	fclose(file);
+	return text;
+}
+
+
+static void
+write_text(const char* path, const BString& text)
+{
+	FILE* file = fopen(path, "w");
+	if (file == NULL)
+		return;
+	fwrite(text.String(), 1, text.Length(), file);
+	fclose(file);
+}
+
+
+//!	The wizard: its setting, its summary as text, and its pages.
+static void
+check_wizard(const BString& listing)
+{
+	// the setting: the wizard by default, the classic window when asked
+	BPath settings;
+	find_directory(B_USER_SETTINGS_DIRECTORY, &settings);
+	BString path(settings.Path());
+	path << "/Renga";
+	mkdir(path.String(), 0755);
+	path << "/installer";
+	bool existed;
+	BString saved = read_text(path.String(), &existed);
+	unlink(path.String());
+	BString command;
+	command << kInstaller << " --which-window";
+	int status;
+	BString none = run(command, &status);
+	write_text(path.String(), "classic_window yes\n");
+	BString classic = run(command, &status);
+	if (existed)
+		write_text(path.String(), saved);
+	else
+		unlink(path.String());
+	none.Trim();
+	classic.Trim();
+	report("wizard_default", none == "wizard" && classic == "classic",
+		"without a setting: \"%s\"; with classic_window yes: \"%s\"",
+		none.String(), classic.String());
+
+	// the Summary page's list as text
+	command = "";
+	command << kInstaller << " --wizard-summary --choice existing --target "
+		"CETarget --mode upgrade 2>&1";
+	BString summary = run(command, &status);
+	report("wizard_summary_upgrade", status == 0
+			&& summary.FindFirst("summary: Upgrade the installation on "
+				"\"CETarget\" (Haiku r1~beta5_hrev57937") >= 0
+			&& summary.FindFirst("summary: The partition table is not "
+				"changed") >= 0
+			&& summary.FindFirst("summary: Install ") >= 0
+			&& summary.FindFirst("onto \"CETarget\"") >= 0,
+		"exit %d: %s", status, one_line(summary).String());
+
+	// CETarget's disk: the second column of its --list-targets line
+	BString disk;
+	int32 line = listing.FindFirst("CETarget\t");
+	if (line >= 0) {
+		int32 start = line + 9;
+		int32 end = listing.FindFirst('\t', start);
+		if (end > start)
+			listing.CopyInto(disk, start, end - start);
+	}
+	command = "";
+	command << kInstaller << " --wizard-summary --choice erase --disk '"
+		<< disk << "' 2>&1";
+	BString small = run(command, &status);
+	report("wizard_summary_small", disk.Length() > 0 && status == 1
+			&& small.FindFirst("installing needs at least") >= 0
+			&& small.FindFirst("summary:") < 0,
+		"%s: exit %d: %s", disk.String(), status, one_line(small).String());
+
+	BString bootDisk;
+	BVolume bootVolume;
+	BDiskDeviceRoster roster;
+	BDiskDevice device;
+	BPartition* partition;
+	if (BVolumeRoster().GetBootVolume(&bootVolume) == B_OK
+		&& roster.FindPartitionByVolume(bootVolume, &device, &partition)
+			== B_OK) {
+		BPath devicePath;
+		device.GetPath(&devicePath);
+		bootDisk = devicePath.Path();
+	}
+	command = "";
+	command << kInstaller << " --wizard-summary --choice erase --disk '"
+		<< bootDisk << "' 2>&1";
+	BString boot = run(command, &status);
+	report("wizard_summary_boot_disk", bootDisk.Length() > 0 && status == 1
+			&& boot.FindFirst("started from") >= 0
+			&& boot.FindFirst("summary:") < 0,
+		"%s: exit %d: %s", bootDisk.String(), status, one_line(boot).String());
+
+	// the pages (the licence window is skipped with --page)
+	const char* pages[] = { "welcome", "destination", "summary" };
+	for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+		const char* arguments[] = { "--wizard", "--page", pages[i],
+			"--choice", "existing", "--target", "CETarget", "--mode",
+			"upgrade", NULL };
+		BString wanted, shot, check;
+		wanted << "wizard page " << pages[i];
+		shot << "installer_wizard_" << pages[i];
+		check << "wizard_page_" << pages[i];
+		bool seen;
+		BString output = run_window(arguments, wanted.String(),
+			shot.String(), 40, &seen);
+		bool pass = seen && output.FindFirst("opening the wizard") >= 0;
+		if (strcmp(pages[i], "summary") == 0) {
+			// the page lists what --wizard-summary printed
+			pass = pass && summary_lines(output).Length() > 0
+				&& summary_lines(output) == summary_lines(summary);
+		}
+		report(check.String(), pass, "%s: %s", seen ? "shown" : "not shown",
+			one_line(output).String());
+	}
 }
 
 
@@ -158,6 +414,9 @@ main()
 		waitpid(team, NULL, 0);
 	}
 	volume.SetName("CETarget");
+
+	check_wizard(output);
+
 	bool kept = stat("/CETarget/home/Documents/letter.txt", &st) == 0
 		&& stat("/CETarget/system/packages/"
 			"haiku-r1~beta5_hrev57937-1-x86_64.hpkg", &st) == 0;

@@ -245,7 +245,11 @@ WAYLAND_SCREENSHOTS = ["wayland_shm_window", "wayland_switch"]
 # images with the Linux root.
 WAYLAND_LINUX_SCREENSHOTS = ["wayland_linux_window"]
 # The Installer with a destination that has an installation (F-23).
-INSTALLER_SCREENSHOTS = ["installer_modes"]
+INSTALLER_SCREENSHOTS = ["installer_modes", "installer_wizard_welcome",
+	"installer_wizard_destination", "installer_wizard_summary"]
+# The wizard's erase installation (F-23, batch 14, installer_wizard_test).
+WIZARD_SCREENSHOTS = ["installer_wizard_erase_summary",
+	"installer_wizard_progress", "installer_wizard_finish"]
 
 # Drivers whose error output (their ERROR() macro prints the name in yellow,
 # "\33[33m<name>:") fails the run. A healthy test run prints none.
@@ -346,11 +350,117 @@ def spare_disk_wanted(args, plain_image=False, tag="", persist=False):
 		for name in selection)
 
 
-def make_spare_disk(path, max_allocated=SPARE_DISK_MAX_ALLOCATED):
+# The disk installer_wizard_test's wizard erases and installs onto (batch
+# 14, F-23, renga-* images): a sparse file attached as one more virtio
+# disk with a marker in its first block (the test never writes to a disk
+# without it). After the test image's boot, if the marker is gone (the
+# wizard installed), the harness boots the disk as it is with UEFI
+# firmware (tag "wizard"; the wizard's GPT layout has an EFI system
+# partition and no BIOS boot path yet), where the test checks the running
+# installation; the disk is removed afterwards, whatever happens.
+WIZARD_DISK = ("wizard", 4 * 1024 * 1024 * 1024,
+	b"CE-WIZARD-DISK installer_wizard\n")
+WIZARD_DISK_TEST = "installer_wizard_test"
+# seconds without serial output before the wizard disk's boot counts as
+# stalled: OVMF is silent while it loads the boot loader from the IDE
+# disk, which took 92 s and 241 s in two runs (20261127-224444, -233341)
+WIZARD_BOOT_STALL = 600
+
+
+def wizard_disk_wanted(args):
+	"""Whether the test image's boot gets the wizard disk: renga-* images
+	booted from a hard disk, not in the modes that boot other disks, and
+	only when the selection has installer_wizard_test (or in a full
+	run)."""
+	if not args.profile.startswith("renga-") or args.media != "disk":
+		return False
+	if args.two_installs or args.other_systems or args.installer_upgrade \
+			or args.restore_points or args.loader_writes \
+			or args.mesa_upgrade:
+		return False
+	selection = getattr(args, "resume_selection", None) or args.only
+	if isinstance(selection, str):
+		selection = [w.strip() for w in selection.split(",") if w.strip()]
+	if not selection:
+		return True
+	return any(name in (WIZARD_DISK_TEST, WIZARD_DISK_TEST[:-len("_test")])
+		for name in selection)
+
+
+def wizard_drives(path):
+	return ["-drive", "file=%s,if=none,id=%s,format=raw,snapshot=off,"
+			"discard=unmap" % (path, WIZARD_DISK[0]),
+		"-device", "virtio-blk-pci,drive=%s" % WIZARD_DISK[0]]
+
+
+def run_wizard_boot(args, results_dir, report, disk):
+	"""After the test image's boot: boot the wizard disk if the wizard
+	installed onto it (its marker is gone), with UEFI firmware, and append
+	that boot's serial log to serial.log, so that installer_wizard_test's
+	checks there count like the others. Removes the disk."""
+	try:
+		with open(disk, "rb") as f:
+			start = f.read(len(WIZARD_DISK[2]))
+		if start == WIZARD_DISK[2]:
+			report["wizard_setup"] = "not installed: the marker is still " \
+				"there"
+			return
+		report["wizard_setup"] = "installed"
+		# UEFI, the disk as the run attaches its image (IDE by default).
+		# OVMF took up to 241 s to load the loader from the IDE disk,
+		# silent all the while, which the stall rule took for a hang:
+		# WIZARD_BOOT_STALL. (From a virtio disk the
+		# loader stopped with an invalid opcode at its first boot-state
+		# write, 20261127-225541: a boot loader finding, not this test's.)
+		saved = (args.firmware, getattr(args, "boot_attachment", None),
+			args.stall)
+		args.firmware, args.boot_attachment = "uefi", None
+		args.stall = max(args.stall, WIZARD_BOOT_STALL)
+		try:
+			if not boot(args, results_dir, report, image=disk, tag="wizard"):
+				log("booting the wizard's installation failed")
+		finally:
+			args.firmware, args.boot_attachment, args.stall = saved
+		for name in ("serial.log", "serial.timed.log"):
+			try:
+				with open(os.path.join(results_dir, "wizard", name),
+						"rb") as part:
+					data = part.read()
+			except OSError:
+				continue
+			with open(os.path.join(results_dir, name), "ab") as whole:
+				whole.write(b"\n[ce-test] --- boot wizard ---\n")
+				whole.write(data)
+	except OSError as error:
+		report["wizard_setup"] = "cannot read %s: %s" % (disk, error)
+	finally:
+		if os.path.exists(disk):
+			os.remove(disk)
+
+
+def check_wizard_boot(report):
+	"""installer_wizard.boot_installed: the wizard's installation started
+	and its test runner finished (only when the wizard disk was used)."""
+	setup = report.get("wizard_setup")
+	if setup is None:
+		return
+	boot = report.get("boots", {}).get("wizard", {})
+	report.setdefault("host_checks", []).append({
+		"name": "installer_wizard.boot_installed",
+		"pass": setup == "installed" and boot.get("status") == "exited"
+			and boot.get("runner_finished", False),
+		"detail": "%s; boot (UEFI): %s, runner finished: %s" % (setup,
+			boot.get("status", "not booted"),
+			boot.get("runner_finished"))})
+
+
+def make_spare_disk(path, max_allocated=SPARE_DISK_MAX_ALLOCATED,
+		disk=SPARE_DISK):
 	"""Creates the spare disk at \a path: a sparse file of SPARE_DISK's size
-	with its marker in the first block. Returns None, or the problem in
-	words; then there is no file (nothing is attached)."""
-	size, marker = SPARE_DISK[1], SPARE_DISK[2]
+	with its marker in the first block (or of \a disk's: WIZARD_DISK).
+	Returns None, or the problem in words; then there is no file (nothing
+	is attached)."""
+	size, marker = disk[1], disk[2]
 	try:
 		with open(path, "wb") as disk:
 			disk.truncate(size)
@@ -5728,6 +5838,20 @@ def main():
 				extra += ["-drive", "file=%s,format=raw,if=none,id=cetarget"
 					% target, "-device", "ide-hd,drive=cetarget,bus=ide.1,"
 					"unit=0"]
+		wizard = None
+		if not disks and not skip_boot and not args.restore_points \
+				and not args.mesa_upgrade and not args.loader_writes \
+				and wizard_disk_wanted(args):
+			wizard = os.path.join(results_dir, WIZARD_DISK[0] + ".img")
+			problem = make_spare_disk(wizard, disk=WIZARD_DISK)
+			if problem is not None:
+				log("wizard disk not attached: " + problem)
+				report.setdefault("host_checks", []).append({
+					"name": "host.wizard_disk", "pass": False,
+					"detail": "not attached: " + problem})
+				wizard = None
+			else:
+				extra += wizard_drives(wizard)
 		if args.restore_points:
 			run_restore_point_boots(args, results_dir, report)
 		elif args.mesa_upgrade:
@@ -5747,6 +5871,8 @@ def main():
 				progress=progress)
 		if disks:
 			run_installer_boots(args, results_dir, report, disks)
+		if wizard is not None:
+			run_wizard_boot(args, results_dir, report, wizard)
 		analyze(args, results_dir, report, available, progress)
 
 	report.setdefault("host_checks", []).append(harness_memory_check())
@@ -5911,6 +6037,7 @@ def analyze(args, results_dir, report, available, progress):
 	check_branding(args, results_dir, report)
 	check_two_installs(args, results_dir, report)
 	check_installer_boots(args, results_dir, report)
+	check_wizard_boot(report)
 	check_restore_point_boots(args, results_dir, report)
 	check_mesa_upgrade_boots(args, report)
 	if "linuxkpi_test" in selected:
@@ -5987,6 +6114,8 @@ SCREENSHOT_CHECKS = [
 	("media_html5_test", "HTML5_SCREENSHOTS", "html5_media.screenshots"),
 	("installer_ui_test", "INSTALLER_SCREENSHOTS",
 		"installer_ui.screenshots"),
+	("installer_wizard_test", "WIZARD_SCREENSHOTS",
+		"installer_wizard.screenshots"),
 	("bootmenu_ui_test", "BOOTMENU_SCREENSHOTS", "bootmenu.screenshots"),
 	("renguin_manager_test", "RENGUIN_MANAGER_SCREENSHOTS",
 		"renguin_manager.screenshots"),

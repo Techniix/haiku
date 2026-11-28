@@ -147,6 +147,7 @@ Remaining queue, in order:
    - Done (2026-11-27, `fix/media-load-checks`): `estimate` reproduced and fixed under KVM plus host load (not yet run under TCG): "16 samples, 1 restarts", the card's start-up burst restarting the drift window; a 2 s warm-up in MixerTap, and the check now waits for the full window. `duck_switch_off` not reproduced in 22 runs; its report now gives purity, recorded length and ducking state, and `record()` waits for the audio it asked for. Neither is on `KNOWN_FLAKY`. QEMU Tested.
 10. Mesa cross-build on the Linux host, time-boxed to about 2 h (decisions log).
 11. F-23, F-22, Renga Depot, F-66/F-41, F-44.
+   - F-23 wizard shell (2026-11-27, `batch/14-installer-wizard`, PR waiting for architect review; it changes `ce-test.py`/`selftest.py`): pages Welcome, Destination (erase, alongside, existing volume, DriveSetup), Summary (change list, before/after bar), Progress, Finish; the wizard is the default, Options > Use the classic Installer window switches. QEMU Tested: `installer_ui.wizard_*`, `installer_wizard.*` (erase install by the wizard, then that disk booted with UEFI), `large_font.installer_wizard_*`. Next: Hardware check, Boot, Account and network, Software pages; BIOS boot of the GPT layout.
 12. End of batch: four-way sweep, image `<date>-batch14`, status PR.
 
 Batch 15: option A for Mesa (decisions log, 2026-11-27):

@@ -512,6 +512,15 @@ describe(const Operation& operation)
 }
 
 
+BString
+Plan::Describe(int32 index) const
+{
+	if (index < 0 || index >= (int32)fOperations.size())
+		return "";
+	return describe(fOperations[index]);
+}
+
+
 status_t
 Plan::Check(BString& why) const
 {

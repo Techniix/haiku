@@ -145,6 +145,11 @@ public:
 			status_t			Check(BString& why) const;
 	//!	What will change, one line per step, and the warnings.
 			BString				Preview() const;
+	//!	Step \a index in words, as Preview() lists it ("new partition
+	//!	table: GUID Partition Map (every partition on the disk is
+	//!	lost)"); front ends list the steps their own way (the Installer's
+	//!	wizard, F-23).
+			BString				Describe(int32 index) const;
 	//!	Backs the table up into \a backupDir, then applies every step;
 	//!	\a log gets one line per step (also written to the journal).
 			status_t			Apply(const char* backupDir, BString& log,

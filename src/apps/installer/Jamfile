@@ -9,6 +9,7 @@ SubDirHdrs [ FDirName $(HAIKU_TOP) src servers launch ] ;
 Application Installer :
 	CopyEngine.cpp
 	DestinationPlan.cpp
+	DiskBarView.cpp
 	EULAWindow.cpp
 	InstallationInfo.cpp
 	InstallerApp.cpp
@@ -22,6 +23,8 @@ Application Installer :
 	UnzipEngine.cpp
 	WorkerThread.cpp
 	WorkerThreadModes.cpp
+	WizardPlan.cpp
+	WizardWindow.cpp
 
 	# From launch_daemon
 	Utility.cpp
@@ -46,4 +49,6 @@ DoCatalogs Installer :
 	ProgressReporter.cpp
 	WorkerThread.cpp
 	WorkerThreadModes.cpp
+	WizardPlan.cpp
+	WizardWindow.cpp
 ;

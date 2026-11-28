@@ -48,6 +48,7 @@
 #include "InstallerDefs.h"
 #include "PackageViews.h"
 #include "PartitionMenuItem.h"
+#include "WizardWindow.h"
 #include "WorkerThread.h"
 
 
@@ -65,6 +66,7 @@ const uint32 LAUNCH_BOOTMAN = 'iWBM';
 const uint32 START_SCAN = 'iSSC';
 const uint32 PACKAGE_CHECKBOX = 'iPCB';
 const uint32 ENCOURAGE_DRIVESETUP = 'iENC';
+const uint32 USE_WIZARD = 'iUWZ';
 
 
 class LogoView : public BView {
@@ -279,6 +281,11 @@ InstallerWindow::InstallerWindow()
 	toolsMenu->AddItem(fLaunchBootManagerItem);
 	toolsMenu->AddItem(fMakeBootableItem);
 	toolsMenu->AddItem(fEFILoaderMenu);
+	// Renga (F-23): back to the wizard, the default window
+	toolsMenu->AddSeparatorItem();
+	fWizardItem = new BMenuItem(B_TRANSLATE("Use the installation wizard"),
+		new BMessage(USE_WIZARD));
+	toolsMenu->AddItem(fWizardItem);
 	mainMenu->AddItem(toolsMenu);
 
 	BGroupView* packagesGroup = new BGroupView(B_VERTICAL, B_USE_ITEM_SPACING);
@@ -610,6 +617,17 @@ InstallerWindow::MessageReceived(BMessage *msg)
 			fWorkerThread->WriteBootSector(fDestMenu);
 			break;
 
+		case USE_WIZARD:
+		{
+			if (fInstallStatus == kInstalling)
+				break;
+			fWorkerThread->PostMessage(B_QUIT_REQUESTED);
+			BMessage request(kMsgSwitchInstallerWindow);
+			request.AddBool("wizard", true);
+			be_app->PostMessage(&request);
+			break;
+		}
+
 		default:
 			BWindow::MessageReceived(msg);
 			break;
@@ -697,24 +715,12 @@ InstallerWindow::_ShowOptionalPackages()
 void
 InstallerWindow::_LaunchDriveSetup()
 {
-	if (be_roster->Launch(kDriveSetupSignature) != B_OK) {
-		// Try really hard to launch it. It's very likely that this fails,
-		// when we run from the CD and there is only an incomplete mime
-		// database for example...
-		BPath path;
-		if (find_directory(B_SYSTEM_APPS_DIRECTORY, &path) != B_OK
-			|| path.Append("DriveSetup") != B_OK) {
-			path.SetTo("/boot/system/apps/DriveSetup");
-		}
-		BEntry entry(path.Path());
-		entry_ref ref;
-		if (entry.GetRef(&ref) != B_OK || be_roster->Launch(&ref) != B_OK) {
-			BAlert* alert = new BAlert("error", B_TRANSLATE("DriveSetup, the "
-				"application to configure disk partitions, could not be "
-				"launched."), B_TRANSLATE("OK"));
-			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
-			alert->Go();
-		}
+	if (!launch_installer_tool(kDriveSetupSignature, "DriveSetup")) {
+		BAlert* alert = new BAlert("error", B_TRANSLATE("DriveSetup, the "
+			"application to configure disk partitions, could not be "
+			"launched."), B_TRANSLATE("OK"));
+		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+		alert->Go();
 	}
 }
 
@@ -726,26 +732,14 @@ InstallerWindow::_LaunchBootManager()
 	// harddisk. If/when it later supports being installed to a certain
 	// harddisk, we would have to pass it the disk that contains the target
 	// partition here.
-	if (be_roster->Launch(kBootManagerSignature) != B_OK) {
-		// Try really hard to launch it. It's very likely that this fails,
-		// when we run from the CD and there is only an incomplete mime
-		// database for example...
-		BPath path;
-		if (find_directory(B_SYSTEM_APPS_DIRECTORY, &path) != B_OK
-			|| path.Append("BootManager") != B_OK) {
-			path.SetTo("/boot/system/apps/BootManager");
-		}
-		BEntry entry(path.Path());
-		entry_ref ref;
-		if (entry.GetRef(&ref) != B_OK || be_roster->Launch(&ref) != B_OK) {
-			BAlert* alert = new BAlert(
-				B_TRANSLATE("Failed to launch BootManager"),
-				B_TRANSLATE("BootManager, the application to configure the "
-					DISTRO_NAME " boot menu, could not be launched."),
-				B_TRANSLATE("OK"), NULL, NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT);
-			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
-			alert->Go();
-		}
+	if (!launch_installer_tool(kBootManagerSignature, "BootManager")) {
+		BAlert* alert = new BAlert(
+			B_TRANSLATE("Failed to launch BootManager"),
+			B_TRANSLATE("BootManager, the application to configure the "
+				DISTRO_NAME " boot menu, could not be launched."),
+			B_TRANSLATE("OK"), NULL, NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT);
+		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+		alert->Go();
 	}
 }
 
@@ -757,6 +751,7 @@ InstallerWindow::_DisableInterface(bool disable)
 	fLeanCheckBox->SetEnabled(!disable);
 	fLaunchBootManagerItem->SetEnabled(!disable);
 	fMakeBootableItem->SetEnabled(!disable);
+	fWizardItem->SetEnabled(!disable);
 	fSrcMenuField->SetEnabled(!disable);
 	fDestMenuField->SetEnabled(!disable);
 }
