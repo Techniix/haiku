@@ -15,6 +15,7 @@
 #include <PartitioningInfo.h>
 
 #include <dirent.h>
+#include <map>
 #include <fs_volume.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -568,8 +569,34 @@ directory_has_haiku_loader(const BPath& directory)
 }
 
 
+static std::map<partition_id, bool> sEFILoaderCache;
+
+
+void
+forget_efi_loader_cache()
+{
+	sEFILoaderCache.clear();
+}
+
+
+static bool look_for_haiku_efi_loader(const RengaDisk::DiskInfo& disk);
+
+
 bool
 disk_has_haiku_efi_loader(const RengaDisk::DiskInfo& disk)
+{
+	std::map<partition_id, bool>::iterator found
+		= sEFILoaderCache.find(disk.id);
+	if (found != sEFILoaderCache.end())
+		return found->second;
+	bool has = look_for_haiku_efi_loader(disk);
+	sEFILoaderCache[disk.id] = has;
+	return has;
+}
+
+
+static bool
+look_for_haiku_efi_loader(const RengaDisk::DiskInfo& disk)
 {
 	BDiskDeviceRoster roster;
 	for (const RengaDisk::PartitionInfo& info : disk.partitions) {

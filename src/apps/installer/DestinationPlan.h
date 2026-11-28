@@ -144,7 +144,11 @@ const char* firmware_name(firmware_kind firmware);
 //!	Whether an EFI system partition of \a disk holds Haiku's or Renga's
 //!	EFI loader (EFI/BOOT, EFI/HAIKU or EFI/RENGA); unmounted ones are
 //!	mounted read-only for the look.
+//!	The answer is kept per device ID (the Destination page asks on every
+//!	change, the name field on every key): forget_efi_loader_cache() when
+//!	the disks are read again.
 bool disk_has_haiku_efi_loader(const RengaDisk::DiskInfo& disk);
+void forget_efi_loader_cache();
 
 //!	Where the Installer keeps the disk engine's table backups and journals
 //!	(~/config/settings/Renga/disk-backups), created if needed.

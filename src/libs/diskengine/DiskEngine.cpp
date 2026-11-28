@@ -459,7 +459,8 @@ Plan::Plan(const char* devicePath)
 	:
 	fDevicePath(devicePath),
 	fAllowRealDisks(false),
-	fCreatedOffset(-1)
+	fCreatedOffset(-1),
+	fExpectedDevice(-1)
 {
 }
 
@@ -534,6 +535,12 @@ Plan::Check(BString& why) const
 	if (disk.isBootDisk) {
 		why = "this is the disk the running system started from";
 		return B_NOT_ALLOWED;
+	}
+	if (fExpectedDevice >= 0 && disk.id != fExpectedDevice) {
+		why.SetToFormat("%s is another disk now (device %" B_PRId32 ", the "
+			"plan was made for device %" B_PRId32 "): it was replaced",
+			fDevicePath.String(), disk.id, fExpectedDevice);
+		return B_DEV_ID_ERROR;
 	}
 	if (disk.readOnly) {
 		why = "the disk is read-only";
@@ -830,6 +837,12 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 	backupPath.SetToFormat("%s/%s-%s.table", backupDir, leaf.String(), stamp);
 	DiskInfo disk;
 	GetDisk(fDevicePath.String(), disk);
+	if (fExpectedDevice >= 0 && disk.id != fExpectedDevice) {
+		log << "refused: " << fDevicePath << " is another disk now (device "
+			<< disk.id << ", the plan was made for device " << fExpectedDevice
+			<< "): it was replaced\n";
+		return B_DEV_ID_ERROR;
+	}
 	status = BackupTable(disk.path.String(), backupPath.String());
 	if (status != B_OK) {
 		log << "refused: the partition table could not be saved ("
@@ -854,6 +867,16 @@ Plan::Apply(const char* backupDir, BString& log, BString* _backupPath)
 		status = get_device(disk.path.String(), device);
 		BString detail;
 		Operation operation = fOperations[i];
+		// the same disk as when the plan was checked: a disk swapped in
+		// the same port while the plan runs gets nothing
+		partition_id expected = fExpectedDevice >= 0 ? fExpectedDevice
+			: disk.id;
+		if (status == B_OK && device.ID() != expected) {
+			detail.SetToFormat("%s is another disk now (device %" B_PRId32
+				", expected %" B_PRId32 ")", disk.path.String(), device.ID(),
+				expected);
+			status = B_DEV_ID_ERROR;
+		}
 		if (status == B_OK && operation.index == kNewPartition) {
 			// the partition the latest create step made, by its offset
 			operation.index = -1;

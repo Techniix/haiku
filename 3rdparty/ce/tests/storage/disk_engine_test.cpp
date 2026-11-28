@@ -26,6 +26,13 @@
 	  disk_engine.refuses_bad_step  a plan naming a partition that does not
 	                                exist is refused before anything is
 	                                written
+	  disk_engine.refuses_other_device
+	                                a plan made for another device ID
+	                                (another stick in the same port,
+	                                RengaDisk::Plan::ExpectDevice) is
+	                                refused by Check() and Apply() before
+	                                the table backup; the disk's own ID
+	                                passes Check() (the engine directly)
 	  disk_engine.restore           a saved table written back brings a
 	                                deleted partition back
 	  disk_engine.format            partition 0 formatted as BFS named Data
@@ -35,6 +42,7 @@
 */
 
 
+#include <DiskEngine.h>
 #include <FindDirectory.h>
 #include <Path.h>
 #include <String.h>
@@ -299,6 +307,50 @@ main()
 			&& refused.FindFirst("no such partition") >= 0
 			&& lines.FindFirst("\"two\"") >= 0,
 		"exit %d: %s", status, one_line(refused).String());
+
+	// a plan for the device the disk was when it was made: refused once
+	// another device is at that path (review of PR #42)
+	{
+		RengaDisk::DiskInfo info;
+		RengaDisk::GetDisk(disk.String(), info);
+		BString otherBackups(backups);
+		otherBackups << "/other-device";
+		mkdir(otherBackups.String(), 0755);
+		RengaDisk::Operation operation;
+		operation.kind = RengaDisk::kSetName;
+		operation.index = 0;
+		operation.size = 0;
+		operation.name = "renamed";
+		RengaDisk::Plan other(disk.String());
+		other.ExpectDevice(info.id + 1000);
+		other.Add(operation);
+		BString why, log;
+		status_t checked = other.Check(why);
+		status_t applied = other.Apply(otherBackups.String(), log);
+		DIR* dir = opendir(otherBackups.String());
+		int written = 0;
+		while (dir != NULL && readdir(dir) != NULL)
+			written++;
+		if (dir != NULL)
+			closedir(dir);
+		RengaDisk::Plan same(disk.String());
+		same.ExpectDevice(info.id);
+		same.Add(operation);
+		BString sameWhy;
+		status_t sameChecked = same.Check(sameWhy);
+		lines = disk_lines(disk);
+		report("refuses_other_device", info.id >= 0
+				&& checked == B_DEV_ID_ERROR && applied == B_DEV_ID_ERROR
+				&& why.FindFirst("replaced") >= 0
+				&& log.FindFirst("replaced") >= 0
+				&& written == 2 /* "." and ".." only */
+				&& sameChecked == B_OK && lines.FindFirst("renamed") < 0,
+			"device %" B_PRId32 ": check \"%s\" (%s), apply \"%s\" (%s), "
+			"%d entries in the backup folder; own ID: %s", info.id,
+			why.String(), strerror(checked), one_line(log).String(),
+			strerror(applied), written, sameWhy.Length() > 0
+				? sameWhy.String() : strerror(sameChecked));
+	}
 
 	BString saved(backups);
 	saved << "/before-delete.table";

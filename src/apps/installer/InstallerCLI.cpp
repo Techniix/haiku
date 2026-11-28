@@ -228,6 +228,7 @@ plan_disk(int argc, char** argv)
 	} else
 		volumeName = name;
 	RengaDisk::Plan plan(info.path.String());
+	plan.ExpectDevice(info.id);
 	BString why;
 	if (make_destination_plan(info, layout, volumeName.String(), plan, why)
 			!= B_OK) {

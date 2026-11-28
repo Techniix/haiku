@@ -135,6 +135,12 @@ public:
 
 			void				AllowRealDisks(bool allow)
 									{ fAllowRealDisks = allow; }
+	//!	The disk's device ID when the plan was made (DiskInfo::id): Check()
+	//!	and Apply() refuse when the disk at the plan's path has another
+	//!	(another stick in the same port gets a new ID), before the table
+	//!	backup and before every step. -1 (the default): not checked.
+			void				ExpectDevice(partition_id id)
+									{ fExpectedDevice = id; }
 			void				Add(const Operation& operation)
 									{ fOperations.push_back(operation); }
 			int32				CountOperations() const
@@ -165,6 +171,7 @@ private:
 			bool				fAllowRealDisks;
 			std::vector<Operation> fOperations;
 			off_t				fCreatedOffset;
+			partition_id		fExpectedDevice;
 };
 
 

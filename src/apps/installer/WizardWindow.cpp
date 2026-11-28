@@ -719,6 +719,8 @@ WizardWindow::_ScanDisks()
 	while (BMenuItem* item = fDiskMenu->RemoveItem((int32)0))
 		delete item;
 
+	// the disks may have changed: look at their EFI loaders again
+	forget_efi_loader_cache();
 	std::vector<RengaDisk::DiskInfo> disks;
 	RengaDisk::ListDisks(disks);
 	for (const RengaDisk::DiskInfo& disk : disks) {
@@ -988,9 +990,16 @@ WizardWindow::_StartInstallation()
 		delete job;
 		return B_OK;
 	}, "apply disk plan", B_NORMAL_PRIORITY, job);
-	if (thread < 0 || resume_thread(thread) != B_OK) {
+	status_t started = thread < 0 ? thread : resume_thread(thread);
+	if (started != B_OK) {
+		// a thread that could not be resumed never ran: it goes, and so
+		// does its job
+		if (thread >= 0)
+			kill_thread(thread);
 		delete job;
-		_Finished(false, strerror(thread < 0 ? thread : B_ERROR));
+		fApplying = false;
+		fCancelButton->SetEnabled(true);
+		_Finished(false, strerror(started));
 	}
 }
 

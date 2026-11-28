@@ -152,6 +152,9 @@ summarize_new_volume(const WizardChoice& choice, WizardSummary& summary,
 	}
 	summary.plan = RengaDisk::Plan(disk.path.String());
 	summary.plan.AllowRealDisks(true);
+	// only ever applied to this very disk: another one plugged into the
+	// same port has another device ID, and the engine refuses it
+	summary.plan.ExpectDevice(disk.id);
 	status = make_destination_plan(disk, layout,
 		choice.volumeName.String(), summary.plan, why);
 	if (status == B_OK)

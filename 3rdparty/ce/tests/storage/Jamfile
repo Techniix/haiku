@@ -22,9 +22,10 @@ if $(CE_HARNESS) {
 # Renga's shared disk-management engine (F-24, first part) through
 # rengadisk, on a disk image file only. rengadisk itself is put into the
 # harness image here (the regular images get it from build/jam).
+UsePrivateHeaders diskengine ;
 Application disk_engine_test :
 	disk_engine_test.cpp
-	: be [ TargetLibstdc++ ]
+	: be libdiskengine.a [ TargetLibstdc++ ]
 ;
 
 if $(CE_HARNESS) {
