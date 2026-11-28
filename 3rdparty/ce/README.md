@@ -1321,7 +1321,9 @@ Host check: `mesa_upgrade.setup`.
   root beside it, in `/boot/system/non-packaged/compat/linux-roots/debian`
   (`tests/renguin/root/build-debian-root.sh`, packages pinned in
   `debian.pins`, `update-debian-pins.py` resolves them, `unpack-deb.py`
-  keeps every path inside the root): glibc 2.41, libstdc++, dash and SDL2
+  keeps every path and link inside the root, resolving them as a chroot
+  would; `test-unpack-deb.sh`, its test with crafted packages, runs first
+  in every build of the root): glibc 2.41, libstdc++, dash and SDL2
   (17.6 MB to download once, 44 MB in the image), and in renga-* images
   Mesa's EGL, GLES and desktop GL with llvmpipe too (47.7 MB more, 240 MB
   in all); the dev layer that builds the test programs is another 11.4 MB

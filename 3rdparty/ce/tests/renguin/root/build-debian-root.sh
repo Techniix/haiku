@@ -55,6 +55,14 @@ shift 5
 layers="$*"
 unpackDeb=$(dirname "$0")/unpack-deb.py
 
+# The unpacker's containment test first (crafted packages): no root is made
+# with an unpacker that lets a path or a link out.
+sh "$(dirname "$0")/test-unpack-deb.sh" "$unpackDeb" > /dev/null || {
+	sh "$(dirname "$0")/test-unpack-deb.sh" "$unpackDeb" >&2
+	echo "build-debian-root.sh: unpack-deb.py fails its test" >&2
+	exit 1
+}
+
 mirror=${RENGUIN_DEBIAN_MIRROR:-https://deb.debian.org/debian}
 snapshot=$(sed -n 's/^snapshot //p' "$pins")
 mkdir -p "$cache"
@@ -119,6 +127,10 @@ for layer in $layers dev; do
 	done < "$work/$layer.files"
 done
 
+# Every link resolves inside the root (unpack-deb.py checked it after each
+# package; once more before the steps below write through the root).
+python3 -I "$unpackDeb" --check "$root"
+
 # What the maintainer scripts would have made.
 cat > "$root/etc/passwd" <<'EOF'
 root:x:0:0:root:/root:/bin/sh
@@ -159,6 +171,7 @@ cp -a "$root" "$sysroot"
 while read -r file; do
 	unpack "$file" "$sysroot"
 done < "$work/dev.files"
+python3 -I "$unpackDeb" --check "$sysroot"
 
 tests=$root/opt/renguin-tests
 mkdir -p "$tests"
@@ -213,6 +226,8 @@ for program in programs:
 if bad:
     sys.exit("build-debian-root.sh: newer than the root has: " + "; ".join(bad))
 ' "$root" "$tests"/*
+
+python3 -I "$unpackDeb" --check "$root"
 
 # Owned by root, as on Linux; the archive keeps modes (set from the
 # packages by unpack-deb.py, from umask 022 for the files above, none group

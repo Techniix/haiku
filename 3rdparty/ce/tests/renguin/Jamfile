@@ -154,7 +154,8 @@ if $(HAIKU_RENGA_IMAGE) {
 }
 MakeLocate $(debianRoot) : $(outputDir) ;
 local debianInputs = <renguin-root>build-debian-root.sh
-	<renguin-root>debian.pins <renguin-root>unpack-deb.py ;
+	<renguin-root>debian.pins <renguin-root>unpack-deb.py
+	<renguin-root>test-unpack-deb.sh ;
 SEARCH on $(debianInputs) = $(rootDir) ;
 local debianDir = [ FDirName $(SUBDIR) debian ] ;
 local debianSources = <renguin-debian>glibc-check.c
