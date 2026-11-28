@@ -531,8 +531,20 @@ attach_image(const BString& spare, const char* name, BString& imagePath,
 	BFile file(imagePath.String(), B_CREATE_FILE | B_ERASE_FILE
 		| B_READ_WRITE);
 	status_t status = file.InitCheck();
+	const off_t size = 3LL * 1024 * 1024 * 1024;
 	if (status == B_OK)
-		status = file.SetSize(3LL * 1024 * 1024 * 1024);
+		status = file.SetSize(size);
+	// SetSize() does not zero the new blocks, and the spare disk had
+	// installer_destination_test's images: an old partition table there
+	// (whose partitions reach past this smaller disk) crashed libbe while
+	// the engine initialized the disk (20261128-003328). The tables live
+	// in the first and the last MiB.
+	static char zeros[1024 * 1024];
+	if (status == B_OK && (file.WriteAt(0, zeros, sizeof(zeros))
+				!= (ssize_t)sizeof(zeros)
+			|| file.WriteAt(size - (off_t)sizeof(zeros), zeros,
+				sizeof(zeros)) != (ssize_t)sizeof(zeros)))
+		status = B_IO_ERROR;
 	file.Unset();
 	BString device;
 	if (status == B_OK)
