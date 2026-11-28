@@ -5991,11 +5991,22 @@ ESP_MBR_TYPE = 0xef
 ESP_GPT_TYPE = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")
 
 
+def read_at(image, offset, length):
+	"""Reads \a length bytes at \a offset of the open \a image, clamped to
+	the file: a corrupt table cannot make the harness seek past the end or
+	allocate more than the image holds. Raises ValueError past the end."""
+	end = os.fstat(image.fileno()).st_size
+	if offset < 0 or length < 0 or offset >= end:
+		raise ValueError("offset %d is outside the %d-byte image"
+			% (offset, end))
+	image.seek(offset)
+	return image.read(min(length, end - offset))
+
+
 def esp_partitions(image):
 	"""The byte offsets of the EFI system partitions in the MBR or GPT
 	partition table of the open \a image."""
-	image.seek(0)
-	mbr = image.read(512)
+	mbr = read_at(image, 0, 512)
 	if len(mbr) < 512 or mbr[510:512] != b"\x55\xaa":
 		return []
 	found = []
@@ -6008,13 +6019,11 @@ def esp_partitions(image):
 		elif entry[4] == 0xee:
 			gpt = True
 	if gpt:
-		image.seek(512)
-		header = image.read(92)
+		header = read_at(image, 512, 92)
 		if header[:8] == b"EFI PART":
 			table, count, size = struct.unpack_from("<QII", header, 72)
-			if size >= 128:
-				image.seek(table * 512)
-				entries = image.read(min(count, 256) * size)
+			if 128 <= size <= 4096:
+				entries = read_at(image, table * 512, min(count, 256) * size)
 				for i in range(len(entries) // size):
 					entry = entries[i * size:(i + 1) * size]
 					if entry[:16] == ESP_GPT_TYPE:
@@ -6027,8 +6036,7 @@ def fat_find(image, offset, path):
 	"""Looks up \a path (a sequence of names) in the FAT12/16/32 file system
 	at byte \a offset of the open \a image. Returns the file's size and its
 	first two bytes; raises ValueError saying what is missing."""
-	image.seek(offset)
-	boot = image.read(512)
+	boot = read_at(image, offset, 512)
 	if len(boot) < 512 or boot[510:512] != b"\x55\xaa":
 		raise ValueError("no FAT boot sector")
 	sector, per_cluster, reserved, fats, root_entries, total16 = \
@@ -6044,8 +6052,8 @@ def fat_find(image, offset, path):
 	clusters = ((total16 or total32) - data) // per_cluster
 	bits = 12 if clusters < 4085 else 16 if clusters < 65525 else 32
 	cluster_bytes = sector * per_cluster
-	image.seek(offset + reserved * sector)
-	fat = image.read(fat_sectors * sector)
+	# clamped to the image: a corrupt FAT size cannot allocate gigabytes
+	fat = read_at(image, offset + reserved * sector, fat_sectors * sector)
 
 	def next_cluster(n):
 		if bits == 12:
@@ -6062,20 +6070,24 @@ def fat_find(image, offset, path):
 		return offset + data * sector + (n - 2) * cluster_bytes
 
 	def read_chain(n):
+		# A directory is read cluster by cluster; a chain that loops or runs
+		# on past a megabyte (far more than any ESP directory) is corrupt.
 		content = b""
-		for _ in range(clusters):
-			if n is None or n < 2:
-				break
-			image.seek(cluster_offset(n))
-			content += image.read(cluster_bytes)
+		visited = set()
+		while n is not None and n >= 2:
+			if n in visited or len(content) >= 1 << 20:
+				raise ValueError("corrupt cluster chain at cluster %d" % n)
+			visited.add(n)
+			content += read_at(image, cluster_offset(n), cluster_bytes)
 			n = next_cluster(n)
 		return content
 
 	if bits == 32:
 		directory = read_chain(root_cluster)
 	else:
-		image.seek(offset + (reserved + fats * fat_sectors) * sector)
-		directory = image.read(root_entries * 32)
+		directory = read_at(image,
+			offset + (reserved + fats * fat_sectors) * sector,
+			root_entries * 32)
 	for depth, name in enumerate(path):
 		walked = "/".join(path[:depth + 1])
 		match = None
@@ -6104,8 +6116,7 @@ def fat_find(image, offset, path):
 		size = struct.unpack_from("<I", match, 28)[0]
 		head = b""
 		if size and first >= 2:
-			image.seek(cluster_offset(first))
-			head = image.read(2)
+			head = read_at(image, cluster_offset(first), 2)
 		return size, head
 	raise ValueError("empty path")
 
@@ -6118,14 +6129,19 @@ def check_esp_loader(path):
 	name = os.path.basename(path)
 	loader = "/".join(ESP_LOADER)
 	problems = []
+	partitions = []
+	# Anything a corrupt image can make the reads raise ends in a FAIL with
+	# the reason, never in a harness crash.
+	corrupt = (ValueError, OverflowError, MemoryError, struct.error)
 	try:
 		with open(path, "rb") as image:
 			partitions = esp_partitions(image)
 			for offset in partitions:
 				try:
 					size, head = fat_find(image, offset, ESP_LOADER)
-				except (ValueError, struct.error) as error:
-					problems.append("ESP at byte %d: %s" % (offset, error))
+				except corrupt as error:
+					problems.append("ESP at byte %d: %s" % (offset,
+						str(error) or type(error).__name__))
 					continue
 				if size == 0:
 					problems.append("ESP at byte %d: %s is 0 bytes"
@@ -6140,7 +6156,10 @@ def check_esp_loader(path):
 	except OSError as error:
 		return {"name": "harness.esp_loader", "pass": False,
 			"detail": "cannot read %s: %s" % (path, error)}
-	if not partitions:
+	except corrupt as error:
+		problems.append("corrupt image: %s"
+			% (str(error) or type(error).__name__))
+	if not partitions and not problems:
 		problems.append("no EFI system partition")
 	return {"name": "harness.esp_loader", "pass": False,
 		"detail": "%s: %s; the firmware has nothing to start (see "

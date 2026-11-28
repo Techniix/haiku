@@ -1936,5 +1936,57 @@ check = esp_check(esp_disk(pe))
 expect("esp_loader: the detail gives the loader's size",
 	"%d bytes" % len(pe) in check["detail"], check["detail"])
 
+# Corrupt images fail harness.esp_loader with a reason instead of crashing
+# the harness (PR #46 review). Known bad, on the first version: a huge GPT
+# table LBA raised ValueError from seek(), an entry size of 0xffffffff and
+# a FAT32 FAT size of 0xffffffff raised MemoryError, and a looping FAT32
+# directory chain was read as long as the volume.
+def corrupt_disk(kind):
+	sector = 512
+	mbr = bytearray(sector)
+	mbr[510:512] = b"\x55\xaa"
+	if kind in ("gpt_lba", "gpt_entry_size"):
+		struct.pack_into("<BBBBBBBBII", mbr, 446, 0, 0, 2, 0, 0xee,
+			0xff, 0xff, 0xff, 1, 0xffffffff)
+		header = bytearray(sector)
+		header[0:8] = b"EFI PART"
+		table, size = (1 << 62, 128) if kind == "gpt_lba" \
+			else (2, 0xffffffff)
+		struct.pack_into("<QII", header, 72, table, 128, size)
+		return bytes(mbr) + bytes(header) + bytes(32 * sector)
+	struct.pack_into("<BBBBBBBBII", mbr, 446, 0x80, 0, 0, 0, 0xef,
+		0, 0, 0, 8, 0xffffffff)
+	boot = bytearray(sector)
+	boot[0:3] = b"\xeb\x58\x90"
+	reserved, fat_sectors = 2, 1
+	if kind == "fat32_fat_size":
+		fat_sectors = 0xffffffff
+	# FAT32: no root directory region, more than 65525 clusters
+	struct.pack_into("<HBHBHHBH", boot, 11, sector, 1, reserved, 1, 0, 0,
+		0xf8, 0)
+	struct.pack_into("<II", boot, 32, 200000, fat_sectors)
+	struct.pack_into("<I", boot, 44, 2)
+	boot[510:512] = b"\x55\xaa"
+	fat = bytearray(sector)
+	# clusters 0 and 1 reserved; the root directory's cluster 2 points to
+	# itself
+	struct.pack_into("<III", fat, 0, 0x0ffffff8, 0x0fffffff, 2)
+	fs = bytes(boot) + bytes(sector) + bytes(fat) + bytes(4 * sector)
+	return bytes(mbr) + bytes(7 * sector) + fs
+
+for kind, label in (
+		("gpt_lba", "a GPT table LBA of 2^62"),
+		("gpt_entry_size", "a GPT entry size of 0xffffffff"),
+		("fat32_fat_size", "a FAT32 FAT size of 0xffffffff"),
+		("fat32_loop", "a looping FAT32 directory chain")):
+	try:
+		check = esp_check(corrupt_disk(kind))
+		outcome = (check["pass"] is False
+			and check["name"] == "harness.esp_loader"
+			and bool(check["detail"]), check["detail"])
+	except BaseException as error:
+		outcome = (False, "raised %s: %s" % (type(error).__name__, error))
+	expect("esp_loader: %s fails cleanly" % label, outcome[0], outcome[1])
+
 print("selftest: %d failure(s)" % failures)
 sys.exit(1 if failures else 0)
