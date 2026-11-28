@@ -38,6 +38,9 @@
 static const uint32 kPreferredFrames = 1024;
 static const float kDefaultRate = 48000;
 static const int32 kBufferCount = 8;
+// A sink's drift window starts this long after the device starts (see
+// _UpdateDrift()).
+static const bigtime_t kDriftWarmUp = 2000000;
 
 
 static size_t
@@ -84,6 +87,7 @@ MixerTap::MixerTap(BMediaAddOn* addOn, kind_t kind, const char* name,
 	fDriftCount(0),
 	fDriftNext(0),
 	fDriftRestarts(0),
+	fDriftWarmUntil(0),
 	fDriftRejected(0),
 	fDrift(0),
 	fMeasuredDrift(0),
@@ -312,6 +316,7 @@ MixerTap::SetDeviceNode(media_node_id node)
 	fDriftValid = false;
 	fDriftCount = 0;
 	fDriftNext = 0;
+	fDriftWarmUntil = 0;
 	fDrift = 0;
 }
 
@@ -327,6 +332,15 @@ MixerTap::SetDeviceNode(media_node_id node)
 	the mix thread with fLock held; reading a time source does not block.
 	The adaptive resampling follows the estimate, so a sink neither runs
 	dry nor piles up on hardware whose cards run from separate crystals.
+
+	A window's first sample waits kDriftWarmUp after the sink's first
+	push (and after a jump): the device starts with the sink, and a card
+	that has just started hands back its first buffers in a burst, so its
+	published time runs ahead for a moment. A first sample taken then
+	pulled the early estimates off by thousands of ppm in QEMU, and under
+	host load the second sample sometimes differed by more than the 5 %
+	that counts as a jump: the window started over (one "restart") for
+	nothing but the device's start (media_drift.estimate, batch 14).
 */
 void
 MixerTap::_UpdateDrift(BTimeSource* mixerClock)
@@ -334,6 +348,12 @@ MixerTap::_UpdateDrift(BTimeSource* mixerClock)
 	if (fDeviceClock == NULL)
 		return;
 	bigtime_t real = BTimeSource::RealTime();
+	if (fDriftCount == 0) {
+		if (fDriftWarmUntil == 0)
+			fDriftWarmUntil = real + kDriftWarmUp;
+		if (real < fDriftWarmUntil)
+			return;
+	}
 	bigtime_t device = fDeviceClock->PerformanceTimeFor(real);
 	bigtime_t mixer = mixerClock->PerformanceTimeFor(real);
 	if (fDriftCount > 0) {
@@ -344,10 +364,13 @@ MixerTap::_UpdateDrift(BTimeSource* mixerClock)
 		double slope = mixerSpan > 0
 			? (double)(device - fDriftDevice[last]) / mixerSpan : 0;
 		if (mixerSpan < 0 || fabs(slope - 1.0) > 0.05) {
-			// a jump (a clock restarted, a time base changed): start over
+			// a jump (a clock restarted, a time base changed): start over,
+			// once the clock has run for a moment again
 			fDriftRestarts++;
 			fDriftCount = 0;
 			fDriftNext = 0;
+			fDriftWarmUntil = real + kDriftWarmUp;
+			return;
 		}
 	}
 	fDriftMixer[fDriftNext] = mixer;

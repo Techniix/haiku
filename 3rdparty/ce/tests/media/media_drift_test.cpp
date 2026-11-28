@@ -18,7 +18,8 @@
 	("<measured ppm> <applied ppm> <frames in> <frames out> <samples>
 	<restarts> <rejected>").
 
-	Checks: without skew the estimate settles (a full window, no restarts);
+	Checks: without skew the estimate settles (a full window, no restarts;
+	waited for, see kSettle);
 	+6000 ppm of skew moves it by 6000 +- 1500 ppm; the sink produces as
 	many more (or fewer) frames than the mixer hands it as the estimate
 	says, within 400 ppm; the skew back at 0 brings the estimate back to
@@ -52,6 +53,20 @@ static const char* kSignature = "application/x-vnd.Renga-drift-player";
 static const int32 kSkew = 6000;
 static const double kWander = 1500;
 	// QEMU's cards against each other, see above
+static const int kWindow = 16;
+	// the sink's samples, one a second (MixerTap::kDriftSamples)
+static const int kSettle = 60;
+	// seconds the first estimate may take to fill its window. The window
+	// starts 2 s after the sink's first mixed buffer (the card's warm-up,
+	// MixerTap::_UpdateDrift()), not when its node is listed: the sink's
+	// connection to the card, its time source and its start come after it
+	// is registered (AudioMixer::_CreateSink()), and they take longer on a
+	// loaded guest. A fixed 18 s left about 2 s for all of that before the
+	// warm-up and none after it. Before the warm-up, the card's start-up
+	// burst also restarted the window now and then under host load
+	// ("16 samples, 1 restarts", batch 14): the likely cause of this
+	// check's failure in the batch 13 renga-raw leg (it passed alone; that
+	// run's detail was not kept).
 
 static int sFailures = 0;
 
@@ -255,20 +270,28 @@ main()
 	}
 
 	// the shared host clock: no drift (the estimate fits a line through
-	// the last 16 s, one sample a second)
+	// the last 16 s, one sample a second). At least 18 s, as before, and
+	// on until the window is full (kSettle).
 	watch(sink, 18, "no skew");
-	Drift before;
+	Drift before = {};
 	status = read_drift(sink, &before);
+	int waited = 18;
+	while (waited < kSettle && (status != B_OK || before.samples < kWindow)
+		&& before.restarts <= 0) {
+		watch(sink, 3, "no skew, filling");
+		waited += 3;
+		status = read_drift(sink, &before);
+	}
 	info("the second card against the first without skew: %.0f ppm",
 		before.measured);
-	report("estimate", status == B_OK && before.samples == 16
+	report("estimate", status == B_OK && before.samples == kWindow
 			&& before.restarts == 0 && fabs(before.applied - before.measured)
 				< 1,
-		"%s; measured %.0f ppm, applied %.0f ppm, %" B_PRId32 " samples, %"
-		B_PRId32 " restarts, %" B_PRId32 " rejected (want a full window of "
-		"16, no restarts, the estimate applied)", strerror(status),
-		before.measured, before.applied, before.samples, before.restarts,
-		before.rejected);
+		"%s; after %d s: measured %.0f ppm, applied %.0f ppm, %" B_PRId32
+		" samples, %" B_PRId32 " restarts, %" B_PRId32 " rejected (want a "
+		"full window of %d within %d s, no restarts, the estimate applied)",
+		strerror(status), waited, before.measured, before.applied,
+		before.samples, before.restarts, before.rejected, kWindow, kSettle);
 
 	// the second card's clock kSkew ppm faster
 	status = set_skew(card, kSkew);
