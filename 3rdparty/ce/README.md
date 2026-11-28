@@ -1317,6 +1317,17 @@ Host check: `mesa_upgrade.setup`.
   (busybox wget from a busybox nc server), `dyn.ip` (busybox ip over
   netlink and ifconfig over SIOCGIF* ioctls), and `dyn.resolv_conf` when
   the machine has a name server.
+  Since batch 14 (Steam groundwork) harness images also carry a Debian 13
+  root beside it, in `/boot/system/non-packaged/compat/linux-roots/debian`
+  (`tests/renguin/root/build-debian-root.sh`, packages pinned in
+  `debian.pins`, `update-debian-pins.py` resolves them; about 15 MB to
+  download once): glibc 2.41, libstdc++, dash and SDL2, and in renga-*
+  images Mesa's EGL/GLES with llvmpipe too. The `debian/` programs are
+  built against the root's own libraries and run in it through Renguin's
+  `chroot()`: `debian.present`, `debian.dash`, `debian.glibc_no_cache`,
+  `debian.ldconfig`, `debian.ld_so_cache_used`, `debian.cxx`,
+  `debian.sdl_game` (an SDL2 game, headless) and, in renga-* images,
+  `debian.gl_llvmpipe`.
 - **wayland** (`wayland_test`, x86_64): Renga's Wayland compositor
   (roadmap F-43 phase C) seen by a native Wayland client on Renga's
   libwayland over `$XDG_RUNTIME_DIR/wayland-0`: the compositor runs,
@@ -1333,7 +1344,10 @@ Host check: `mesa_upgrade.setup`.
   `linux_clipboard`: the Linux Wayland client `wlclient-musl` (musl,
   Alpine's libwayland-client, through Renguin's sockets) shows its
   window (screenshot `screen-wayland_linux_window`) and its selection
-  reaches the system clipboard. `switch_off` and `switch_on`: `Screen
+  reaches the system clipboard. In renga-* images (the Debian root's gl
+  layer), `linux_sdl_window`: the SDL2 game from the Debian root in a
+  window (SDL's Wayland driver, GLES on llvmpipe; screenshot
+  `screen-wayland_linux_sdl_window`). `switch_off` and `switch_on`: `Screen
   --wayland off|on` (the Screen preferences' "Show Wayland programs"
   switch) stops the compositor through the launch daemon (it stays
   stopped, the socket goes, the settings say disabled) and starts it
